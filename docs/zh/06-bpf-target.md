@@ -27,7 +27,7 @@ out/program.zig + out/runtime.zig + out/build.zig
  │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
  ▼
 out/program.bc   (LLVM bitcode)
- │  sbpf-linker --cpu v3 --export entrypoint
+ │  sbpf-linker --cpu v2 --export entrypoint    （v3 为可选；ADR-013）
  ▼
 program.so   (Solana 可加载的 SBPF ELF)
 ```
@@ -37,9 +37,9 @@ program.so   (Solana 可加载的 SBPF ELF)
 
 1. `zig build-lib … -femit-llvm-bc` → 出 LLVM bitcode（这一步真正的产物
    是 `.bc`；`zig` 自己接着产的 `.o` **不是** Solana 兼容 ELF）。
-2. **`sbpf-linker --cpu v3 --export entrypoint`** → 出 `program.so`。
-   这是 Solana 专用的 linker，它懂 SBPFv3 的 ELF section 布局
-   和入口符号 export 语义；标准 `lld` 不懂。
+2. **`sbpf-linker --cpu v2 --export entrypoint`** → 出 `program.so`。
+   这是 Solana 专用的 linker，它懂 SBPF（默认 v2，v3 可选）的 ELF
+   section 布局和入口符号 export 语义；标准 `lld` 不懂。
 
 所以 `sbpf-linker` 是 `omlz` 的 build-time 依赖。
 pinning 策略见 ADR-012；SBPF 版本固定见 ADR-013。
@@ -117,7 +117,32 @@ P1 **明确不** 包含：
 
 ## 6. Build flag
 
-BPF 用 —— 两步管线（先出 bitcode，再链接）：
+### macOS 前置条件（sbpf-linker LLVM 20 dlopen）
+
+`sbpf-linker 0.1.8`（ADR-012 pin 的版本）通过 `aya-rustc-llvm-proxy`
+在运行时 `dlopen` `libLLVM*`。在 stock macOS + Homebrew 环境里，
+该库不在动态链接器搜索路径上，所以 linker 会 panic：
+
+```
+sbpf-linker: unable to find LLVM shared lib
+```
+
+修复方式（Spike β 已验证）：
+
+```sh
+brew install llvm@20
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"
+```
+
+我们要 **`llvm@20`**，因为 `sbpf-linker 0.1.8` 是按 LLVM 20 ABI 编出来的；
+`llvm@21` 在运行时也"能解析符号"，但 ABI 不保证。
+Linux 上大多数发行版自带 `libLLVM-20.so`；若没有，
+把 `LD_LIBRARY_PATH=/path/to/llvm-20/lib` 指过去。
+
+完整理由及"`sbpf-linker` 哪天去掉这个依赖时的升级路径"
+见 ADR-012（Revised 2026-04-27）。
+
+### BPF 用 —— 两步管线（先出 bitcode，再链接）
 
 ```sh
 # Step 1：Zig → LLVM bitcode
@@ -134,13 +159,15 @@ zig build-lib \
 
 # Step 2：SBPF 链接
 sbpf-linker \
-  --cpu v3 \
+  --cpu v2 \
   --export entrypoint \
   -o program.so \
   out/program.bc
 ```
 
-`--cpu v3` 把 SBPF 版本钉死。理由见 ADR-013。
+`--cpu v2` 把 SBPF 版本钉死（默认；与 Solana mainnet 一致）。
+`--cpu v3` 通过 CLI flag `--sbpf-version=v3` 作为可选路径，
+保留给明确需要 v3 特性的用户。理由见 ADR-013（Revised 2026-04-27）。
 
 Native 仅供开发便利（**不是** P1 交付物）：
 
@@ -153,7 +180,7 @@ zig build-exe -O Debug out/program.zig
 P1 产出的 BPF `.so` 必须满足：
 
 1. `llvm-objdump -d solana_hello.so` 显示一个 export 出去的
-   `entrypoint` 符号，带合法 eBPF（SBPFv3）指令。
+   `entrypoint` 符号，带合法 eBPF（默认 SBPFv2，v3 可选）指令。
 2. 能被 `solana-test-validator` 加载：
    ```sh
    solana program deploy ./solana_hello.so
@@ -175,6 +202,7 @@ P1 产出的 BPF `.so` 必须满足：
 | `sbpf-linker` 没装 | 新增的 build-time 依赖 | 按 ADR-012 pin 的版本 `cargo install`；CI 装 |
 | `sbpf-linker` 拒绝 bitcode | LLVM IR 形态它不认 | 把 `ZigBackend` 生成的代码降复杂度；扩 `--cpu` 必须走 ADR |
 | loader 报 "Access violation" 在低地址 | Zig 0.16 const-array 放置怪癖（§4 注） | codegen 规则：对 const 数组先复制到栈再取地址 |
+| `sbpf-linker: unable to find LLVM shared lib` | macOS 上 `DYLD_FALLBACK_LIBRARY_PATH` 找不到 `libLLVM*` | `brew install llvm@20`；`export DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib`（详见 §6、ADR-012 Revised 2026-04-27） |
 | BPF verifier 拒绝程序 | 栈帧太深、循环无界、非法 helper | 前端 / ANF 阶段加逃逸分析（P3） |
 | Solana loader 因别的原因失败 | ELF section 布局不对 | 拿 zignocchio 的参考 `program.so` 做 diff；上报 sbpf-linker |
 | 返回值不对 | 后端和解释器不一致 | 由确定性套件捕获（`05-backends.md` §6） |

@@ -26,7 +26,7 @@
 [ zig build-lib -target bpfel-freestanding -femit-llvm-bc ]
    │  .bc (LLVM bitcode)
    ▼
-[ sbpf-linker --cpu v3 --export entrypoint ]
+[ sbpf-linker --cpu v2 --export entrypoint ]    ◀── v3 可选（ADR-013）
    │
    ▼
 Solana BPF .so

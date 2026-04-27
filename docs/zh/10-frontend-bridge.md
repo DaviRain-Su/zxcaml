@@ -255,3 +255,48 @@ src/frontend_bridge/
 - `.mli` 签名（P3+）。
 - functor 支持（按 ADR-001，范围之外）。
 - 任何要求理解 OCaml C runtime 布局的事。
+
+## 10. 已知陷阱（来自 Spike α，2026-04-27）
+
+下面这些是构建 Spike α reader 时观察到的 `compiler-libs` API 实操陷阱。
+未来 P1 frontend-bridge 的实现者一定会撞上；这里只作为导航备忘，
+不是教程。每条的实证背景保留在 `docs/preflight-results.md`。
+
+### 10.1 顶层 `let` 是 `Tstr_value`，不是 `Texp_let`
+
+用户写的顶层 `let f x = …` 落在
+`structure_item.str_desc = Tstr_value (…)`，**不是** `Texp_let`。
+只有嵌套 / 表达式内的 `let` 才以 `Texp_let` 出现。
+所以子集 enforcer 必须 **同时** 遍历 `structure_item.str_desc`
+和 `expression.exp_desc`。
+意味着：iterator 是 structure 级 walker（带
+`structure_item` 和 `expr` override 的 `Tast_iterator.iterator`），
+不是仅表达式 walker。漏掉这点会做出一个"对顶层绑定的 body 不做检查"的 enforcer。
+
+### 10.2 `-bin-annot` **不是** dune 对 executable 的默认
+
+`dune (library …)` 自动加 `-bin-annot`；`dune (executable …)` **不会**。
+按 ADR-011，`omlz` 通过 `build.zig` 直接调 `ocamlc`，不走 `dune`，
+所以这个 flag 是我们自己的责任。
+任何文档化或实现的 OCaml 编译步骤里（见 ADR-011 的构建流程草图、
+`docs/06-bpf-target.md` 工具链），`ocamlc` 命令行 **必须显式带
+`-bin-annot`**，否则不出 `.cmt`，`zxc-frontend` 没东西可读。
+
+### 10.3 `Printtyp.type_expr` 写进程级全局状态
+
+通过 `Printtyp.type_expr` pretty-print 一个 OCaml 类型会改一个
+**进程级** 环境（printing-environment 的 path table）。
+对短命的一次性进程没问题 —— 这正是 `zxc-frontend` 按
+ADR-010 / ADR-011 的设计；但常驻进程反复 pretty-print 类型会泄漏 identity，
+跨调用产生奇怪输出。如果 bridge 以后演化成 daemon，
+调用方必须用 `Printtyp.wrap_printing_env`（或等价物）在每次 pretty-print
+前后做环境快照。任何"长生命 OCaml 前端 daemon"优化前先想到这点。
+
+### 10.4 `Cmt_format.cmt_modname` 是 `Misc.modname`，目前是 `string` 的私有别名
+
+OCaml 5.2.x 里 `Cmt_format.cmt_modname` 的类型是 `Misc.modname`，
+通过 `(_ :> string)` 强制可访问到 `string` —— 它是 `string` 的私有别名。
+今天编译没问题，但若未来 OCaml 把 `Misc.modname` 改成抽象类型，
+**可能会断**。建议把这个强制集中到一个 helper 里
+（如 `let modname_to_string : Misc.modname -> string = fun s -> (s :> string)`），
+未来升级时一行修复，而不是 bridge 各处 find-and-replace。

@@ -280,3 +280,60 @@ its backend or its runtime model.
 - `.mli` signatures (P3+).
 - Functor support (out of scope per ADR-001).
 - Anything that requires reading OCaml's C runtime layout.
+
+## 10. Known pitfalls (from Spike α, 2026-04-27)
+
+These are concrete `compiler-libs` API hazards observed while
+building the Spike α reader. They will bite the future P1
+frontend-bridge implementer; they are documented here as a
+navigation aid, not a tutorial. The empirical context for each
+item is preserved in `docs/preflight-results.md`.
+
+### 10.1 Top-level `let` is `Tstr_value`, not `Texp_let`
+
+A user-written top-level `let f x = …` lands in
+`structure_item.str_desc = Tstr_value (…)`, **not** in
+`Texp_let`. Only nested / in-expression `let`s surface as
+`Texp_let`. The subset enforcer must therefore walk **both**
+`structure_item.str_desc` and `expression.exp_desc`. Implication:
+the iterator is a structure-level walker (`Tast_iterator.iterator`
+with `structure_item` and `expr` overrides), not an expression-only
+walker. Missing this produces an enforcer that silently accepts
+top-level bindings without checking their bodies.
+
+### 10.2 `-bin-annot` is **not** the dune default for executables
+
+`dune (library …)` passes `-bin-annot` automatically; `dune
+(executable …)` does **not**. Per ADR-011, `omlz` invokes
+`ocamlc` directly via `build.zig` rather than going through
+`dune`, so we are responsible for the flag ourselves. The
+`ocamlc` invocation in the OCaml step (see ADR-011's build flow
+sketch and `docs/06-bpf-target.md` toolchain) **must include
+`-bin-annot`** explicitly, otherwise no `.cmt` is emitted and
+`zxc-frontend` has nothing to read. Add `-bin-annot` to the
+`ocamlc` command line wherever the OCaml compile step is
+documented or implemented.
+
+### 10.3 `Printtyp.type_expr` writes through process-global state
+
+Pretty-printing an OCaml type via `Printtyp.type_expr` mutates a
+**process-wide** environment (the printing-environment path
+table). It is fine for short-lived single-shot processes — which
+`zxc-frontend` is, per ADR-010 / ADR-011 — but a long-lived
+OCaml process that pretty-prints types repeatedly will leak
+identity and produce surprising output across calls. If the
+bridge ever grows into a daemon, callers must snapshot the
+environment via `Printtyp.wrap_printing_env` (or equivalent)
+around each pretty-print. Keep this in mind before considering
+any "long-lived OCaml frontend daemon" optimisation.
+
+### 10.4 `Cmt_format.cmt_modname` is `Misc.modname`, currently a private alias for `string`
+
+In OCaml 5.2.x, `Cmt_format.cmt_modname` has type
+`Misc.modname`, which is a private alias for `string` reachable
+via `(_ :> string)` coercion. The coercion compiles cleanly today
+but **may break** if a future OCaml release makes `Misc.modname`
+abstract. Recommendation: centralise the coercion in a single
+helper (e.g. `let modname_to_string : Misc.modname -> string =
+fun s -> (s :> string)`) so a future upgrade is a one-line
+fix rather than a scattered find-and-replace across the bridge.

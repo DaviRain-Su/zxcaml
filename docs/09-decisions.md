@@ -97,7 +97,8 @@ P1 includes the BPF target chain end-to-end:
 
 - `omlz build --target=bpf` invokes `zig build-lib -target
   bpfel-freestanding -femit-llvm-bc=…` followed by
-  `sbpf-linker --cpu v3 --export entrypoint`.
+  `sbpf-linker --cpu v2 --export entrypoint` (default; `v3` is an
+  opt-in per ADR-013 Revised 2026-04-27).
 - The resulting `.so` is loadable by `solana-test-validator`.
 - Acceptance criterion is a working `examples/solana_hello.ml`.
 
@@ -412,7 +413,7 @@ ANF lowering → Core IR → ArenaStrategy → Lowered IR → Zig codegen
  ↓
 zig build-lib -target bpfel-freestanding -femit-llvm-bc
  ↓
-sbpf-linker --cpu v3 --export entrypoint
+sbpf-linker --cpu v2 --export entrypoint    (or --cpu v3 opt-in; ADR-013)
  ↓
 Solana BPF .so
 ```
@@ -541,8 +542,9 @@ SDK at `github.com/DaviRain-Su/zignocchio`. The verified chain
 has two steps, not one:
 
 1. `zig build-lib … -femit-llvm-bc` (LLVM bitcode out).
-2. `sbpf-linker --cpu v3 --export entrypoint` (SBPFv3 ELF
-   `.so` out, accepted by Solana's loader).
+2. `sbpf-linker --cpu v2 --export entrypoint` (SBPFv2 ELF
+   `.so` out, accepted by Solana's loader; `v3` is opt-in per
+   ADR-013 Revised 2026-04-27).
 
 Stock `lld` does not produce a `.so` Solana's loader will accept:
 the Solana ELF layout, the SBPF instruction set version
@@ -596,6 +598,49 @@ as `sbpf-linker`.
   last working version, and consider whether the bitcode shape is
   what should change instead.
 
+### Revised 2026-04-27 — macOS LLVM 20 dlopen prerequisite
+
+Spike β (`docs/preflight-results-spike-beta.md`) found that the
+pinned `sbpf-linker 0.1.8` panics at runtime on stock macOS with:
+
+```
+sbpf-linker: unable to find LLVM shared lib
+```
+
+unless an LLVM 20 dynamic library is reachable via
+`DYLD_FALLBACK_LIBRARY_PATH`. The cause:
+
+- `sbpf-linker 0.1.8` depends on `aya-rustc-llvm-proxy 0.10.0`,
+  which `dlopen`s the first `libLLVM*` it finds in
+  `LD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`, or any `lib/`
+  adjacent to a `PATH` entry.
+- A stock macOS + Homebrew environment contains no such library
+  by default; Homebrew Rust links against `llvm@21`'s
+  `libLLVM.dylib`, but `sbpf-linker 0.1.8` was built against the
+  LLVM 20 ABI.
+
+**macOS workaround** (required to use `sbpf-linker 0.1.8`):
+
+```sh
+brew install llvm@20
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"
+```
+
+**Linux note**: most distros ship a `libLLVM-20.so` discoverable
+via the system linker; if not, set
+`LD_LIBRARY_PATH=/path/to/llvm-20/lib` to the equivalent
+directory.
+
+This dependency is **transitive on `aya-rustc-llvm-proxy`**, not
+something we control. If a future `sbpf-linker` release removes
+or changes it (e.g. statically links LLVM), this revision note
+is updated accordingly.
+
+The `sbpf-linker = 0.1.8` pin itself is unchanged; only the
+documented prerequisites grow. `06-bpf-target.md` §6 now carries
+the macOS prerequisite block, and §8 carries a corresponding
+troubleshooting row.
+
 ---
 
 ## ADR-013 — Solana SBF version is pinned at `v3` for P1
@@ -642,6 +687,42 @@ P1 pins the SBPF version at **`v3`** for all BPF builds.
   This is acknowledged and accepted.
 - If a future phase needs to ship multi-version support, the CLI
   flag `--sbpf-version` is reserved for that purpose.
+
+### Revised 2026-04-27 — default is `v2`, `v3` is opt-in
+
+Spike β (`docs/preflight-results-spike-beta.md`) verified the BPF
+toolchain end-to-end against `DaviRain-Su/zignocchio`. Reading
+zignocchio's `build.zig` and `AGENTS.md` revealed a fact that the
+original ADR-013 misread: **zignocchio uses `--cpu v2`**, not
+`--cpu v3`. The relevant `build.zig` comment is verbatim:
+
+> `v2: No 32-bit jumps (Solana sBPF compatible)`
+
+Empirically, the `hello.so` we built with `--cpu v2` was deployed
+to `solana-test-validator` 3.1.12 and executed correctly
+(107 compute units, `status: Ok`). v2 is what mainnet validators
+default to today; v3 introduces newer features (e.g. static
+syscalls) that require feature-gate activation and are not
+universally accepted yet.
+
+Therefore, this ADR is revised:
+
+- **Default SBPF target is `v2`.** `omlz build --target=bpf`
+  invokes `sbpf-linker --cpu v2 --export entrypoint`.
+- **`v3` remains a documented opt-in path.** A CLI flag
+  `--sbpf-version=v3` (or equivalent env var) lets users who
+  explicitly need v3 features select it. P1 ships v2 only and
+  has no acceptance test for v3; the v3 path is reserved, not
+  validated.
+- The original v3 wording above is preserved as historical
+  record per the ADR convention; this addendum is the
+  authoritative current statement.
+
+Cascade applied in the same change-set: `06-bpf-target.md`,
+`zignocchio-relationship.md`, `01-architecture.md`, `README.md`,
+and the Chinese mirrors of all of the above were updated from
+`--cpu v3` / `SBPFv3` to `--cpu v2` / `SBPFv2` (with `v3` noted
+as the opt-in alternative where the doc context warrants).
 
 ---
 
@@ -695,8 +776,8 @@ This is the same posture ADR-009 takes toward OxCaml.
 
 ### What this allows
 
-- Reading zignocchio's source to learn how an SBPFv3 entrypoint
-  is correctly written.
+- Reading zignocchio's source to learn how an SBPF (v2 by
+  default; v3 opt-in) entrypoint is correctly written.
 - Re-deriving its design (BumpAllocator → our `arena.zig`,
   syscall MurmurHash3-32 helper → our P3 `runtime/zig/syscalls.zig`)
   in our own code, with our own naming and error story.

@@ -4,7 +4,7 @@
 >
 > **Status:** Accepted · **Date:** 2026-04-27
 > **See also:** ADR-014 (formal "no import" decision),
-> ADR-012 (`sbpf-linker`), ADR-013 (SBPFv3),
+> ADR-012 (`sbpf-linker`), ADR-013 (SBPF version pin: v2 default, v3 opt-in),
 > `06-bpf-target.md` §2 (toolchain chain).
 
 ---
@@ -89,7 +89,8 @@ docs:
 
 Pre: `zig build-obj -target bpfel-freestanding` → `.o`.
 Post: `zig build-lib … -femit-llvm-bc` → `.bc` →
-      `sbpf-linker --cpu v3 --export entrypoint` → `.so`.
+      `sbpf-linker --cpu v2 --export entrypoint` → `.so`
+      (`v3` opt-in per ADR-013 Revised 2026-04-27).
 
 The Solana loader does **not** accept stock `lld`-linked ELFs.
 `sbpf-linker` is what bridges generic-BPF bitcode to the
@@ -108,9 +109,16 @@ documentation, and CI gates all changed from `program.o` to
 ### 3.3 The SBPF version must be pinned
 
 `sbpf-linker` accepts `--cpu v0|v1|v2|v3`. The default is **not**
-sufficient for modern Solana; v3 is.
+sufficient for modern Solana. zignocchio's own `build.zig`
+pins `--cpu v2` ("v2: No 32-bit jumps (Solana sBPF compatible)"),
+which is what current mainnet validators accept by default. v3
+is newer and reserved as an opt-in for users who explicitly need
+its features (e.g. static syscalls).
 
-→ Captured in: ADR-013.
+ZxCaml mirrors zignocchio: `--cpu v2` is the default, `--cpu v3`
+is opt-in via `--sbpf-version=v3`.
+
+→ Captured in: ADR-013 (Revised 2026-04-27).
 
 ### 3.4 Zig 0.16 has a known BPF code-placement bug
 
@@ -177,7 +185,8 @@ We owe attribution, not code.
 
 When ZxCaml's documentation or commit messages reference a
 non-obvious technique that originated in zignocchio (e.g. the
-const-array workaround, the SBPFv3 `--cpu` flag), we cite it.
+const-array workaround, the SBPF `--cpu` flag and v2/v3 choice),
+we cite it.
 This document and the relevant ADRs already do so.
 
 We do not owe upstream contributions, because we are not

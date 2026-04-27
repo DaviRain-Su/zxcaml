@@ -82,7 +82,8 @@ P1 包含端到端 BPF 链路：
 
 - `omlz build --target=bpf` 先调
   `zig build-lib -target bpfel-freestanding -femit-llvm-bc=…`，
-  再调 `sbpf-linker --cpu v3 --export entrypoint`。
+  再调 `sbpf-linker --cpu v2 --export entrypoint`（默认；
+  `v3` 为可选，按 ADR-013 Revised 2026-04-27）。
 - 产出 `.so` 能被 `solana-test-validator` 加载。
 - 验收门槛是一份能跑的 `examples/solana_hello.ml`。
 
@@ -356,7 +357,7 @@ ANF lowering → Core IR → ArenaStrategy → Lowered IR → Zig codegen
  ↓
 zig build-lib -target bpfel-freestanding -femit-llvm-bc
  ↓
-sbpf-linker --cpu v3 --export entrypoint
+sbpf-linker --cpu v2 --export entrypoint    （或 --cpu v3 可选；ADR-013）
  ↓
 Solana BPF .so
 ```
@@ -464,8 +465,8 @@ zig build
 被验证过的工具链是两步，不是一步：
 
 1. `zig build-lib … -femit-llvm-bc` 出 LLVM bitcode。
-2. `sbpf-linker --cpu v3 --export entrypoint` 出 Solana loader 接受的
-   SBPFv3 ELF `.so`。
+2. `sbpf-linker --cpu v2 --export entrypoint` 出 Solana loader 接受的
+   SBPFv2 ELF `.so`（`v3` 为可选，详见 ADR-013 Revised 2026-04-27）。
 
 标准 `lld` 产出的 `.so` Solana loader 不接受：
 Solana 的 ELF 布局、SBPF 指令集版本（SBPFv0/v1/v2/v3）、
@@ -514,6 +515,43 @@ crates.io 上以 `sbpf-linker` 名字发布。
   按 P0 处理 —— 上报上游、回退到上一个能用的版本，
   并评估是不是该改的是我们 bitcode 的形态。
 
+### 2026-04-27 修订 —— macOS 下需要 LLVM 20 dlopen 前置条件
+
+Spike β（`docs/preflight-results-spike-beta.md`）发现，在 stock macOS 上
+pinned 的 `sbpf-linker 0.1.8` 在运行时会 panic：
+
+```
+sbpf-linker: unable to find LLVM shared lib
+```
+
+除非通过 `DYLD_FALLBACK_LIBRARY_PATH` 暴露一个 LLVM 20 的动态库。
+原因：
+
+- `sbpf-linker 0.1.8` 依赖 `aya-rustc-llvm-proxy 0.10.0`，后者
+  `dlopen` `LD_LIBRARY_PATH`、`DYLD_FALLBACK_LIBRARY_PATH`
+  以及 `PATH` 邻近 `lib/` 目录里第一个找到的 `libLLVM*`。
+- stock macOS + Homebrew 默认这些路径里都没有 `libLLVM.dylib`；
+  Homebrew Rust 链接的是 `llvm@21` 的 `libLLVM.dylib`，
+  但 `sbpf-linker 0.1.8` 是按 LLVM 20 ABI 编出来的。
+
+**macOS workaround**（要用 `sbpf-linker 0.1.8` 必须做）：
+
+```sh
+brew install llvm@20
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"
+```
+
+**Linux 备注**：大多数发行版自带 `libLLVM-20.so`，系统 linker 能找到；
+若没有，把 `LD_LIBRARY_PATH=/path/to/llvm-20/lib` 指过去即可。
+
+这个依赖来自 `aya-rustc-llvm-proxy`，**不在我们控制范围内**。
+若未来 `sbpf-linker` 把 LLVM 静态链接进去，就会取消这一依赖；
+届时本修订条目随之更新。
+
+`sbpf-linker = 0.1.8` 的 pin 不变；只是文档化的前置条件多了一条。
+`06-bpf-target.md` §6 现在带了 macOS prereq 段落，
+§8 故障表新增对应一行。
+
 ---
 
 ## ADR-013 —— Solana SBF 版本在 P1 锁为 `v3`
@@ -551,6 +589,37 @@ P1 把 SBPF 版本锁在 **`v3`**。
 - P1 编出来的程序跑不了老 SBPF runtime。已知，已接受。
 - 如果未来某 phase 需要 multi-version 支持，
   CLI flag `--sbpf-version` 留给那一刻用。
+
+### 2026-04-27 修订 —— 默认 `v2`，`v3` 改为可选
+
+Spike β（`docs/preflight-results-spike-beta.md`）端到端验证了 BPF 工具链
+（对照 `DaviRain-Su/zignocchio`）。读 zignocchio 的 `build.zig` 和
+`AGENTS.md` 时发现 ADR-013 当初读错了一件事：
+**zignocchio 用的是 `--cpu v2`**，不是 `--cpu v3`。
+`build.zig` 里相关注释原文：
+
+> `v2: No 32-bit jumps (Solana sBPF compatible)`
+
+我们用 `--cpu v2` 构建出的 `hello.so` 被 `solana-test-validator` 3.1.12
+接受、跑通（107 compute units，`status: Ok`）。
+v2 是当前 mainnet validator 的默认接受版本；
+v3 引入了更新的特性（如 static syscalls），需要 feature gate 激活，
+目前并不被普遍接受。
+
+因此本 ADR 修订如下：
+
+- **默认 SBPF 目标是 `v2`。** `omlz build --target=bpf` 调
+  `sbpf-linker --cpu v2 --export entrypoint`。
+- **`v3` 作为可选路径保留。** CLI flag `--sbpf-version=v3`
+  （或等价环境变量）允许明确需要 v3 特性的用户选择它。
+  P1 只 ship v2，v3 不进 P1 验收测试；v3 路径只是保留，未验证。
+- 上面 v3 的原文按 ADR 约定保留为历史记录；
+  此 addendum 是当前权威表述。
+
+同步级联（已在同一变更集内完成）：`06-bpf-target.md`、
+`zignocchio-relationship.md`、`01-architecture.md`、`README.md`，
+以及对应的中文镜像，全部把 `--cpu v3` / `SBPFv3` 改为
+`--cpu v2` / `SBPFv2`（在文档语境合适处注明 `v3` 为可选）。
 
 ---
 
@@ -599,7 +668,7 @@ PDA / CPI helper、litesvm/surfpool/mollusk 测试集成。
 
 ### 这条 ADR 允许什么
 
-- 阅读 zignocchio 源码，学习 SBPFv3 entrypoint 的正确写法。
+- 阅读 zignocchio 源码，学习 SBPF（默认 v2，v3 可选）entrypoint 的正确写法。
 - 用我们自己的命名、错误处理、arena 所有权语义，
   独立重新得到它的设计（BumpAllocator → 我们的 `arena.zig`、
   syscall MurmurHash3-32 helper → 我们 P3 的

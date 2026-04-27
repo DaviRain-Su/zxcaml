@@ -4,7 +4,7 @@
 >
 > **状态：** 已采纳 · **日期：** 2026-04-27
 > **关联：** ADR-014（"不导入"的正式决策）、
-> ADR-012（`sbpf-linker`）、ADR-013（SBPFv3）、
+> ADR-012（`sbpf-linker`）、ADR-013（SBPF 版本 pin：默认 v2，v3 可选）、
 > `06-bpf-target.md` §2（工具链链路）。
 
 ---
@@ -79,7 +79,8 @@ ZxCaml 的工作不是这个：我们是个编译器，输出 `.zig` 源码。
 
 之前：`zig build-obj -target bpfel-freestanding` → `.o`。
 之后：`zig build-lib … -femit-llvm-bc` → `.bc` →
-      `sbpf-linker --cpu v3 --export entrypoint` → `.so`。
+      `sbpf-linker --cpu v2 --export entrypoint` → `.so`
+      （`v3` 为可选，详见 ADR-013 Revised 2026-04-27）。
 
 Solana loader **不**接受标准 `lld` 链出来的 ELF。
 `sbpf-linker` 是"通用 BPF bitcode → Solana 形态 ELF"的桥。
@@ -95,10 +96,17 @@ Solana loader **不**接受标准 `lld` 链出来的 ELF。
 
 ### 3.3 SBPF 版本要 pin
 
-`sbpf-linker` 接受 `--cpu v0|v1|v2|v3`。默认值对现代 Solana 不够；
-v3 才行。
+`sbpf-linker` 接受 `--cpu v0|v1|v2|v3`。默认值对现代 Solana 不够。
+zignocchio 自己的 `build.zig` pin 了 `--cpu v2`
+（"v2: No 32-bit jumps (Solana sBPF compatible)"），
+也就是当前 mainnet validator 默认接受的版本。
+v3 是更新的版本，作为可选保留给明确需要它特性的用户
+（比如 static syscalls）。
 
-→ 落到：ADR-013。
+ZxCaml 镜像 zignocchio 的选择：默认 `--cpu v2`，
+通过 `--sbpf-version=v3` 显式启用 `--cpu v3`。
+
+→ 落到：ADR-013（Revised 2026-04-27）。
 
 ### 3.4 Zig 0.16 有已知的 BPF 代码放置 bug
 
@@ -157,7 +165,8 @@ zignocchio 在 macOS 上开发。
 我们欠的是 attribution，不是代码。
 
 ZxCaml 文档或 commit message 引用一个起源于 zignocchio 的非显然技巧时
-（比如 const-array workaround、SBPFv3 `--cpu` flag），我们注明出处。
+（比如 const-array workaround、SBPF `--cpu` flag 与 v2/v3 的选择），
+我们注明出处。
 这份文档和相关 ADR 已经做到这一点。
 
 我们不欠它 upstream contribution，因为我们没有改它的代码。

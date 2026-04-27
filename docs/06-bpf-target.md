@@ -28,7 +28,7 @@ out/program.zig + out/runtime.zig + out/build.zig
  │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
  ▼
 out/program.bc   (LLVM bitcode)
- │  sbpf-linker --cpu v3 --export entrypoint
+ │  sbpf-linker --cpu v2 --export entrypoint    (v3 is opt-in; ADR-013)
  ▼
 program.so   (Solana-loadable SBPF ELF)
 ```
@@ -39,10 +39,10 @@ that produces a Solana-loadable artefact is:
 1. `zig build-lib … -femit-llvm-bc` → emit LLVM bitcode (the `.bc`
    file is the deliverable from this step; the `.o` `zig` would
    produce on its own is **not** a Solana-compatible ELF).
-2. **`sbpf-linker --cpu v3 --export entrypoint`** → produce
+2. **`sbpf-linker --cpu v2 --export entrypoint`** → produce
    `program.so`. This is a Solana-specific linker that knows about
-   SBPFv3 ELF section layout and entry-symbol export, which stock
-   `lld` does not.
+   SBPF (v2 by default; v3 opt-in) ELF section layout and
+   entry-symbol export, which stock `lld` does not.
 
 `sbpf-linker` is therefore a build-time dependency of `omlz`. See
 ADR-012 for the pinning policy and ADR-013 for the SBPF version
@@ -125,7 +125,34 @@ P1 explicitly does **not** include:
 
 ## 6. Build flags
 
-For BPF — two-step pipeline (bitcode then link):
+### macOS prerequisites (sbpf-linker LLVM 20 dlopen)
+
+`sbpf-linker 0.1.8` (the version pinned by ADR-012) `dlopen`s
+`libLLVM*` at runtime via `aya-rustc-llvm-proxy`. On a stock
+macOS + Homebrew environment that library is not on the dynamic
+loader's search path, so the linker panics with:
+
+```
+sbpf-linker: unable to find LLVM shared lib
+```
+
+The fix (Spike β verified):
+
+```sh
+brew install llvm@20
+export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"
+```
+
+We require **`llvm@20`** specifically because `sbpf-linker 0.1.8`
+was built against the LLVM 20 ABI; `llvm@21` happens to resolve
+symbols at runtime but is not ABI-guaranteed. On Linux, most
+distros ship `libLLVM-20.so` already; if not, set
+`LD_LIBRARY_PATH=/path/to/llvm-20/lib` to the equivalent.
+
+See ADR-012 (Revised 2026-04-27) for the full rationale and the
+upgrade path if `sbpf-linker` ever drops this dependency.
+
+### For BPF — two-step pipeline (bitcode then link)
 
 ```sh
 # Step 1: Zig → LLVM bitcode
@@ -142,13 +169,16 @@ zig build-lib \
 
 # Step 2: SBPF link
 sbpf-linker \
-  --cpu v3 \
+  --cpu v2 \
   --export entrypoint \
   -o program.so \
   out/program.bc
 ```
 
-`--cpu v3` pins the SBPF version. See ADR-013 for the rationale.
+`--cpu v2` pins the SBPF version (default; matches Solana
+mainnet). `--cpu v3` is reserved as an opt-in via the
+`--sbpf-version=v3` CLI flag for users who explicitly need v3
+features. See ADR-013 (Revised 2026-04-27) for the rationale.
 
 For native (developer convenience only, **not** a P1 deliverable):
 
@@ -161,7 +191,8 @@ zig build-exe -O Debug out/program.zig
 A BPF `.so` produced by P1 must satisfy:
 
 1. `llvm-objdump -d solana_hello.so` shows a single exported
-   `entrypoint` symbol with valid eBPF (SBPFv3) instructions.
+   `entrypoint` symbol with valid eBPF (SBPFv2 by default; v3
+   opt-in) instructions.
 2. Loadable by `solana-test-validator`:
    ```sh
    solana program deploy ./solana_hello.so
@@ -185,6 +216,7 @@ in P3.
 | `sbpf-linker` not found | New build-time dep, not installed | `cargo install` from pinned commit (ADR-012); CI installs it |
 | `sbpf-linker` rejects bitcode | LLVM IR shape it doesn't understand | Lower codegen complexity in `ZigBackend`; widen `--cpu` only with ADR |
 | Loader rejects with "Access violation" at low address | Zig 0.16 const-array placement quirk (§4 note) | Codegen rule: copy const arrays to stack before address-of |
+| `sbpf-linker: unable to find LLVM shared lib` | macOS missing `libLLVM*` on `DYLD_FALLBACK_LIBRARY_PATH` | `brew install llvm@20`; `export DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` (see §6, ADR-012 Revised 2026-04-27) |
 | BPF verifier rejects the program | Stack frames too deep, unbounded loops, illegal helper | Frontend / ANF lowering escape analysis (P3) |
 | Solana loader fails for other reasons | ELF section layout off | Diff against zignocchio's reference `program.so`; report to sbpf-linker |
 | Returns wrong value | Backend mismatches interpreter | Determinism suite (`05-backends.md` §6) catches this |

@@ -33,7 +33,7 @@ The frontend is borrowed from upstream OCaml; everything from
 [ Zig toolchain ]                    (zig build-lib -target bpfel-freestanding -femit-llvm-bc)
    │   .bc (LLVM bitcode)
    ▼
-[ sbpf-linker ]                      (--cpu v3 --export entrypoint)
+[ sbpf-linker ]                      (--cpu v2 --export entrypoint; v3 opt-in)
    │
    ▼
 Solana BPF .so
