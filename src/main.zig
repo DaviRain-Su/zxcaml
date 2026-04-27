@@ -4,12 +4,14 @@
 //! - Print the package version declared in `build.zig.zon`.
 //! - Dispatch `omlz check <file.ml>` through the OCaml frontend subprocess.
 //! - Emit the M0 Core IR contract with `omlz check --emit=core-ir <file.ml>`.
+//! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
 const pipeline = @import("driver/pipeline.zig");
+const interp = @import("backend/interp.zig");
 const core_anf = @import("core/anf.zig");
 const core_pretty = @import("core/pretty.zig");
 
@@ -60,6 +62,22 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    if (args.len == 3 and std.mem.eql(u8, args[1], "run")) {
+        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
+            if (shouldPrintGenericFrontendFailure(err)) {
+                try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
+            }
+            std.process.exit(1);
+        };
+        defer result.deinit();
+
+        switch (result) {
+            .success => |parsed| try runModule(init, parsed.module),
+            .failed => |code| std.process.exit(if (code == 0) 1 else code),
+        }
+        return;
+    }
+
     try writeStderr(init.io, "error: unsupported command or option; run `omlz --help` for usage.\n");
     std.process.exit(1);
 }
@@ -77,7 +95,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz check <file.ml>
         \\  omlz check --emit=core-ir <file.ml>
         \\  omlz build <file.ml>   (not yet implemented)
-        \\  omlz run <file.ml>     (not yet implemented)
+        \\  omlz run <file.ml>
         \\
     );
 }
@@ -116,6 +134,30 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
 
     try writeStdout(init.io, rendered);
     try writeStdout(init.io, "\n");
+}
+
+fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module) !void {
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
+
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    var interpreter: interp.Interpreter = .{};
+    const value = interpreter.backend().evalModule(core_module) catch |err| {
+        try writeStderr(init.io, "error: ");
+        try writeStderr(init.io, interp.errorMessage(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    var buffer: [32]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buffer, "{d}\n", .{value});
+    try writeStdout(init.io, rendered);
 }
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
@@ -167,6 +209,8 @@ test "package version comes from build manifest" {
 }
 
 test {
+    _ = @import("backend/api.zig");
+    _ = @import("backend/interp.zig");
     _ = @import("core/anf.zig");
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
