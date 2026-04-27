@@ -10,6 +10,8 @@ const api = @import("api.zig");
 const ir = @import("../core/ir.zig");
 const layout = @import("../core/layout.zig");
 
+const division_by_zero_marker = "ZXCAML_PANIC:division_by_zero";
+
 /// Stateless M0 interpreter backend.
 pub const Interpreter = struct {
     const vtable: api.VTable = .{
@@ -111,9 +113,17 @@ pub fn errorMessage(err: anyerror) []const u8 {
         error.UnboundVariable => "interpreter found an unbound variable",
         error.MatchFailure => "interpreter pattern match was non-exhaustive",
         error.ArityMismatch => "interpreter function application arity mismatch",
-        error.DivisionByZero => "interpreter integer division by zero",
+        error.DivisionByZero => division_by_zero_marker,
         error.NotImplemented => "interpreter does not yet implement source emission",
         else => "interpreter failed",
+    };
+}
+
+/// Returns a stable panic marker for errors that model user-program panics.
+pub fn panicMarker(err: anyerror) ?[]const u8 {
+    return switch (err) {
+        error.DivisionByZero => division_by_zero_marker,
+        else => null,
     };
 }
 
@@ -179,11 +189,11 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
     const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
     const rhs = try intValue(try evalExpr(allocator, prim.args[1].*, env));
     return switch (prim.op) {
-        .Add => .{ .Int = lhs +% rhs },
-        .Sub => .{ .Int = lhs -% rhs },
-        .Mul => .{ .Int = lhs *% rhs },
-        .Div => if (rhs == 0) error.DivisionByZero else .{ .Int = @divTrunc(lhs, rhs) },
-        .Mod => if (rhs == 0) error.DivisionByZero else .{ .Int = @rem(lhs, rhs) },
+        .Add => .{ .Int = wrappingAdd(lhs, rhs) },
+        .Sub => .{ .Int = wrappingSub(lhs, rhs) },
+        .Mul => .{ .Int = wrappingMul(lhs, rhs) },
+        .Div => .{ .Int = try truncatingDiv(lhs, rhs) },
+        .Mod => .{ .Int = try truncatingMod(lhs, rhs) },
         .Eq => .{ .Bool = lhs == rhs },
         .Ne => .{ .Bool = lhs != rhs },
         .Lt => .{ .Bool = lhs < rhs },
@@ -191,6 +201,33 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
         .Gt => .{ .Bool = lhs > rhs },
         .Ge => .{ .Bool = lhs >= rhs },
     };
+}
+
+fn wrappingAdd(lhs: i64, rhs: i64) i64 {
+    const result = @addWithOverflow(lhs, rhs);
+    return result[0];
+}
+
+fn wrappingSub(lhs: i64, rhs: i64) i64 {
+    const result = @subWithOverflow(lhs, rhs);
+    return result[0];
+}
+
+fn wrappingMul(lhs: i64, rhs: i64) i64 {
+    const result = @mulWithOverflow(lhs, rhs);
+    return result[0];
+}
+
+fn truncatingDiv(lhs: i64, rhs: i64) EvalError!i64 {
+    if (rhs == 0) return error.DivisionByZero;
+    if (lhs == std.math.minInt(i64) and rhs == -1) return std.math.minInt(i64);
+    return @divTrunc(lhs, rhs);
+}
+
+fn truncatingMod(lhs: i64, rhs: i64) EvalError!i64 {
+    if (rhs == 0) return error.DivisionByZero;
+    if (lhs == std.math.minInt(i64) and rhs == -1) return 0;
+    return @rem(lhs, rhs);
 }
 
 fn intValue(value: Value) EvalError!i64 {
@@ -374,6 +411,17 @@ test "interpreter evaluates M0 integer constants directly from Core IR" {
 
     try std.testing.expectEqual(@as(u64, 0), try evalModule(.{ .decls = &zero_decls }));
     try std.testing.expectEqual(@as(u64, 42), try evalModule(.{ .decls = &answer_decls }));
+}
+
+test "interpreter pins i64 arithmetic wrap edge cases" {
+    try std.testing.expectEqual(std.math.minInt(i64), wrappingAdd(std.math.maxInt(i64), 1));
+    try std.testing.expectEqual(std.math.maxInt(i64), wrappingSub(std.math.minInt(i64), 1));
+    try std.testing.expectEqual(std.math.minInt(i64), wrappingMul(std.math.minInt(i64), -1));
+    try std.testing.expectEqual(std.math.minInt(i64), try truncatingDiv(std.math.minInt(i64), -1));
+    try std.testing.expectEqual(@as(i64, 0), try truncatingMod(std.math.minInt(i64), -1));
+    try std.testing.expectError(error.DivisionByZero, truncatingDiv(0, 0));
+    try std.testing.expectError(error.DivisionByZero, truncatingMod(0, 0));
+    try std.testing.expectEqualStrings(division_by_zero_marker, panicMarker(error.DivisionByZero).?);
 }
 
 test "interpreter evaluates top-level and nested let variable bindings" {

@@ -155,7 +155,7 @@ fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Ex
         .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
         .If => |if_expr| try lowerIf(arena, ctx, if_expr),
         .Prim => |prim| try lowerPrim(arena, ctx, prim),
-        .Var => |var_ref| .{ .Var = try lowerVar(arena, ctx, var_ref) },
+        .Var => |var_ref| try lowerVarExpr(arena, ctx, var_ref),
         .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr),
         .Match => |match_expr| try lowerMatch(arena, ctx, match_expr),
     };
@@ -268,6 +268,27 @@ fn lowerVar(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.
         .ty = binding.ty,
         .layout = binding.layout,
     };
+}
+
+fn lowerVarExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.Var) LowerError!ir.Expr {
+    if (ctx.scope.contains(var_ref.name)) {
+        return .{ .Var = try lowerVar(arena, ctx, var_ref) };
+    }
+    if (std.mem.eql(u8, var_ref.name, "max_int")) {
+        return .{ .Constant = .{
+            .value = .{ .Int = std.math.maxInt(i64) },
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } };
+    }
+    if (std.mem.eql(u8, var_ref.name, "min_int")) {
+        return .{ .Constant = .{
+            .value = .{ .Int = std.math.minInt(i64) },
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } };
+    }
+    return error.UnboundVariable;
 }
 
 fn lowerConstant(arena: *std.heap.ArenaAllocator, constant: ttree.Constant) LowerError!ir.Constant {
@@ -807,6 +828,51 @@ test "lower top-level and nested lets with lexical var references" {
     };
     try std.testing.expectEqualStrings("x", var_ref.name);
     try std.testing.expectEqual(layout.intConstant(), var_ref.layout);
+}
+
+test "lower max_int and min_int as pinned i64 constants" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (let _ (prim \"+\" (var max_int) (const-int 1)) (prim \"-\" (var min_int) (const-int 1)))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const first_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const add = switch (first_let.value.*) {
+        .Prim => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const max_const = switch (add.args[0].*) {
+        .Constant => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(i64, std.math.maxInt(i64)), max_const.value.Int);
+
+    const sub = switch (first_let.body.*) {
+        .Prim => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const min_const = switch (sub.args[0].*) {
+        .Constant => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), min_const.value.Int);
 }
 
 test "lower constructor expressions with layout policy" {

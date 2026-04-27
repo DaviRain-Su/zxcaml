@@ -229,9 +229,14 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
 
     var interpreter: interp.Interpreter = .{};
     const value = interpreter.backend().evalModule(core_module) catch |err| {
-        try writeStderr(init.io, "error: ");
-        try writeStderr(init.io, interp.errorMessage(err));
-        try writeStderr(init.io, "\n");
+        if (interp.panicMarker(err)) |marker| {
+            try writeStderr(init.io, marker);
+            try writeStderr(init.io, "\n");
+        } else {
+            try writeStderr(init.io, "error: ");
+            try writeStderr(init.io, interp.errorMessage(err));
+            try writeStderr(init.io, "\n");
+        }
         std.process.exit(1);
     };
 

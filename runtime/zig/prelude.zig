@@ -3,9 +3,25 @@
 //! RESPONSIBILITIES:
 //! - Provide arena-friendly tagged unions for option/result/list constructors.
 //! - Keep constructor helpers allocation-free unless generated Layout code allocates.
-//! - Stay dependency-free for BPF-compatible generated programs.
+//! - Keep integer helpers and constructor helpers BPF-compatible.
 
+const std = @import("std");
 const Arena = @import("arena.zig").Arena;
+const runtime_panic = @import("panic.zig");
+
+/// Divides two i64 values with ZxCaml's pinned truncating semantics.
+pub fn intDiv(lhs: i64, rhs: i64) i64 {
+    if (rhs == 0) runtime_panic.divisionByZero();
+    if (lhs == std.math.minInt(i64) and rhs == -1) return std.math.minInt(i64);
+    return @divTrunc(lhs, rhs);
+}
+
+/// Computes i64 remainder with ZxCaml's pinned truncating semantics.
+pub fn intMod(lhs: i64, rhs: i64) i64 {
+    if (rhs == 0) runtime_panic.divisionByZero();
+    if (lhs == std.math.minInt(i64) and rhs == -1) return 0;
+    return @rem(lhs, rhs);
+}
 
 /// OCaml-style `'a option` representation used by generated Zig.
 pub fn Option(comptime T: type) type {
@@ -123,4 +139,14 @@ test "List constructors preserve head and tail payloads" {
         },
         .nil => return error.TestUnexpectedResult,
     }
+}
+
+test "integer division and modulus pin overflow edge semantics" {
+    try std.testing.expectEqual(@as(i64, 3), intDiv(7, 2));
+    try std.testing.expectEqual(@as(i64, -3), intDiv(-7, 2));
+    try std.testing.expectEqual(std.math.minInt(i64), intDiv(std.math.minInt(i64), -1));
+    try std.testing.expectEqual(@as(i64, 1), intMod(7, 3));
+    try std.testing.expectEqual(@as(i64, -1), intMod(-7, 3));
+    try std.testing.expectEqual(@as(i64, 0), intMod(std.math.minInt(i64), -1));
+    try std.testing.expectEqualStrings("ZXCAML_PANIC:division_by_zero", runtime_panic.division_by_zero_marker);
 }

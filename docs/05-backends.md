@@ -87,9 +87,10 @@ from a static buffer and calls user `main` with it.
 ### 2.5 Integer semantics
 
 P1 emits `i64` and uses Zig's `+%`, `-%`, `*%` (wrapping) for
-arithmetic. OCaml's standard integers are wrap-around on overflow,
-which matches `+%` semantics. Division and modulus map to `@divTrunc`
-and `@rem` to keep behaviour consistent with OCaml's `/` and `mod`.
+arithmetic. Division and modulus use small runtime helpers around
+`@divTrunc` and `@rem` so the zero-divisor panic path and the
+`min_int / -1` edge case are shared across targets. The exact pinned
+semantics are part of the determinism contract in §6.
 
 ### 2.6 Naming
 
@@ -175,3 +176,25 @@ Interpreter(P)  ≡  ZigBackend(P)  (mod observable outputs)
 This is an **enforced invariant**, checked by a property suite that
 runs a corpus of `.ml` files through both and diffs the results.
 Failures are P0 bugs.
+
+### Pinned integer semantics (ADR-008 / F14)
+
+ZxCaml `int` is deliberately pinned to **signed 64-bit `i64`** in P1.
+This diverges from upstream OCaml on 64-bit hosts, where `int` is a
+63-bit immediate (`max_int = 4611686018427387903`). In ZxCaml,
+`max_int = 9223372036854775807` and `min_int = -9223372036854775808`.
+
+The interpreter and ZigBackend must be byte-identical on these rules:
+
+- `+`, `-`, and `*` wrap on overflow exactly like Zig `+%`, `-%`, and
+  `*%` (`max_int + 1 = min_int`, `min_int - 1 = max_int`,
+  `min_int * -1 = min_int`).
+- `/` truncates toward zero. `min_int / -1` is pinned to `min_int` so
+  this overflow edge also wraps instead of backend-trapping.
+- `mod` uses Zig/OCaml-style remainder semantics. `min_int mod -1` is
+  pinned to `0`.
+- Division or modulus by zero is a user-program panic with the stable
+  marker `ZXCAML_PANIC:division_by_zero`; the interpreter prints the
+  marker and exits non-zero, and generated hosted binaries print the
+  same marker before exiting non-zero. BPF/freestanding builds use the
+  no-return panic path in `runtime/zig/panic.zig`.

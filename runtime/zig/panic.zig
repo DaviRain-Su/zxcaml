@@ -2,11 +2,26 @@
 //!
 //! RESPONSIBILITIES:
 //! - Provide one user-program panic function for generated code to call.
-//! - Abort immediately without attempting recovery or allocation.
-//! - Remain tiny so the BPF-safe variant can replace/extend it in F08.
+//! - Terminate without attempting recovery or allocation.
+//! - Emit a stable marker on hosted targets and use a no-return path on BPF/freestanding.
+
+const std = @import("std");
+const builtin = @import("builtin");
+
+/// Stable user-observable marker for integer division or modulus by zero.
+pub const division_by_zero_marker = "ZXCAML_PANIC:division_by_zero";
+
+/// Panics with the stable division-by-zero marker.
+pub fn divisionByZero() noreturn {
+    panic(division_by_zero_marker);
+}
 
 /// Aborts execution for an unrecoverable user-program panic.
 pub fn panic(msg: []const u8) noreturn {
-    _ = msg;
-    @trap();
+    if (comptime builtin.os.tag == .freestanding) {
+        while (true) {}
+    } else {
+        std.debug.print("{s}\n", .{msg});
+        std.process.exit(101);
+    }
 }

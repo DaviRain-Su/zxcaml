@@ -83,8 +83,9 @@ out/
 ### 2.5 整数语义
 
 P1 发 `i64`，算术用 Zig 的 `+%`、`-%`、`*%`（绕回）。
-OCaml 标准整数溢出绕回，与 `+%` 一致。
-除法和取余映射到 `@divTrunc` 和 `@rem`，与 OCaml 的 `/` 和 `mod` 行为一致。
+除法和取余通过 runtime helper 包装 `@divTrunc` 和 `@rem`，
+这样除零 panic 和 `min_int / -1` 边界在各后端保持一致；
+精确定义见 §6 的确定性要求。
 
 ### 2.6 命名
 
@@ -163,3 +164,8 @@ Interpreter(P)  ≡  ZigBackend(P)   （在可观察输出上）
 
 这是一个 **强制不变量**，由属性测试套件保证 —— 跑一组 `.ml` 文件穿过两条路径，
 diff 结果。出现分歧就是 P0 bug。
+
+**固定整数语义（F14）**：ZxCaml 的 `int` 在 P1 固定为有符号 64 位
+`i64`，这刻意不同于上游 OCaml 的 63 位立即整数；`+`/`-`/`*`
+按 `+%`/`-%`/`*%` 绕回，`/` 向零截断，`mod` 使用 remainder 语义，
+除零或 `mod 0` 统一以 `ZXCAML_PANIC:division_by_zero` 标记 panic。

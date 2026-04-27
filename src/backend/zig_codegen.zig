@@ -108,8 +108,7 @@ fn emitExpr(
     switch (expr) {
         .Constant => |constant| switch (constant) {
             .Int => |value| {
-                const unsigned = std.math.cast(u64, value) orelse return error.NegativeIntegerResultUnsupported;
-                try appendPrint(out, allocator, "{d}", .{unsigned});
+                try appendPrint(out, allocator, "{d}", .{value});
             },
             .String => |value| try appendPrint(out, allocator, "\"{f}\"", .{std.zig.fmtString(value)}),
         },
@@ -190,14 +189,14 @@ fn emitPrimExpr(
     if (prim.args.len != 2) return error.UnsupportedExpr;
     switch (prim.op) {
         .Div => {
-            try append(out, allocator, "@divTrunc(");
+            try append(out, allocator, "prelude.intDiv(");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try append(out, allocator, ", ");
             try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
             try append(out, allocator, ")");
         },
         .Mod => {
-            try append(out, allocator, "@rem(");
+            try append(out, allocator, "prelude.intMod(");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try append(out, allocator, ", ");
             try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
@@ -832,6 +831,40 @@ test "ZigBackend emits let expressions as const declarations inside blocks" {
     try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(blk0: {") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "const x = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
+}
+
+test "ZigBackend emits pinned integer arithmetic operations" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .Prim = .{
+                .op = .Mul,
+                .args = &.{
+                    &.{ .Constant = .{ .Int = std.math.minInt(i64) } },
+                    &.{ .Constant = .{ .Int = -1 } },
+                },
+            } },
+            .body = &.{ .Let = .{
+                .name = "_",
+                .value = &.{ .Prim = .{
+                    .op = .Div,
+                    .args = &.{ &.{ .Constant = .{ .Int = 1 } }, &.{ .Constant = .{ .Int = 0 } } },
+                } },
+                .body = &.{ .Prim = .{
+                    .op = .Mod,
+                    .args = &.{ &.{ .Constant = .{ .Int = 0 } }, &.{ .Constant = .{ .Int = 0 } } },
+                } },
+            } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "*% -1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intDiv(1, 0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intMod(0, 0)") != null);
 }
 
 test "ZigBackend emits option constructors through prelude tagged unions" {
