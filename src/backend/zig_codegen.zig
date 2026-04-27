@@ -160,9 +160,9 @@ fn emitIfExpr(
     ctx.next_block_id += 1;
     try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try append(out, allocator, "if (");
+    try append(out, allocator, "if (prelude.Bool.toNative(");
     try emitExpr(out, allocator, if_expr.cond.*, indent_level + 1, ctx);
-    try append(out, allocator, ") {\n");
+    try append(out, allocator, ")) {\n");
     try emitIndent(out, allocator, indent_level + 2);
     try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
     try emitExpr(out, allocator, if_expr.then_branch.*, indent_level + 2, ctx);
@@ -202,7 +202,14 @@ fn emitPrimExpr(
             try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
             try append(out, allocator, ")");
         },
-        else => {
+        .Eq, .Ne, .Lt, .Le, .Gt, .Ge => {
+            try append(out, allocator, "prelude.Bool.fromNative((");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, "))");
+        },
+        .Add, .Sub, .Mul => {
             try append(out, allocator, "(");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
@@ -654,7 +661,7 @@ fn allKnownVariantsCovered(variants: []const []const u8) bool {
 fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
     return switch (ty) {
         .Int => allocator.dupe(u8, "i64"),
-        .Bool => allocator.dupe(u8, "bool"),
+        .Bool => allocator.dupe(u8, "prelude.Bool"),
         .Unit => allocator.dupe(u8, "void"),
         .String => allocator.dupe(u8, "[]const u8"),
         .Adt => |adt| blk: {
@@ -865,6 +872,26 @@ test "ZigBackend emits pinned integer arithmetic operations" {
     try std.testing.expect(std.mem.indexOf(u8, source, "*% -1") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intDiv(1, 0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intMod(0, 0)") != null);
+}
+
+test "ZigBackend emits comparison bool ADT values and Zig if-expressions" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .If = .{
+            .cond = &.{ .Prim = .{
+                .op = .Le,
+                .args = &.{ &.{ .Constant = .{ .Int = 2 } }, &.{ .Constant = .{ .Int = 3 } } },
+            } },
+            .then_branch = &.{ .Constant = .{ .Int = 1 } },
+            .else_branch = &.{ .Constant = .{ .Int = 0 } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "if (prelude.Bool.toNative(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Bool.fromNative((2 <= 3))") != null);
 }
 
 test "ZigBackend emits option constructors through prelude tagged unions" {

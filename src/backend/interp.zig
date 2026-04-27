@@ -178,10 +178,10 @@ fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Va
 
 fn evalIf(allocator: std.mem.Allocator, if_expr: ir.IfExpr, env: *std.StringHashMap(Value)) EvalError!Value {
     const cond = try evalExpr(allocator, if_expr.cond.*, env);
-    return switch (cond) {
-        .Bool => |value| if (value) evalExpr(allocator, if_expr.then_branch.*, env) else evalExpr(allocator, if_expr.else_branch.*, env),
-        else => error.UnsupportedExpr,
-    };
+    return if (try boolValue(cond))
+        evalExpr(allocator, if_expr.then_branch.*, env)
+    else
+        evalExpr(allocator, if_expr.else_branch.*, env);
 }
 
 fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap(Value)) EvalError!Value {
@@ -194,12 +194,28 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
         .Mul => .{ .Int = wrappingMul(lhs, rhs) },
         .Div => .{ .Int = try truncatingDiv(lhs, rhs) },
         .Mod => .{ .Int = try truncatingMod(lhs, rhs) },
-        .Eq => .{ .Bool = lhs == rhs },
-        .Ne => .{ .Bool = lhs != rhs },
-        .Lt => .{ .Bool = lhs < rhs },
-        .Le => .{ .Bool = lhs <= rhs },
-        .Gt => .{ .Bool = lhs > rhs },
-        .Ge => .{ .Bool = lhs >= rhs },
+        .Eq => boolCtor(lhs == rhs),
+        .Ne => boolCtor(lhs != rhs),
+        .Lt => boolCtor(lhs < rhs),
+        .Le => boolCtor(lhs <= rhs),
+        .Gt => boolCtor(lhs > rhs),
+        .Ge => boolCtor(lhs >= rhs),
+    };
+}
+
+fn boolCtor(value: bool) Value {
+    return .{ .Ctor = .{ .name = if (value) "true" else "false", .args = &.{} } };
+}
+
+fn boolValue(value: Value) EvalError!bool {
+    return switch (value) {
+        .Bool => |native| native,
+        .Ctor => |ctor| {
+            if (ctor.args.len == 0 and std.mem.eql(u8, ctor.name, "true")) return true;
+            if (ctor.args.len == 0 and std.mem.eql(u8, ctor.name, "false")) return false;
+            return error.UnsupportedExpr;
+        },
+        else => error.UnsupportedExpr,
     };
 }
 
@@ -422,6 +438,54 @@ test "interpreter pins i64 arithmetic wrap edge cases" {
     try std.testing.expectError(error.DivisionByZero, truncatingDiv(0, 0));
     try std.testing.expectError(error.DivisionByZero, truncatingMod(0, 0));
     try std.testing.expectEqualStrings(division_by_zero_marker, panicMarker(error.DivisionByZero).?);
+}
+
+test "interpreter comparisons produce bool constructors consumed by if" {
+    var env = std.StringHashMap(Value).init(std.testing.allocator);
+    defer env.deinit();
+
+    const cmp_true = try evalPrim(std.testing.allocator, .{
+        .op = .Le,
+        .args = &.{
+            makeExpr(.{ .Constant = .{ .value = .{ .Int = 1 }, .ty = .Int, .layout = layout.intConstant() } }),
+            makeExpr(.{ .Constant = .{ .value = .{ .Int = 2 }, .ty = .Int, .layout = layout.intConstant() } }),
+        },
+        .ty = .Bool,
+        .layout = layout.intConstant(),
+    }, &env);
+    switch (cmp_true) {
+        .Ctor => |ctor| try std.testing.expectEqualStrings("true", ctor.name),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const entrypoint_decl: ir.Decl = .{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .If = .{
+                .cond = makeExpr(.{ .Prim = .{
+                    .op = .Gt,
+                    .args = &.{
+                        makeExpr(.{ .Constant = .{ .value = .{ .Int = 3 }, .ty = .Int, .layout = layout.intConstant() } }),
+                        makeExpr(.{ .Constant = .{ .value = .{ .Int = 5 }, .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                    .ty = .Bool,
+                    .layout = layout.intConstant(),
+                } }),
+                .then_branch = makeExpr(.{ .Constant = .{ .value = .{ .Int = 9 }, .ty = .Int, .layout = layout.intConstant() } }),
+                .else_branch = makeExpr(.{ .Constant = .{ .value = .{ .Int = 4 }, .ty = .Int, .layout = layout.intConstant() } }),
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } };
+    const decls = [_]ir.Decl{entrypoint_decl};
+
+    try std.testing.expectEqual(@as(u64, 4), try evalModule(.{ .decls = &decls }));
 }
 
 test "interpreter evaluates top-level and nested let variable bindings" {

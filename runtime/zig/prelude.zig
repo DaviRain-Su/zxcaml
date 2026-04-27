@@ -1,13 +1,29 @@
 //! Runtime prelude helpers used by generated ZxCaml programs.
 //!
 //! RESPONSIBILITIES:
-//! - Provide arena-friendly tagged unions for option/result/list constructors.
+//! - Provide arena-friendly tagged unions for bool/option/result/list constructors.
 //! - Keep constructor helpers allocation-free unless generated Layout code allocates.
 //! - Keep integer helpers and constructor helpers BPF-compatible.
 
 const std = @import("std");
 const Arena = @import("arena.zig").Arena;
 const runtime_panic = @import("panic.zig");
+
+/// OCaml-style `bool` representation used by generated Zig.
+pub const Bool = enum(u1) {
+    false = 0,
+    true = 1,
+
+    /// Converts a native Zig condition into the bool ADT.
+    pub fn fromNative(value: bool) Bool {
+        return if (value) .true else .false;
+    }
+
+    /// Converts the bool ADT back into the native Zig `if` condition type.
+    pub fn toNative(value: Bool) bool {
+        return value == .true;
+    }
+};
 
 /// Divides two i64 values with ZxCaml's pinned truncating semantics.
 pub fn intDiv(lhs: i64, rhs: i64) i64 {
@@ -95,6 +111,13 @@ pub fn List(comptime T: type) type {
             return ConsFromTailPtr(head, Box(arena, tail));
         }
     };
+}
+
+test "Bool constructors convert to and from native Zig bools" {
+    try std.testing.expectEqual(Bool.true, Bool.fromNative(true));
+    try std.testing.expectEqual(Bool.false, Bool.fromNative(false));
+    try std.testing.expect(Bool.toNative(Bool.true));
+    try std.testing.expect(!Bool.toNative(Bool.false));
 }
 
 test "Option and Result constructors preserve payloads" {
