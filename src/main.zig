@@ -5,13 +5,14 @@
 //! - Dispatch `omlz check <file.ml>` through the OCaml frontend subprocess.
 //! - Emit the M0 Core IR contract with `omlz check --emit=core-ir <file.ml>`.
 //! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
-//! - Dispatch `omlz build --target=native --keep-zig <file.ml> -o <out>` through Zig source emission.
+//! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
 const pipeline = @import("driver/pipeline.zig");
+const driver_build = @import("driver/build.zig");
 const interp = @import("backend/interp.zig");
 const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
@@ -88,11 +89,7 @@ pub fn main(init: std.process.Init) !void {
         };
 
         if (!std.mem.eql(u8, build_args.target, "native")) {
-            try writeStderr(init.io, "error: only --target=native is wired in F06; BPF build lands in F08.\n");
-            std.process.exit(1);
-        }
-        if (!build_args.keep_zig) {
-            try writeStderr(init.io, "error: native binary build lands in F07; use --keep-zig in F06.\n");
+            try writeStderr(init.io, "error: only --target=native is currently wired; BPF build lands in F08.\n");
             std.process.exit(1);
         }
 
@@ -105,7 +102,7 @@ pub fn main(init: std.process.Init) !void {
         defer result.deinit();
 
         switch (result) {
-            .success => |parsed| try emitZigSource(init, parsed.module, build_args),
+            .success => |parsed| try buildNative(init, parsed.module, build_args),
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
         }
         return;
@@ -127,7 +124,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz --help
         \\  omlz check <file.ml>
         \\  omlz check --emit=core-ir <file.ml>
-        \\  omlz build --target=native --keep-zig <file.ml> -o <out>
+        \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz run <file.ml>
         \\
     );
@@ -234,13 +231,11 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
     try writeStdout(init.io, rendered);
 }
 
-fn emitZigSource(
+fn buildNative(
     init: std.process.Init,
     module: @import("frontend_bridge/ttree.zig").Module,
     build_args: BuildArgs,
 ) !void {
-    _ = build_args.output_path;
-
     var core_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer core_arena.deinit();
 
@@ -277,6 +272,17 @@ fn emitZigSource(
         .data = source,
         .flags = .{ .truncate = true },
     });
+
+    driver_build.buildNative(init.gpa, init.io, .{
+        .generated_zig_path = "out/program.zig",
+        .native_entry_path = "out/native_entry.zig",
+        .output_path = build_args.output_path,
+    }) catch |err| {
+        try writeStderr(init.io, "error: native build failed: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 }
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
@@ -327,12 +333,11 @@ test "package version comes from build manifest" {
     try std.testing.expectEqualStrings("0.1.0", build_options.version);
 }
 
-test "parse F06 keep-zig build arguments" {
+test "parse F07 native build arguments without requiring keep-zig" {
     const args = [_][]const u8{
         "omlz",
         "build",
         "--target=native",
-        "--keep-zig",
         "examples/m0_zero.ml",
         "-o",
         "/tmp/m0",
@@ -340,7 +345,7 @@ test "parse F06 keep-zig build arguments" {
 
     const parsed = try parseBuildArgs(&args);
     try std.testing.expectEqualStrings("native", parsed.target);
-    try std.testing.expect(parsed.keep_zig);
+    try std.testing.expect(!parsed.keep_zig);
     try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
     try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path);
 }
@@ -355,6 +360,7 @@ test {
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");
+    _ = @import("driver/build.zig");
     _ = @import("lower/arena.zig");
     _ = @import("lower/lir.zig");
     _ = @import("lower/strategy.zig");
