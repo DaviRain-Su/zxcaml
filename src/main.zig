@@ -2,12 +2,13 @@
 //!
 //! RESPONSIBILITIES:
 //! - Print the package version declared in `build.zig.zon`.
-//! - Print bootstrap usage for planned subcommands.
+//! - Dispatch `omlz check <file.ml>` through the OCaml frontend subprocess.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
+const pipeline = @import("driver/pipeline.zig");
 
 /// Parses top-level CLI flags and dispatches implemented bootstrap commands.
 pub fn main(init: std.process.Init) !void {
@@ -25,6 +26,21 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (args.len == 3 and std.mem.eql(u8, args[1], "check")) {
+        const result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
+            if (err != error.FrontendNotFound) {
+                try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
+            }
+            std.process.exit(1);
+        };
+        defer result.deinit(init.gpa);
+
+        switch (result) {
+            .success => return,
+            .failed => |code| std.process.exit(if (code == 0) 1 else code),
+        }
+    }
+
     try writeStderr(init.io, "error: unsupported command or option; run `omlz --help` for usage.\n");
     std.process.exit(1);
 }
@@ -39,7 +55,7 @@ fn writeHelp(io: Io) !void {
         \\Usage:
         \\  omlz --version
         \\  omlz --help
-        \\  omlz check <file.ml>   (not yet implemented)
+        \\  omlz check <file.ml>
         \\  omlz build <file.ml>   (not yet implemented)
         \\  omlz run <file.ml>     (not yet implemented)
         \\
@@ -64,4 +80,8 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
 
 test "package version comes from build manifest" {
     try std.testing.expectEqualStrings("0.1.0", build_options.version);
+}
+
+test {
+    _ = pipeline;
 }
