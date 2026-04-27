@@ -1,13 +1,14 @@
 (* S-expression serializer for the ZxCaml OCaml frontend wire format.
 
    The serializer is intentionally hand-written to avoid any dependency beyond
-   compiler-libs.common.  Version 0.2 contains top-level let declarations,
-   one-argument lambdas, integer constants, identifiers, and nested lets. *)
+   compiler-libs.common.  Version 0.3 contains top-level let declarations,
+   one-argument lambdas, integer/string constants, identifiers, nested lets,
+   and whitelisted option/result constructor expressions. *)
 
 open Format
 open Zxc_subset
 
-let version = "0.2"
+let version = "0.3"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' -> true
@@ -21,6 +22,7 @@ let pp_param ppf = function Anonymous -> fprintf ppf "_"
 
 let rec pp_expr ppf = function
   | Const_int n -> fprintf ppf "(const-int %d)" n
+  | Const_string value -> fprintf ppf "(const-string %S)" value
   | Var name -> fprintf ppf "(var %a)" pp_atom name
   | Lambda lambda ->
       fprintf ppf "(lambda (";
@@ -29,6 +31,10 @@ let rec pp_expr ppf = function
   | Let let_expr ->
       fprintf ppf "(let %a %a %a)" pp_atom let_expr.name pp_expr let_expr.value
         pp_expr let_expr.body
+  | Ctor ctor ->
+      fprintf ppf "(ctor %a" pp_atom ctor.name;
+      List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) ctor.args;
+      fprintf ppf ")"
 
 and pp_params ppf = function
   | [] -> ()

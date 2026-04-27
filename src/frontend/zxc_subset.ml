@@ -27,9 +27,11 @@ type param = Anonymous
 
 type expr =
   | Const_int of int
+  | Const_string of string
   | Var of string
   | Lambda of lambda
   | Let of let_expr
+  | Ctor of ctor
 
 and lambda = {
   params : param list;
@@ -40,6 +42,11 @@ and let_expr = {
   name : string;
   value : expr;
   body : expr;
+}
+
+and ctor = {
+  name : string;
+  args : expr list;
 }
 
 type decl = {
@@ -77,8 +84,9 @@ let unsupported ~node_kind ~loc =
            Printf.sprintf
              "%s is not supported in the current ZxCaml subset; expected \
               top-level `let` declarations, integer constants, identifiers, \
-              one-argument functions, or non-recursive nested `let` \
-              expressions"
+              string constants, one-argument functions, non-recursive nested \
+              `let` expressions, or the whitelisted constructors \
+              None/Some/Ok/Error"
              node_kind;
        })
 
@@ -152,6 +160,10 @@ let ident_name ident = Ident.name ident
 
 let longident_name (lid : Longident.t Location.loc) = Longident.last lid.txt
 
+let is_whitelisted_constructor = function
+  | "None" | "Some" | "Ok" | "Error" -> true
+  | _ -> false
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_var (ident, _, _) -> ident_name ident
@@ -171,6 +183,7 @@ let parse_param (param : function_param) =
 let rec parse_expr (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
+  | Texp_constant (Const_string (value, _, _)) -> Const_string value
   | Texp_ident (_, lid, _) -> Var (longident_name lid)
   | Texp_function ([ param ], Tfunction_body body) ->
       let param = parse_param param in
@@ -192,6 +205,11 @@ let rec parse_expr (expr : expression) =
   | Texp_let (_, _ :: _ :: _, _) ->
       unsupported ~node_kind:"Texp_let(and)" ~loc:expr.exp_loc
   | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc
+  | Texp_construct (_lid, constructor, args) ->
+      let name = constructor.Types.cstr_name in
+      if is_whitelisted_constructor name then
+        Ctor { name; args = List.map parse_expr args }
+      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
 
 let parse_value_binding (binding : value_binding) =
