@@ -1,9 +1,11 @@
 //! Runtime prelude helpers used by generated ZxCaml programs.
 //!
 //! RESPONSIBILITIES:
-//! - Provide arena-friendly tagged unions for option/result constructors.
+//! - Provide arena-friendly tagged unions for option/result/list constructors.
 //! - Keep constructor helpers allocation-free unless generated Layout code allocates.
 //! - Stay dependency-free for BPF-compatible generated programs.
+
+const Arena = @import("arena.zig").Arena;
 
 /// OCaml-style `'a option` representation used by generated Zig.
 pub fn Option(comptime T: type) type {
@@ -41,6 +43,44 @@ pub fn Result(comptime T: type, comptime E: type) type {
     };
 }
 
+/// OCaml-style `'a list` representation used by generated Zig.
+pub fn List(comptime T: type) type {
+    return union(enum) {
+        nil,
+        cons: Cons,
+
+        const Self = @This();
+
+        /// Heap-allocated cons-cell payload: head plus pointer to the tail list.
+        pub const Cons = struct {
+            head: T,
+            tail: *const Self,
+        };
+
+        /// Constructs `[]` without heap allocation.
+        pub fn Nil() Self {
+            return .nil;
+        }
+
+        /// Constructs a cons value from an already-boxed tail pointer.
+        pub fn ConsFromTailPtr(head: T, tail: *const Self) Self {
+            return .{ .cons = .{ .head = head, .tail = tail } };
+        }
+
+        /// Allocates a list value in the arena and returns a stable tail pointer.
+        pub fn Box(arena: *Arena, value: Self) *const Self {
+            const slot = arena.alloc(Self, 1) catch unreachable;
+            slot[0] = value;
+            return &slot[0];
+        }
+
+        /// Allocates the tail value and constructs a cons cell that points at it.
+        pub fn ConsAlloc(arena: *Arena, head: T, tail: Self) Self {
+            return ConsFromTailPtr(head, Box(arena, tail));
+        }
+    };
+}
+
 test "Option and Result constructors preserve payloads" {
     const maybe = Option(i64).Some(1);
     switch (maybe) {
@@ -64,5 +104,23 @@ test "Option and Result constructors preserve payloads" {
     switch (err) {
         .err => |value| try @import("std").testing.expectEqual(@as(i64, 3), value),
         .ok => return error.TestUnexpectedResult,
+    }
+}
+
+test "List constructors preserve head and tail payloads" {
+    var buf: [256]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+
+    const nil = List(i64).Nil();
+    const one = List(i64).ConsAlloc(&arena, 1, nil);
+    switch (one) {
+        .cons => |cell| {
+            try @import("std").testing.expectEqual(@as(i64, 1), cell.head);
+            switch (cell.tail.*) {
+                .nil => {},
+                .cons => return error.TestUnexpectedResult,
+            }
+        },
+        .nil => return error.TestUnexpectedResult,
     }
 }

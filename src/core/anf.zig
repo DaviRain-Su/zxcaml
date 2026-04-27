@@ -98,8 +98,13 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
 
     for (lambda.params) |param_name| {
         const owned_name = try arena.allocator().dupe(u8, param_name);
-        const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_")) .Unit else .Int;
-        const param_layout = if (std.mem.startsWith(u8, param_name, "_")) layout.unitValue() else layout.intConstant();
+        const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_"))
+            .Unit
+        else if (try lambdaParamIsList(arena, lambda.body.*, param_name))
+            try listTy(arena, .Int)
+        else
+            .Int;
+        const param_layout = layoutForTy(param_ty);
         try params.append(arena.allocator(), .{
             .name = owned_name,
             .ty = param_ty,
@@ -442,15 +447,17 @@ fn lowerCtorPattern(
     inserted: *std.ArrayList(ScopedBinding),
 ) LowerError!ir.Pattern {
     try validateCtor(ctor_pattern.name, ctor_pattern.args.len);
-    const payload_ty = try ctorPatternPayloadTy(ctor_pattern.name, matched_ty);
-    const payload_layout = layout.intConstant();
+    const payload_tys = try ctorPatternPayloadTys(arena, ctor_pattern.name, matched_ty);
 
     var args = std.ArrayList(ir.Pattern).empty;
     errdefer args.deinit(arena.allocator());
-    for (ctor_pattern.args) |arg| {
+    for (ctor_pattern.args, 0..) |arg, index| {
         switch (arg) {
             .Ctor => return error.UnsupportedPattern,
-            .Wildcard, .Var => try args.append(arena.allocator(), try lowerPattern(arena, ctx, arg, payload_ty, payload_layout, inserted)),
+            .Wildcard, .Var => try args.append(
+                arena.allocator(),
+                try lowerPattern(arena, ctx, arg, payload_tys[index], layoutForTy(payload_tys[index]), inserted),
+            ),
         }
     }
 
@@ -467,6 +474,14 @@ fn validateCtor(name: []const u8, arg_count: usize) LowerError!void {
     }
     if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Error")) {
         if (arg_count != 1) return error.UnsupportedCtorArity;
+        return;
+    }
+    if (std.mem.eql(u8, name, "[]")) {
+        if (arg_count != 0) return error.UnsupportedCtorArity;
+        return;
+    }
+    if (std.mem.eql(u8, name, "::")) {
+        if (arg_count != 2) return error.UnsupportedCtorArity;
         return;
     }
     return error.UnsupportedCtor;
@@ -523,7 +538,7 @@ fn restoreBindings(ctx: *LowerContext, inserted: []const ScopedBinding) void {
     }
 }
 
-fn ctorPatternPayloadTy(name: []const u8, matched_ty: ir.Ty) LowerError!ir.Ty {
+fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, name: []const u8, matched_ty: ir.Ty) LowerError![]const ir.Ty {
     const adt = switch (matched_ty) {
         .Adt => |value| value,
         else => return error.UnsupportedPattern,
@@ -531,21 +546,44 @@ fn ctorPatternPayloadTy(name: []const u8, matched_ty: ir.Ty) LowerError!ir.Ty {
 
     if (std.mem.eql(u8, name, "Some")) {
         if (adt.params.len != 1) return error.UnsupportedPattern;
-        return adt.params[0];
+        const payloads = try arena.allocator().alloc(ir.Ty, 1);
+        payloads[0] = adt.params[0];
+        return payloads;
     }
     if (std.mem.eql(u8, name, "Ok")) {
         if (adt.params.len != 2) return error.UnsupportedPattern;
-        return adt.params[0];
+        const payloads = try arena.allocator().alloc(ir.Ty, 1);
+        payloads[0] = adt.params[0];
+        return payloads;
     }
     if (std.mem.eql(u8, name, "Error")) {
         if (adt.params.len != 2) return error.UnsupportedPattern;
-        return adt.params[1];
+        const payloads = try arena.allocator().alloc(ir.Ty, 1);
+        payloads[0] = adt.params[1];
+        return payloads;
     }
-    if (std.mem.eql(u8, name, "None")) return .Unit;
+    if (std.mem.eql(u8, name, "None")) return &.{};
+    if (std.mem.eql(u8, name, "[]")) {
+        if (!std.mem.eql(u8, adt.name, "list")) return error.UnsupportedPattern;
+        return &.{};
+    }
+    if (std.mem.eql(u8, name, "::")) {
+        if (!std.mem.eql(u8, adt.name, "list") or adt.params.len != 1) return error.UnsupportedPattern;
+        const payloads = try arena.allocator().alloc(ir.Ty, 2);
+        payloads[0] = adt.params[0];
+        payloads[1] = matched_ty;
+        return payloads;
+    }
     return error.UnsupportedPattern;
 }
 
 fn ctorTy(arena: *std.heap.ArenaAllocator, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
+    if (std.mem.eql(u8, name, "[]")) {
+        return listTy(arena, .Int);
+    }
+    if (std.mem.eql(u8, name, "::")) {
+        return listTy(arena, exprTy(args[0].*));
+    }
     const adt_name = if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "None")) "option" else "result";
     const param_count: usize = if (std.mem.eql(u8, adt_name, "option")) 1 else 2;
     const params = try arena.allocator().alloc(ir.Ty, param_count);
@@ -562,6 +600,79 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, name: []const u8, args: []const *cons
         .name = adt_name,
         .params = params,
     } };
+}
+
+fn listTy(arena: *std.heap.ArenaAllocator, elem_ty: ir.Ty) LowerError!ir.Ty {
+    const params = try arena.allocator().alloc(ir.Ty, 1);
+    params[0] = elem_ty;
+    return .{ .Adt = .{
+        .name = "list",
+        .params = params,
+    } };
+}
+
+fn layoutForTy(ty: ir.Ty) layout.Layout {
+    return switch (ty) {
+        .Int, .Bool => layout.intConstant(),
+        .Unit => layout.unitValue(),
+        .String => layout.defaultFor(.StringLiteral),
+        .Adt => layout.ctor(1),
+        .Arrow => layout.topLevelLambda(),
+    };
+}
+
+fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_name: []const u8) LowerError!bool {
+    return switch (expr) {
+        .Match => |match_expr| blk: {
+            const scrutinee_is_param = switch (match_expr.scrutinee.*) {
+                .Var => |var_ref| std.mem.eql(u8, var_ref.name, param_name),
+                else => false,
+            };
+            if (scrutinee_is_param) {
+                for (match_expr.arms) |arm| {
+                    if (patternIsListCtor(arm.pattern)) break :blk true;
+                }
+            }
+            if (try lambdaParamIsList(arena, match_expr.scrutinee.*, param_name)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (try lambdaParamIsList(arena, arm.body.*, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Lambda => |lambda| try lambdaParamIsList(arena, lambda.body.*, param_name),
+        .App => |app| blk: {
+            if (try lambdaParamIsList(arena, app.callee.*, param_name)) break :blk true;
+            for (app.args) |arg| {
+                if (try lambdaParamIsList(arena, arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| (try lambdaParamIsList(arena, let_expr.value.*, param_name)) or
+            (!std.mem.eql(u8, let_expr.name, param_name) and try lambdaParamIsList(arena, let_expr.body.*, param_name)),
+        .If => |if_expr| (try lambdaParamIsList(arena, if_expr.cond.*, param_name)) or
+            (try lambdaParamIsList(arena, if_expr.then_branch.*, param_name)) or
+            (try lambdaParamIsList(arena, if_expr.else_branch.*, param_name)),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (try lambdaParamIsList(arena, arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (try lambdaParamIsList(arena, arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Constant, .Var => false,
+    };
+}
+
+fn patternIsListCtor(pattern: ttree.Pattern) bool {
+    return switch (pattern) {
+        .Ctor => |ctor_pattern| std.mem.eql(u8, ctor_pattern.name, "[]") or std.mem.eql(u8, ctor_pattern.name, "::"),
+        .Wildcard, .Var => false,
+    };
 }
 
 fn makeArrowTy(
@@ -733,6 +844,59 @@ test "lower constructor expressions with layout policy" {
     const printed = try pretty.formatModule(std.testing.allocator, module);
     defer std.testing.allocator.free(printed);
     try std.testing.expect(std.mem.indexOf(u8, printed, "(ctor Some") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, ":layout (arena boxed)") != null);
+}
+
+test "lower list constructors and cons patterns with list layout policy" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (let-rec sum (lambda (xs) (match (var xs) (case (ctor \"[]\") (const-int 0)) (case (ctor \"::\" (var x) (var rest)) (prim \"+\" (var x) (app (var sum) (var rest)))))) (app (var sum) (ctor \"::\" (const-int 1) (ctor \"[]\"))))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const sum_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const sum_lambda = switch (sum_let.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("list", switch (sum_lambda.params[0].ty) {
+        .Adt => |adt| adt.name,
+        else => return error.TestUnexpectedResult,
+    });
+
+    const list_arg = switch (sum_let.body.*) {
+        .App => |app| switch (app.args[0].*) {
+            .Let => |let_expr| switch (let_expr.body.*) {
+                .Ctor => |ctor| ctor,
+                else => return error.TestUnexpectedResult,
+            },
+            .Ctor => |ctor| ctor,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("::", list_arg.name);
+    try std.testing.expectEqual(layout.Layout{ .region = .Arena, .repr = .Boxed }, list_arg.layout);
+
+    const printed = try pretty.formatModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(printed);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "(ctor ::") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, ":layout (arena boxed)") != null);
 }
 

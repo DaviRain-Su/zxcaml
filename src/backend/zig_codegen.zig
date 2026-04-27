@@ -315,6 +315,21 @@ fn emitCtorMatchArm(
     const variant = try ctorVariantName(ctor_pattern.name);
     try emitIndent(out, allocator, indent_level);
     try appendPrint(out, allocator, ".{s} => ", .{variant});
+    if (std.mem.eql(u8, ctor_pattern.name, "::")) {
+        if (ctor_pattern.args.len != 2) return error.UnsupportedExpr;
+        const bind_block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "|omlz_cons| break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
+        try emitConsPatternBinding(out, allocator, ctor_pattern.args[0], "omlz_cons.head", body, indent_level + 1);
+        try emitConsPatternBinding(out, allocator, ctor_pattern.args[1], "omlz_cons.tail.*", body, indent_level + 1);
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
+        try emitExpr(out, allocator, body, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "},\n");
+        return;
+    }
     if (ctor_pattern.args.len == 1) {
         const arg = ctor_pattern.args[0];
         const capture_name: ?[]const u8 = switch (arg) {
@@ -335,6 +350,26 @@ fn emitCtorMatchArm(
     try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
     try emitExpr(out, allocator, body, indent_level, ctx);
     try append(out, allocator, ",\n");
+}
+
+fn emitConsPatternBinding(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    pattern: lir.LPattern,
+    source_expr: []const u8,
+    body: lir.LExpr,
+    indent_level: usize,
+) EmitError!void {
+    switch (pattern) {
+        .Wildcard => {},
+        .Var => |name| if (!std.mem.eql(u8, name, "_") and exprUsesName(body, name)) {
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "const ");
+            try emitIdentifier(out, allocator, name);
+            try appendPrint(out, allocator, " = {s};\n", .{source_expr});
+        },
+        .Ctor => return error.UnsupportedExpr,
+    }
 }
 
 fn emitCatchAllMatchArm(
@@ -395,6 +430,11 @@ fn emitCtorExpr(
         return;
     }
 
+    if (std.mem.eql(u8, ctor_expr.name, "::")) {
+        try emitConsCtorExpr(out, allocator, ctor_expr, ty_name, indent_level, ctx);
+        return;
+    }
+
     if (ctor_expr.args.len != 1) return error.UnsupportedExpr;
 
     const block_id = ctx.next_block_id;
@@ -405,6 +445,55 @@ fn emitCtorExpr(
     try appendPrint(out, allocator, "const omlz_ctor_payload_{d} = {s}{{ .{s} = ", .{ block_id, ty_name, variant });
     try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level + 1, ctx);
     try append(out, allocator, " };\n");
+
+    switch (ctor_expr.layout.region) {
+        .Arena => {
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_ctor_box_{d} = arena.alloc({s}, 1) catch unreachable;\n", .{ block_id, ty_name });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "omlz_ctor_box_{d}[0] = omlz_ctor_payload_{d};\n", .{ block_id, block_id });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} omlz_ctor_box_{d}[0];\n", .{ block_id, block_id });
+        },
+        .Static, .Stack => {
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} omlz_ctor_payload_{d};\n", .{ block_id, block_id });
+        },
+    }
+
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitConsCtorExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ctor_expr: lir.LCtor,
+    ty_name: []const u8,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (ctor_expr.args.len != 2) return error.UnsupportedExpr;
+
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_list_head_{d} = ", .{block_id});
+    try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_list_tail_{d} = ", .{block_id});
+    try emitExpr(out, allocator, ctor_expr.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_list_tail_box_{d} = {s}.Box(arena, omlz_list_tail_{d});\n", .{ block_id, ty_name, block_id });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_ctor_payload_{d} = {s}{{ .cons = .{{ .head = omlz_list_head_{d}, .tail = omlz_list_tail_box_{d} }} }};\n", .{ block_id, ty_name, block_id, block_id });
 
     switch (ctor_expr.layout.region) {
         .Arena => {
@@ -559,7 +648,8 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
 
 fn allKnownVariantsCovered(variants: []const []const u8) bool {
     return (containsString(variants, "some") and containsString(variants, "none")) or
-        (containsString(variants, "ok") and containsString(variants, "err"));
+        (containsString(variants, "ok") and containsString(variants, "err")) or
+        (containsString(variants, "nil") and containsString(variants, "cons"));
 }
 
 fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
@@ -582,6 +672,12 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
                 const err_ty = try zigTypeName(allocator, adt.params[1]);
                 defer allocator.free(err_ty);
                 break :blk try std.fmt.allocPrint(allocator, "prelude.Result({s}, {s})", .{ ok_ty, err_ty });
+            }
+            if (std.mem.eql(u8, adt.name, "list")) {
+                if (adt.params.len != 1) return error.UnsupportedExpr;
+                const inner = try zigTypeName(allocator, adt.params[0]);
+                defer allocator.free(inner);
+                break :blk try std.fmt.allocPrint(allocator, "prelude.List({s})", .{inner});
             }
             return error.UnsupportedExpr;
         },
@@ -608,6 +704,8 @@ fn ctorVariantName(name: []const u8) EmitError![]const u8 {
     if (std.mem.eql(u8, name, "Some")) return "some";
     if (std.mem.eql(u8, name, "Ok")) return "ok";
     if (std.mem.eql(u8, name, "Error")) return "err";
+    if (std.mem.eql(u8, name, "[]")) return "nil";
+    if (std.mem.eql(u8, name, "::")) return "cons";
     return error.UnsupportedExpr;
 }
 
@@ -793,6 +891,51 @@ test "ZigBackend emits switch-on-discriminant for constructor matches" {
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".some => |x| break") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".none => break") != null);
+}
+
+test "ZigBackend emits list constructors and cons pattern bindings" {
+    const list_ty = lir.LTy{ .Adt = .{ .name = "list", .params = &.{.Int} } };
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Match = .{
+            .scrutinee = &.{ .Ctor = .{
+                .name = "::",
+                .args = &.{
+                    &.{ .Constant = .{ .Int = 6 } },
+                    &.{ .Ctor = .{
+                        .name = "[]",
+                        .args = &.{},
+                        .ty = list_ty,
+                        .layout = @import("../core/layout.zig").ctor(0),
+                    } },
+                },
+                .ty = list_ty,
+                .layout = @import("../core/layout.zig").ctor(2),
+            } },
+            .arms = &.{
+                .{
+                    .pattern = .{ .Ctor = .{ .name = "[]", .args = &.{} } },
+                    .body = &.{ .Constant = .{ .Int = 0 } },
+                },
+                .{
+                    .pattern = .{ .Ctor = .{
+                        .name = "::",
+                        .args = &.{ .{ .Var = "x" }, .{ .Var = "rest" } },
+                    } },
+                    .body = &.{ .Var = .{ .name = "x" } },
+                },
+            },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.List(i64)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".nil") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".cons = .{ .head = omlz_list_head_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".cons => |omlz_cons|") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_cons.head;") != null);
 }
 
 test "ZigBackend emits direct recursive helper functions" {

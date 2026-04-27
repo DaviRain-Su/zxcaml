@@ -80,7 +80,7 @@ pub const Var = struct {
     name: []const u8,
 };
 
-/// Constructor expression such as `None`, `Some x`, `Ok x`, or `Error e`.
+/// Constructor expression such as `None`, `Some x`, `Ok x`, `Error e`, `[]`, or `x :: xs`.
 pub const Ctor = struct {
     name: []const u8,
     args: []const Expr,
@@ -98,14 +98,14 @@ pub const Arm = struct {
     body: *const Expr,
 };
 
-/// Basic, non-nested pattern forms accepted for F11.
+/// Basic, non-nested pattern forms accepted for F11/F13.
 pub const Pattern = union(enum) {
     Wildcard,
     Var: []const u8,
     Ctor: CtorPattern,
 };
 
-/// Single-level constructor pattern such as `Some x` or `None`.
+/// Single-level constructor pattern such as `Some x`, `None`, `[]`, or `x :: xs`.
 pub const CtorPattern = struct {
     name: []const u8,
     args: []const Pattern,
@@ -643,4 +643,48 @@ test "parse basic match expressions and patterns" {
         .Wildcard => {},
         else => return error.TestUnexpectedResult,
     };
+}
+
+test "parse quoted list constructor expressions and patterns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_input) (match (ctor \"::\" (const-int 1) (ctor \"[]\")) (case (ctor \"::\" (var x) (var rest)) (var x)) (case (ctor \"[]\") (const-int 0)))))))",
+    );
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const lambda = switch (entrypoint.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const match_expr = switch (lambda.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const cons_expr = switch (match_expr.scrutinee.*) {
+        .Ctor => |ctor| ctor,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("::", cons_expr.name);
+    try std.testing.expectEqual(@as(usize, 2), cons_expr.args.len);
+    const nil_tail = switch (cons_expr.args[1]) {
+        .Ctor => |ctor| ctor,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("[]", nil_tail.name);
+
+    const cons_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |pattern| pattern,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("::", cons_pattern.name);
+    try std.testing.expectEqual(@as(usize, 2), cons_pattern.args.len);
+    const nil_pattern = switch (match_expr.arms[1].pattern) {
+        .Ctor => |pattern| pattern,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("[]", nil_pattern.name);
 }

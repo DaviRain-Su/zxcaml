@@ -45,12 +45,23 @@ const Value = union(enum) {
     Bool: bool,
     String: []const u8,
     Ctor: CtorValue,
+    List: *const ListValue,
     Lambda: ir.Lambda,
 };
 
 const CtorValue = struct {
     name: []const u8,
     args: []const Value,
+};
+
+const ListValue = union(enum) {
+    nil,
+    cons: Cons,
+};
+
+const Cons = struct {
+    head: Value,
+    tail: *const ListValue,
 };
 
 /// Evaluates a Core IR module by invoking its top-level `entrypoint` lambda.
@@ -205,6 +216,24 @@ fn evalMatch(allocator: std.mem.Allocator, match_expr: ir.Match, env: *std.Strin
 }
 
 fn evalCtor(allocator: std.mem.Allocator, ctor_expr: ir.Ctor, env: *std.StringHashMap(Value)) EvalError!Value {
+    if (std.mem.eql(u8, ctor_expr.name, "[]")) {
+        if (ctor_expr.args.len != 0) return error.ArityMismatch;
+        const list = try allocator.create(ListValue);
+        list.* = .nil;
+        return .{ .List = list };
+    }
+    if (std.mem.eql(u8, ctor_expr.name, "::")) {
+        if (ctor_expr.args.len != 2) return error.ArityMismatch;
+        const head = try evalExpr(allocator, ctor_expr.args[0].*, env);
+        const tail = switch (try evalExpr(allocator, ctor_expr.args[1].*, env)) {
+            .List => |list| list,
+            else => return error.UnsupportedExpr,
+        };
+        const list = try allocator.create(ListValue);
+        list.* = .{ .cons = .{ .head = head, .tail = tail } };
+        return .{ .List = list };
+    }
+
     const args = try allocator.alloc(Value, ctor_expr.args.len);
     for (ctor_expr.args, 0..) |arg, index| {
         args[index] = try evalExpr(allocator, arg.*, env);
@@ -251,6 +280,9 @@ fn patternMatches(
             break :blk true;
         },
         .Ctor => |ctor_pattern| blk: {
+            if (try listPatternMatches(allocator, ctor_pattern, value, env, inserted)) |matched| {
+                break :blk matched;
+            }
             const ctor_value = switch (value) {
                 .Ctor => |ctor| ctor,
                 else => break :blk false,
@@ -263,6 +295,32 @@ fn patternMatches(
             break :blk true;
         },
     };
+}
+
+fn listPatternMatches(
+    allocator: std.mem.Allocator,
+    ctor_pattern: ir.PatternCtor,
+    value: Value,
+    env: *std.StringHashMap(Value),
+    inserted: *std.ArrayList(EnvBinding),
+) EvalError!?bool {
+    if (!std.mem.eql(u8, ctor_pattern.name, "[]") and !std.mem.eql(u8, ctor_pattern.name, "::")) return null;
+    const list = switch (value) {
+        .List => |list_value| list_value,
+        else => return false,
+    };
+    switch (list.*) {
+        .nil => {
+            if (!std.mem.eql(u8, ctor_pattern.name, "[]")) return false;
+            return ctor_pattern.args.len == 0;
+        },
+        .cons => |cell| {
+            if (!std.mem.eql(u8, ctor_pattern.name, "::") or ctor_pattern.args.len != 2) return false;
+            if (!try patternMatches(allocator, ctor_pattern.args[0], cell.head, env, inserted)) return false;
+            if (!try patternMatches(allocator, ctor_pattern.args[1], .{ .List = cell.tail }, env, inserted)) return false;
+            return true;
+        },
+    }
 }
 
 fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void {
@@ -281,7 +339,7 @@ fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void
 fn valueToU64(value: Value) EvalError!u64 {
     return switch (value) {
         .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
-        .Bool, .String, .Ctor, .Lambda => error.UnsupportedExpr,
+        .Bool, .String, .Ctor, .List, .Lambda => error.UnsupportedExpr,
     };
 }
 
@@ -458,6 +516,57 @@ test "interpreter matches constructor arms top-to-bottom" {
     const decls = [_]ir.Decl{entrypoint_decl};
 
     try std.testing.expectEqual(@as(u64, 1), try evalModule(.{ .decls = &decls }));
+}
+
+test "interpreter represents lists as nil/cons values and matches them" {
+    const list_ty = ir.Ty{ .Adt = .{ .name = "list", .params = &.{.Int} } };
+    const entrypoint_decl: ir.Decl = .{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .Match = .{
+                .scrutinee = makeExpr(.{ .Ctor = .{
+                    .name = "::",
+                    .args = &.{
+                        makeExpr(.{ .Constant = .{ .value = .{ .Int = 6 }, .ty = .Int, .layout = layout.intConstant() } }),
+                        makeExpr(.{ .Ctor = .{
+                            .name = "[]",
+                            .args = &.{},
+                            .ty = list_ty,
+                            .layout = layout.ctor(0),
+                        } }),
+                    },
+                    .ty = list_ty,
+                    .layout = layout.ctor(2),
+                } }),
+                .arms = &.{
+                    .{
+                        .pattern = .{ .Ctor = .{ .name = "[]", .args = &.{} } },
+                        .body = makeExpr(.{ .Constant = .{ .value = .{ .Int = 0 }, .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                    .{
+                        .pattern = .{ .Ctor = .{
+                            .name = "::",
+                            .args = &.{
+                                .{ .Var = .{ .name = "x", .ty = .Int, .layout = layout.intConstant() } },
+                                .{ .Var = .{ .name = "rest", .ty = list_ty, .layout = layout.ctor(2) } },
+                            },
+                        } },
+                        .body = makeExpr(.{ .Var = .{ .name = "x", .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                },
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } };
+    const decls = [_]ir.Decl{entrypoint_decl};
+
+    try std.testing.expectEqual(@as(u64, 6), try evalModule(.{ .decls = &decls }));
 }
 
 test "interpreter supports wildcard and variable match patterns" {

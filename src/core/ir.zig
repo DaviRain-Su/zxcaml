@@ -10,7 +10,7 @@
 //! - Preserve pattern-match order: arms are tested top-to-bottom and the first
 //!   matching arm wins in every backend.
 //!
-//! Ctor layout policy (F10):
+//! Ctor layout policy (F10/F13):
 //! ```text
 //! Some(x) -> Ctor { name = "Some", args = [x],
 //!                   ty = option<int>,
@@ -25,6 +25,17 @@
 //!
 //! Ok(x) and Error(e) follow the same result<T,E> rule: payload variants are
 //! Arena/Boxed, while future nullary variants would be Static/TaggedImmediate.
+//!
+//! (::)(head, tail) -> Ctor { name = "::", args = [head, tail],
+//!                            ty = list<int>,
+//!                            layout = { region = Arena, repr = Boxed } }
+//!   Cons cells are heap-allocated in the arena; the runtime payload stores
+//!   the head plus a tail pointer.
+//!
+//! [] -> Ctor { name = "[]", args = [],
+//!              ty = list<int>,
+//!              layout = { region = Static, repr = TaggedImmediate } }
+//!   Nil is zero-sized at runtime: only the empty-list discriminant is needed.
 //! ```
 
 const layout = @import("layout.zig");
@@ -145,7 +156,7 @@ pub const Var = struct {
     layout: layout.Layout,
 };
 
-/// Constructor expression for whitelisted option/result ADTs.
+/// Constructor expression for whitelisted option/result/list ADTs.
 pub const Ctor = struct {
     name: []const u8,
     args: []const *const Expr,
@@ -181,7 +192,7 @@ pub const PatternVar = struct {
     layout: layout.Layout,
 };
 
-/// Single-level constructor pattern such as `Some x`, `None`, `Ok x`, `Error e`.
+/// Single-level constructor pattern such as `Some x`, `None`, `Ok x`, `Error e`, `[]`, or `x :: xs`.
 pub const PatternCtor = struct {
     name: []const u8,
     args: []const Pattern,
