@@ -49,6 +49,7 @@ const Value = union(enum) {
     Ctor: CtorValue,
     List: *const ListValue,
     Lambda: ir.Lambda,
+    Closure: *const ClosureValue,
 };
 
 const CtorValue = struct {
@@ -64,6 +65,17 @@ const ListValue = union(enum) {
 const Cons = struct {
     head: Value,
     tail: *const ListValue,
+};
+
+const ClosureValue = struct {
+    lambda: ir.Lambda,
+    captures: []const CapturedValue,
+    self_name: ?[]const u8 = null,
+};
+
+const CapturedValue = struct {
+    name: []const u8,
+    value: Value,
 };
 
 /// Evaluates a Core IR module by invoking its top-level `entrypoint` lambda.
@@ -84,7 +96,8 @@ pub fn evalModule(module: ir.Module) EvalError!u64 {
                 }
                 switch (let_decl.value.*) {
                     .Lambda => |lambda| {
-                        try env.put(let_decl.name, .{ .Lambda = lambda });
+                        const closure = try makeClosure(arena.allocator(), lambda, &env, if (let_decl.is_rec) let_decl.name else null);
+                        try env.put(let_decl.name, .{ .Closure = closure });
                         continue;
                     },
                     else => {},
@@ -135,7 +148,7 @@ fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.Stri
     return switch (expr) {
         .Constant, .Let, .Var, .Ctor, .Match => evalExpr(allocator, expr, env),
         .App, .If, .Prim => evalExpr(allocator, expr, env),
-        .Lambda => |lambda| .{ .Lambda = lambda },
+        .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
 }
 
@@ -152,20 +165,32 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         .Prim => |prim| evalPrim(allocator, prim, env),
         .Ctor => |ctor_expr| evalCtor(allocator, ctor_expr, env),
         .Match => |match_expr| evalMatch(allocator, match_expr, env),
-        .Lambda => |lambda| .{ .Lambda = lambda },
+        .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
 }
 
 fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Value)) EvalError!Value {
     const callee = try evalExpr(allocator, app.callee.*, env);
-    const lambda = switch (callee) {
-        .Lambda => |value| value,
+    const closure = switch (callee) {
+        .Closure => |value| value,
+        .Lambda => |value| try makeClosure(allocator, value, env, null),
         else => return error.UnsupportedExpr,
     };
+    const lambda = closure.lambda;
     if (lambda.params.len != app.args.len) return error.ArityMismatch;
 
     var inserted = std.ArrayList(EnvBinding).empty;
     defer inserted.deinit(allocator);
+    for (closure.captures) |capture| {
+        const previous = env.get(capture.name);
+        try env.put(capture.name, capture.value);
+        try inserted.append(allocator, .{ .name = capture.name, .previous = previous });
+    }
+    if (closure.self_name) |self_name| {
+        const previous = env.get(self_name);
+        try env.put(self_name, .{ .Closure = closure });
+        try inserted.append(allocator, .{ .name = self_name, .previous = previous });
+    }
     for (lambda.params, app.args) |param, arg| {
         const value = try evalExpr(allocator, arg.*, env);
         const previous = env.get(param.name);
@@ -174,6 +199,35 @@ fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Va
     }
     defer restoreEnv(env, inserted.items);
     return evalExpr(allocator, lambda.body.*, env);
+}
+
+fn makeClosure(
+    allocator: std.mem.Allocator,
+    lambda: ir.Lambda,
+    env: *std.StringHashMap(Value),
+    self_name: ?[]const u8,
+) EvalError!*const ClosureValue {
+    var captures = std.ArrayList(CapturedValue).empty;
+    errdefer captures.deinit(allocator);
+
+    var iterator = env.iterator();
+    while (iterator.next()) |entry| {
+        if (self_name) |name| {
+            if (std.mem.eql(u8, entry.key_ptr.*, name)) continue;
+        }
+        try captures.append(allocator, .{
+            .name = entry.key_ptr.*,
+            .value = entry.value_ptr.*,
+        });
+    }
+
+    const closure = try allocator.create(ClosureValue);
+    closure.* = .{
+        .lambda = lambda,
+        .captures = try captures.toOwnedSlice(allocator),
+        .self_name = self_name,
+    };
+    return closure;
 }
 
 fn evalIf(allocator: std.mem.Allocator, if_expr: ir.IfExpr, env: *std.StringHashMap(Value)) EvalError!Value {
@@ -298,7 +352,10 @@ fn evalCtor(allocator: std.mem.Allocator, ctor_expr: ir.Ctor, env: *std.StringHa
 }
 
 fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value {
-    const value = try evalExpr(allocator, let_expr.value.*, env);
+    const value = switch (let_expr.value.*) {
+        .Lambda => |lambda| Value{ .Closure = try makeClosure(allocator, lambda, env, if (let_expr.is_rec) let_expr.name else null) },
+        else => try evalExpr(allocator, let_expr.value.*, env),
+    };
     const previous = env.get(let_expr.name);
     try env.put(let_expr.name, value);
     defer {
@@ -392,7 +449,7 @@ fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void
 fn valueToU64(value: Value) EvalError!u64 {
     return switch (value) {
         .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
-        .Bool, .String, .Ctor, .List, .Lambda => error.UnsupportedExpr,
+        .Bool, .String, .Ctor, .List, .Lambda, .Closure => error.UnsupportedExpr,
     };
 }
 

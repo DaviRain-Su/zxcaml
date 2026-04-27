@@ -102,6 +102,8 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
             .Unit
         else if (try lambdaParamIsList(arena, lambda.body.*, param_name))
             try listTy(arena, .Int)
+        else if (lambdaParamIsFunction(lambda.body.*, param_name))
+            try intToIntArrowTy(arena)
         else
             .Int;
         const param_layout = layoutForTy(param_ty);
@@ -172,13 +174,23 @@ fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: t
         });
     }
 
-    const value = try lowerExprPtr(arena, ctx, let_expr.value.*);
-    if (!let_expr.is_rec) {
-        try ctx.scope.put(owned_name, .{
-            .ty = exprTy(value.*),
-            .layout = exprLayout(value.*),
-        });
+    var value = try lowerExprPtr(arena, ctx, let_expr.value.*);
+    if (let_expr.is_rec and recBindingEscapes(let_expr.name, let_expr.body.*)) {
+        switch (value.*) {
+            .Lambda => |lambda_value| {
+                var closure_lambda = lambda_value;
+                closure_lambda.layout = layout.closure();
+                const closure_value = try arena.allocator().create(ir.Expr);
+                closure_value.* = .{ .Lambda = closure_lambda };
+                value = closure_value;
+            },
+            else => {},
+        }
     }
+    try ctx.scope.put(owned_name, .{
+        .ty = exprTy(value.*),
+        .layout = exprLayout(value.*),
+    });
     defer {
         if (previous) |binding| {
             ctx.scope.getPtr(owned_name).?.* = binding;
@@ -638,7 +650,114 @@ fn layoutForTy(ty: ir.Ty) layout.Layout {
         .Unit => layout.unitValue(),
         .String => layout.defaultFor(.StringLiteral),
         .Adt => layout.ctor(1),
-        .Arrow => layout.topLevelLambda(),
+        .Arrow => layout.closure(),
+    };
+}
+
+fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
+    return switch (expr) {
+        .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+        .App => |app| blk: {
+            const direct_self_call = switch (app.callee.*) {
+                .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+                else => false,
+            };
+            if (!direct_self_call and recBindingEscapes(name, app.callee.*)) break :blk true;
+            for (app.args) |arg| {
+                if (recBindingEscapes(name, arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| blk: {
+            if (recBindingEscapes(name, let_expr.value.*)) break :blk true;
+            if (!std.mem.eql(u8, let_expr.name, name) and recBindingEscapes(name, let_expr.body.*)) break :blk true;
+            break :blk false;
+        },
+        .Lambda => |lambda| lambdaParamShadows(lambda.params, name) == false and recBindingEscapes(name, lambda.body.*),
+        .If => |if_expr| recBindingEscapes(name, if_expr.cond.*) or
+            recBindingEscapes(name, if_expr.then_branch.*) or
+            recBindingEscapes(name, if_expr.else_branch.*),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (recBindingEscapes(name, arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (recBindingEscapes(name, arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Match => |match_expr| blk: {
+            if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, name) and recBindingEscapes(name, arm.body.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Constant => false,
+    };
+}
+
+fn lambdaParamShadows(params: []const []const u8, name: []const u8) bool {
+    for (params) |param| {
+        if (std.mem.eql(u8, param, name)) return true;
+    }
+    return false;
+}
+
+fn patternBindsTtreeName(pattern: ttree.Pattern, name: []const u8) bool {
+    return switch (pattern) {
+        .Var => |var_name| std.mem.eql(u8, var_name, name),
+        .Ctor => |ctor_pattern| blk: {
+            for (ctor_pattern.args) |arg| {
+                if (patternBindsTtreeName(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Wildcard => false,
+    };
+}
+
+fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
+    return switch (expr) {
+        .App => |app| blk: {
+            switch (app.callee.*) {
+                .Var => |var_ref| if (std.mem.eql(u8, var_ref.name, param_name)) break :blk true,
+                else => if (lambdaParamIsFunction(app.callee.*, param_name)) break :blk true,
+            }
+            for (app.args) |arg| {
+                if (lambdaParamIsFunction(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Lambda => |lambda| !lambdaParamShadows(lambda.params, param_name) and lambdaParamIsFunction(lambda.body.*, param_name),
+        .Let => |let_expr| lambdaParamIsFunction(let_expr.value.*, param_name) or
+            (!std.mem.eql(u8, let_expr.name, param_name) and lambdaParamIsFunction(let_expr.body.*, param_name)),
+        .If => |if_expr| lambdaParamIsFunction(if_expr.cond.*, param_name) or
+            lambdaParamIsFunction(if_expr.then_branch.*, param_name) or
+            lambdaParamIsFunction(if_expr.else_branch.*, param_name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (lambdaParamIsFunction(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (lambdaParamIsFunction(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Match => |match_expr| blk: {
+            if (lambdaParamIsFunction(match_expr.scrutinee.*, param_name)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, param_name) and lambdaParamIsFunction(arm.body.*, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Constant, .Var => false,
     };
 }
 
@@ -709,6 +828,17 @@ fn makeArrowTy(
     const ret = try arena.allocator().create(ir.Ty);
     ret.* = ret_ty;
 
+    return .{ .Arrow = .{
+        .params = param_tys,
+        .ret = ret,
+    } };
+}
+
+fn intToIntArrowTy(arena: *std.heap.ArenaAllocator) LowerError!ir.Ty {
+    const param_tys = try arena.allocator().alloc(ir.Ty, 1);
+    param_tys[0] = .Int;
+    const ret = try arena.allocator().create(ir.Ty);
+    ret.* = .Int;
     return .{ .Arrow = .{
         .params = param_tys,
         .ret = ret,

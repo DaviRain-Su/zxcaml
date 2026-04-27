@@ -15,6 +15,7 @@ pub const LModule = struct {
 pub const LFunc = struct {
     name: []const u8,
     params: []const LParam = &.{},
+    captures: []const LParam = &.{},
     body: LExpr,
     calling_convention: CallingConvention = .ArenaThreaded,
     source_span: SourceSpan = .unavailable,
@@ -30,6 +31,8 @@ pub const LParam = struct {
 pub const CallingConvention = enum {
     /// ADR-007: `arena: *Arena` is the implicit first parameter.
     ArenaThreaded,
+    /// ADR-007 first-class closure code pointer convention.
+    Closure,
 };
 
 /// Source span carried into generated comments; M0 has no real spans yet.
@@ -47,12 +50,20 @@ pub const LExpr = union(enum) {
     Var: LVar,
     Ctor: LCtor,
     Match: LMatch,
+    Closure: LClosure,
 };
 
 /// Lowered function application.
 pub const LApp = struct {
     callee: *const LExpr,
     args: []const *const LExpr,
+    kind: LCallKind = .Direct,
+};
+
+/// Whether a lowered application calls a named helper directly or a closure pointer.
+pub const LCallKind = enum {
+    Direct,
+    Closure,
 };
 
 /// M0 lowered constants.
@@ -102,6 +113,18 @@ pub const LVar = struct {
     name: []const u8,
 };
 
+/// Arena-allocated closure record value with a code pointer and captured values.
+pub const LClosure = struct {
+    name: []const u8,
+    captures: []const LClosureCapture = &.{},
+};
+
+/// One captured value stored in a closure record.
+pub const LClosureCapture = struct {
+    name: []const u8,
+    ty: LTy,
+};
+
 /// Lowered constructor expression.
 pub const LCtor = struct {
     name: []const u8,
@@ -142,6 +165,7 @@ pub const LTy = union(enum) {
     Unit,
     String,
     Adt: LAdt,
+    Closure,
 };
 
 /// Lowered ADT type reference.

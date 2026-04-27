@@ -40,15 +40,18 @@ const CaptureSet = []const ir.Param;
 const LowerContext = struct {
     bound: std.StringHashMap(ir.Ty),
     rec_captures: std.StringHashMap(CaptureSet),
+    closure_bound: std.StringHashMap(void),
 
     fn init(allocator: std.mem.Allocator) LowerContext {
         return .{
             .bound = std.StringHashMap(ir.Ty).init(allocator),
             .rec_captures = std.StringHashMap(CaptureSet).init(allocator),
+            .closure_bound = std.StringHashMap(void).init(allocator),
         };
     }
 
     fn deinit(self: *LowerContext) void {
+        self.closure_bound.deinit();
         self.rec_captures.deinit();
         self.bound.deinit();
     }
@@ -168,9 +171,11 @@ fn lowerFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lamb
     try ctx.rec_captures.put(name, captures);
     for (captures) |capture| {
         try ctx.bound.put(capture.name, capture.ty);
+        if (isClosureTy(capture.ty)) try ctx.closure_bound.put(capture.name, {});
     }
     for (lambda.params) |param| {
         try ctx.bound.put(param.name, param.ty);
+        if (isClosureTy(param.ty)) try ctx.closure_bound.put(param.name, {});
     }
 
     const params = try concatParams(allocator, captures, lambda.params);
@@ -179,6 +184,30 @@ fn lowerFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lamb
         .params = try lowerParams(allocator, params),
         .body = (try lowerExprPtrWithContext(allocator, lambda.body.*, &ctx)).*,
         .calling_convention = .ArenaThreaded,
+        .source_span = .unavailable,
+    };
+}
+
+fn lowerClosureFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lambda, captures: CaptureSet) LowerError!lir.LFunc {
+    var ctx = LowerContext.init(allocator);
+    defer ctx.deinit();
+    try ctx.rec_captures.put(name, captures);
+    try ctx.closure_bound.put(name, {});
+    for (captures) |capture| {
+        try ctx.bound.put(capture.name, capture.ty);
+        if (isClosureTy(capture.ty)) try ctx.closure_bound.put(capture.name, {});
+    }
+    for (lambda.params) |param| {
+        try ctx.bound.put(param.name, param.ty);
+        if (isClosureTy(param.ty)) try ctx.closure_bound.put(param.name, {});
+    }
+
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .params = try lowerParams(allocator, lambda.params),
+        .captures = try lowerParams(allocator, captures),
+        .body = (try lowerExprPtrWithContext(allocator, lambda.body.*, &ctx)).*,
+        .calling_convention = .Closure,
         .source_span = .unavailable,
     };
 }
@@ -205,6 +234,9 @@ fn collectNestedFunctions(allocator: std.mem.Allocator, expr: ir.Expr, functions
                     if (let_expr.is_rec) {
                         const captures = try recursiveCaptures(allocator, let_expr.name, lambda, bound);
                         try functions.append(allocator, try lowerFunction(allocator, let_expr.name, lambda, captures));
+                        if (recBindingEscapes(let_expr.name, let_expr.body.*)) {
+                            try functions.append(allocator, try lowerClosureFunction(allocator, let_expr.name, lambda, captures));
+                        }
                     }
                     const snapshots = try pushParams(allocator, bound, lambda.params);
                     defer restoreBound(bound, snapshots);
@@ -263,6 +295,23 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
                         const previous_captures = ctx.rec_captures.get(let_expr.name);
                         try ctx.rec_captures.put(let_expr.name, captures);
                         defer restoreRecCaptures(&ctx.rec_captures, let_expr.name, previous_captures);
+                        if (recBindingEscapes(let_expr.name, let_expr.body.*)) {
+                            const closure_expr = try lowerClosureExpr(allocator, let_expr.name, captures);
+                            const previous_bound = ctx.bound.get(let_expr.name);
+                            const had_closure = ctx.closure_bound.contains(let_expr.name);
+                            try ctx.bound.put(let_expr.name, exprTy(let_expr.value.*));
+                            try ctx.closure_bound.put(let_expr.name, {});
+                            defer {
+                                restoreSingleBound(&ctx.bound, let_expr.name, previous_bound);
+                                restoreSingleClosureBound(&ctx.closure_bound, let_expr.name, had_closure);
+                            }
+                            break :blk .{ .Let = .{
+                                .name = try allocator.dupe(u8, let_expr.name),
+                                .value = closure_expr,
+                                .body = try lowerExprPtrWithContext(allocator, let_expr.body.*, ctx),
+                                .is_rec = true,
+                            } };
+                        }
                         break :blk (try lowerExprPtrWithContext(allocator, let_expr.body.*, ctx)).*;
                     },
                     else => {},
@@ -271,7 +320,13 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
             const value = try lowerExprPtrWithContext(allocator, let_expr.value.*, ctx);
             const previous = ctx.bound.get(let_expr.name);
             try ctx.bound.put(let_expr.name, exprTy(let_expr.value.*));
+            const closure_binding = isClosureTy(exprTy(let_expr.value.*));
+            const had_closure = ctx.closure_bound.contains(let_expr.name);
+            if (closure_binding) try ctx.closure_bound.put(let_expr.name, {});
             defer restoreSingleBound(&ctx.bound, let_expr.name, previous);
+            defer {
+                if (closure_binding) restoreSingleClosureBound(&ctx.closure_bound, let_expr.name, had_closure);
+            }
             break :blk .{ .Let = .{
                 .name = try allocator.dupe(u8, let_expr.name),
                 .value = value,
@@ -307,12 +362,17 @@ fn lowerApp(allocator: std.mem.Allocator, app: ir.App, ctx: *LowerContext) Lower
     var args = std.ArrayList(*const lir.LExpr).empty;
     errdefer args.deinit(allocator);
 
+    var kind: lir.LCallKind = .Direct;
     switch (app.callee.*) {
-        .Var => |callee| if (ctx.rec_captures.get(callee.name)) |captures| {
-            for (captures) |capture| {
-                const capture_expr = try allocator.create(lir.LExpr);
-                capture_expr.* = .{ .Var = .{ .name = try allocator.dupe(u8, capture.name) } };
-                try args.append(allocator, capture_expr);
+        .Var => |callee| {
+            if (ctx.closure_bound.contains(callee.name) and ctx.rec_captures.get(callee.name) == null) {
+                kind = .Closure;
+            } else if (ctx.rec_captures.get(callee.name)) |captures| {
+                for (captures) |capture| {
+                    const capture_expr = try allocator.create(lir.LExpr);
+                    capture_expr.* = .{ .Var = .{ .name = try allocator.dupe(u8, capture.name) } };
+                    try args.append(allocator, capture_expr);
+                }
             }
         },
         else => {},
@@ -324,7 +384,24 @@ fn lowerApp(allocator: std.mem.Allocator, app: ir.App, ctx: *LowerContext) Lower
     return .{ .App = .{
         .callee = try lowerExprPtrWithContext(allocator, app.callee.*, ctx),
         .args = try args.toOwnedSlice(allocator),
+        .kind = kind,
     } };
+}
+
+fn lowerClosureExpr(allocator: std.mem.Allocator, name: []const u8, captures: CaptureSet) LowerError!*lir.LExpr {
+    const capture_values = try allocator.alloc(lir.LClosureCapture, captures.len);
+    for (captures, 0..) |capture, index| {
+        capture_values[index] = .{
+            .name = try allocator.dupe(u8, capture.name),
+            .ty = try lowerTy(allocator, capture.ty),
+        };
+    }
+    const ptr = try allocator.create(lir.LExpr);
+    ptr.* = .{ .Closure = .{
+        .name = try allocator.dupe(u8, name),
+        .captures = capture_values,
+    } };
+    return ptr;
 }
 
 fn recursiveCaptures(
@@ -435,6 +512,10 @@ fn restoreSingleBound(bound: *std.StringHashMap(ir.Ty), name: []const u8, previo
     }
 }
 
+fn restoreSingleClosureBound(bound: *std.StringHashMap(void), name: []const u8, existed: bool) void {
+    if (!existed) _ = bound.remove(name);
+}
+
 fn restoreRecCaptures(map: *std.StringHashMap(CaptureSet), name: []const u8, previous: ?CaptureSet) void {
     if (previous) |captures| {
         map.getPtr(name).?.* = captures;
@@ -480,6 +561,13 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Var => |var_ref| var_ref.ty,
         .Ctor => |ctor| ctor.ty,
         .Match => |match_expr| match_expr.ty,
+    };
+}
+
+fn isClosureTy(ty: ir.Ty) bool {
+    return switch (ty) {
+        .Arrow => true,
+        else => false,
     };
 }
 
@@ -554,11 +642,74 @@ fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
         .Bool => .Bool,
         .Unit => .Unit,
         .String => .String,
-        .Arrow => error.UnsupportedExpr,
+        .Arrow => .Closure,
         .Adt => |adt| .{ .Adt = .{
             .name = try allocator.dupe(u8, adt.name),
             .params = try lowerTySlice(allocator, adt.params),
         } },
+    };
+}
+
+fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
+    return switch (expr) {
+        .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+        .App => |app| blk: {
+            const direct_self_call = switch (app.callee.*) {
+                .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+                else => false,
+            };
+            if (!direct_self_call and recBindingEscapes(name, app.callee.*)) break :blk true;
+            for (app.args) |arg| {
+                if (recBindingEscapes(name, arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| recBindingEscapes(name, let_expr.value.*) or
+            (!std.mem.eql(u8, let_expr.name, name) and recBindingEscapes(name, let_expr.body.*)),
+        .Lambda => |lambda| !paramBindsName(lambda.params, name) and recBindingEscapes(name, lambda.body.*),
+        .If => |if_expr| recBindingEscapes(name, if_expr.cond.*) or
+            recBindingEscapes(name, if_expr.then_branch.*) or
+            recBindingEscapes(name, if_expr.else_branch.*),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (recBindingEscapes(name, arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (recBindingEscapes(name, arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Match => |match_expr| blk: {
+            if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsName(arm.pattern, name) and recBindingEscapes(name, arm.body.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Constant => false,
+    };
+}
+
+fn paramBindsName(params: []const ir.Param, name: []const u8) bool {
+    for (params) |param| {
+        if (std.mem.eql(u8, param.name, name)) return true;
+    }
+    return false;
+}
+
+fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
+    return switch (pattern) {
+        .Var => |var_pattern| std.mem.eql(u8, var_pattern.name, name),
+        .Ctor => |ctor_pattern| blk: {
+            for (ctor_pattern.args) |arg| {
+                if (patternBindsName(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Wildcard => false,
     };
 }
 

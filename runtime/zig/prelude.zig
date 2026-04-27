@@ -25,6 +25,54 @@ pub const Bool = enum(u1) {
     }
 };
 
+/// Runtime value stored inside an arena-allocated closure capture array.
+pub const ClosureValue = union(enum) {
+    int: i64,
+    closure: *const Closure,
+
+    /// Stores an integer capture.
+    pub fn fromInt(value: i64) ClosureValue {
+        return .{ .int = value };
+    }
+
+    /// Stores a closure capture.
+    pub fn fromClosure(value: *const Closure) ClosureValue {
+        return .{ .closure = value };
+    }
+
+    /// Reads an integer capture.
+    pub fn asInt(self: ClosureValue) i64 {
+        return switch (self) {
+            .int => |value| value,
+            else => unreachable,
+        };
+    }
+
+    /// Reads a closure capture.
+    pub fn asClosure(self: ClosureValue) *const Closure {
+        return switch (self) {
+            .closure => |value| value,
+            else => unreachable,
+        };
+    }
+};
+
+/// ADR-007 arena closure record: code pointer, captures, and recursive self-reference.
+pub const Closure = struct {
+    code: *const fn (*Arena, *const Closure, i64) i64,
+    captures: []const ClosureValue,
+    self: ?*const Closure = null,
+
+    /// Constructs a closure record value; generated code stores it in the arena.
+    pub fn init(code: *const fn (*Arena, *const Closure, i64) i64, captures: []const ClosureValue) Closure {
+        return .{
+            .code = code,
+            .captures = captures,
+            .self = null,
+        };
+    }
+};
+
 /// Divides two i64 values with ZxCaml's pinned truncating semantics.
 pub fn intDiv(lhs: i64, rhs: i64) i64 {
     if (rhs == 0) runtime_panic.divisionByZero();
@@ -162,6 +210,25 @@ test "List constructors preserve head and tail payloads" {
         },
         .nil => return error.TestUnexpectedResult,
     }
+}
+
+test "Closure records store code pointer, captures, and self-reference" {
+    const thunk = struct {
+        fn call(_: *Arena, closure: *const Closure, value: i64) i64 {
+            return closure.captures[0].asInt() + value;
+        }
+    }.call;
+
+    var buf: [256]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+    const captures = arena.alloc(ClosureValue, 1) catch unreachable;
+    captures[0] = ClosureValue.fromInt(2);
+    const slot = arena.alloc(Closure, 1) catch unreachable;
+    slot[0] = Closure.init(thunk, captures);
+    slot[0].self = &slot[0];
+
+    try std.testing.expectEqual(@as(i64, 5), slot[0].code(&arena, &slot[0], 3));
+    try std.testing.expect(slot[0].self.? == &slot[0]);
 }
 
 test "integer division and modulus pin overflow edge semantics" {

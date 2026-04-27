@@ -41,20 +41,22 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
 }
 
 fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir.LFunc) EmitError!void {
-    switch (func.calling_convention) {
-        .ArenaThreaded => {},
-    }
-
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
     const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
     try append(out, allocator, if (is_entrypoint) "pub fn " else "fn ");
-    const function_name = try emittedFunctionName(allocator, func.name);
+    const function_name = switch (func.calling_convention) {
+        .ArenaThreaded => try emittedFunctionName(allocator, func.name),
+        .Closure => try emittedClosureFunctionName(allocator, func.name),
+    };
     defer freeEmittedFunctionName(allocator, func.name, function_name);
     try append(out, allocator, function_name);
     try append(out, allocator, "(arena: *Arena");
     if (is_entrypoint) {
         try append(out, allocator, ", input: [*]const u8) callconv(.c) u64 {\n");
     } else {
+        if (func.calling_convention == .Closure) {
+            try append(out, allocator, ", closure: *const prelude.Closure");
+        }
         for (func.params) |param| {
             try append(out, allocator, ", ");
             try emitIdentifier(out, allocator, param.name);
@@ -69,6 +71,9 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
         try append(out, allocator, "    _ = arena;\n");
     }
     if (is_entrypoint) try append(out, allocator, "    _ = input;\n");
+    if (func.calling_convention == .Closure) {
+        try emitClosureCaptureBindings(out, allocator, func.captures);
+    }
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
     var ctx: EmitContext = .{};
     try emitExpr(out, allocator, func.body, 1, &ctx);
@@ -92,6 +97,27 @@ fn emittedFunctionName(allocator: std.mem.Allocator, source_name: []const u8) Em
         }
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn emittedClosureFunctionName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
+    const base = try emittedFunctionName(allocator, source_name);
+    defer freeEmittedFunctionName(allocator, source_name, base);
+    return std.fmt.allocPrint(allocator, "{s}__closure", .{base});
+}
+
+fn emitClosureCaptureBindings(out: *std.ArrayList(u8), allocator: std.mem.Allocator, captures: []const lir.LParam) EmitError!void {
+    try append(out, allocator, "    _ = closure.self;\n");
+    for (captures, 0..) |capture, index| {
+        try append(out, allocator, "    const ");
+        try emitIdentifier(out, allocator, capture.name);
+        try appendPrint(out, allocator, " = closure.captures[{d}].", .{index});
+        switch (capture.ty) {
+            .Int => try append(out, allocator, "asInt()"),
+            .Closure => try append(out, allocator, "asClosure()"),
+            else => return error.UnsupportedExpr,
+        }
+        try append(out, allocator, ";\n");
+    }
 }
 
 const EmitContext = struct {
@@ -119,6 +145,7 @@ fn emitExpr(
         .Prim => |prim| try emitPrimExpr(out, allocator, prim, indent_level, ctx),
         .Ctor => |ctor_expr| try emitCtorExpr(out, allocator, ctor_expr, indent_level, ctx),
         .Match => |match_expr| try emitMatchExpr(out, allocator, match_expr, indent_level, ctx),
+        .Closure => |closure| try emitClosureExpr(out, allocator, closure, indent_level, ctx),
     }
 }
 
@@ -129,6 +156,22 @@ fn emitAppExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (app.kind == .Closure) {
+        const callee = switch (app.callee.*) {
+            .Var => |var_ref| var_ref,
+            else => return error.UnsupportedExpr,
+        };
+        try emitIdentifier(out, allocator, callee.name);
+        try append(out, allocator, ".code(arena, ");
+        try emitIdentifier(out, allocator, callee.name);
+        for (app.args) |arg| {
+            try append(out, allocator, ", ");
+            try emitExpr(out, allocator, arg.*, indent_level, ctx);
+        }
+        try append(out, allocator, ")");
+        return;
+    }
+
     switch (app.callee.*) {
         .Var => |callee| {
             const function_name = try emittedFunctionName(allocator, callee.name);
@@ -471,6 +514,51 @@ fn emitCtorExpr(
     try append(out, allocator, "}");
 }
 
+fn emitClosureExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    closure: lir.LClosure,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    const code_name = try emittedClosureFunctionName(allocator, closure.name);
+    defer allocator.free(code_name);
+
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_closure_captures_{d} = arena.alloc(prelude.ClosureValue, {d}) catch unreachable;\n", .{ block_id, closure.captures.len });
+    for (closure.captures, 0..) |capture, index| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "omlz_closure_captures_{d}[{d}] = ", .{ block_id, index });
+        switch (capture.ty) {
+            .Int => {
+                try append(out, allocator, "prelude.ClosureValue.fromInt(");
+                try emitIdentifier(out, allocator, capture.name);
+                try append(out, allocator, ")");
+            },
+            .Closure => {
+                try append(out, allocator, "prelude.ClosureValue.fromClosure(");
+                try emitIdentifier(out, allocator, capture.name);
+                try append(out, allocator, ")");
+            },
+            else => return error.UnsupportedExpr,
+        }
+        try append(out, allocator, ";\n");
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_closure_slot_{d} = arena.alloc(prelude.Closure, 1) catch unreachable;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_closure_slot_{d}[0] = prelude.Closure.init({s}, omlz_closure_captures_{d});\n", .{ block_id, code_name, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_closure_slot_{d}[0].self = &omlz_closure_slot_{d}[0];\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} &omlz_closure_slot_{d}[0];\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
 fn emitConsCtorExpr(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -591,6 +679,12 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
             }
             return false;
         },
+        .Closure => |closure| {
+            for (closure.captures) |capture| {
+                if (std.mem.eql(u8, capture.name, name)) return true;
+            }
+            return false;
+        },
     };
 }
 
@@ -619,6 +713,7 @@ fn exprNeedsArena(expr: lir.LExpr) bool {
             }
             break :blk false;
         },
+        .Closure => true,
     };
 }
 
@@ -664,6 +759,7 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
         .Bool => allocator.dupe(u8, "prelude.Bool"),
         .Unit => allocator.dupe(u8, "void"),
         .String => allocator.dupe(u8, "[]const u8"),
+        .Closure => allocator.dupe(u8, "*const prelude.Closure"),
         .Adt => |adt| blk: {
             if (std.mem.eql(u8, adt.name, "option")) {
                 if (adt.params.len != 1) return error.UnsupportedExpr;
