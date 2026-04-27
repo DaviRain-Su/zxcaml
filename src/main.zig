@@ -27,16 +27,19 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (args.len == 3 and std.mem.eql(u8, args[1], "check")) {
-        const result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
-            if (err != error.FrontendNotFound) {
+        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
+            if (shouldPrintGenericFrontendFailure(err)) {
                 try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
             }
             std.process.exit(1);
         };
-        defer result.deinit(init.gpa);
+        defer result.deinit();
 
         switch (result) {
-            .success => return,
+            .success => |parsed| {
+                _ = parsed.module;
+                return;
+            },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
         }
     }
@@ -78,10 +81,41 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
     try writer.flush();
 }
 
+fn shouldPrintGenericFrontendFailure(err: anyerror) bool {
+    return switch (err) {
+        error.FrontendNotFound,
+        error.EmptyInput,
+        error.ExpectedExpression,
+        error.UnmatchedParen,
+        error.UnexpectedRightParen,
+        error.TrailingInput,
+        error.BadAtom,
+        error.UnterminatedString,
+        error.BadStringEscape,
+        error.IntegerOverflow,
+        error.InvalidHeader,
+        error.WireFormatVersionMismatch,
+        error.ExpectedList,
+        error.ExpectedAtom,
+        error.ExpectedInteger,
+        error.UnexpectedAtom,
+        error.UnsupportedNode,
+        error.MalformedModule,
+        error.MalformedDecl,
+        error.MalformedLambda,
+        error.MalformedConstant,
+        => false,
+        else => true,
+    };
+}
+
 test "package version comes from build manifest" {
     try std.testing.expectEqualStrings("0.1.0", build_options.version);
 }
 
 test {
     _ = pipeline;
+    _ = @import("frontend_bridge/sexp_lexer.zig");
+    _ = @import("frontend_bridge/sexp_parser.zig");
+    _ = @import("frontend_bridge/ttree.zig");
 }

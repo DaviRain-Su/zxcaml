@@ -5,6 +5,7 @@
 //! - Invoke `zxc-frontend --emit=sexp <input.ml>` and return stdout as the sexp payload.
 //! - Drain stdout and stderr concurrently so large frontend output cannot deadlock the driver.
 //! - Forward frontend stderr line-by-line, preserving JSON diagnostics for F20 and prefixing text.
+//! - Parse successful stdout into the Zig `frontend_bridge` typed tree mirror.
 //!
 //! Protocol contract: `omlz check <file.ml>` calls this module, which runs
 //! `zxc-frontend --emit=sexp <input.ml>`. Stdout is the versioned
@@ -18,23 +19,54 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const frontend_bridge = @import("../frontend_bridge/ttree.zig");
 
 pub const default_frontend_path = "zig-out/bin/zxc-frontend";
 pub const frontend_name = "zxc-frontend";
 
-/// Result of invoking the OCaml frontend subprocess.
-pub const FrontendResult = union(enum) {
+/// Arena-owned result of a successful frontend bridge parse.
+pub const ParsedFrontend = struct {
+    arena: std.heap.ArenaAllocator,
+    module: frontend_bridge.Module,
+
+    /// Releases all memory owned by the parsed frontend result.
+    pub fn deinit(self: *ParsedFrontend) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+};
+
+/// Raw subprocess result used by tests and by the parse wrapper.
+pub const FrontendProcessResult = union(enum) {
     /// Frontend succeeded; caller owns the sexp bytes.
     success: []u8,
     /// Frontend failed; the contained value is the exit code `omlz` should use.
     failed: u8,
 
-    /// Frees any owned payload carried by this result.
-    pub fn deinit(result: FrontendResult, allocator: Allocator) void {
-        switch (result) {
+    /// Frees any owned payload carried by this process result.
+    pub fn deinit(result: *FrontendProcessResult, allocator: Allocator) void {
+        switch (result.*) {
             .success => |bytes| allocator.free(bytes),
             .failed => {},
         }
+        result.* = undefined;
+    }
+};
+
+/// Result of invoking and parsing the OCaml frontend subprocess.
+pub const FrontendResult = union(enum) {
+    /// Frontend succeeded; caller owns the parsed typed tree arena.
+    success: ParsedFrontend,
+    /// Frontend failed; the contained value is the exit code `omlz` should use.
+    failed: u8,
+
+    /// Frees any owned payload carried by this result.
+    pub fn deinit(result: *FrontendResult) void {
+        switch (result.*) {
+            .success => |*parsed| parsed.deinit(),
+            .failed => {},
+        }
+        result.* = undefined;
     }
 };
 
@@ -104,7 +136,7 @@ pub fn runFrontendExecutable(
     input_file: []const u8,
 ) !FrontendResult {
     const argv = [_][]const u8{ executable, "--emit=sexp", input_file };
-    return runFrontendArgv(allocator, io, &argv);
+    return runFrontendArgvParsed(allocator, io, &argv);
 }
 
 fn frontendSiblingFromArgv0(allocator: Allocator, omlz_argv0: []const u8) ![]u8 {
@@ -119,7 +151,7 @@ pub fn runFrontendArgv(
     allocator: Allocator,
     io: Io,
     argv: []const []const u8,
-) !FrontendResult {
+) !FrontendProcessResult {
     const completed = try std.process.run(allocator, io, .{ .argv = argv });
     defer allocator.free(completed.stderr);
 
@@ -136,6 +168,33 @@ pub fn runFrontendArgv(
         .signal, .stopped, .unknown => {
             allocator.free(completed.stdout);
             return .{ .failed = 1 };
+        },
+    }
+}
+
+fn runFrontendArgvParsed(
+    allocator: Allocator,
+    io: Io,
+    argv: []const []const u8,
+) !FrontendResult {
+    var process_result = try runFrontendArgv(allocator, io, argv);
+    defer process_result.deinit(allocator);
+
+    switch (process_result) {
+        .failed => |code| return .{ .failed = code },
+        .success => |bytes| {
+            var parsed_arena = std.heap.ArenaAllocator.init(allocator);
+            errdefer parsed_arena.deinit();
+
+            const module = frontend_bridge.parseModule(&parsed_arena, bytes) catch |err| {
+                try frontend_bridge.writeParseError(io, bytes, err);
+                return err;
+            };
+
+            return .{ .success = .{
+                .arena = parsed_arena,
+                .module = module,
+            } };
         },
     }
 }
@@ -215,8 +274,8 @@ test "missing zxc-frontend reports the documented lookup diagnostic" {
 }
 
 test "non-zero frontend exit becomes a failed frontend result" {
-    const result = try runFrontendExecutable(std.testing.allocator, std.testing.io, "/usr/bin/false", "input.ml");
-    defer result.deinit(std.testing.allocator);
+    var result = try runFrontendExecutable(std.testing.allocator, std.testing.io, "/usr/bin/false", "input.ml");
+    defer result.deinit();
 
     switch (result) {
         .success => return error.TestUnexpectedResult,
@@ -226,7 +285,7 @@ test "non-zero frontend exit becomes a failed frontend result" {
 
 test "large frontend stdout is drained without deadlock" {
     const argv = [_][]const u8{ "/bin/sh", "-c", "yes | head -c 1048576" };
-    const result = try runFrontendArgv(std.testing.allocator, std.testing.io, &argv);
+    var result = try runFrontendArgv(std.testing.allocator, std.testing.io, &argv);
     defer result.deinit(std.testing.allocator);
 
     switch (result) {
