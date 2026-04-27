@@ -1,5 +1,7 @@
 # 03 — Core IR
 
+> **Languages / 语言**: **English** · [简体中文](./zh/03-core-ir.md)
+
 The Core IR is the **only stable contract** in this compiler.
 Everything else (Surface AST, Typed AST, Lowered IR, backends) is
 internal and may be rewritten freely. If you change Core IR, you are

@@ -1,5 +1,7 @@
 # 00 — Overview
 
+> **Languages / 语言**: **English** · [简体中文](./zh/00-overview.md)
+
 ## 1. What ZxCaml is
 
 ZxCaml is a **compiler for an OCaml dialect** whose backend produces

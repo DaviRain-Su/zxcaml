@@ -1,5 +1,7 @@
 # 10 — Frontend bridge (OCaml `compiler-libs` → Zig)
 
+> **Languages / 语言**: **English** · [简体中文](./zh/10-frontend-bridge.md)
+
 This document specifies how `omlz` obtains a fully type-checked
 representation of a `.ml` source file without forking or
 re-implementing OCaml. It is the practical realisation of ADR-010.

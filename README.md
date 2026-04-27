@@ -1,5 +1,7 @@
 # ZxCaml
 
+> **Languages / 语言**: **English** · [简体中文](./docs/zh/README.md)
+
 > An **OCaml dialect** with a **Zig/BPF backend**.
 > We do **not** invent a new language. Source files use the standard `.ml`
 > extension. We replace the *backend*, not the *frontend*.

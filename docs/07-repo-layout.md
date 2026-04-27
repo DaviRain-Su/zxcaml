@@ -1,5 +1,7 @@
 # 07 — Repo layout
 
+> **Languages / 语言**: **English** · [简体中文](./zh/07-repo-layout.md)
+
 ## 1. Top-level
 
 ```text

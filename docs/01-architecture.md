@@ -1,5 +1,7 @@
 # 01 — Architecture
 
+> **Languages / 语言**: **English** · [简体中文](./zh/01-architecture.md)
+
 ## 1. Pipeline
 
 The frontend is borrowed from upstream OCaml; everything from

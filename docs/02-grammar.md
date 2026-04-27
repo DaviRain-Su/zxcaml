@@ -1,5 +1,7 @@
 # 02 — Grammar (OCaml subset for P1)
 
+> **Languages / 语言**: **English** · [简体中文](./zh/02-grammar.md)
+
 ## 1. Position
 
 ZxCaml accepts a **strict subset of OCaml**. Anything written in

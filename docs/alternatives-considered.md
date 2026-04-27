@@ -1,5 +1,7 @@
 # Alternatives Considered — Frontend strategy
 
+> **Languages / 语言**: **English** · [简体中文](./zh/alternatives-considered.md)
+
 This is a snapshot of the three options considered for ZxCaml's
 frontend, the reasoning behind picking option B, and what each
 rejected option would have entailed. It exists so that future

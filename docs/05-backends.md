@@ -1,5 +1,7 @@
 # 05 — Backends
 
+> **Languages / 语言**: **English** · [简体中文](./zh/05-backends.md)
+
 ## 1. Backend trait (conceptual)
 
 A backend consumes `Lowered IR` (or, for the interpreter, `Core IR`

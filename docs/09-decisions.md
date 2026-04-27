@@ -1,5 +1,7 @@
 # 09 — Architectural Decision Records
 
+> **Languages / 语言**: **English** · [简体中文](./zh/09-decisions.md)
+
 Format: short, dated, immutable. Append new ADRs; do not edit old
 ones — supersede them with a new entry.
 

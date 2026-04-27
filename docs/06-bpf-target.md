@@ -1,5 +1,7 @@
 # 06 — BPF target
 
+> **Languages / 语言**: **English** · [简体中文](./zh/06-bpf-target.md)
+
 ## 1. Goal
 
 Phase 1 must end with this command sequence succeeding end-to-end on

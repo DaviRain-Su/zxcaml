@@ -1,5 +1,7 @@
 # 04 — Memory model
 
+> **Languages / 语言**: **English** · [简体中文](./zh/04-memory-model.md)
+
 ## 1. Position
 
 In Phase 1, ZxCaml has **one** memory model:
