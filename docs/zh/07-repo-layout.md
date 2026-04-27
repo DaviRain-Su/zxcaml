@@ -92,7 +92,7 @@ src/
 │
 └── driver/
     ├── pipeline.zig            -- spawn zxc-frontend，驱动剩下流水线
-    ├── build.zig               -- 调 ZigBackend，再调 `zig build-obj`
+    ├── build.zig               -- 调 ZigBackend，再调 `zig build-lib` + `sbpf-linker`
     └── bpf.zig                 -- BPF 目标接线
 ```
 

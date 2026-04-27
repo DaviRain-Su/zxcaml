@@ -46,7 +46,10 @@ Zig `ttree` mirror, or Core IR directly.
 ### 2.2 Output
 
 A single `.zig` source file plus a `build.zig` snippet that drives
-`zig build-obj` for the requested target.
+the toolchain for the requested target. For `--target=bpf` the
+chain is `zig build-lib -target bpfel-freestanding -femit-llvm-bc`
+followed by `sbpf-linker --cpu v2 --export entrypoint`, producing
+`program.so` (see `06-bpf-target.md` §2 / §6, ADR-012, ADR-013).
 
 ```text
 out/

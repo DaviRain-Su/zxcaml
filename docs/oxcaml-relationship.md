@@ -137,7 +137,7 @@ PX activates for, e.g., wasm32 with a real use case.
 one .ml source file
   ├── ocaml / dune                → x86_64 / arm64 native binary
   │                                  (for fast local testing, fuzzing, REPL)
-  └── omlz                         → BPF .o
+  └── omlz                         → program.so (Solana SBPF ELF)
                                      (for deployment to Solana)
 ```
 

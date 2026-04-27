@@ -14,7 +14,8 @@
 
 ```text
 .ml  →  Zig lexer  →  Zig parser  →  Zig HM/ADT  →  Zig Typed AST
-        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen  →  BPF .o
+        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen
+        →  zig build-lib + sbpf-linker  →  program.so
 ```
 
 ### 优点
@@ -48,7 +49,8 @@
         →  zxc-frontend (OCaml，~几百行)
         →  .cir.sexp
         →  Zig 前端桥
-        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen  →  BPF .o
+        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen
+        →  zig build-lib + sbpf-linker  →  program.so
 ```
 
 ### 优点

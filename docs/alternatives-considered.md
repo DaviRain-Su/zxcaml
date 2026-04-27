@@ -18,7 +18,8 @@ The decision itself is recorded in **ADR-009** (no fork) and
 
 ```text
 .ml  →  Zig lexer  →  Zig parser  →  Zig HM/ADT  →  Zig Typed AST
-        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen  →  BPF .o
+        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen
+        →  zig build-lib + sbpf-linker  →  program.so
 ```
 
 ### Pros
@@ -56,7 +57,8 @@ stability becomes a chronic problem.
         →  zxc-frontend (OCaml, ~few hundred LOC)
         →  .cir.sexp
         →  Zig frontend bridge
-        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen  →  BPF .o
+        →  ANF  →  Core IR  →  Lowered IR  →  Zig codegen
+        →  zig build-lib + sbpf-linker  →  program.so
 ```
 
 ### Pros

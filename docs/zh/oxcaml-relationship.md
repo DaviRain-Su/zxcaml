@@ -124,7 +124,7 @@ PX 为某目标激活，比如 wasm32，且有真实用例。
 一份 .ml 源文件
   ├── ocaml / dune                → x86_64 / arm64 native 二进制
   │                                  （快速本地测试、fuzzing、REPL）
-  └── omlz                         → BPF .o
+  └── omlz                         → program.so（Solana SBPF ELF）
                                      （部署到 Solana）
 ```
 

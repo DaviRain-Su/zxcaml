@@ -93,7 +93,7 @@ src/
 │
 └── driver/
     ├── pipeline.zig            -- spawns zxc-frontend, drives the rest
-    ├── build.zig               -- invokes ZigBackend, then `zig build-obj`
+    ├── build.zig               -- invokes ZigBackend, then `zig build-lib` + `sbpf-linker`
     └── bpf.zig                 -- BPF target wiring
 ```
 
