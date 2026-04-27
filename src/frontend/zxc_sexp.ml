@@ -19,7 +19,9 @@ let pp_atom ppf atom =
   if atom <> "" && String.for_all is_atom_char atom then fprintf ppf "%s" atom
   else fprintf ppf "%S" atom
 
-let pp_param ppf = function Anonymous -> fprintf ppf "_"
+let pp_param ppf = function
+  | Anonymous -> fprintf ppf "_"
+  | Param name -> pp_atom ppf name
 
 let rec pp_expr ppf = function
   | Const_int n -> fprintf ppf "(const-int %d)" n
@@ -29,9 +31,22 @@ let rec pp_expr ppf = function
       fprintf ppf "(lambda (";
       pp_params ppf lambda.params;
       fprintf ppf ") %a)" pp_expr lambda.body
+  | App app ->
+      fprintf ppf "(app %a" pp_expr app.callee;
+      List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) app.args;
+      fprintf ppf ")"
   | Let let_expr ->
-      fprintf ppf "(let %a %a %a)" pp_atom let_expr.name pp_expr let_expr.value
+      fprintf ppf "(%s %a %a %a)"
+        (if let_expr.is_rec then "let-rec" else "let")
+        pp_atom let_expr.name pp_expr let_expr.value
         pp_expr let_expr.body
+  | If if_expr ->
+      fprintf ppf "(if %a %a %a)" pp_expr if_expr.cond pp_expr
+        if_expr.then_branch pp_expr if_expr.else_branch
+  | Prim prim ->
+      fprintf ppf "(prim %a" pp_atom prim.op;
+      List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) prim.args;
+      fprintf ppf ")"
   | Ctor ctor ->
       fprintf ppf "(ctor %a" pp_atom ctor.name;
       List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) ctor.args;
@@ -60,7 +75,9 @@ and pp_match_pattern ppf = function
       fprintf ppf ")"
 
 let pp_decl ppf decl =
-  fprintf ppf "(let %a %a)" pp_atom decl.name pp_expr decl.body
+  fprintf ppf "(%s %a %a)"
+    (if decl.is_rec then "let-rec" else "let")
+    pp_atom decl.name pp_expr decl.body
 
 let pp_module ppf = function
   | Module decls ->

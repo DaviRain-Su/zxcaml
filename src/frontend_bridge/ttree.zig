@@ -26,13 +26,17 @@ pub const Decl = union(enum) {
 pub const LetDecl = struct {
     name: []const u8,
     body: Expr,
+    is_rec: bool = false,
 };
 
 /// Typed mirror of accepted expressions.
 pub const Expr = union(enum) {
     Lambda: Lambda,
     Constant: Constant,
+    App: App,
     Let: LetExpr,
+    If: IfExpr,
+    Prim: Prim,
     Var: Var,
     Ctor: Ctor,
     Match: Match,
@@ -44,11 +48,31 @@ pub const Lambda = struct {
     body: *const Expr,
 };
 
+/// Function application expression.
+pub const App = struct {
+    callee: *const Expr,
+    args: []const Expr,
+};
+
 /// Nested `let NAME = VALUE in BODY` expression.
 pub const LetExpr = struct {
     name: []const u8,
     value: *const Expr,
     body: *const Expr,
+    is_rec: bool = false,
+};
+
+/// Conditional expression with an explicit else branch.
+pub const IfExpr = struct {
+    cond: *const Expr,
+    then_branch: *const Expr,
+    else_branch: *const Expr,
+};
+
+/// Primitive integer/comparison operation.
+pub const Prim = struct {
+    op: []const u8,
+    args: []const Expr,
 };
 
 /// Variable reference expression.
@@ -105,7 +129,10 @@ pub const BridgeError = sexp_parser.ParseError || error{
     MalformedModule,
     MalformedDecl,
     MalformedLambda,
+    MalformedApp,
     MalformedLet,
+    MalformedIf,
+    MalformedPrim,
     MalformedVar,
     MalformedCtor,
     MalformedMatch,
@@ -174,12 +201,13 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
 fn parseDecl(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Decl {
     const items = try expectList(node);
     if (items.len != 3) return error.MalformedDecl;
-    try expectAtomValue(items[0], "let");
+    const tag = try expectAtom(items[0]);
+    const is_rec = if (std.mem.eql(u8, tag, "let")) false else if (std.mem.eql(u8, tag, "let-rec")) true else return error.MalformedDecl;
 
     const name = try dupeAtom(arena, items[1]);
     const body = try parseExpr(arena, items[2]);
 
-    return .{ .Let = .{ .name = name, .body = body } };
+    return .{ .Let = .{ .name = name, .body = body, .is_rec = is_rec } };
 }
 
 fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Expr {
@@ -190,7 +218,11 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "lambda")) return .{ .Lambda = try parseLambda(arena, items) };
     if (std.mem.eql(u8, tag, "const-int")) return .{ .Constant = .{ .Int = try parseConstInt(items) } };
     if (std.mem.eql(u8, tag, "const-string")) return .{ .Constant = .{ .String = try parseConstString(arena, items) } };
-    if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items) };
+    if (std.mem.eql(u8, tag, "app")) return .{ .App = try parseApp(arena, items) };
+    if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items, false) };
+    if (std.mem.eql(u8, tag, "let-rec")) return .{ .Let = try parseLetExpr(arena, items, true) };
+    if (std.mem.eql(u8, tag, "if")) return .{ .If = try parseIf(arena, items) };
+    if (std.mem.eql(u8, tag, "prim")) return .{ .Prim = try parsePrim(arena, items) };
     if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
     if (std.mem.eql(u8, tag, "ctor")) return .{ .Ctor = try parseCtor(arena, items) };
     if (std.mem.eql(u8, tag, "match")) return .{ .Match = try parseMatch(arena, items) };
@@ -216,7 +248,25 @@ fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Brid
     };
 }
 
-fn parseLetExpr(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!LetExpr {
+fn parseApp(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!App {
+    if (items.len < 2) return error.MalformedApp;
+
+    const callee = try arena.allocator().create(Expr);
+    callee.* = try parseExpr(arena, items[1]);
+
+    var args = std.ArrayList(Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (items[2..]) |arg_node| {
+        try args.append(arena.allocator(), try parseExpr(arena, arg_node));
+    }
+
+    return .{
+        .callee = callee,
+        .args = try args.toOwnedSlice(arena.allocator()),
+    };
+}
+
+fn parseLetExpr(arena: *std.heap.ArenaAllocator, items: []const *const Sexp, is_rec: bool) BridgeError!LetExpr {
     if (items.len != 4) return error.MalformedLet;
 
     const value = try arena.allocator().create(Expr);
@@ -229,6 +279,39 @@ fn parseLetExpr(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Bri
         .name = try dupeAtom(arena, items[1]),
         .value = value,
         .body = body,
+        .is_rec = is_rec,
+    };
+}
+
+fn parseIf(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!IfExpr {
+    if (items.len != 4) return error.MalformedIf;
+
+    const cond = try arena.allocator().create(Expr);
+    cond.* = try parseExpr(arena, items[1]);
+    const then_branch = try arena.allocator().create(Expr);
+    then_branch.* = try parseExpr(arena, items[2]);
+    const else_branch = try arena.allocator().create(Expr);
+    else_branch.* = try parseExpr(arena, items[3]);
+
+    return .{
+        .cond = cond,
+        .then_branch = then_branch,
+        .else_branch = else_branch,
+    };
+}
+
+fn parsePrim(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Prim {
+    if (items.len < 2) return error.MalformedPrim;
+
+    var args = std.ArrayList(Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (items[2..]) |arg_node| {
+        try args.append(arena.allocator(), try parseExpr(arena, arg_node));
+    }
+
+    return .{
+        .op = try dupeAtom(arena, items[1]),
+        .args = try args.toOwnedSlice(arena.allocator()),
     };
 }
 

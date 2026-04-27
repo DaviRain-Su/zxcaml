@@ -27,7 +27,7 @@ pub fn formatModule(allocator: std.mem.Allocator, module: ir.Module) ![]u8 {
 fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.Decl) !void {
     switch (decl) {
         .Let => |let_decl| {
-            try append(out, allocator, "(let ");
+            try append(out, allocator, if (let_decl.is_rec) "(let-rec " else "(let ");
             try append(out, allocator, let_decl.name);
             try append(out, allocator, " ");
             try formatExpr(out, allocator, let_decl.value.*);
@@ -64,8 +64,21 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, constant.layout);
             try append(out, allocator, ")");
         },
+        .App => |app| {
+            try append(out, allocator, "(app ");
+            try formatExpr(out, allocator, app.callee.*);
+            for (app.args) |arg| {
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, arg.*);
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, app.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, app.layout);
+            try append(out, allocator, ")");
+        },
         .Let => |let_expr| {
-            try append(out, allocator, "(let ");
+            try append(out, allocator, if (let_expr.is_rec) "(let-rec " else "(let ");
             try append(out, allocator, let_expr.name);
             try append(out, allocator, " ");
             try formatExpr(out, allocator, let_expr.value.*);
@@ -75,6 +88,32 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatTy(out, allocator, let_expr.ty);
             try append(out, allocator, " :layout ");
             try formatLayout(out, allocator, let_expr.layout);
+            try append(out, allocator, ")");
+        },
+        .If => |if_expr| {
+            try append(out, allocator, "(if ");
+            try formatExpr(out, allocator, if_expr.cond.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, if_expr.then_branch.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, if_expr.else_branch.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, if_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, if_expr.layout);
+            try append(out, allocator, ")");
+        },
+        .Prim => |prim| {
+            try append(out, allocator, "(prim ");
+            try append(out, allocator, primOpName(prim.op));
+            for (prim.args) |arg| {
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, arg.*);
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, prim.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, prim.layout);
             try append(out, allocator, ")");
         },
         .Var => |var_ref| {
@@ -141,6 +180,7 @@ fn formatPattern(out: *std.ArrayList(u8), allocator: std.mem.Allocator, pattern:
 fn formatTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) !void {
     switch (ty) {
         .Int => try append(out, allocator, "int"),
+        .Bool => try append(out, allocator, "bool"),
         .Unit => try append(out, allocator, "unit"),
         .String => try append(out, allocator, "string"),
         .Adt => |adt| {
@@ -163,6 +203,22 @@ fn formatTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) !v
             try append(out, allocator, ")");
         },
     }
+}
+
+fn primOpName(op: ir.PrimOp) []const u8 {
+    return switch (op) {
+        .Add => "+",
+        .Sub => "-",
+        .Mul => "*",
+        .Div => "/",
+        .Mod => "mod",
+        .Eq => "=",
+        .Ne => "<>",
+        .Lt => "<",
+        .Le => "<=",
+        .Gt => ">",
+        .Ge => ">=",
+    };
 }
 
 fn formatLayout(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: layout.Layout) !void {

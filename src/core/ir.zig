@@ -45,6 +45,7 @@ pub const Let = struct {
     value: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    is_rec: bool = false,
 };
 
 /// Core IR lambda in ANF form.
@@ -65,10 +66,21 @@ pub const Param = struct {
 pub const Expr = union(enum) {
     Lambda: Lambda,
     Constant: Constant,
+    App: App,
     Let: LetExpr,
+    If: IfExpr,
+    Prim: Prim,
     Var: Var,
     Ctor: Ctor,
     Match: Match,
+};
+
+/// Function application expression.
+pub const App = struct {
+    callee: *const Expr,
+    args: []const *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
 };
 
 /// Lexically-scoped let expression in ANF form.
@@ -78,6 +90,39 @@ pub const LetExpr = struct {
     body: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    is_rec: bool = false,
+};
+
+/// Conditional expression.
+pub const IfExpr = struct {
+    cond: *const Expr,
+    then_branch: *const Expr,
+    else_branch: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Primitive integer/comparison operation.
+pub const Prim = struct {
+    op: PrimOp,
+    args: []const *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Primitive operations supported by the current Core IR.
+pub const PrimOp = enum {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 };
 
 /// Integer constant expression with type and layout annotations.
@@ -145,6 +190,7 @@ pub const PatternCtor = struct {
 /// M1 type language needed to describe current examples.
 pub const Ty = union(enum) {
     Int,
+    Bool,
     Unit,
     String,
     Adt: Adt,

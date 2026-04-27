@@ -8,14 +8,22 @@
 /// A lowered module with the single M0 user entrypoint.
 pub const LModule = struct {
     entrypoint: LFunc,
+    functions: []const LFunc = &.{},
 };
 
 /// A lowered function using the P1 arena-threaded calling convention.
 pub const LFunc = struct {
     name: []const u8,
+    params: []const LParam = &.{},
     body: LExpr,
     calling_convention: CallingConvention = .ArenaThreaded,
     source_span: SourceSpan = .unavailable,
+};
+
+/// Lowered function parameter.
+pub const LParam = struct {
+    name: []const u8,
+    ty: LTy,
 };
 
 /// Calling conventions available to lowered functions.
@@ -32,10 +40,19 @@ pub const SourceSpan = union(enum) {
 /// Lowered expression.
 pub const LExpr = union(enum) {
     Constant: LConstant,
+    App: LApp,
     Let: LLet,
+    If: LIf,
+    Prim: LPrim,
     Var: LVar,
     Ctor: LCtor,
     Match: LMatch,
+};
+
+/// Lowered function application.
+pub const LApp = struct {
+    callee: *const LExpr,
+    args: []const *const LExpr,
 };
 
 /// M0 lowered constants.
@@ -49,6 +66,35 @@ pub const LLet = struct {
     name: []const u8,
     value: *const LExpr,
     body: *const LExpr,
+    is_rec: bool = false,
+};
+
+/// Lowered conditional expression.
+pub const LIf = struct {
+    cond: *const LExpr,
+    then_branch: *const LExpr,
+    else_branch: *const LExpr,
+};
+
+/// Lowered primitive operation.
+pub const LPrim = struct {
+    op: LPrimOp,
+    args: []const *const LExpr,
+};
+
+/// Lowered primitive operation kind.
+pub const LPrimOp = enum {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
 };
 
 /// Lowered variable reference.
@@ -92,6 +138,7 @@ pub const LCtorPattern = struct {
 /// Lowered type information needed by source emission.
 pub const LTy = union(enum) {
     Int,
+    Bool,
     Unit,
     String,
     Adt: LAdt,

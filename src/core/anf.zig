@@ -19,6 +19,8 @@ pub const LowerError = std.mem.Allocator.Error || error{
     UnsupportedCtor,
     UnsupportedCtorArity,
     UnsupportedPattern,
+    UnsupportedPrim,
+    UnsupportedPrimArity,
     MatchWithoutArms,
 };
 
@@ -46,6 +48,19 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
     defer ctx.scope.deinit();
 
     for (module.decls) |decl| {
+        switch (decl) {
+            .Let => |let_decl| {
+                if (let_decl.is_rec) {
+                    try ctx.scope.put(let_decl.name, .{
+                        .ty = .Unit,
+                        .layout = layout.topLevelLambda(),
+                    });
+                }
+            },
+        }
+    }
+
+    for (module.decls) |decl| {
         const lowered = try lowerDecl(arena, &ctx, decl);
         try decls.append(arena.allocator(), lowered);
         switch (lowered) {
@@ -68,6 +83,7 @@ fn lowerDecl(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, decl: ttree.De
                 .value = value,
                 .ty = exprTy(value.*),
                 .layout = exprLayout(value.*),
+                .is_rec = let_decl.is_rec,
             } };
         },
     };
@@ -82,14 +98,16 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
 
     for (lambda.params) |param_name| {
         const owned_name = try arena.allocator().dupe(u8, param_name);
+        const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_")) .Unit else .Int;
+        const param_layout = if (std.mem.startsWith(u8, param_name, "_")) layout.unitValue() else layout.intConstant();
         try params.append(arena.allocator(), .{
             .name = owned_name,
-            .ty = .Unit,
+            .ty = param_ty,
         });
         const previous = ctx.scope.get(owned_name);
         try ctx.scope.put(owned_name, .{
-            .ty = .Unit,
-            .layout = layout.unitValue(),
+            .ty = param_ty,
+            .layout = param_layout,
         });
         try inserted_params.append(arena.allocator(), .{ .name = owned_name, .previous = previous });
     }
@@ -128,7 +146,10 @@ fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Ex
     return switch (expr) {
         .Lambda => |lambda| .{ .Lambda = try lowerLambda(arena, ctx, lambda) },
         .Constant => |constant| .{ .Constant = try lowerConstant(arena, constant) },
+        .App => |app| try lowerApp(arena, ctx, app),
         .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
+        .If => |if_expr| try lowerIf(arena, ctx, if_expr),
+        .Prim => |prim| try lowerPrim(arena, ctx, prim),
         .Var => |var_ref| .{ .Var = try lowerVar(arena, ctx, var_ref) },
         .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr),
         .Match => |match_expr| try lowerMatch(arena, ctx, match_expr),
@@ -136,14 +157,23 @@ fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Ex
 }
 
 fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: ttree.LetExpr) LowerError!ir.LetExpr {
-    const value = try lowerExprPtr(arena, ctx, let_expr.value.*);
     const owned_name = try arena.allocator().dupe(u8, let_expr.name);
 
     const previous = ctx.scope.get(owned_name);
-    try ctx.scope.put(owned_name, .{
-        .ty = exprTy(value.*),
-        .layout = exprLayout(value.*),
-    });
+    if (let_expr.is_rec) {
+        try ctx.scope.put(owned_name, .{
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        });
+    }
+
+    const value = try lowerExprPtr(arena, ctx, let_expr.value.*);
+    if (!let_expr.is_rec) {
+        try ctx.scope.put(owned_name, .{
+            .ty = exprTy(value.*),
+            .layout = exprLayout(value.*),
+        });
+    }
     defer {
         if (previous) |binding| {
             ctx.scope.getPtr(owned_name).?.* = binding;
@@ -159,7 +189,71 @@ fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: t
         .body = body,
         .ty = exprTy(body.*),
         .layout = exprLayout(body.*),
+        .is_rec = let_expr.is_rec,
     };
+}
+
+fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    const callee = try lowerExprPtr(arena, ctx, app.callee.*);
+    var args = std.ArrayList(*const ir.Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (app.args) |arg| {
+        try args.append(arena.allocator(), try lowerExprPtr(arena, ctx, arg));
+    }
+    return .{ .App = .{
+        .callee = callee,
+        .args = try args.toOwnedSlice(arena.allocator()),
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } };
+}
+
+fn lowerIf(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, if_expr: ttree.IfExpr) LowerError!ir.Expr {
+    const cond = try lowerExprPtr(arena, ctx, if_expr.cond.*);
+    const then_branch = try lowerExprPtr(arena, ctx, if_expr.then_branch.*);
+    const else_branch = try lowerExprPtr(arena, ctx, if_expr.else_branch.*);
+    return .{ .If = .{
+        .cond = cond,
+        .then_branch = then_branch,
+        .else_branch = else_branch,
+        .ty = exprTy(then_branch.*),
+        .layout = exprLayout(then_branch.*),
+    } };
+}
+
+fn lowerPrim(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, prim: ttree.Prim) LowerError!ir.Expr {
+    const op = try lowerPrimOp(prim.op);
+    if (prim.args.len != 2) return error.UnsupportedPrimArity;
+    var args = std.ArrayList(*const ir.Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (prim.args) |arg| {
+        try args.append(arena.allocator(), try lowerExprPtr(arena, ctx, arg));
+    }
+    const ty: ir.Ty = switch (op) {
+        .Add, .Sub, .Mul, .Div, .Mod => .Int,
+        .Eq, .Ne, .Lt, .Le, .Gt, .Ge => .Bool,
+    };
+    return .{ .Prim = .{
+        .op = op,
+        .args = try args.toOwnedSlice(arena.allocator()),
+        .ty = ty,
+        .layout = layout.intConstant(),
+    } };
+}
+
+fn lowerPrimOp(op: []const u8) LowerError!ir.PrimOp {
+    if (std.mem.eql(u8, op, "+")) return .Add;
+    if (std.mem.eql(u8, op, "-")) return .Sub;
+    if (std.mem.eql(u8, op, "*")) return .Mul;
+    if (std.mem.eql(u8, op, "/")) return .Div;
+    if (std.mem.eql(u8, op, "mod")) return .Mod;
+    if (std.mem.eql(u8, op, "=")) return .Eq;
+    if (std.mem.eql(u8, op, "<>")) return .Ne;
+    if (std.mem.eql(u8, op, "<")) return .Lt;
+    if (std.mem.eql(u8, op, "<=")) return .Le;
+    if (std.mem.eql(u8, op, ">")) return .Gt;
+    if (std.mem.eql(u8, op, ">=")) return .Ge;
+    return error.UnsupportedPrim;
 }
 
 fn lowerVar(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.Var) LowerError!ir.Var {
@@ -493,7 +587,10 @@ fn exprTy(expr: ir.Expr) ir.Ty {
     return switch (expr) {
         .Lambda => |lambda| lambda.ty,
         .Constant => |constant| constant.ty,
+        .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .If => |if_expr| if_expr.ty,
+        .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
         .Ctor => |ctor_expr| ctor_expr.ty,
         .Match => |match_expr| match_expr.ty,
@@ -504,7 +601,10 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
     return switch (expr) {
         .Lambda => |lambda| lambda.layout,
         .Constant => |constant| constant.layout,
+        .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .If => |if_expr| if_expr.layout,
+        .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,
         .Ctor => |ctor_expr| ctor_expr.layout,
         .Match => |match_expr| match_expr.layout,

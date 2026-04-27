@@ -38,7 +38,33 @@ pub const LowerError = std.mem.Allocator.Error || error{
 /// Lowers a Core IR module with the P1 arena strategy.
 pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!lir.LModule {
     const entrypoint_index = findEntrypointIndex(module) orelse return error.EntrypointNotFound;
-    return .{ .entrypoint = try lowerLet(allocator, module, entrypoint_index) };
+    var functions = std.ArrayList(lir.LFunc).empty;
+    errdefer functions.deinit(allocator);
+    for (module.decls, 0..) |decl, index| {
+        if (index == entrypoint_index) continue;
+        const let_decl = switch (decl) {
+            .Let => |value| value,
+        };
+        switch (let_decl.value.*) {
+            .Lambda => |lambda| {
+                try functions.append(allocator, try lowerFunction(allocator, let_decl.name, lambda));
+                try collectNestedFunctions(allocator, lambda.body.*, &functions);
+            },
+            else => {},
+        }
+    }
+    const entrypoint = switch (module.decls[entrypoint_index]) {
+        .Let => |value| value,
+    };
+    const entry_lambda = switch (entrypoint.value.*) {
+        .Lambda => |lambda| lambda,
+        else => return error.UnsupportedEntrypoint,
+    };
+    try collectNestedFunctions(allocator, entry_lambda.body.*, &functions);
+    return .{
+        .entrypoint = try lowerEntrypointLet(allocator, module, entrypoint_index),
+        .functions = try functions.toOwnedSlice(allocator),
+    };
 }
 
 fn lowerBackend(ptr: *anyopaque, module: ir.Module) anyerror!lir.LModule {
@@ -57,7 +83,7 @@ fn findEntrypointIndex(module: ir.Module) ?usize {
     return null;
 }
 
-fn lowerLet(allocator: std.mem.Allocator, module: ir.Module, entrypoint_index: usize) LowerError!lir.LFunc {
+fn lowerEntrypointLet(allocator: std.mem.Allocator, module: ir.Module, entrypoint_index: usize) LowerError!lir.LFunc {
     const let_decl = switch (module.decls[entrypoint_index]) {
         .Let => |value| value,
     };
@@ -73,6 +99,10 @@ fn lowerLet(allocator: std.mem.Allocator, module: ir.Module, entrypoint_index: u
         const top_level = switch (module.decls[index]) {
             .Let => |value| value,
         };
+        switch (top_level.value.*) {
+            .Lambda => continue,
+            else => {},
+        }
         const let_body = try allocator.create(lir.LExpr);
         let_body.* = body.*;
         body = try allocator.create(lir.LExpr);
@@ -80,6 +110,7 @@ fn lowerLet(allocator: std.mem.Allocator, module: ir.Module, entrypoint_index: u
             .name = try allocator.dupe(u8, top_level.name),
             .value = try lowerExprPtr(allocator, top_level.value.*),
             .body = let_body,
+            .is_rec = top_level.is_rec,
         } };
     }
 
@@ -89,6 +120,50 @@ fn lowerLet(allocator: std.mem.Allocator, module: ir.Module, entrypoint_index: u
         .calling_convention = .ArenaThreaded,
         .source_span = .unavailable,
     };
+}
+
+fn lowerFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lambda) LowerError!lir.LFunc {
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .params = try lowerParams(allocator, lambda.params),
+        .body = (try lowerExprPtr(allocator, lambda.body.*)).*,
+        .calling_convention = .ArenaThreaded,
+        .source_span = .unavailable,
+    };
+}
+
+fn collectNestedFunctions(allocator: std.mem.Allocator, expr: ir.Expr, functions: *std.ArrayList(lir.LFunc)) LowerError!void {
+    switch (expr) {
+        .Lambda => |lambda| try collectNestedFunctions(allocator, lambda.body.*, functions),
+        .Let => |let_expr| {
+            switch (let_expr.value.*) {
+                .Lambda => |lambda| {
+                    if (let_expr.is_rec) {
+                        try functions.append(allocator, try lowerFunction(allocator, let_expr.name, lambda));
+                    }
+                    try collectNestedFunctions(allocator, lambda.body.*, functions);
+                },
+                else => try collectNestedFunctions(allocator, let_expr.value.*, functions),
+            }
+            try collectNestedFunctions(allocator, let_expr.body.*, functions);
+        },
+        .If => |if_expr| {
+            try collectNestedFunctions(allocator, if_expr.cond.*, functions);
+            try collectNestedFunctions(allocator, if_expr.then_branch.*, functions);
+            try collectNestedFunctions(allocator, if_expr.else_branch.*, functions);
+        },
+        .Prim => |prim| for (prim.args) |arg| try collectNestedFunctions(allocator, arg.*, functions),
+        .App => |app| {
+            try collectNestedFunctions(allocator, app.callee.*, functions);
+            for (app.args) |arg| try collectNestedFunctions(allocator, arg.*, functions);
+        },
+        .Ctor => |ctor| for (ctor.args) |arg| try collectNestedFunctions(allocator, arg.*, functions),
+        .Match => |match_expr| {
+            try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions);
+            for (match_expr.arms) |arm| try collectNestedFunctions(allocator, arm.body.*, functions);
+        },
+        .Constant, .Var => {},
+    }
 }
 
 fn lowerExprPtr(allocator: std.mem.Allocator, expr: ir.Expr) LowerError!*lir.LExpr {
@@ -103,10 +178,32 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr) LowerError!lir.LExpr {
             .Int => |value| .{ .Int = value },
             .String => |value| .{ .String = try allocator.dupe(u8, value) },
         } },
-        .Let => |let_expr| .{ .Let = .{
-            .name = try allocator.dupe(u8, let_expr.name),
-            .value = try lowerExprPtr(allocator, let_expr.value.*),
-            .body = try lowerExprPtr(allocator, let_expr.body.*),
+        .App => |app| .{ .App = .{
+            .callee = try lowerExprPtr(allocator, app.callee.*),
+            .args = try lowerExprPtrs(allocator, app.args),
+        } },
+        .Let => |let_expr| blk: {
+            if (let_expr.is_rec) {
+                switch (let_expr.value.*) {
+                    .Lambda => break :blk (try lowerExprPtr(allocator, let_expr.body.*)).*,
+                    else => {},
+                }
+            }
+            break :blk .{ .Let = .{
+                .name = try allocator.dupe(u8, let_expr.name),
+                .value = try lowerExprPtr(allocator, let_expr.value.*),
+                .body = try lowerExprPtr(allocator, let_expr.body.*),
+                .is_rec = let_expr.is_rec,
+            } };
+        },
+        .If => |if_expr| .{ .If = .{
+            .cond = try lowerExprPtr(allocator, if_expr.cond.*),
+            .then_branch = try lowerExprPtr(allocator, if_expr.then_branch.*),
+            .else_branch = try lowerExprPtr(allocator, if_expr.else_branch.*),
+        } },
+        .Prim => |prim| .{ .Prim = .{
+            .op = lowerPrimOp(prim.op),
+            .args = try lowerExprPtrs(allocator, prim.args),
         } },
         .Var => |var_ref| .{ .Var = .{ .name = try allocator.dupe(u8, var_ref.name) } },
         .Ctor => |ctor_expr| .{ .Ctor = .{
@@ -120,6 +217,33 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr) LowerError!lir.LExpr {
             .arms = try lowerArms(allocator, match_expr.arms),
         } },
         .Lambda => error.UnsupportedExpr,
+    };
+}
+
+fn lowerParams(allocator: std.mem.Allocator, params: []const ir.Param) LowerError![]const lir.LParam {
+    const lowered = try allocator.alloc(lir.LParam, params.len);
+    for (params, 0..) |param, index| {
+        lowered[index] = .{
+            .name = try allocator.dupe(u8, param.name),
+            .ty = try lowerTy(allocator, param.ty),
+        };
+    }
+    return lowered;
+}
+
+fn lowerPrimOp(op: ir.PrimOp) lir.LPrimOp {
+    return switch (op) {
+        .Add => .Add,
+        .Sub => .Sub,
+        .Mul => .Mul,
+        .Div => .Div,
+        .Mod => .Mod,
+        .Eq => .Eq,
+        .Ne => .Ne,
+        .Lt => .Lt,
+        .Le => .Le,
+        .Gt => .Gt,
+        .Ge => .Ge,
     };
 }
 
@@ -164,6 +288,7 @@ fn lowerExprPtrs(allocator: std.mem.Allocator, exprs: []const *const ir.Expr) Lo
 fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
     return switch (ty) {
         .Int => .Int,
+        .Bool => .Bool,
         .Unit => .Unit,
         .String => .String,
         .Arrow => error.UnsupportedExpr,

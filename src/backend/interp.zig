@@ -35,13 +35,17 @@ pub const EvalError = error{
     UnsupportedTopLevelValue,
     UnboundVariable,
     MatchFailure,
+    ArityMismatch,
+    DivisionByZero,
     OutOfMemory,
 };
 
 const Value = union(enum) {
     Int: i64,
+    Bool: bool,
     String: []const u8,
     Ctor: CtorValue,
+    Lambda: ir.Lambda,
 };
 
 const CtorValue = struct {
@@ -66,7 +70,10 @@ pub fn evalModule(module: ir.Module) EvalError!u64 {
                     continue;
                 }
                 switch (let_decl.value.*) {
-                    .Lambda => continue,
+                    .Lambda => |lambda| {
+                        try env.put(let_decl.name, .{ .Lambda = lambda });
+                        continue;
+                    },
                     else => {},
                 }
                 try env.put(let_decl.name, try evalTopLevelValue(arena.allocator(), let_decl.value.*, &env));
@@ -92,6 +99,8 @@ pub fn errorMessage(err: anyerror) []const u8 {
         error.UnsupportedTopLevelValue => "interpreter entrypoint must be a function",
         error.UnboundVariable => "interpreter found an unbound variable",
         error.MatchFailure => "interpreter pattern match was non-exhaustive",
+        error.ArityMismatch => "interpreter function application arity mismatch",
+        error.DivisionByZero => "interpreter integer division by zero",
         error.NotImplemented => "interpreter does not yet implement source emission",
         else => "interpreter failed",
     };
@@ -104,7 +113,8 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
         .Constant, .Let, .Var, .Ctor, .Match => evalExpr(allocator, expr, env),
-        .Lambda => error.UnsupportedTopLevelValue,
+        .App, .If, .Prim => evalExpr(allocator, expr, env),
+        .Lambda => |lambda| .{ .Lambda = lambda },
     };
 }
 
@@ -116,9 +126,66 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         },
         .Let => |let_expr| evalLet(allocator, let_expr, env),
         .Var => |var_ref| env.get(var_ref.name) orelse error.UnboundVariable,
+        .App => |app| evalApp(allocator, app, env),
+        .If => |if_expr| evalIf(allocator, if_expr, env),
+        .Prim => |prim| evalPrim(allocator, prim, env),
         .Ctor => |ctor_expr| evalCtor(allocator, ctor_expr, env),
         .Match => |match_expr| evalMatch(allocator, match_expr, env),
-        .Lambda => error.UnsupportedExpr,
+        .Lambda => |lambda| .{ .Lambda = lambda },
+    };
+}
+
+fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Value)) EvalError!Value {
+    const callee = try evalExpr(allocator, app.callee.*, env);
+    const lambda = switch (callee) {
+        .Lambda => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    if (lambda.params.len != app.args.len) return error.ArityMismatch;
+
+    var inserted = std.ArrayList(EnvBinding).empty;
+    defer inserted.deinit(allocator);
+    for (lambda.params, app.args) |param, arg| {
+        const value = try evalExpr(allocator, arg.*, env);
+        const previous = env.get(param.name);
+        try env.put(param.name, value);
+        try inserted.append(allocator, .{ .name = param.name, .previous = previous });
+    }
+    defer restoreEnv(env, inserted.items);
+    return evalExpr(allocator, lambda.body.*, env);
+}
+
+fn evalIf(allocator: std.mem.Allocator, if_expr: ir.IfExpr, env: *std.StringHashMap(Value)) EvalError!Value {
+    const cond = try evalExpr(allocator, if_expr.cond.*, env);
+    return switch (cond) {
+        .Bool => |value| if (value) evalExpr(allocator, if_expr.then_branch.*, env) else evalExpr(allocator, if_expr.else_branch.*, env),
+        else => error.UnsupportedExpr,
+    };
+}
+
+fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap(Value)) EvalError!Value {
+    if (prim.args.len != 2) return error.ArityMismatch;
+    const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
+    const rhs = try intValue(try evalExpr(allocator, prim.args[1].*, env));
+    return switch (prim.op) {
+        .Add => .{ .Int = lhs +% rhs },
+        .Sub => .{ .Int = lhs -% rhs },
+        .Mul => .{ .Int = lhs *% rhs },
+        .Div => if (rhs == 0) error.DivisionByZero else .{ .Int = @divTrunc(lhs, rhs) },
+        .Mod => if (rhs == 0) error.DivisionByZero else .{ .Int = @rem(lhs, rhs) },
+        .Eq => .{ .Bool = lhs == rhs },
+        .Ne => .{ .Bool = lhs != rhs },
+        .Lt => .{ .Bool = lhs < rhs },
+        .Le => .{ .Bool = lhs <= rhs },
+        .Gt => .{ .Bool = lhs > rhs },
+        .Ge => .{ .Bool = lhs >= rhs },
+    };
+}
+
+fn intValue(value: Value) EvalError!i64 {
+    return switch (value) {
+        .Int => |int| int,
+        else => error.UnsupportedExpr,
     };
 }
 
@@ -214,7 +281,7 @@ fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void
 fn valueToU64(value: Value) EvalError!u64 {
     return switch (value) {
         .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
-        .String, .Ctor => error.UnsupportedExpr,
+        .Bool, .String, .Ctor, .Lambda => error.UnsupportedExpr,
     };
 }
 
@@ -422,6 +489,68 @@ test "interpreter supports wildcard and variable match patterns" {
     const decls = [_]ir.Decl{entrypoint_decl};
 
     try std.testing.expectEqual(@as(u64, 4), try evalModule(.{ .decls = &decls }));
+}
+
+test "interpreter evaluates a recursive top-level function" {
+    const decls = [_]ir.Decl{
+        .{ .Let = .{
+            .name = "loop",
+            .value = makeExpr(.{ .Lambda = .{
+                .params = &.{.{ .name = "n", .ty = .Int }},
+                .body = makeExpr(.{ .If = .{
+                    .cond = makeExpr(.{ .Prim = .{
+                        .op = .Le,
+                        .args = &.{
+                            makeExpr(.{ .Var = .{ .name = "n", .ty = .Int, .layout = layout.intConstant() } }),
+                            makeExpr(.{ .Constant = .{ .value = .{ .Int = 0 }, .ty = .Int, .layout = layout.intConstant() } }),
+                        },
+                        .ty = .Bool,
+                        .layout = layout.intConstant(),
+                    } }),
+                    .then_branch = makeExpr(.{ .Constant = .{ .value = .{ .Int = 7 }, .ty = .Int, .layout = layout.intConstant() } }),
+                    .else_branch = makeExpr(.{ .App = .{
+                        .callee = makeExpr(.{ .Var = .{ .name = "loop", .ty = .Unit, .layout = layout.topLevelLambda() } }),
+                        .args = &.{makeExpr(.{ .Prim = .{
+                            .op = .Sub,
+                            .args = &.{
+                                makeExpr(.{ .Var = .{ .name = "n", .ty = .Int, .layout = layout.intConstant() } }),
+                                makeExpr(.{ .Constant = .{ .value = .{ .Int = 1 }, .ty = .Int, .layout = layout.intConstant() } }),
+                            },
+                            .ty = .Int,
+                            .layout = layout.intConstant(),
+                        } })},
+                        .ty = .Int,
+                        .layout = layout.intConstant(),
+                    } }),
+                    .ty = .Int,
+                    .layout = layout.intConstant(),
+                } }),
+                .ty = .Unit,
+                .layout = layout.topLevelLambda(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+            .is_rec = true,
+        } },
+        .{ .Let = .{
+            .name = "entrypoint",
+            .value = makeExpr(.{ .Lambda = .{
+                .params = &.{},
+                .body = makeExpr(.{ .App = .{
+                    .callee = makeExpr(.{ .Var = .{ .name = "loop", .ty = .Unit, .layout = layout.topLevelLambda() } }),
+                    .args = &.{makeExpr(.{ .Constant = .{ .value = .{ .Int = 3 }, .ty = .Int, .layout = layout.intConstant() } })},
+                    .ty = .Int,
+                    .layout = layout.intConstant(),
+                } }),
+                .ty = .Unit,
+                .layout = layout.topLevelLambda(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } },
+    };
+
+    try std.testing.expectEqual(@as(u64, 7), try evalModule(.{ .decls = &decls }));
 }
 
 test "interpreter backend trait exposes direct eval and rejects source emission" {

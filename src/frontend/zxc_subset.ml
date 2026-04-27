@@ -23,14 +23,17 @@ type diagnostic = {
   message : string;
 }
 
-type param = Anonymous
+type param = Anonymous | Param of string
 
 type expr =
   | Const_int of int
   | Const_string of string
   | Var of string
   | Lambda of lambda
+  | App of app
   | Let of let_expr
+  | If of if_expr
+  | Prim of prim
   | Ctor of ctor
   | Match of match_expr
 
@@ -39,10 +42,27 @@ and lambda = {
   body : expr;
 }
 
+and app = {
+  callee : expr;
+  args : expr list;
+}
+
 and let_expr = {
   name : string;
   value : expr;
   body : expr;
+  is_rec : bool;
+}
+
+and if_expr = {
+  cond : expr;
+  then_branch : expr;
+  else_branch : expr;
+}
+
+and prim = {
+  op : string;
+  args : expr list;
 }
 
 and ctor = {
@@ -73,6 +93,7 @@ and ctor_pattern = {
 type decl = {
   name : string;
   body : expr;
+  is_rec : bool;
 }
 
 type modul = Module of decl list
@@ -186,6 +207,10 @@ let is_whitelisted_constructor = function
   | "None" | "Some" | "Ok" | "Error" -> true
   | _ -> false
 
+let is_whitelisted_prim = function
+  | "+" | "-" | "*" | "/" | "mod" | "=" | "<>" | "<" | "<=" | ">" | ">=" -> true
+  | _ -> false
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> "_"
@@ -196,7 +221,8 @@ let parse_param (param : function_param) =
   match (param.fp_arg_label, param.fp_kind) with
   | Nolabel, Tparam_pat pat -> (
       match pat.pat_desc with
-      | Tpat_any | Tpat_var _ -> Anonymous
+      | Tpat_any -> Anonymous
+      | Tpat_var (ident, _, _) -> Param (ident_name ident)
       | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc)
   | _, Tparam_pat pat ->
       unsupported ~node_kind:"labelled-parameter" ~loc:pat.pat_loc
@@ -245,6 +271,14 @@ let rec parse_match_case (case : computation case) =
   let body = parse_expr case.c_rhs in
   { pattern; body }
 
+and parse_apply_args args =
+  let parse_one = function
+    | Nolabel, Some arg -> parse_expr arg
+    | _, Some arg -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc
+    | _, None -> unsupported ~node_kind:"partial-application" ~loc:Location.none
+  in
+  List.map parse_one args
+
 and parse_expr (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
@@ -262,9 +296,12 @@ and parse_expr (expr : expression) =
       let name = parse_binding_name binding.vb_pat in
       let value = parse_expr binding.vb_expr in
       let body = parse_expr body in
-      Let { name; value; body }
-  | Texp_let (Recursive, _, _) ->
-      unsupported ~node_kind:"Texp_let(recursive)" ~loc:expr.exp_loc
+      Let { name; value; body; is_rec = false }
+  | Texp_let (Recursive, [ binding ], body) ->
+      let name = parse_binding_name binding.vb_pat in
+      let value = parse_expr binding.vb_expr in
+      let body = parse_expr body in
+      Let { name; value; body; is_rec = true }
   | Texp_let (_, [], _) ->
       unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc
   | Texp_let (_, _ :: _ :: _, _) ->
@@ -275,6 +312,19 @@ and parse_expr (expr : expression) =
       if is_whitelisted_constructor name then
         Ctor { name; args = List.map parse_expr args }
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when is_whitelisted_prim (longident_name lid) ->
+      Prim { op = longident_name lid; args = parse_apply_args args }
+  | Texp_apply (callee, args) -> App { callee = parse_expr callee; args = parse_apply_args args }
+  | Texp_ifthenelse (cond, then_branch, Some else_branch) ->
+      If
+        {
+          cond = parse_expr cond;
+          then_branch = parse_expr then_branch;
+          else_branch = parse_expr else_branch;
+        }
+  | Texp_ifthenelse (_, _, None) ->
+      unsupported ~node_kind:"Texp_ifthenelse(no-else)" ~loc:expr.exp_loc
   | Texp_match (scrutinee, cases, _) ->
       let scrutinee = parse_match_scrutinee scrutinee in
       let arms = List.map parse_match_case cases in
@@ -284,13 +334,14 @@ and parse_expr (expr : expression) =
 let parse_value_binding (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
   let body = parse_expr binding.vb_expr in
-  { name; body }
+  { name; body; is_rec = false }
 
 let parse_structure_item (item : structure_item) =
   match item.str_desc with
   | Tstr_value (Nonrecursive, [ binding ]) -> [ parse_value_binding binding ]
-  | Tstr_value (Recursive, _) ->
-      unsupported ~node_kind:"Tstr_value(recursive)" ~loc:item.str_loc
+  | Tstr_value (Recursive, [ binding ]) ->
+      let decl = parse_value_binding binding in
+      [ { decl with is_rec = true } ]
   | Tstr_value (_, []) ->
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc
   | Tstr_value (_, _ :: _ :: _) ->

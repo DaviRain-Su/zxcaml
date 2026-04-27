@@ -31,6 +31,10 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\
         \\
     );
+    for (module.functions) |func| {
+        try emitFunction(&out, allocator, func);
+        try append(&out, allocator, "\n");
+    }
     try emitFunction(&out, allocator, module.entrypoint);
 
     return out.toOwnedSlice(allocator);
@@ -42,17 +46,33 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
     }
 
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
-    try append(out, allocator, "pub fn ");
-    try append(out, allocator, try emittedFunctionName(allocator, func.name));
-    try append(out, allocator, "(arena: *Arena, input: [*]const u8) callconv(.c) u64 {\n");
+    const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
+    try append(out, allocator, if (is_entrypoint) "pub fn " else "fn ");
+    const function_name = try emittedFunctionName(allocator, func.name);
+    defer freeEmittedFunctionName(allocator, func.name, function_name);
+    try append(out, allocator, function_name);
+    try append(out, allocator, "(arena: *Arena");
+    if (is_entrypoint) {
+        try append(out, allocator, ", input: [*]const u8) callconv(.c) u64 {\n");
+    } else {
+        for (func.params) |param| {
+            try append(out, allocator, ", ");
+            try emitIdentifier(out, allocator, param.name);
+            try append(out, allocator, ": ");
+            const ty_name = try zigTypeName(allocator, param.ty);
+            defer allocator.free(ty_name);
+            try append(out, allocator, ty_name);
+        }
+        try append(out, allocator, ") i64 {\n");
+    }
     if (!exprNeedsArena(func.body)) {
         try append(out, allocator, "    _ = arena;\n");
     }
-    try append(out, allocator, "    _ = input;\n");
-    try append(out, allocator, "    return @intCast(");
+    if (is_entrypoint) try append(out, allocator, "    _ = input;\n");
+    try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
     var ctx: EmitContext = .{};
     try emitExpr(out, allocator, func.body, 1, &ctx);
-    try append(out, allocator, ");\n");
+    try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
 }
 
@@ -94,9 +114,102 @@ fn emitExpr(
             .String => |value| try appendPrint(out, allocator, "\"{f}\"", .{std.zig.fmtString(value)}),
         },
         .Var => |var_ref| try emitIdentifier(out, allocator, var_ref.name),
+        .App => |app| try emitAppExpr(out, allocator, app, indent_level, ctx),
         .Let => |let_expr| try emitLetExpr(out, allocator, let_expr, indent_level, ctx),
+        .If => |if_expr| try emitIfExpr(out, allocator, if_expr, indent_level, ctx),
+        .Prim => |prim| try emitPrimExpr(out, allocator, prim, indent_level, ctx),
         .Ctor => |ctor_expr| try emitCtorExpr(out, allocator, ctor_expr, indent_level, ctx),
         .Match => |match_expr| try emitMatchExpr(out, allocator, match_expr, indent_level, ctx),
+    }
+}
+
+fn emitAppExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    switch (app.callee.*) {
+        .Var => |callee| {
+            const function_name = try emittedFunctionName(allocator, callee.name);
+            defer freeEmittedFunctionName(allocator, callee.name, function_name);
+            try append(out, allocator, function_name);
+        },
+        else => return error.UnsupportedExpr,
+    }
+    try append(out, allocator, "(arena");
+    for (app.args) |arg| {
+        try append(out, allocator, ", ");
+        try emitExpr(out, allocator, arg.*, indent_level, ctx);
+    }
+    try append(out, allocator, ")");
+}
+
+fn freeEmittedFunctionName(allocator: std.mem.Allocator, source_name: []const u8, emitted: []const u8) void {
+    if (!std.mem.eql(u8, source_name, "entrypoint")) allocator.free(emitted);
+}
+
+fn emitIfExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    if_expr: lir.LIf,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "if (");
+    try emitExpr(out, allocator, if_expr.cond.*, indent_level + 1, ctx);
+    try append(out, allocator, ") {\n");
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+    try emitExpr(out, allocator, if_expr.then_branch.*, indent_level + 2, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "} else {\n");
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+    try emitExpr(out, allocator, if_expr.else_branch.*, indent_level + 2, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "}\n");
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitPrimExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    prim: lir.LPrim,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (prim.args.len != 2) return error.UnsupportedExpr;
+    switch (prim.op) {
+        .Div => {
+            try append(out, allocator, "@divTrunc(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, ", ");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, ")");
+        },
+        .Mod => {
+            try append(out, allocator, "@rem(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, ", ");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, ")");
+        },
+        else => {
+            try append(out, allocator, "(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, ")");
+        },
     }
 }
 
@@ -354,8 +467,22 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
     return switch (expr) {
         .Constant => false,
         .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+        .App => |app| blk: {
+            if (exprUsesName(app.callee.*, name)) break :blk true;
+            for (app.args) |arg| {
+                if (exprUsesName(arg.*, name)) break :blk true;
+            }
+            break :blk false;
+        },
         .Let => |let_expr| exprUsesName(let_expr.value.*, name) or
             (!std.mem.eql(u8, let_expr.name, name) and exprUsesName(let_expr.body.*, name)),
+        .If => |if_expr| exprUsesName(if_expr.cond.*, name) or exprUsesName(if_expr.then_branch.*, name) or exprUsesName(if_expr.else_branch.*, name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (exprUsesName(arg.*, name)) break :blk true;
+            }
+            break :blk false;
+        },
         .Ctor => |ctor_expr| {
             for (ctor_expr.args) |arg| {
                 if (exprUsesName(arg.*, name)) return true;
@@ -375,7 +502,15 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
 fn exprNeedsArena(expr: lir.LExpr) bool {
     return switch (expr) {
         .Constant, .Var => false,
+        .App => true,
         .Let => |let_expr| exprNeedsArena(let_expr.value.*) or exprNeedsArena(let_expr.body.*),
+        .If => |if_expr| exprNeedsArena(if_expr.cond.*) or exprNeedsArena(if_expr.then_branch.*) or exprNeedsArena(if_expr.else_branch.*),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (exprNeedsArena(arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
         .Match => |match_expr| blk: {
             if (exprNeedsArena(match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -430,6 +565,7 @@ fn allKnownVariantsCovered(variants: []const []const u8) bool {
 fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
     return switch (ty) {
         .Int => allocator.dupe(u8, "i64"),
+        .Bool => allocator.dupe(u8, "bool"),
         .Unit => allocator.dupe(u8, "void"),
         .String => allocator.dupe(u8, "[]const u8"),
         .Adt => |adt| blk: {
@@ -449,6 +585,21 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
             }
             return error.UnsupportedExpr;
         },
+    };
+}
+
+fn primOpToken(op: lir.LPrimOp) []const u8 {
+    return switch (op) {
+        .Add => "+%",
+        .Sub => "-%",
+        .Mul => "*%",
+        .Eq => "==",
+        .Ne => "!=",
+        .Lt => "<",
+        .Le => "<=",
+        .Gt => ">",
+        .Ge => ">=",
+        .Div, .Mod => unreachable,
     };
 }
 
@@ -642,4 +793,47 @@ test "ZigBackend emits switch-on-discriminant for constructor matches" {
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".some => |x| break") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".none => break") != null);
+}
+
+test "ZigBackend emits direct recursive helper functions" {
+    const module: lir.LModule = .{
+        .functions = &.{.{
+            .name = "fact",
+            .params = &.{.{ .name = "n", .ty = .Int }},
+            .body = .{ .If = .{
+                .cond = &.{ .Prim = .{
+                    .op = .Le,
+                    .args = &.{ &.{ .Var = .{ .name = "n" } }, &.{ .Constant = .{ .Int = 1 } } },
+                } },
+                .then_branch = &.{ .Constant = .{ .Int = 1 } },
+                .else_branch = &.{ .Prim = .{
+                    .op = .Mul,
+                    .args = &.{
+                        &.{ .Var = .{ .name = "n" } },
+                        &.{ .App = .{
+                            .callee = &.{ .Var = .{ .name = "fact" } },
+                            .args = &.{&.{ .Prim = .{
+                                .op = .Sub,
+                                .args = &.{ &.{ .Var = .{ .name = "n" } }, &.{ .Constant = .{ .Int = 1 } } },
+                            } }},
+                        } },
+                    },
+                } },
+            } },
+        }},
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .App = .{
+                .callee = &.{ .Var = .{ .name = "fact" } },
+                .args = &.{&.{ .Constant = .{ .Int = 5 } }},
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "fn omlz_user_fact(arena: *Arena, n: i64) i64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_fact(arena, (n -% 1))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(omlz_user_fact(arena, 5));") != null);
 }
