@@ -6,6 +6,7 @@
 //! - Emit the M0 Core IR contract with `omlz check --emit=core-ir <file.ml>`.
 //! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
 //! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
+//! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through Zig bitcode emission and sbpf-linker.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
@@ -13,6 +14,7 @@ const Io = std.Io;
 const build_options = @import("build_options");
 const pipeline = @import("driver/pipeline.zig");
 const driver_build = @import("driver/build.zig");
+const driver_bpf = @import("driver/bpf.zig");
 const interp = @import("backend/interp.zig");
 const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
@@ -88,8 +90,8 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         };
 
-        if (!std.mem.eql(u8, build_args.target, "native")) {
-            try writeStderr(init.io, "error: only --target=native is currently wired; BPF build lands in F08.\n");
+        if (!std.mem.eql(u8, build_args.target, "native") and !std.mem.eql(u8, build_args.target, "bpf")) {
+            try writeStderr(init.io, "error: unsupported build target; expected native or bpf.\n");
             std.process.exit(1);
         }
 
@@ -102,7 +104,13 @@ pub fn main(init: std.process.Init) !void {
         defer result.deinit();
 
         switch (result) {
-            .success => |parsed| try buildNative(init, parsed.module, build_args),
+            .success => |parsed| {
+                if (std.mem.eql(u8, build_args.target, "bpf")) {
+                    try buildBpf(init, parsed.module, build_args);
+                } else {
+                    try buildNative(init, parsed.module, build_args);
+                }
+            },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
         }
         return;
@@ -125,6 +133,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz check <file.ml>
         \\  omlz check --emit=core-ir <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
+        \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
         \\  omlz run <file.ml>
         \\
     );
@@ -285,6 +294,61 @@ fn buildNative(
     };
 }
 
+fn buildBpf(
+    init: std.process.Init,
+    module: @import("frontend_bridge/ttree.zig").Module,
+    build_args: BuildArgs,
+) !void {
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
+
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer lowered_arena.deinit();
+
+    var impl: arena_lower.ArenaStrategy = .{ .allocator = lowered_arena.allocator() };
+    const lowered_module = impl.loweringStrategy().lowerModule(core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower with ArenaStrategy: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    const source = zig_codegen.emitModule(init.gpa, lowered_module) catch |err| {
+        try writeStderr(init.io, "error: failed to emit Zig source: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(source);
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(init.io, "out");
+    try cwd.writeFile(init.io, .{
+        .sub_path = "out/program.zig",
+        .data = source,
+        .flags = .{ .truncate = true },
+    });
+
+    driver_bpf.buildBpf(init.gpa, init.io, .{
+        .output_path = build_args.output_path,
+        .environ = init.minimal.environ,
+    }) catch |err| {
+        if (err != error.SbpfLinkerMissing) {
+            try writeStderr(init.io, "error: BPF build failed: ");
+            try writeStderr(init.io, @errorName(err));
+            try writeStderr(init.io, "\n");
+        }
+        std.process.exit(1);
+    };
+}
+
 fn writeStdout(io: Io, bytes: []const u8) !void {
     var buffer: [1024]u8 = undefined;
     var file_writer: Io.File.Writer = .init(.stdout(), io, &buffer);
@@ -361,6 +425,7 @@ test {
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");
     _ = @import("driver/build.zig");
+    _ = @import("driver/bpf.zig");
     _ = @import("lower/arena.zig");
     _ = @import("lower/lir.zig");
     _ = @import("lower/strategy.zig");
