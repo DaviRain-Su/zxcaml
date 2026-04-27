@@ -30,10 +30,13 @@ The frontend is borrowed from upstream OCaml; everything from
 [ Backend ]                          (P1: Zig codegen)
    │   .zig source
    ▼
-[ Zig toolchain ]                    (zig build-obj -target bpfel-freestanding)
+[ Zig toolchain ]                    (zig build-lib -target bpfel-freestanding -femit-llvm-bc)
+   │   .bc (LLVM bitcode)
+   ▼
+[ sbpf-linker ]                      (--cpu v3 --export entrypoint)
    │
    ▼
-Solana BPF .o
+Solana BPF .so
 ```
 
 The vertical bar between `zxc-frontend` and `frontend_bridge` is the

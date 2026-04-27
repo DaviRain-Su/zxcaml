@@ -66,7 +66,7 @@
 
 ---
 
-## ADR-003 —— Phase 1 端到端出 BPF `.o`
+## ADR-003 —— Phase 1 端到端出 BPF `.so`
 
 **日期：** 2026-04-27
 **状态：** 已采纳
@@ -80,9 +80,16 @@
 
 P1 包含端到端 BPF 链路：
 
-- `omlz build --target=bpf` 调 `zig build-obj -target bpfel-freestanding`。
-- 产出 `.o` 能被 `solana-test-validator` 加载。
+- `omlz build --target=bpf` 先调
+  `zig build-lib -target bpfel-freestanding -femit-llvm-bc=…`，
+  再调 `sbpf-linker --cpu v3 --export entrypoint`。
+- 产出 `.so` 能被 `solana-test-validator` 加载。
 - 验收门槛是一份能跑的 `examples/solana_hello.ml`。
+
+> **2026-04-27 修订** 以反映对照 `DaviRain-Su/zignocchio` 验证后的真实工具链形态。
+> 早期写的 "`zig build-obj`、`.o`" 是规划期的近似；
+> 真正能跑通的链路文档化在 `06-bpf-target.md` §2，
+> 并由 ADR-012 / ADR-013 / ADR-014 钉住。
 
 ### 范围纪律
 
@@ -347,9 +354,11 @@ zxc-frontend-bridge（Zig）  读 sexp，构造我们的 Typed AST 镜像
  ↓
 ANF lowering → Core IR → ArenaStrategy → Lowered IR → Zig codegen
  ↓
-zig build-obj -target bpfel-freestanding
+zig build-lib -target bpfel-freestanding -femit-llvm-bc
  ↓
-Solana BPF .o
+sbpf-linker --cpu v3 --export entrypoint
+ ↓
+Solana BPF .so
 ```
 
 Core IR 仍然是稳定契约（ADR-004 不变）。
@@ -438,3 +447,187 @@ zig build
 ```
 
 `omlz` 在处理 `.ml` 输入时，运行时把 `zxc-frontend` 当子进程调起。
+
+---
+
+## ADR-012 —— `sbpf-linker` 是 build-time 依赖，版本钉死
+
+**日期：** 2026-04-27
+**状态：** 已采纳
+**Supersedes：** ADR-003 / `06-bpf-target.md` 早期草稿里那个隐含
+"光跑 `zig build-obj` 就能出 Solana 可加载产物"的假设。
+
+### 上下文
+
+在准备 spike β（BPF 工具链验证）的 preflight 时，我们对照了
+正在工作的 Zig→Solana SDK：`github.com/DaviRain-Su/zignocchio`。
+被验证过的工具链是两步，不是一步：
+
+1. `zig build-lib … -femit-llvm-bc` 出 LLVM bitcode。
+2. `sbpf-linker --cpu v3 --export entrypoint` 出 Solana loader 接受的
+   SBPFv3 ELF `.so`。
+
+标准 `lld` 产出的 `.so` Solana loader 不接受：
+Solana 的 ELF 布局、SBPF 指令集版本（SBPFv0/v1/v2/v3）、
+入口符号 export 语义都和通用 eBPF 不一样。
+`sbpf-linker` 就是这座桥。
+
+`sbpf-linker` 维护在 `github.com/blueshift-gg/sbpf-linker`，
+crates.io 上以 `sbpf-linker` 名字发布。
+
+### 决策
+
+- `sbpf-linker` 是 `omlz` 的 **build-time 依赖**。
+  产 BPF 产物时必须；**运行**已部署 BPF 程序时不必。
+- P1 的 pinned 版本是 **`sbpf-linker 0.1.8`**（crates.io），
+  如果只是 bug-fix 必须升到更新版本，备选是 pin 到 `master` 上的
+  某个具体 commit。
+- `omlz` 的 `build.zig` **不**安装 `sbpf-linker`，只要求
+  `PATH` 上有这个二进制；找不到时打印诊断 + 安装指引。
+- CI 用 `cargo install sbpf-linker --version 0.1.8` 装；
+  必要时也可以 `cargo install --git
+  https://github.com/blueshift-gg/sbpf-linker --rev <sha>`。
+
+### 理由
+
+- 我们没有能力自己写一个懂 Solana 的 BPF linker。
+  2026-04 唯一可行的答案就是 `sbpf-linker`，
+  且它的维护态势够（活跃 commit、有 crate 发布、被其它 Solana
+  工具链使用）。
+- pin 一个 *版本*（外加 commit fallback）让构建可重复，
+  并把"何时升级"集中到一个 ADR 修订上。
+- 不放进 `build.zig` 的安装路径，省掉 `cargo` bootstrap 的兔子洞；
+  `zig build` 仍是唯一 driver（ADR-011），
+  `cargo install` 是开发者一次性 setup —— 与装 `solana-cli` 同级。
+
+### 后果
+
+- `omlz` 的安装文档列出四个先决条件：
+  `zig 0.16.x`、`ocaml 5.2.x`（带 `compiler-libs`）、
+  `sbpf-linker`（pinned）、`solana-cli`。
+- 升级 `sbpf-linker` 需要：
+  (a) 跑一遍 CI；
+  (b) 重跑 BPF 验收测试；
+  (c) 在本 ADR 加一条修订记录写新版本号。
+  不允许"沉默地跟着 `master` 漂"。
+- 如果哪天 `sbpf-linker` 与我们生成的 bitcode 出现兼容问题：
+  按 P0 处理 —— 上报上游、回退到上一个能用的版本，
+  并评估是不是该改的是我们 bitcode 的形态。
+
+---
+
+## ADR-013 —— Solana SBF 版本在 P1 锁为 `v3`
+
+**日期：** 2026-04-27
+**状态：** 已采纳
+
+### 上下文
+
+Solana 的 BPF 方言有版本：
+
+- **SBPFv0** —— 最初的版本，限制极多（无 call、无 shift……）。已 legacy。
+- **SBPFv1 / v2** —— 中间态；指令更广，但 loader 仍有限制。
+- **SBPFv3** —— 2026 年新程序的默认；支持 LLVM 一般会发的指令。
+
+`sbpf-linker` 暴露 `--cpu v0|v1|v2|v3`。zignocchio 用的是 `--cpu v3`。
+
+### 决策
+
+P1 把 SBPF 版本锁在 **`v3`**。
+
+- `omlz build --target=bpf` 永远调 `sbpf-linker --cpu v3`。
+- 必须跑在更老 runtime 上的程序（2026 年很罕见，但 legacy chain 上有）
+  **不在** P1 范围。
+
+### 理由
+
+- v3 是 `solana-test-validator` 和现代 mainnet loader 的默认接受版本。
+- 老版本对指令做了限制，LLVM 不加 target 特定选项不会守这些限制；
+  锁 v3 避免和工具链对着干。
+- 一个版本 → 一套验收测试 → 一套预期行为。
+
+### 后果
+
+- P1 编出来的程序跑不了老 SBPF runtime。已知，已接受。
+- 如果未来某 phase 需要 multi-version 支持，
+  CLI flag `--sbpf-version` 留给那一刻用。
+
+---
+
+## ADR-014 —— 把 `zignocchio` 当灵感参考（Way A），不导入它的代码
+
+**日期：** 2026-04-27
+**状态：** 已采纳
+
+### 上下文
+
+`github.com/DaviRain-Su/zignocchio` 是一个能跑通的
+Zig→Solana SBF SDK。它的覆盖面与 ZxCaml 未来 `runtime/` 需要的
+显著重叠：arena allocator、BPF entrypoint deserializer、
+syscall 绑定（MurmurHash3-32 dispatch）、AccountInfo 解析、
+PDA / CPI helper、litesvm/surfpool/mollusk 测试集成。
+
+"使用 zignocchio"考虑了四种策略：
+
+- **A.** 当灵感读它，ZxCaml 自己写自己的 runtime。
+- **B.** 当 `git submodule` / `build.zig.zon` 依赖；
+  生成代码调它的 SDK。
+- **C.** vendor 几个关键文件（entrypoint / syscalls / allocator）
+  到 `runtime/zig/`，附 attribution。
+- **D.** fork 它，作为 ZxCaml 风格的子项目维护。
+
+### 决策
+
+采纳 **Way A**：zignocchio 是 **灵感参考**。
+我们可以自由阅读它的源码；**不导入** 它的代码到本仓库。
+
+这与 ADR-009 对 OxCaml 的姿态完全一致。
+
+### 理由
+
+- **与项目其它"不 fork、不 vendor"决策一致。**
+  ADR-009 拒绝 fork OxCaml，理由同样适用：
+  fork 或 vendor 等于承担非自有代码的维护责任。
+- **license 卫生。** 导入代码自带 license 义务；
+  "读思路、自己写"没有。
+- **范围解耦。** zignocchio 的定位是给 Solana 开发者用的 Zig SDK。
+  ZxCaml 是一个编译器，碰巧生成代码也需要那一层 SDK 表面。
+  把两者耦合就是把我们的 roadmap 耦合到他们的。
+- **要保持 fresh 的表面更小。** vendored 副本会过期；
+  submodule pin 要求我们追踪 upstream。
+  "读思路"维护成本是 0 —— 需要思路时再读。
+
+### 这条 ADR 允许什么
+
+- 阅读 zignocchio 源码，学习 SBPFv3 entrypoint 的正确写法。
+- 用我们自己的命名、错误处理、arena 所有权语义，
+  独立重新得到它的设计（BumpAllocator → 我们的 `arena.zig`、
+  syscall MurmurHash3-32 helper → 我们 P3 的
+  `runtime/zig/syscalls.zig`）。
+- 把它作为某个非显然技巧的来源加以引用
+  （比如 `06-bpf-target.md` §4 的 const-array workaround）。
+
+### 这条 ADR 禁止什么
+
+- 把 zignocchio 的源码文件 copy-paste 到 `runtime/zig/`
+  或本仓库其它任何地方。
+- 把 zignocchio 加为 build 依赖（submodule、zon、vendor 目录）。
+- 在 ZxCaml 组织下 fork 它。
+
+### 关系总览
+
+| 来源 | 我们的姿态 | ADR |
+|---|---|---|
+| OCaml `compiler-libs` | build-time 当库用 | ADR-010 |
+| OxCaml | 仅作为灵感阅读 | ADR-009 |
+| zignocchio | 仅作为灵感阅读 | ADR-014 |
+| `sbpf-linker` | build-time 工具依赖，pin 死 | ADR-012 |
+| `solana-cli` | 开发者工具依赖 | （隐含） |
+
+### 后果
+
+- 到 P3，ZxCaml 的 `runtime/zig/` 会含有看起来 *与 zignocchio 的部分非常相似*
+  的代码。这是预期：Solana BPF 输入缓冲区只有一种正确的反序列化方式，
+  bump allocator 也只有一种顺手的写法。趋同演化没问题；copy-paste 不行。
+- 关于"我们从读 zignocchio 学到了什么、它如何塑造了 P1"的较长叙事，
+  见 `docs/zignocchio-relationship.md`。

@@ -95,10 +95,17 @@ later, but also leaves it unproven for longer.
 
 P1 includes the BPF target chain end-to-end:
 
-- `omlz build --target=bpf` invokes `zig build-obj -target
-  bpfel-freestanding`.
-- The resulting `.o` is loadable by `solana-test-validator`.
+- `omlz build --target=bpf` invokes `zig build-lib -target
+  bpfel-freestanding -femit-llvm-bc=…` followed by
+  `sbpf-linker --cpu v3 --export entrypoint`.
+- The resulting `.so` is loadable by `solana-test-validator`.
 - Acceptance criterion is a working `examples/solana_hello.ml`.
+
+> **Revised 2026-04-27** to reflect the actual toolchain shape
+> validated against `DaviRain-Su/zignocchio`. The earlier wording
+> ("`zig build-obj`", "`.o`") was a planning approximation; the
+> chain that actually works is documented in `06-bpf-target.md` §2
+> and locked in by ADR-012 / ADR-013 / ADR-014.
 
 ### Scope discipline
 
@@ -403,9 +410,11 @@ zxc-frontend-bridge (Zig)   read sexp, build our Typed AST mirror
  ↓
 ANF lowering → Core IR → ArenaStrategy → Lowered IR → Zig codegen
  ↓
-zig build-obj -target bpfel-freestanding
+zig build-lib -target bpfel-freestanding -femit-llvm-bc
  ↓
-Solana BPF .o
+sbpf-linker --cpu v3 --export entrypoint
+ ↓
+Solana BPF .so
 ```
 
 The Core IR remains the stable contract (ADR-004 unchanged).
@@ -513,3 +522,212 @@ zig build
 
 `omlz` invokes `zxc-frontend` as a subprocess at runtime when
 processing `.ml` input.
+
+---
+
+## ADR-012 — `sbpf-linker` is a build-time dependency, version pinned
+
+**Date:** 2026-04-27
+**Status:** Accepted
+**Supersedes:** the implicit assumption in earlier drafts of
+ADR-003 / `06-bpf-target.md` that "`zig build-obj`" alone produces
+a Solana-loadable artefact.
+
+### Context
+
+While preparing the spike β preflight (BPF toolchain verification)
+we cross-checked our planned chain against the working Zig→Solana
+SDK at `github.com/DaviRain-Su/zignocchio`. The verified chain
+has two steps, not one:
+
+1. `zig build-lib … -femit-llvm-bc` (LLVM bitcode out).
+2. `sbpf-linker --cpu v3 --export entrypoint` (SBPFv3 ELF
+   `.so` out, accepted by Solana's loader).
+
+Stock `lld` does not produce a `.so` Solana's loader will accept:
+the Solana ELF layout, the SBPF instruction set version
+(SBPFv0/v1/v2/v3), and the symbol-export semantics differ from
+generic eBPF. `sbpf-linker` is the linker that bridges these.
+
+`sbpf-linker` is maintained at
+`github.com/blueshift-gg/sbpf-linker` and is published on crates.io
+as `sbpf-linker`.
+
+### Decision
+
+- `sbpf-linker` is a **build-time dependency** of `omlz`. It is
+  required to produce a BPF artefact; it is not required to
+  *run* a deployed BPF program.
+- The pinned version for P1 is **`sbpf-linker 0.1.8`** (crates.io)
+  with a fallback git-pin to a specific commit on `master` if a
+  bug-fix-only newer version is required.
+- The `omlz` build (`build.zig`) does **not** install
+  `sbpf-linker`; it requires the binary on `PATH` and prints a
+  diagnostic with install instructions if absent.
+- CI installs it via `cargo install sbpf-linker --version 0.1.8`
+  (or, if pinning to a commit becomes necessary, `cargo install
+  --git https://github.com/blueshift-gg/sbpf-linker --rev <sha>`).
+
+### Reasons
+
+- We are not in a position to write a Solana-aware BPF linker;
+  `sbpf-linker` is the only viable answer in 2026-04 and has a
+  sufficient maintenance posture (active commits, a published
+  crate, used by other Solana tooling).
+- Pinning a *version* (and a fallback commit) gives us
+  reproducible builds and a single coordinate to update when
+  upstream changes.
+- Keeping it off `build.zig`'s install path avoids the
+  `cargo` boot-strapping rabbit hole; `zig build` remains the
+  single driver per ADR-011, and `cargo install` is a one-time
+  developer setup step like installing `solana-cli`.
+
+### Consequences
+
+- `omlz`'s install instructions list four prerequisites:
+  `zig 0.16.x`, `ocaml 5.2.x` (with `compiler-libs`),
+  `sbpf-linker` (pinned), and `solana-cli`.
+- Upgrading `sbpf-linker` requires (a) a CI run, (b) re-running
+  the BPF acceptance test, and (c) an addendum to this ADR with
+  the new version coordinate. We do not silently float on
+  `master`.
+- If `sbpf-linker` ever breaks compatibility with our generated
+  bitcode, we treat that as a P0 issue: report upstream, pin the
+  last working version, and consider whether the bitcode shape is
+  what should change instead.
+
+---
+
+## ADR-013 — Solana SBF version is pinned at `v3` for P1
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+### Context
+
+Solana's BPF flavour has versioned. Roughly:
+
+- **SBPFv0** — the original, very restricted (no calls, no shifts,
+  …). Now legacy.
+- **SBPFv1 / v2** — intermediate; broader instructions but still
+  loader-restricted.
+- **SBPFv3** — current default for new programs in 2026; supports
+  the instructions LLVM normally emits.
+
+`sbpf-linker` exposes `--cpu v0|v1|v2|v3`. zignocchio uses
+`--cpu v3`.
+
+### Decision
+
+P1 pins the SBPF version at **`v3`** for all BPF builds.
+
+- `omlz build --target=bpf` always invokes `sbpf-linker --cpu v3`.
+- Programs that must run on older runtimes (rare in 2026, but
+  conceivable for legacy chains) are explicitly **out of scope**
+  for P1.
+
+### Reasons
+
+- v3 is what `solana-test-validator` and modern Solana mainnet
+  loaders accept by default.
+- Older versions impose instruction restrictions that LLVM does
+  not honour without target-specific options; staying on v3 means
+  we are not fighting the toolchain.
+- A single version gives us one set of acceptance tests, one set
+  of expected behaviours.
+
+### Consequences
+
+- Programs compiled by P1 will not run on legacy SBPF runtimes.
+  This is acknowledged and accepted.
+- If a future phase needs to ship multi-version support, the CLI
+  flag `--sbpf-version` is reserved for that purpose.
+
+---
+
+## ADR-014 — Reuse `zignocchio` as inspiration only (Way A)
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+### Context
+
+`github.com/DaviRain-Su/zignocchio` is a working Zig→Solana SBF
+SDK. Its scope materially overlaps with what ZxCaml's `runtime/`
+will eventually need: an arena allocator, a BPF entrypoint
+deserialiser, syscall bindings (via MurmurHash3-32), AccountInfo
+parsing, PDA / CPI helpers, and litesvm/surfpool/mollusk test
+harnesses.
+
+Four strategies were considered for "using" zignocchio:
+
+- **A.** Read it for ideas; ZxCaml writes its own runtime.
+- **B.** Add it as a `git submodule` or `build.zig.zon` dep;
+  generated code calls into its SDK.
+- **C.** Vendor selected files (entrypoint, syscalls, allocator)
+  into `runtime/zig/` with attribution.
+- **D.** Fork it and maintain a ZxCaml-flavoured copy.
+
+### Decision
+
+We adopt **Way A**: zignocchio is **inspirational reference
+material**. We may read its source freely; we **do not import its
+code** into this repository.
+
+This is the same posture ADR-009 takes toward OxCaml.
+
+### Reasons
+
+- **Consistency with the project's other "no fork, no vendor"
+  decisions.** ADR-009 rules out forking OxCaml. The same logic
+  applies here: a fork or vendor implies maintenance ownership of
+  code we did not write.
+- **License hygiene.** Importing code carries a license
+  obligation; "read for ideas, write our own" carries none.
+- **Scope independence.** zignocchio is positioned as a
+  hand-written-Zig SDK for Solana developers. ZxCaml is a
+  compiler whose generated code happens to also need that SDK
+  surface. Coupling them couples our roadmap to theirs.
+- **Smaller surface to keep current.** A vendored copy goes
+  stale; a submodule pin requires us to track upstream. Reading
+  for ideas costs nothing to keep current — we re-read when we
+  need an idea.
+
+### What this allows
+
+- Reading zignocchio's source to learn how an SBPFv3 entrypoint
+  is correctly written.
+- Re-deriving its design (BumpAllocator → our `arena.zig`,
+  syscall MurmurHash3-32 helper → our P3 `runtime/zig/syscalls.zig`)
+  in our own code, with our own naming and error story.
+- Citing it as the source of a non-obvious idea (e.g. the Zig
+  0.16 low-address const-array workaround documented in
+  `06-bpf-target.md` §4).
+
+### What this forbids
+
+- Copy-pasting source files from zignocchio into `runtime/zig/`
+  or anywhere else in this repository.
+- Adding zignocchio as a build dependency (submodule, zon, vendor
+  directory).
+- Forking it under the ZxCaml org.
+
+### Relationship table
+
+| Source | Our posture | ADR |
+|---|---|---|
+| OCaml `compiler-libs` | Used as a library at build time | ADR-010 |
+| OxCaml | Inspirational reading only | ADR-009 |
+| zignocchio | Inspirational reading only | ADR-014 |
+| `sbpf-linker` | Build-time tool dependency, pinned | ADR-012 |
+| `solana-cli` | Developer-time tool dependency | (implicit) |
+
+### Consequences
+
+- ZxCaml's `runtime/zig/` will, by P3, contain code that looks
+  *very similar* to parts of zignocchio. This is expected: there
+  is one correct way to deserialise the Solana BPF input buffer
+  and one ergonomic way to write a bump allocator. Convergent
+  evolution is fine; copy-paste is not.
+- See `docs/zignocchio-relationship.md` for the longer narrative
+  of what we learned from reading it and how that shaped P1.

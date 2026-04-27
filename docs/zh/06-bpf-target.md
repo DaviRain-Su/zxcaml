@@ -7,27 +7,48 @@
 Phase 1 必须以下面这条命令链在开发者机器上端到端跑通收尾：
 
 ```sh
-omlz build examples/solana_hello.ml --target=bpf -o solana_hello.o
+omlz build examples/solana_hello.ml --target=bpf -o solana_hello.so
 solana-test-validator &                          # 另一个 shell
-solana program deploy ./solana_hello.o
+solana program deploy ./solana_hello.so
 ```
 
 …然后向这个程序发起的事务必须返回 `0`。
 
-## 2. 工具链链路
+> **产物是 `.so`，不是 `.o`。** Solana 的 BPF loader 接受的是 ELF 共享对象。
+> 整篇文档里我们都把产物叫 `program.so`。
+
+## 2. 工具链链路（已被 zignocchio 验证）
 
 ```text
 .ml
  │  omlz 前端 + ArenaStrategy + ZigBackend
  ▼
 out/program.zig + out/runtime.zig + out/build.zig
- │  zig build-obj -target bpfel-freestanding -O ReleaseSmall
+ │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
  ▼
-program.o   (Solana 可加载的 BPF ELF)
+out/program.bc   (LLVM bitcode)
+ │  sbpf-linker --cpu v3 --export entrypoint
+ ▼
+program.so   (Solana 可加载的 SBPF ELF)
 ```
 
-我们刻意 **不** 直接调 LLVM。`zig` 0.16 自带的 LLVM 已经认识 BPF target；
-通过 `zig build-obj` 间接驱动它就够了。
+工具链 **不是** "原生 `zig build-obj`" 这一步就完。
+能产出 Solana loader 接受的 ELF 的真实链路是：
+
+1. `zig build-lib … -femit-llvm-bc` → 出 LLVM bitcode（这一步真正的产物
+   是 `.bc`；`zig` 自己接着产的 `.o` **不是** Solana 兼容 ELF）。
+2. **`sbpf-linker --cpu v3 --export entrypoint`** → 出 `program.so`。
+   这是 Solana 专用的 linker，它懂 SBPFv3 的 ELF section 布局
+   和入口符号 export 语义；标准 `lld` 不懂。
+
+所以 `sbpf-linker` 是 `omlz` 的 build-time 依赖。
+pinning 策略见 ADR-012；SBPF 版本固定见 ADR-013。
+
+> **来源说明。** 这套工具链的形态是通过阅读
+> `DaviRain-Su/zignocchio`（一个 Zig→Solana SBF SDK，
+> 端到端管线已经能跑通）总结出来的。
+> 我们 **不复制它的代码**；我们按 ADR-014 独立重新得到同样的形态。
+> 见 `zignocchio-relationship.md`。
 
 ## 3. Target triple
 
@@ -35,12 +56,12 @@ program.o   (Solana 可加载的 BPF ELF)
 bpfel-freestanding
 ```
 
-- `bpfel` —— 小端 eBPF（Solana 用的方言）。
+- `bpfel` —— 小端 eBPF，也就是 Solana 的方言。
 - `freestanding` —— 没有宿主操作系统接口。
 
 P1 **不** 使用 Solana 自己的 LLVM fork。
-如果 `zig` 自带的 LLVM 不够用，P3 可能加入备选工具链路径；
-P1 不能依赖它。
+`zig` 0.16 自带的 LLVM 产出的 BPF bitcode `sbpf-linker` 接受；
+linker 才是把"通用 BPF bitcode"转成"Solana 形 ELF"的桥。
 
 ## 4. Entrypoint 契约
 
@@ -70,6 +91,14 @@ export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
 编译器的工作是发出签名正确的 `omlz_user_entrypoint`。
 runtime shim 才是 Solana 实际加载的东西。
 
+> **Zig 0.16 已知 BPF 怪癖（一定会咬到我们）。**
+> 模块作用域的 const 数组 —— 尤其是全零的 —— 可能被 LLVM 放在
+> 极低地址（如 0x0、0x20），Solana verifier 视为 access violation。
+> zignocchio 的解法是：在取地址之前先把这种常量复制到本地栈上。
+> 任何 `let _ = [|0; 0; ...|]` 形态、模块作用域的常量数组，
+> codegen 必须套用这个 workaround。
+> 当作 P1 的 codegen 规则记下；如果 Zig 0.17 修了再回过头评估。
+
 ## 5. Runtime 产物（`runtime/zig/`）
 
 | 文件 | 角色 |
@@ -88,18 +117,30 @@ P1 **明确不** 包含：
 
 ## 6. Build flag
 
-BPF 用：
+BPF 用 —— 两步管线（先出 bitcode，再链接）：
 
 ```sh
-zig build-obj \
+# Step 1：Zig → LLVM bitcode
+zig build-lib \
   -target bpfel-freestanding \
   -O ReleaseSmall \
   -fno-stack-check \
   -fno-PIC \
   -fno-PIE \
   --strip \
+  -femit-llvm-bc=out/program.bc \
+  -fno-emit-bin \
   out/program.zig
+
+# Step 2：SBPF 链接
+sbpf-linker \
+  --cpu v3 \
+  --export entrypoint \
+  -o program.so \
+  out/program.bc
 ```
+
+`--cpu v3` 把 SBPF 版本钉死。理由见 ADR-013。
 
 Native 仅供开发便利（**不是** P1 交付物）：
 
@@ -109,27 +150,33 @@ zig build-exe -O Debug out/program.zig
 
 ## 7. "P1 完成"前的正确性检查
 
-P1 产出的 BPF `.o` 必须满足：
+P1 产出的 BPF `.so` 必须满足：
 
-1. `llvm-objdump -d solana_hello.o` 显示一个 `entrypoint` 符号，
-   带有合法 eBPF 指令。
+1. `llvm-objdump -d solana_hello.so` 显示一个 export 出去的
+   `entrypoint` 符号，带合法 eBPF（SBPFv3）指令。
 2. 能被 `solana-test-validator` 加载：
    ```sh
-   solana program deploy ./solana_hello.o
+   solana program deploy ./solana_hello.so
    ```
    成功。
 3. 一次 no-op 调用返回 `0`。
 4. 目标文件可重现：相同输入 → 相同字节（除了时间戳元数据）。
+5. （新加）通过 `sbpf-linker` 链接后的 section 布局检查 ——
+   没有 `.rodata` 符号解析到 < 0x100 的地址（Zig 0.16 的低地址怪癖；
+   见 §4 的注）。
 
-1–3 是 CI 门槛。4 在 P1 是尽力而为，到 P3 强制要求。
+1–3、5 是 CI 门槛。4 在 P1 是尽力而为，到 P3 强制要求。
 
 ## 8. 可能出错的点（以及怎么应对）
 
 | 现象 | 可能原因 | 应对 |
 |---|---|---|
 | `zig` 拒绝 target triple | Zig 版本漂移 | 在 CI 里 pin `zig 0.16.x`；升级流程写进 ADR |
+| `sbpf-linker` 没装 | 新增的 build-time 依赖 | 按 ADR-012 pin 的版本 `cargo install`；CI 装 |
+| `sbpf-linker` 拒绝 bitcode | LLVM IR 形态它不认 | 把 `ZigBackend` 生成的代码降复杂度；扩 `--cpu` 必须走 ADR |
+| loader 报 "Access violation" 在低地址 | Zig 0.16 const-array 放置怪癖（§4 注） | codegen 规则：对 const 数组先复制到栈再取地址 |
 | BPF verifier 拒绝程序 | 栈帧太深、循环无界、非法 helper | 前端 / ANF 阶段加逃逸分析（P3） |
-| Solana loader 失败 | ELF section 布局不对 | 检查 `runtime/zig/bpf_entry.zig` 的链接器 flag |
+| Solana loader 因别的原因失败 | ELF section 布局不对 | 拿 zignocchio 的参考 `program.so` 做 diff；上报 sbpf-linker |
 | 返回值不对 | 后端和解释器不一致 | 由确定性套件捕获（`05-backends.md` §6） |
 
 ## 9. 范围之外（P1）

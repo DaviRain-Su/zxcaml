@@ -23,10 +23,13 @@
 [ omlz (Zig)  : ANF → Core IR → ArenaStrategy → Lowered IR → Zig codegen ]
    │  .zig
    ▼
-[ zig build-obj -target bpfel-freestanding ]
+[ zig build-lib -target bpfel-freestanding -femit-llvm-bc ]
+   │  .bc (LLVM bitcode)
+   ▼
+[ sbpf-linker --cpu v3 --export entrypoint ]
    │
    ▼
-Solana BPF .o
+Solana BPF .so
 ```
 
 - Frontend: **upstream OCaml `compiler-libs`** (no fork, no
@@ -73,7 +76,7 @@ file** can be compiled and run two ways:
 ```
 one .ml file
   ├── ocaml / dune  →  native x86_64 / arm64 binary   (local testing, fuzzing, REPL)
-  └── omlz          →  Solana BPF .o                  (deployment)
+  └── omlz          →  Solana BPF .so                 (deployment)
 ```
 
 This means **ZxCaml does not need a dedicated x86 backend** to give
@@ -110,13 +113,14 @@ Read in order:
 | 03 | [Core IR](./docs/03-core-ir.md) | ANF IR data model, the central contract |
 | 04 | [Memory model](./docs/04-memory-model.md) | Arena-only in P1, region descriptor for the future |
 | 05 | [Backends](./docs/05-backends.md) | Zig codegen, tree-walk interpreter, backend trait |
-| 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.o` |
+| 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.so` (zig + sbpf-linker) |
 | 07 | [Repo layout](./docs/07-repo-layout.md) | Directory contract, who owns what |
 | 08 | [Roadmap](./docs/08-roadmap.md) | Phases P1–P7 and P1 internal steps |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |
 | —  | [OxCaml relationship](./docs/oxcaml-relationship.md) | What OxCaml is, four ways to "use" it, which to pick |
+| —  | [zignocchio relationship](./docs/zignocchio-relationship.md) | The Zig→Solana SDK we read for ideas, what we learned, what we did not import (ADR-014) |
 
 ---
 

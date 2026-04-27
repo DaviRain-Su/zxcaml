@@ -23,10 +23,13 @@
 [ omlz (Zig)  : ANF → Core IR → ArenaStrategy → Lowered IR → Zig 代码生成 ]
    │  .zig
    ▼
-[ zig build-obj -target bpfel-freestanding ]
+[ zig build-lib -target bpfel-freestanding -femit-llvm-bc ]
+   │  .bc (LLVM bitcode)
+   ▼
+[ sbpf-linker --cpu v3 --export entrypoint ]
    │
    ▼
-Solana BPF .o
+Solana BPF .so
 ```
 
 - 前端：**上游 OCaml `compiler-libs`**（不 fork、不重写）。见 ADR-009 / ADR-010。
@@ -68,7 +71,7 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 ```
 一份 .ml 文件
   ├── ocaml / dune  →  native x86_64 / arm64 二进制   （本地测试、fuzzing、REPL）
-  └── omlz          →  Solana BPF .o                  （部署）
+  └── omlz          →  Solana BPF .so                 （部署）
 ```
 
 这意味着 **ZxCaml 不需要一个专门的 x86 后端** 也能给你原生执行能力。
@@ -100,13 +103,14 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 | 03 | [Core IR](./03-core-ir.md) | ANF IR 数据模型，核心契约 |
 | 04 | [内存模型](./04-memory-model.md) | P1 仅 arena，未来扩展用 region 描述符 |
 | 05 | [后端](./05-backends.md) | Zig 代码生成、树遍历解释器、后端 trait |
-| 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.o` 的工具链链路 |
+| 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.so` 的工具链链路（zig + sbpf-linker） |
 | 07 | [仓库布局](./07-repo-layout.md) | 目录契约，谁拥有什么 |
 | 08 | [路线图](./08-roadmap.md) | P1–P7 各阶段和 P1 内部步骤 |
 | 09 | [决策（ADR）](./09-decisions.md) | 锁定的决策，附带理由 |
 | 10 | [前端桥接](./10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | —  | [备选方案对比](./alternatives-considered.md) | 为什么不自写、为什么不 fork OxCaml |
 | —  | [OxCaml 关系](./oxcaml-relationship.md) | OxCaml 是什么，"用 OxCaml" 的四种解读，该选哪种 |
+| —  | [zignocchio 关系](./zignocchio-relationship.md) | 我们读的 Zig→Solana SDK，学到了什么、没复制什么（ADR-014） |
 
 > 所有中文文档都是英文版的对照翻译，结构完全一致；
 > 真理来源是英文版。如果两边出现冲突，以英文版为准。

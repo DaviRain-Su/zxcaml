@@ -8,27 +8,51 @@ Phase 1 must end with this command sequence succeeding end-to-end on
 a developer's machine:
 
 ```sh
-omlz build examples/solana_hello.ml --target=bpf -o solana_hello.o
+omlz build examples/solana_hello.ml --target=bpf -o solana_hello.so
 solana-test-validator &                          # in another shell
-solana program deploy ./solana_hello.o
+solana program deploy ./solana_hello.so
 ```
 
 …and a subsequent transaction calling the program must return `0`.
 
-## 2. Toolchain chain
+> **Output is `.so`, not `.o`.** Solana's BPF loader expects an ELF
+> shared object. We name the artefact `program.so` throughout.
+
+## 2. Toolchain chain (validated by zignocchio)
 
 ```text
 .ml
  │  omlz frontend + ArenaStrategy + ZigBackend
  ▼
 out/program.zig + out/runtime.zig + out/build.zig
- │  zig build-obj -target bpfel-freestanding -O ReleaseSmall
+ │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
  ▼
-program.o   (Solana-loadable BPF ELF)
+out/program.bc   (LLVM bitcode)
+ │  sbpf-linker --cpu v3 --export entrypoint
+ ▼
+program.so   (Solana-loadable SBPF ELF)
 ```
 
-We deliberately do **not** invoke LLVM directly. `zig` 0.16 ships an
-LLVM that knows the BPF target; we drive it via `zig build-obj`.
+The toolchain is **not** "stock `zig build-obj`". The actual chain
+that produces a Solana-loadable artefact is:
+
+1. `zig build-lib … -femit-llvm-bc` → emit LLVM bitcode (the `.bc`
+   file is the deliverable from this step; the `.o` `zig` would
+   produce on its own is **not** a Solana-compatible ELF).
+2. **`sbpf-linker --cpu v3 --export entrypoint`** → produce
+   `program.so`. This is a Solana-specific linker that knows about
+   SBPFv3 ELF section layout and entry-symbol export, which stock
+   `lld` does not.
+
+`sbpf-linker` is therefore a build-time dependency of `omlz`. See
+ADR-012 for the pinning policy and ADR-013 for the SBPF version
+pinning.
+
+> **Lineage.** This toolchain shape was discovered by reading
+> `DaviRain-Su/zignocchio` (a Zig→Solana SBF SDK that has the
+> end-to-end pipeline working). We **do not import its code**; we
+> independently re-derive the same shape per ADR-014. See
+> `zignocchio-relationship.md`.
 
 ## 3. Target triple
 
@@ -36,12 +60,13 @@ LLVM that knows the BPF target; we drive it via `zig build-obj`.
 bpfel-freestanding
 ```
 
-- `bpfel` — little-endian eBPF (Solana's flavour).
+- `bpfel` — little-endian eBPF, which is Solana's flavour.
 - `freestanding` — no host OS surface.
 
-We do **not** use the Solana-specific LLVM fork in P1. If the stock
-`zig`-bundled LLVM proves insufficient, P3 may add an alternative
-toolchain path; P1 must not depend on this.
+We do **not** use the Solana-specific LLVM fork in P1. The bundled
+LLVM that ships with `zig` 0.16 emits BPF bitcode that
+`sbpf-linker` accepts; the linker is what bridges generic-BPF
+bitcode to a Solana-shaped ELF.
 
 ## 4. Entrypoint contract
 
@@ -72,6 +97,16 @@ export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
 The compiler's job is to emit `omlz_user_entrypoint` with the
 correct signature. The runtime shim is what Solana actually loads.
 
+> **Known Zig 0.16 BPF quirk (will bite us).** Module-scope const
+> arrays — particularly all-zero ones — can be placed at very low
+> addresses (e.g. 0x0, 0x20) by the LLVM lowering, which Solana's
+> verifier treats as access violations. The mitigation, observed
+> in zignocchio, is to copy such constants onto the local stack
+> before taking their address. Codegen for any `let _ = [|0; 0;
+> ...|]`-shaped value at module scope must apply this workaround.
+> Tracked as a P1 codegen rule; revisit if Zig 0.17 fixes the
+> placement.
+
 ## 5. Runtime artefacts (`runtime/zig/`)
 
 | File | Role |
@@ -90,18 +125,30 @@ P1 explicitly does **not** include:
 
 ## 6. Build flags
 
-For BPF:
+For BPF — two-step pipeline (bitcode then link):
 
 ```sh
-zig build-obj \
+# Step 1: Zig → LLVM bitcode
+zig build-lib \
   -target bpfel-freestanding \
   -O ReleaseSmall \
   -fno-stack-check \
   -fno-PIC \
   -fno-PIE \
   --strip \
+  -femit-llvm-bc=out/program.bc \
+  -fno-emit-bin \
   out/program.zig
+
+# Step 2: SBPF link
+sbpf-linker \
+  --cpu v3 \
+  --export entrypoint \
+  -o program.so \
+  out/program.bc
 ```
+
+`--cpu v3` pins the SBPF version. See ADR-013 for the rationale.
 
 For native (developer convenience only, **not** a P1 deliverable):
 
@@ -111,28 +158,35 @@ zig build-exe -O Debug out/program.zig
 
 ## 7. Sanity checks before "P1 done"
 
-A BPF `.o` produced by P1 must satisfy:
+A BPF `.so` produced by P1 must satisfy:
 
-1. `llvm-objdump -d solana_hello.o` shows a single `entrypoint`
-   symbol with valid eBPF instructions.
+1. `llvm-objdump -d solana_hello.so` shows a single exported
+   `entrypoint` symbol with valid eBPF (SBPFv3) instructions.
 2. Loadable by `solana-test-validator`:
    ```sh
-   solana program deploy ./solana_hello.o
+   solana program deploy ./solana_hello.so
    ```
    succeeds.
 3. A no-op invocation returns `0`.
 4. The object file is reproducible: identical input → identical
    bytes (modulo timestamp metadata).
+5. (New) Section layout passes the `sbpf-linker` post-link check —
+   no `.rodata` symbol resolves to address < 0x100 (the Zig 0.16
+   low-address quirk; see §4 note).
 
-Items 1–3 are CI gates. Item 4 is best-effort in P1, mandatory in P3.
+Items 1–3, 5 are CI gates. Item 4 is best-effort in P1, mandatory
+in P3.
 
 ## 8. What can go wrong (and how we respond)
 
 | Symptom | Likely cause | Response |
 |---|---|---|
 | `zig` rejects the target triple | Zig version drift | Pin `zig 0.16.x` in CI; document upgrade in ADR |
+| `sbpf-linker` not found | New build-time dep, not installed | `cargo install` from pinned commit (ADR-012); CI installs it |
+| `sbpf-linker` rejects bitcode | LLVM IR shape it doesn't understand | Lower codegen complexity in `ZigBackend`; widen `--cpu` only with ADR |
+| Loader rejects with "Access violation" at low address | Zig 0.16 const-array placement quirk (§4 note) | Codegen rule: copy const arrays to stack before address-of |
 | BPF verifier rejects the program | Stack frames too deep, unbounded loops, illegal helper | Frontend / ANF lowering escape analysis (P3) |
-| Solana loader fails | ELF section layout off | Check `runtime/zig/bpf_entry.zig` linker flags |
+| Solana loader fails for other reasons | ELF section layout off | Diff against zignocchio's reference `program.so`; report to sbpf-linker |
 | Returns wrong value | Backend mismatches interpreter | Determinism suite (`05-backends.md` §6) catches this |
 
 ## 9. Out of scope (P1)

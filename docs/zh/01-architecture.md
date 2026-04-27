@@ -30,10 +30,13 @@
 [ 后端 ]                             （P1：Zig 代码生成）
    │   .zig 源码
    ▼
-[ Zig 工具链 ]                       （zig build-obj -target bpfel-freestanding）
+[ Zig 工具链 ]                       （zig build-lib -target bpfel-freestanding -femit-llvm-bc）
+   │   .bc (LLVM bitcode)
+   ▼
+[ sbpf-linker ]                      （--cpu v3 --export entrypoint）
    │
    ▼
-Solana BPF .o
+Solana BPF .so
 ```
 
 `zxc-frontend` 和 `frontend_bridge` 之间那道竖线，是项目里 **唯一的跨语言边界**。
