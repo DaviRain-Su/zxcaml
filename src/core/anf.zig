@@ -517,7 +517,7 @@ test "lower M0 constant module through ANF to Core IR" {
 
     const frontend = try ttree.parseModule(
         &frontend_arena,
-        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (const-int 0)))))",
+        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_input) (const-int 0)))))",
     );
 
     var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -562,7 +562,7 @@ test "lower top-level and nested lets with lexical var references" {
 
     const frontend = try ttree.parseModule(
         &frontend_arena,
-        "(zxcaml-cir 0.3 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
+        "(zxcaml-cir 0.4 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
     );
 
     var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -604,7 +604,7 @@ test "lower constructor expressions with layout policy" {
 
     const frontend = try ttree.parseModule(
         &frontend_arena,
-        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (let _ (ctor Some (const-int 1)) (const-int 0))))))",
+        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_input) (let _ (ctor Some (const-int 1)) (const-int 0))))))",
     );
 
     var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -642,7 +642,7 @@ test "lower basic match expressions with top-to-bottom arms" {
 
     const frontend = try ttree.parseModule(
         &frontend_arena,
-        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) ((pattern (ctor Some (var x))) (var x)) ((pattern (ctor None)) (const-int 0)))))))",
+        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)))))))",
     );
 
     var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
