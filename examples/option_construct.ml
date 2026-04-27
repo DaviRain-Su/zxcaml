@@ -1,2 +1,1 @@
-let ignored = Some 1
-let entrypoint _ = 0
+let entrypoint _ = let _ignored = Some 1 in 0
