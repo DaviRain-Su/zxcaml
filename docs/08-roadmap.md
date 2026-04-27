@@ -157,6 +157,70 @@ The first four run through the interpreter and the Zig backend
   serialisation? deterministic JSON?).
 - Property tests: refinement between Core IR and Lowered IR.
 
+## 8a. Phase PX — Multi-target expansion (optional, gated)
+
+**Status:** Not scheduled. Not on the critical path. This phase
+exists only to give "what about other targets?" a defined shape so
+it does not creep into earlier phases.
+
+### Context
+
+Because the Zig backend emits `.zig` source, the Zig toolchain can in
+principle lower to any of its supported targets (`aarch64`, `x86_64`,
+`riscv*`, `wasm32`, `nvptx*`, `amdgcn`, …; see `06-bpf-target.md`
+§10 for the long list and the cold shower that goes with it).
+
+This does **not** mean those targets are supported. PX is the place
+where a target moves from "the toolchain can technically reach it" to
+"ZxCaml supports it".
+
+### Activation gate
+
+PX activates only when **all** of the following are true for a
+specific target:
+
+1. **A concrete use case exists**, named in writing, with at least
+   one champion who will use the output.
+2. **An owner exists** for the runtime shim work for that target
+   (entrypoint, panic, memory plan, calling convention to user
+   code).
+3. **The BPF-shaped language constraints fit the use case**, or a
+   relaxation is proposed as a new ADR (e.g. "WASM target may use
+   the host allocator instead of a single arena").
+4. **A CI lane and an acceptance example are added** as part of the
+   same change.
+
+If any of the four is missing, the target stays out. Speculative
+multi-target support is a leak, not a feature.
+
+### Plausible candidates (illustrative, not committed)
+
+- **`wasm32-freestanding`** — for an in-browser Solana program
+  simulator. Gate: who is the user? what tool consumes the output?
+- **`x86_64-linux`** — for fuzzing / property testing harnesses
+  that want native speed and crash dumps. Gate: a real fuzzing
+  harness, not "wouldn't it be nice".
+- **`riscv64-linux` / embedded BPF (Linux kernel eBPF)** — outside
+  Solana's BPF flavour but adjacent. Gate: a specific eBPF program
+  someone needs to ship.
+
+### What PX is **not**
+
+- Not "support every Zig target". The toolchain breadth does not
+  imply ZxCaml breadth.
+- Not "make the language general-purpose". The BPF-shaped
+  constraints (no GC, no syscalls, no threads, no exceptions) stay
+  in place unless an ADR explicitly relaxes them per target.
+- Not a P1 / P2 / P3 deliverable. It is intentionally placed after
+  the main numbered phases, and is itself optional.
+
+### Relationship to existing phases
+
+PX **does not block any earlier phase**. P1–P5 happen as planned
+with BPF as the only validated target. PX exists so that, when a
+real second target eventually shows up, it lands through a defined
+process instead of organically blurring the project's focus.
+
 ## 9. Anti-goals (every phase)
 
 - We never accept the OCaml C runtime in compiled output.

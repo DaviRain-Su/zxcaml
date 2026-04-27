@@ -142,3 +142,82 @@ P1 产出的 BPF `.o` 必须满足：
 - Upgrade authority / multisig 流程
 
 这些都明确属于 P3+。
+
+## 10. 为什么不"凡是 Zig 能产出的目标都支持"？
+
+因为 Zig 后端发的是 `.zig` 源码，再调 Zig 工具链，
+所以很容易得出"Zig 能编到的目标 = ZxCaml 支持的目标"这个结论。
+**这个结论是错的。**
+错在哪里值得写清楚，免得以后再有人这么想。
+
+整条链路上有三个独立的层：
+
+```
+1. Zig 工具链        — Zig 自己能 lower 到的目标（≈ LLVM 支持的目标）
+2. ZxCaml 代码生成    — 我们后端能产出合法 Zig 源码的目标
+3. ZxCaml runtime    — 我们能在那里实际跑起来的目标
+```
+
+第 1 层 **极广**：`aarch64`、`arm`、`x86`、`x86_64`、`riscv*`、`mips*`、
+`loongarch*`、`bpfel`/`bpfeb`、`wasm32`/`wasm64`、`nvptx*`、`amdgcn`、
+`spirv*`、`avr`、`msp430` …… 和更多。把它们列出来不等于支持它们。
+
+第 2 层在 P1 几乎与目标无关。我们生成的 Zig 是直白的代码，
+没有 SIMD、没有 inline asm、没有平台 intrinsic。任何合理目标都能接受。
+
+**第 3 层才是乐观主义死掉的地方。** 每个目标至少需要：
+
+- **入口 shim。**
+  Solana BPF 要 `u64 entrypoint(const u8 *)`；
+  Linux 要走 libc `_start` → `int main(int, char**)`；
+  WASM 要 export 函数；
+  裸金属要 reset vector；
+  Linux 内核 eBPF 要 `SEC(...)` 加 context-typed 函数。
+  每一种都得单独手写。
+- **panic 策略。**
+  BPF 是 abort；native 可能 print + exit；裸金属可能 halt 或 reboot。
+- **内存方案。**
+  BPF 给一段静态 buffer 当 arena；native 理论可以用 `malloc`-backed region；
+  freestanding ARM 必须告诉它 RAM 起点。P1 只懂"静态 buffer arena"这一种。
+- **与用户代码之间的调用约定。**
+  隐式 `arena: *Arena` 首参是 BPF / freestanding 的规则；
+  hosted 目标可能想跳过它。
+
+**不止 shim —— 语言本身就是按 BPF 约束塑形的：**
+
+| ZxCaml 选择 | 为什么这么选 | 在其它目标上的代价 |
+|---|---|---|
+| 没有 GC | BPF verifier 不允许 | x86 上其实可以加 GC，但我们没 |
+| 单 arena | BPF 不能 `malloc` | x86 / WASM 上限制了表达力 |
+| 没有 syscall | BPF 只能用白名单 helper | x86 上不能开文件、不能 print |
+| 没有线程 | BPF 单线程 | 现代平台浪费了多核 |
+| 没有异常 | BPF 不允许 unwind | 通用语言里不常见 |
+| 有界栈 | BPF verifier 限制 | 在所有目标上都限制了递归深度 |
+
+所以即使 `zig build-obj -target x86_64-linux out/program.zig` 成功，
+产物也是一个被剪掉了 I/O、GC、线程、异常、stdlib 的 OCaml 方言 ——
+没人会想用它写 x86 程序。
+**工具链能编通是必要条件，不是充分条件。**
+要"在那个目标上是个有用的语言"，
+还得逐目标松开 BPF 强加的约束 —— 那是真实的设计工作。
+
+### 我们 **顺带** 允许什么
+
+- `omlz build --target=native` 文档化为 **仅供开发便利**：
+  它让你能本地跑编译产物以更快发现集成 bug，比走 `solana-test-validator` 快。
+  这**不**是被支持的交付物；我们不承诺稳定性、性能、功能对等。
+
+### 一个新目标在什么情况下会成为真实目标
+
+只有当 **以下全部** 成立时，新目标才进入"被支持"集合：
+
+1. 存在一个具体、有名字的用例 —— 不是"如果有就好了"。
+2. 有人为这个目标的 entry shim、panic 策略、内存方案负责。
+3. 或者 BPF 形态的语言约束已经匹配这个用例，
+   或者有文档化的"按目标松绑约束"方案（且作为 ADR 通过）。
+4. 这个目标拿到一条 CI lane 和至少一个验收 example。
+
+直到这些条件成立之前，"Zig 能编到它"只是有趣的小知识，不是承诺。
+
+可选、有门槛的 **PX —— 多目标扩展** 阶段，
+把这条规则写进了路线图，见 `08-roadmap.md`。

@@ -145,3 +145,88 @@ Items 1–3 are CI gates. Item 4 is best-effort in P1, mandatory in P3.
 - Upgrade authority / multisig flows
 
 These are explicitly P3+ work.
+
+## 10. Why not "every target Zig can produce"?
+
+Because the Zig backend emits `.zig` source and then drives the Zig
+toolchain, it is tempting to claim that **any target Zig can compile
+to is therefore a target ZxCaml supports**. That claim is wrong, and
+the wrongness is worth pinning down so it does not creep back in.
+
+There are three independent layers in the chain:
+
+```
+1. Zig toolchain        — what Zig can lower to (≈ what LLVM supports)
+2. ZxCaml codegen       — what our backend emits valid Zig for
+3. ZxCaml runtime       — what we can actually run there
+```
+
+Layer 1 is enormous: `aarch64`, `arm`, `x86`, `x86_64`, `riscv*`,
+`mips*`, `loongarch*`, `bpfel`/`bpfeb`, `wasm32`/`wasm64`, `nvptx*`,
+`amdgcn`, `spirv*`, `avr`, `msp430`, and many more. Listing this is
+not the same as supporting it.
+
+Layer 2 is mostly target-agnostic in P1. Our codegen produces
+straight-line Zig with no SIMD, no inline asm, no platform intrinsics.
+Any reasonable target accepts it.
+
+**Layer 3 is where the optimism dies.** Each target needs at least:
+
+- An **entrypoint shim**. Solana BPF wants
+  `u64 entrypoint(const u8 *)`; Linux wants `int main(int, char**)`
+  via the libc `_start` shim; WASM wants exported functions; bare
+  metal wants a reset vector; eBPF (kernel) wants `SEC(...)` plus a
+  context-typed function. Each is hand-written.
+- A **panic strategy**. BPF aborts; native may print and exit;
+  bare metal may halt or reboot.
+- A **memory plan**. BPF gets a static buffer arena; native could
+  in principle support `malloc`-backed regions; freestanding ARM has
+  to be told where RAM begins. P1 only knows the static-buffer plan.
+- An **agreed calling convention to user code**. Implicit
+  `arena: *Arena` first parameter is the BPF / freestanding rule;
+  hosted targets may want to skip it.
+
+Beyond shims, **the language itself was shaped by BPF's constraints**:
+
+| ZxCaml choice | Why it exists | What it costs elsewhere |
+|---|---|---|
+| No GC | BPF verifier disallows allocation | x86 could afford GC, we don't have one |
+| Single arena | BPF cannot `malloc` | x86 / WASM lose expressiveness |
+| No syscalls | BPF only allows whitelisted helpers | x86 cannot open files, cannot print |
+| No threads | BPF is single-threaded | Modern targets waste their cores |
+| No exceptions | BPF disallows unwind | Unusual for general-purpose targets |
+| Bounded stack | BPF verifier stack limit | Limits recursion depth everywhere |
+
+So even if `zig build-obj -target x86_64-linux out/program.zig`
+succeeds, the result is a stripped-down OCaml-flavoured language with
+no I/O, no GC, no threads, no exceptions, no real stdlib. There is no
+audience for that program. **A working toolchain is necessary but not
+sufficient**; we would also need to relax the BPF-imposed constraints
+on a per-target basis, which is real design work.
+
+### What we **do** allow incidentally
+
+- `omlz build --target=native` is documented for **developer
+  convenience only**: it lets you run the compiled program locally to
+  spot integration bugs faster than going through
+  `solana-test-validator`. It is not a supported deliverable; we do
+  not promise stability, performance, or feature parity.
+
+### When a new target becomes a real goal
+
+A target only enters the supported set when **all** of the following
+hold:
+
+1. There is a concrete, named use case — not "wouldn't it be nice".
+2. Someone owns the entrypoint shim, panic strategy, and memory plan
+   for that target.
+3. Either the BPF-shaped language constraints already fit the use
+   case, or a documented relaxation plan exists (and is approved as
+   an ADR).
+4. The target gains a CI lane and at least one acceptance example.
+
+Until those conditions hold, "Zig supports it" is interesting
+trivia, not a commitment.
+
+See `08-roadmap.md` for the optional, gated **PX — Multi-target
+expansion** phase that codifies this rule.
