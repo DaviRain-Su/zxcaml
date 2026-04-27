@@ -9,3 +9,17 @@ spike/bpf-toolchain/**/node_modules/
 
 # Spike α (OCaml cmt-read) — dune build artefacts
 spike/ocaml-cmt-read/_build/
+
+# Zig build artefacts
+zig-cache/
+.zig-cache/
+zig-out/
+
+# OCaml / opam artefacts
+_build/
+*.cmt
+*.cmti
+_opam/
+
+# Generated compiler output
+out/
