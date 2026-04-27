@@ -27,7 +27,10 @@ P1 ships:
 P1 stubs (signatures only, must compile, must return "not
 implemented" diagnostics if invoked):
 
-- `OCamlBackend`      — sanity oracle for the stdlib subset.
+- `OCamlBackend`      — placeholder. Note: the subset oracle role
+  this slot used to claim has been removed because ADR-010 makes
+  drift impossible by construction; the upstream OCaml compiler is
+  *already* on the main path as the frontend.
 - `LlvmBackend`       — placeholder.
 
 ## 2. ZigBackend
@@ -35,7 +38,8 @@ implemented" diagnostics if invoked):
 ### 2.1 Inputs
 
 `Lowered IR` produced by `ArenaStrategy`. The backend is **not**
-allowed to read Surface or Typed AST.
+allowed to read upstream `Typedtree`, the sexp wire format, the
+Zig `ttree` mirror, or Core IR directly.
 
 ### 2.2 Output
 

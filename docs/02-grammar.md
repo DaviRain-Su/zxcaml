@@ -3,9 +3,20 @@
 ## 1. Position
 
 ZxCaml accepts a **strict subset of OCaml**. Anything written in
-ZxCaml is valid OCaml; the converse does not hold. We use this
-property to type-check the stdlib with the real OCaml compiler as a
-sanity oracle.
+ZxCaml is valid OCaml; the converse does not hold.
+
+**We do not define our own grammar.** Per ADR-010, the grammar is
+whatever the upstream OCaml compiler accepts; ZxCaml restricts the
+*Typedtree* (post type-checking), not the surface syntax. The
+authoritative subset list is in
+[`10-frontend-bridge.md` §4](./10-frontend-bridge.md), expressed in
+terms of `Typedtree` constructors.
+
+This document remains as a **human-readable** description of what
+"the subset" looks like at the surface level, and to enumerate
+which keywords are reserved-but-rejected for friendlier error
+messages. It is **not** the source of truth; the source of truth is
+`10-frontend-bridge.md` §4.
 
 File extension is `.ml`. There is **no** `.mli` in P1; signatures may
 appear inline as type annotations.
@@ -50,10 +61,13 @@ external
 when
 ```
 
-## 4. Grammar (EBNF, P1)
+## 4. Grammar (EBNF, illustrative — non-authoritative)
 
-The non-terminals below define **exactly** what the P1 parser
-accepts. Future phases extend this grammar, but never break it.
+The grammar below is a **descriptive** sketch of the subset; it is
+useful for orientation but is not what the compiler enforces.
+Enforcement happens at the `Typedtree` level (see
+`10-frontend-bridge.md` §4). The OCaml compiler itself implements
+the actual parser.
 
 ```ebnf
 program        ::= { top_item } EOF
@@ -193,30 +207,42 @@ construction.
 
 ## 7. Diagnostics for rejected OCaml constructs
 
-When the parser encounters a reserved-but-rejected keyword from §3,
-it must emit a diagnostic of the form:
+Two layers exist:
 
-```
-error: feature not supported in P1: `module`
-  --> foo.ml:12:1
-  note: ZxCaml accepts a subset of OCaml; this construct is planned
-        for a later phase, see docs/08-roadmap.md
-```
+1. **Pure syntax errors** are reported by the upstream OCaml
+   compiler (via `zxc-frontend`). `omlz` re-renders them in its
+   own diagnostic style but does not re-author them.
+   ```
+   error: Syntax error
+     --> foo.ml:5:14
+   ```
+2. **Subset violations** are detected by `zxc-frontend` walking
+   the `Typedtree`. They look like:
+   ```
+   error[P1-UNSUPPORTED]: `try ... with` is not supported in P1
+     --> foo.ml:12:3
+     note: ZxCaml accepts a subset of OCaml; this construct is
+           planned for a later phase, see docs/08-roadmap.md
+   ```
 
-Plain syntax errors keep OCaml-style reporting:
+Both classes are emitted as JSON by `zxc-frontend` (`--json-diag`)
+and rendered uniformly by `omlz`.
 
-```
-error: expected `->`, found `=`
-  --> foo.ml:5:14
-```
+## 8. Compatibility check
 
-## 8. Compatibility check (sanity oracle)
+Subset drift is **structurally impossible** under ADR-010: the
+upstream OCaml compiler is the parser/type-checker, so anything
+`omlz` accepts is by construction valid OCaml. No separate sanity
+oracle is required.
 
-The stdlib and example programs MUST also type-check under the real
-`ocaml` compiler when it is available locally. CI step (post-P1):
+What CI still does verify:
 
 ```sh
-ocamlfind ocamlc -i stdlib/core.ml > /dev/null
+# Every example and stdlib file must type-check against the
+# pinned OCaml version (already implied by the omlz build).
+for f in stdlib/*.ml examples/*.ml; do
+    omlz check "$f"
+done
 ```
 
-This guarantees we have not silently drifted out of the OCaml subset.
+If `omlz check` succeeds, the input is by definition valid OCaml.

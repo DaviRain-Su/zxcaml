@@ -282,3 +282,232 @@ result. Any divergence is a P0 bug.
   pinned in `05-backends.md`.
 - BPF outputs cannot be diff-checked at the value level, but their
   return code can; this is the BPF acceptance test.
+
+---
+
+## ADR-009 — Do **not** fork OxCaml (or any OCaml compiler distribution)
+
+**Date:** 2026-04-27
+**Status:** Accepted
+**Supersedes:** none. Strengthens ADR-006.
+
+### Context
+
+OxCaml (`oxcaml/oxcaml`, formerly `flambda-backend`) is a Jane Street
+fork of the OCaml compiler. It contains a complete OCaml 5.2
+compiler, a redesigned Cfg backend, the Flambda 2 optimiser, the
+`mode` / `local` / `unique` system, a Layouts feature, and the
+OxCaml C runtime. The repository carries ~37k commits, ~970
+branches, and is ~87% OCaml + ~9% C. It is actively rebased onto
+upstream OCaml.
+
+A natural-sounding strategy for this project is: *"fork oxcaml,
+add a BPF backend next to its Cfg backend, inherit all of Jane
+Street's optimisations for free."* This was reconsidered carefully
+and **rejected**.
+
+### Decision
+
+- We do **not** fork OxCaml.
+- We do **not** fork upstream OCaml.
+- We do **not** vendor any OCaml compiler source tree into this
+  repo.
+
+### Reasons
+
+1. **OxCaml's optimisations assume the OCaml runtime exists.**
+   Flambda 2's unboxing relies on `caml_call_gc` not running for
+   the unboxed path. The Cfg backend emits calling conventions
+   that match the OCaml ABI. The `local` / unique mode system
+   discriminates stack-vs-GC-heap allocation, where "GC heap" is
+   the OCaml GC. None of these assumptions hold on Solana BPF,
+   which has no GC, no exceptions, no threads, no `caml_call_gc`,
+   and no OCaml-shaped ABI. The optimisations therefore do **not**
+   transfer; we would be inheriting code we cannot use and a
+   maintenance burden we cannot avoid.
+2. **OxCaml's own backends do not target BPF.** Adding a BPF
+   target inside OxCaml would be a hostile patch from upstream's
+   point of view: it would have to coexist with their Cfg backend,
+   bypass `caml_call_gc`, stub out exceptions and threads, and
+   ship a parallel mini-runtime. None of that is welcome upstream.
+3. **Maintaining a fork of an active 37k-commit compiler is a
+   full-time-team workload.** Jane Street has a team. We do not.
+   A fork that does not regularly rebase becomes dead code; a fork
+   that does rebase consumes most of the project's engineering
+   budget on conflict resolution.
+4. **The frontend reuse goal can be satisfied without a fork.**
+   See ADR-010: upstream OCaml's `compiler-libs` plus
+   `-bin-annot` (`.cmt`) export already provides a fully
+   type-checked `Typedtree`. We consume that, no fork required.
+
+### What we lose by not forking
+
+- We do **not** get Flambda 2's optimisations.
+  → For BPF, we trust `zig`'s LLVM-based optimiser instead.
+- We do **not** get OxCaml's `mode` / `local` system.
+  → Our `Layout` field on Core IR (ADR-004) is a distinct,
+  smaller mechanism aligned with our region story (ADR-005).
+- We do **not** get unboxed Layouts (`float64`, `bits64`, …).
+  → Acceptable in P1; reconsider at P4+ if the BPF target shows
+  it matters.
+
+### What we keep open
+
+OxCaml's design ideas (Layouts, modes, Flambda 2's IR) are
+**inspirational reference material**. We may read their code and
+their papers; we do not import their code.
+
+---
+
+## ADR-010 — Use upstream OCaml `compiler-libs` as the frontend
+
+**Date:** 2026-04-27
+**Status:** Accepted
+**Supersedes:** parts of ADR-002 — the compiler is no longer
+"all Zig"; it is **OCaml frontend bridge + Zig backend**.
+
+### Context
+
+ADR-009 rules out forking any OCaml compiler. ADR-001 commits to
+OCaml syntax and semantics. We must therefore obtain a parsed,
+name-resolved, type-checked representation of the user's `.ml`
+file from somewhere.
+
+Three options were considered:
+
+- **A.** Hand-write lexer + parser + HM in Zig. Maximum
+  independence; most code; risk of subset drift from real OCaml.
+- **B.** Call into the upstream OCaml compiler's `compiler-libs`
+  to obtain a `Typedtree`, consume that. No fork; tiny OCaml glue
+  layer; perfect language fidelity within our subset.
+- **C.** Fork OxCaml (rejected by ADR-009).
+
+### Decision
+
+We adopt **option B**: a small OCaml glue program drives
+`compiler-libs` to type-check the user's `.ml` and emit a
+serialised `Typedtree` (S-expression, exact format defined in
+`docs/10-frontend-bridge.md`). The Zig compiler reads this
+serialisation and continues from there.
+
+### Architecture impact
+
+```
+.ml
+ ↓        zxc-frontend (OCaml, ~few hundred LOC)
+ocamlc -bin-annot   →   .cmt (Typedtree)   →   sexp dump
+ ↓
+zxc-frontend-bridge (Zig)   read sexp, build our Typed AST mirror
+ ↓
+ANF lowering → Core IR → ArenaStrategy → Lowered IR → Zig codegen
+ ↓
+zig build-obj -target bpfel-freestanding
+ ↓
+Solana BPF .o
+```
+
+The Core IR remains the stable contract (ADR-004 unchanged).
+Everything **above** Core IR shifts: the Surface AST is now the
+OCaml `Typedtree`, not a hand-written one.
+
+### Reasons
+
+- **No parser written, no parser to maintain.** OCaml's lexer and
+  parser are the reference; we cannot drift from them by accident.
+- **No type system written, no type system to maintain.** OCaml's
+  HM + ADT (and modules, when we want them) come for free.
+- **Subset enforcement is trivial.** The OCaml glue type-checks
+  the program with the real compiler, then walks the `Typedtree`
+  and rejects any node we don't yet support, with a precise
+  diagnostic. No risk of accidental incompatibility.
+- **Tooling reuse.** Editor support, `merlin`, `ocamlformat` all
+  work on user `.ml` files unmodified.
+
+### Consequences
+
+- A working `ocaml` toolchain (`ocamlc`, `ocamlfind`) is a
+  **build-time** requirement for `omlz`. It is **not** a
+  runtime requirement of compiled BPF programs (those have no
+  OCaml dependency at all).
+- The compiler is now bilingual: a small OCaml frontend bridge
+  plus the existing Zig pipeline. See ADR-011 for build
+  orchestration.
+- The `Typedtree` API is part of `compiler-libs` and is **not**
+  guaranteed stable across major OCaml releases. We pin a single
+  OCaml version per phase and document the upgrade path in this
+  ADR's revision history.
+- We lose the option of "single-binary, no-OCaml" distribution.
+  Acceptable: developers building Solana programs already need
+  toolchains. End-users running deployed BPF programs need
+  nothing.
+
+### Pinned versions (P1)
+
+- OCaml: **5.2.x** (matches OxCaml's base; widely available in
+  opam).
+- `compiler-libs.common` from the matching distribution.
+- Zig: **0.16.x** (unchanged; ADR-002 stands).
+
+---
+
+## ADR-011 — `build.zig` is the single build driver; no `dune`
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+### Context
+
+ADR-010 introduces an OCaml component to the project. The natural
+build tool for OCaml code is `dune`. Adopting `dune` would mean
+two coexisting build systems (`dune` for the frontend bridge,
+`build.zig` for everything else) plus a coordinator on top.
+
+### Decision
+
+`build.zig` is the **only** build driver in this repository.
+
+The OCaml frontend bridge is built via direct invocations of
+`ocamlfind ocamlopt` from a `b.addSystemCommand` step inside
+`build.zig`. No `dune-project` file is checked in.
+
+### Reasons
+
+- **One project, one build entry point.** `zig build` is the
+  developer's contract.
+- **The OCaml bridge is small.** A single executable producing
+  a single binary; it does not benefit from `dune`'s
+  multi-package machinery.
+- **No opam dependency footprint beyond `compiler-libs`.** Adding
+  `dune` would pull in a sub-toolchain we do not otherwise need.
+- **CI is simpler.** One `zig build` step, period.
+
+### Consequences
+
+- The OCaml glue must be self-contained: no third-party `opam`
+  packages beyond `compiler-libs` (which ships with the OCaml
+  distribution).
+- If the OCaml bridge ever grows beyond a few files, this
+  decision must be revisited. It is **explicitly tied to scope**:
+  if the frontend bridge becomes "real OCaml code", we will
+  reconsider, but only by superseding this ADR.
+- Editor / LSP setup for the OCaml bridge code may need a tiny
+  `.merlin` or per-directory `dune` shim that is **not** part of
+  the build. That is acceptable as long as `zig build` remains
+  authoritative.
+
+### Build flow
+
+```
+zig build
+  ├─ step: ocaml-frontend
+  │    invokes: ocamlfind ocamlopt -package compiler-libs.common \
+  │             -linkpkg src/frontend/zxc_frontend.ml \
+  │             -o build/zxc-frontend
+  ├─ step: omlz (Zig executable)
+  │    depends on: ocaml-frontend (binary copied/embedded)
+  └─ step: install
+       puts both binaries under zig-out/bin/
+```
+
+`omlz` invokes `zxc-frontend` as a subprocess at runtime when
+processing `.ml` input.

@@ -2,46 +2,56 @@
 
 ## 1. Pipeline
 
+The frontend is borrowed from upstream OCaml; everything from
+`Typedtree` onward is ours. See ADR-010 and `10-frontend-bridge.md`.
+
 ```text
 .ml source
    │
    ▼
-[ Lexer ]
-   │   tokens
+[ ocamlc -bin-annot ]                ◀── upstream OCaml, used as a library
+   │   .cmt (binary Typedtree)
    ▼
-[ Parser ]                    (hand-written recursive descent + Pratt)
-   │   Surface AST
+[ zxc-frontend (OCaml glue) ]        ◀── walks Typedtree, enforces subset
+   │   .cir.sexp (versioned wire format)
    ▼
-[ Name resolution ]
-   │   resolved AST
-   ▼
-[ Type checker ]              (Hindley–Milner + ADT)
-   │   typed AST
+[ frontend_bridge (Zig) ]            ◀── parses sexp into Zig mirror types
+   │   ttree.Module (Zig)
    ▼
 [ ANF lowering ]
    │   Core IR  ◀────────────  THE STABLE CONTRACT
    ├───────────────────────────────► [ Tree-walk interpreter ] (dev only)
    ▼
-[ Lowering strategy ]         (P1: arena only)
+[ Lowering strategy ]                (P1: arena only)
    │   Lowered IR
    ▼
-[ Backend ]                   (P1: Zig codegen)
+[ Backend ]                          (P1: Zig codegen)
    │   .zig source
    ▼
-[ Zig toolchain ]             (zig build-obj -target bpfel-freestanding)
+[ Zig toolchain ]                    (zig build-obj -target bpfel-freestanding)
    │
    ▼
 Solana BPF .o
 ```
 
+The vertical bar between `zxc-frontend` and `frontend_bridge` is the
+**only inter-language boundary** in this project. Both sides are
+small. Above the bar is OCaml; below it is Zig.
+
 ## 2. Layered IR — the central design
 
 ```text
-Surface AST     — concrete syntax tree, mirrors OCaml grammar.
-                  Lossless w.r.t. spans and trivia for diagnostics.
+.cmt (Typedtree)— produced by upstream OCaml; the canonical
+                  type-checked AST. We do not own this format; we
+                  consume a *subset* of it (see 10-frontend-bridge.md §4).
 
-Typed AST       — same shape as Surface, but every node carries a Ty
-                  and every binder is resolved.
+.cir.sexp       — our wire format: a versioned, lossless
+                  serialisation of the accepted Typedtree subset.
+                  Carries `ty` and `span` on every node.
+
+ttree (Zig)     — a 1:1 Zig mirror of the sexp shape. The boundary
+                  where OCaml ends and Zig begins. Not optimised,
+                  not normalised; pure data.
 
 Core IR (ANF)   — small, regular, typed. Every non-trivial sub-expression
                   is named via `let`. Every call argument is an atom
@@ -55,8 +65,13 @@ Lowered IR      — Core IR with explicit allocation plans and closure
 ```
 
 **Invariant:** Core IR is the only stable contract. Backends never
-look at the Surface or Typed AST. Lowered IR is allowed to differ per
-strategy — that is the whole point of having it.
+look at `.cmt`, `.cir.sexp`, or `ttree`. Lowered IR is allowed to
+differ per strategy — that is the whole point of having it.
+
+Why a sexp wire format and a Zig mirror, instead of consuming
+`.cmt` directly from Zig? Because `.cmt` is OCaml's marshal format
+and is unstable across releases. The sexp is **ours**, versioned by
+us, and decouples upstream OCaml's binary format from our consumer.
 
 ## 3. Extension points (designed in, not built)
 
@@ -132,23 +147,23 @@ Stub-only (signatures present, implementations empty):
 ```mermaid
 flowchart TD
     SRC[".ml source"]
-    LEX["Lexer"]
-    PAR["Parser"]
-    SAST["Surface AST"]
-    NR["Name resolution"]
-    TYCK["HM type checker + ADT"]
-    TAST["Typed AST"]
+    OCAMLC["ocamlc -bin-annot"]
+    CMT[".cmt"]
+    XFE["zxc-frontend (OCaml)"]
+    SEXP[".cir.sexp"]
+    BRIDGE["frontend_bridge (Zig)"]
+    TT["ttree (Zig mirror)"]
     ANF["ANF lowering"]
-    CIR["Core IR (typed, ANF, Layout-tagged)"]
+    CIR["Core IR (ANF, Layout-tagged)"]
     INTERP["Tree-walk interpreter"]
-    LSTRAT["LoweringStrategy = ArenaStrategy (P1)"]
+    LSTRAT["ArenaStrategy (P1)"]
     LIR["Lowered IR"]
-    BE["Backend = ZigBackend (P1)"]
+    BE["ZigBackend (P1)"]
     ZSRC[".zig"]
     ZTOOL["zig build-obj"]
     BPF["Solana BPF .o"]
 
-    SRC --> LEX --> PAR --> SAST --> NR --> TYCK --> TAST --> ANF --> CIR
+    SRC --> OCAMLC --> CMT --> XFE --> SEXP --> BRIDGE --> TT --> ANF --> CIR
     CIR --> INTERP
     CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BPF
 ```
@@ -157,13 +172,15 @@ flowchart TD
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Tokens, spans, diagnostics | Frontend util | Used by every later phase |
-| Surface AST → Typed AST | Frontend | Pure, no IO |
-| Typed AST → Core IR | ANF lowering | Inserts `Layout` fields |
+| Lex / parse / type-check / module resolution | upstream OCaml `compiler-libs` | We do not own this code |
+| Subset enforcement, Typedtree → sexp | `zxc-frontend` (OCaml glue) | Tiny, read-only consumer of `compiler-libs` |
+| Sexp parse → Zig mirror | `frontend_bridge` (Zig) | Pure data, no inference |
+| `ttree` → Core IR (ANF + `Layout` fields) | `core/anf.zig` | Our first owned IR transformation |
 | Core IR → Lowered IR | `LoweringStrategy` | P1 single impl |
 | Lowered IR → bytes | `Backend` | P1: Zig source |
 | `.zig` → `.o` | Driver, calls `zig` CLI | Not the compiler's job |
 | Runtime helpers (arena, panic, BPF entry shim) | `runtime/zig` | Linked into user programs |
+| Diagnostics rendering | `omlz` (Zig), formatted from JSON emitted by `zxc-frontend` | Single user-facing diagnostic style |
 
 ## 6. What we explicitly do not do in this architecture
 

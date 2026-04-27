@@ -9,27 +9,35 @@
 ## TL;DR
 
 ```text
-.ml source  →  OCaml-subset frontend  →  Typed Core IR (ANF)
-                                              │
-                                              ▼
-                                  Lowering (arena, P1 only)
-                                              │
-                                              ▼
-                                       Zig codegen
-                                              │
-                                              ▼
-                                  zig build-obj -target bpfel-…
-                                              │
-                                              ▼
-                                     Solana BPF .o
+.ml source
+   │
+   ▼
+[ ocamlc -bin-annot ]    ◀── upstream OCaml, used as a library, never forked
+   │  .cmt (Typedtree)
+   ▼
+[ zxc-frontend (small OCaml glue) ]
+   │  .cir.sexp  (versioned wire format)
+   ▼
+[ omlz (Zig)  : ANF → Core IR → ArenaStrategy → Lowered IR → Zig codegen ]
+   │  .zig
+   ▼
+[ zig build-obj -target bpfel-freestanding ]
+   │
+   ▼
+Solana BPF .o
 ```
 
-- Compiler host language: **Zig 0.16**
-- Source language: **OCaml** (subset, growing)
-- Primary target: **Solana BPF** (`bpfel-freestanding`)
-- Memory model (P1): **arena, fully inferred, hidden from the user**
-- Core IR shape: **ANF** (A-Normal Form), typed, layout-tagged
-- CLI binary name: **`omlz`** (OCaml on Zig)
+- Frontend: **upstream OCaml `compiler-libs`** (no fork, no
+  re-implementation). See ADR-009 / ADR-010.
+- Compiler host language for everything below the frontend:
+  **Zig 0.16**.
+- Source language: **OCaml** (subset, growing).
+- Primary target: **Solana BPF** (`bpfel-freestanding`).
+- Memory model (P1): **arena, fully inferred, hidden from the user**.
+- Core IR shape: **ANF** (A-Normal Form), typed, layout-tagged.
+- CLI binary name: **`omlz`** (OCaml on Zig).
+- Build driver: a single **`build.zig`** orchestrates both the
+  OCaml frontend bridge and the Zig pipeline (ADR-011).
 
 ---
 
@@ -43,6 +51,13 @@ where the OCaml runtime (GC, boxed floats, exceptions) cannot run.
 ZxCaml keeps the OCaml language and reuses its mental model, but routes
 the program through a new pipeline that produces flat, GC-free, BPF-ready
 code via Zig.
+
+We deliberately **do not** fork an OCaml compiler distribution (upstream
+OCaml or OxCaml). Instead, we use upstream `compiler-libs` as a library
+for parsing and type-checking, and we own everything from `Typedtree`
+onwards. The reasoning is captured in
+[`docs/alternatives-considered.md`](./docs/alternatives-considered.md)
+and locked in ADR-009 / ADR-010.
 
 ---
 
@@ -72,9 +87,13 @@ Read in order:
 | 07 | [Repo layout](./docs/07-repo-layout.md) | Directory contract, who owns what |
 | 08 | [Roadmap](./docs/08-roadmap.md) | Phases P1–P7 and P1 internal steps |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
+| 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
+| —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |
 
 ---
 
 ## One-line summary
 
-> **Take OCaml's frontend. Throw away its runtime. Land on BPF via Zig.**
+> **Borrow OCaml's frontend. Throw away its runtime. Land on BPF via Zig.**
+>
+> Borrow ≠ fork. We call `compiler-libs` as a library; we never patch it.

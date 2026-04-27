@@ -124,8 +124,9 @@ Notes:
 
 ## 3. ANF transformation rules
 
-Given a Typed AST expression `e`, lowering to Core IR follows the
-standard ANF rules:
+Given a `ttree` expression `e` (the Zig mirror of OCaml's
+`Typedtree`, see `10-frontend-bridge.md`), lowering to Core IR
+follows the standard ANF rules:
 
 ```
 [[ x ]]            = EAtom (AVar x)

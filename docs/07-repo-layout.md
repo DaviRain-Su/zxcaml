@@ -6,22 +6,47 @@
 ZxCaml/
 ├── README.md
 ├── docs/                       -- design docs (this directory)
-├── build.zig                   -- compiler build script
+├── build.zig                   -- single build driver (ADR-011)
 ├── build.zig.zon               -- pinned to Zig 0.16
-├── src/                        -- compiler source (Zig)
+├── src/
+│   ├── frontend/               -- OCaml glue (zxc-frontend)
+│   │   ├── zxc_frontend.ml
+│   │   ├── zxc_subset.ml
+│   │   ├── zxc_sexp.ml
+│   │   └── zxc_sexp_format.md  -- the wire contract
+│   ├── frontend_bridge/        -- Zig sexp consumer
+│   │   ├── sexp_lexer.zig
+│   │   ├── sexp_parser.zig
+│   │   └── ttree.zig           -- Zig mirror of accepted Typedtree subset
+│   ├── core/                   -- Core IR (ANF, Layout)
+│   ├── lower/                  -- ArenaStrategy (P1)
+│   ├── backend/                -- ZigBackend, Interpreter, stubs
+│   ├── driver/                 -- CLI pipeline, BPF wiring
+│   ├── util/                   -- arena, diagnostics, interner
+│   ├── main.zig                -- omlz entry point
+│   └── root.zig                -- library re-exports for tests
 ├── runtime/
 │   └── zig/                    -- runtime helpers linked into user programs
 ├── stdlib/
-│   └── core.ml                 -- option / result / list, written in our subset
+│   └── core.ml                 -- option / result / list (real OCaml; subset)
 ├── examples/
 │   ├── hello.ml                -- interpreter + Zig backend smoke test
 │   └── solana_hello.ml         -- BPF acceptance program
 ├── tests/
 │   ├── ui/                     -- end-to-end .ml → expected output
-│   ├── golden/                 -- Core IR snapshot tests
+│   ├── golden/                 -- Core IR + sexp snapshot tests
 │   └── solana/                 -- solana-test-validator integration
 └── .github/workflows/          -- CI (post-P1)
 ```
+
+### 1.1 Two-language boundary
+
+The repo contains exactly one inter-language boundary, at
+`src/frontend/` (OCaml) ↔ `src/frontend_bridge/` (Zig). Both
+sides are small. There is no other OCaml in the repo and no
+other inter-language seam. Build orchestration is in
+`build.zig`, which invokes `ocamlfind` to compile the OCaml side
+(see `09-decisions.md` ADR-011).
 
 ## 2. `src/` (the compiler)
 
@@ -35,22 +60,21 @@ src/
 │   ├── diag.zig                -- diagnostics with spans
 │   └── intern.zig              -- string / symbol interner
 │
-├── syntax/
-│   ├── token.zig
-│   ├── lexer.zig
-│   ├── parser.zig              -- hand-written, recursive descent + Pratt
-│   └── ast.zig                 -- Surface AST
+├── frontend/                   -- OCaml-side glue (compiled to native binary)
+│   ├── zxc_frontend.ml         -- main; drives compiler-libs
+│   ├── zxc_subset.ml           -- Typedtree subset whitelist + walker
+│   ├── zxc_sexp.ml             -- S-expression serialiser
+│   └── zxc_sexp_format.md      -- the versioned wire contract
 │
-├── types/
-│   ├── ty.zig                  -- Ty representation
-│   ├── env.zig                 -- TypeEnv
-│   ├── unify.zig               -- union-find unification
-│   └── infer.zig               -- HM inference + ADT
+├── frontend_bridge/            -- Zig consumer of the sexp
+│   ├── sexp_lexer.zig
+│   ├── sexp_parser.zig
+│   └── ttree.zig               -- Zig mirror of accepted Typedtree subset
 │
 ├── core/
 │   ├── ir.zig                  -- Core IR data model (CONTRACT)
 │   ├── layout.zig              -- Region / Repr / Layout (EXTENSION POINT)
-│   ├── anf.zig                 -- Typed AST → Core IR
+│   ├── anf.zig                 -- ttree → Core IR
 │   └── pretty.zig              -- IR pretty-printer (golden tests)
 │
 ├── lower/
@@ -62,14 +86,19 @@ src/
 │   ├── api.zig                 -- Backend interface (EXTENSION POINT)
 │   ├── zig_codegen.zig         -- ZigBackend
 │   ├── interp.zig              -- tree-walk interpreter
-│   ├── ocaml_stub.zig          -- compile-only stub
+│   ├── ocaml_stub.zig          -- compile-only stub (NOT the frontend; see frontend/)
 │   └── llvm_stub.zig           -- compile-only stub
 │
 └── driver/
-    ├── pipeline.zig            -- frontend pipeline (parse → typecheck → ANF)
+    ├── pipeline.zig            -- spawns zxc-frontend, drives the rest
     ├── build.zig               -- invokes ZigBackend, then `zig build-obj`
     └── bpf.zig                 -- BPF target wiring
 ```
+
+`src/syntax/` and `src/types/` from the previous draft are gone.
+Their responsibilities now live in `src/frontend/` (OCaml) and
+`src/frontend_bridge/` (Zig) respectively. This is the concrete
+realisation of ADR-010.
 
 ### 2.1 Files marked **EXTENSION POINT**
 

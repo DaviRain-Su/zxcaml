@@ -18,8 +18,11 @@ Phases are **not** time-boxed in this document. They are scope-boxed.
 
 ### 2.1 Scope (must)
 
-- Lexer + parser for the subset in `02-grammar.md`.
-- HM type inference + ADT, no functors / GADTs.
+- `zxc-frontend` (OCaml glue): drives `compiler-libs`, walks
+  `Typedtree`, enforces the P1 subset
+  (`10-frontend-bridge.md` §4), emits `.cir.sexp`.
+- `frontend_bridge` (Zig): parses `.cir.sexp` into the `ttree`
+  mirror.
 - ANF lowering to Core IR with `Layout` annotations.
 - `ArenaStrategy` lowering to Lowered IR.
 - `ZigBackend` emitting `.zig` source.
@@ -32,6 +35,9 @@ Phases are **not** time-boxed in this document. They are scope-boxed.
   corpus.
 - Acceptance: `solana_hello.ml` deploys and returns `0` on
   `solana-test-validator`.
+
+We deliberately do **not** include "write our own lexer / parser /
+HM" in P1. Per ADR-010, that work is done by upstream OCaml.
 
 ### 2.2 Out of scope (must not)
 
@@ -61,22 +67,28 @@ omlz version
 ### 2.4 Internal milestones (suggested PR boundaries)
 
 ```
-P1.0  Skeleton              build.zig (Zig 0.16), `omlz --version`,
-                            arena util, diagnostics util
-P1.1  Lexer                 token stream for the §2 grammar
-P1.2  Parser                Surface AST for the full subset
-P1.3  Name resolution       binders, scopes, shadowing
-P1.4  Type inference        HM + ADT, error messages
-P1.5  ANF lowering          Core IR with Layout fields
-P1.6  IR pretty-printer     golden tests
-P1.7  Interpreter           `omlz run` returns Some 1 for hello.ml
-P1.8  ArenaStrategy         Lowered IR
-P1.9  ZigBackend            generates `.zig` that builds natively
-P1.10 Runtime + entrypoint  BPF shim, arena, panic
-P1.11 BPF driver            `omlz build --target=bpf` produces .o
-P1.12 Solana harness        deploy + invoke on test-validator
-P1.13 Determinism suite     interpreter ≡ Zig native ≡ Zig BPF (where applicable)
+P1.0  Skeleton              build.zig (Zig 0.16) drives both OCaml and Zig steps;
+                            `omlz --version`; arena util; diagnostics util.
+P1.1  zxc-frontend MVP      Smallest OCaml program that loads a .cmt and prints
+                            "ok"; wired into build.zig via ocamlfind.
+P1.2  Subset walker         `zxc_subset.ml` rejects every Typedtree node
+                            outside the §4 whitelist, with locations.
+P1.3  Sexp serialiser       `.cir.sexp` for the accepted subset, version 0.1.
+P1.4  Sexp parser (Zig)     `frontend_bridge` parses 0.1 into `ttree`.
+P1.5  ANF lowering          ttree → Core IR with Layout fields.
+P1.6  IR pretty-printer     Golden tests on `omlz check --emit=core-ir`.
+P1.7  Interpreter           `omlz run hello.ml` returns Some 1.
+P1.8  ArenaStrategy         Lowered IR.
+P1.9  ZigBackend            Generates `.zig` that `zig build-exe` accepts natively.
+P1.10 Runtime + entrypoint  BPF shim, arena, panic.
+P1.11 BPF driver            `omlz build --target=bpf` produces a .o.
+P1.12 Solana harness        Deploy + invoke on solana-test-validator.
+P1.13 Determinism suite     interpreter ≡ Zig native ≡ Zig BPF (where applicable).
 ```
+
+The shape changed from the previous draft: P1.1–P1.4 used to be
+"Lexer / Parser / Name resolution / Type inference" written in
+Zig. Per ADR-010 those are now upstream OCaml plus a small glue.
 
 Each milestone has at least one test (UI, golden, or integration).
 
@@ -145,9 +157,12 @@ The first four run through the interpreter and the Zig backend
 
 ## 9. Anti-goals (every phase)
 
-- We never accept the OCaml C runtime.
+- We never accept the OCaml C runtime in compiled output.
 - We never adopt a feature that requires GC.
-- We never depend on `opam` packages at build time.
-- We never fork the OCaml compiler.
-- We never silently drift out of the OCaml subset; the sanity
-  oracle (`02-grammar.md` §8) is a CI gate.
+- We never fork the OCaml compiler (ADR-009).
+- We never silently drift out of the OCaml subset; ADR-010 makes
+  drift structurally impossible because the upstream compiler is
+  the parser/type-checker.
+- We do **not** depend on `opam` packages **beyond** what ships in
+  the OCaml distribution (`compiler-libs.common`). The frontend
+  bridge has zero third-party `opam` dependencies.

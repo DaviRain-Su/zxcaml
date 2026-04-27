@@ -7,8 +7,10 @@ Solana **BPF** object files via **Zig**.
 
 Concretely:
 
-- The **frontend** (lexer, parser, type system, module system) follows
-  OCaml. We do not invent new syntax. Source files use `.ml`.
+- The **frontend** is **upstream OCaml itself**, used as a library
+  via `compiler-libs`. We do not invent new syntax, do not write a
+  parser, and do not fork any OCaml compiler. Source files use
+  `.ml`. See ADR-009 and ADR-010.
 - The **backend** is new. It targets a flat, GC-free execution model
   suitable for Solana programs.
 - The **glue** between them is a typed **Core IR** in **ANF**, which is
@@ -44,6 +46,30 @@ Concretely:
 
 These are documented so that future contributors do not have to
 re-discover them.
+
+### 4.0 We do **not** fork OxCaml or any OCaml compiler
+
+OxCaml (Jane Street's OCaml fork, formerly `flambda-backend`) ships
+with Flambda 2, a Cfg backend, and a `mode`/`local`/`unique` system.
+At first glance, forking it sounds like a shortcut.
+
+It is not a shortcut. OxCaml's optimisations all assume the OCaml
+runtime exists (GC, exceptions, threads, the OCaml ABI). On BPF
+none of those exist, so the optimisations do not transfer. Forking
+a 37k-commit, actively-rebased compiler to add a backend whose
+defining feature is "no OCaml runtime" is the wrong shape of work
+for this project. Locked by ADR-009.
+
+Frontend reuse is achieved differently — see §4.0.5 and ADR-010.
+
+### 4.0.5 We **do** consume upstream OCaml `compiler-libs`
+
+Parsing and type checking happen in the upstream OCaml compiler,
+called as a library by a small OCaml glue program (`zxc-frontend`).
+The result is exported as a versioned S-expression
+(`docs/10-frontend-bridge.md`) and consumed by the Zig pipeline.
+
+This gives us OCaml's frontend without any of OCaml's runtime.
 
 ### 4.1 OCaml backend is **not** a viable ecosystem bridge
 
@@ -86,12 +112,15 @@ P4+ work on regions and ownership.
 
 | Decision | Value |
 |---|---|
-| Compiler host language | **Zig 0.16** |
+| Frontend strategy | **Upstream OCaml `compiler-libs` as a library** (no fork) |
+| OCaml version (P1) | **5.2.x**, pinned per phase |
+| Compiler host language (everything below the frontend) | **Zig 0.16** |
 | Source language | **OCaml subset** (see `02-grammar.md`) |
 | Source file extension | `.ml` |
 | Core IR shape | **ANF**, typed, layout-tagged |
 | Memory model exposure | **Hidden**, fully inferred, arena-only |
 | Primary target | **Solana BPF** (`bpfel-freestanding` via Zig) |
+| Build driver | **single `build.zig`** (drives both OCaml and Zig steps) |
 | P1 endpoint | A `.ml` program produces a `.o` that loads on `solana-test-validator` and returns 0 |
 
 ## 6. Out of scope (forever, or until explicitly re-opened)
