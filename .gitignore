@@ -1,0 +1,11 @@
+# Spike β (BPF toolchain) — local-only artefacts and upstream clone
+spike/bpf-toolchain/zignocchio/
+spike/bpf-toolchain/zignocchio/zig-out/
+spike/bpf-toolchain/zignocchio/zig-cache/
+spike/bpf-toolchain/zignocchio/.zig-cache/
+spike/bpf-toolchain/**/.anchor/
+spike/bpf-toolchain/**/target/
+spike/bpf-toolchain/**/node_modules/
+
+# Spike α (OCaml cmt-read) — dune build artefacts
+spike/ocaml-cmt-read/_build/

@@ -1,0 +1,19 @@
+; Spike α — ZxCaml preflight verification.
+;
+; Two artefacts:
+;   * `hello`   : a tiny OCaml program built with `(modes byte)` so dune
+;                 emits hello.cmt next to its source.  We never actually
+;                 run this binary; we only consume its .cmt.
+;   * `reader`  : the Typedtree walker; depends on compiler-libs.common
+;                 only.
+
+(executable
+ (name hello)
+ (modes byte)
+ (modules hello)
+ (flags (:standard -bin-annot)))
+
+(executable
+ (name reader)
+ (modules reader)
+ (libraries compiler-libs.common))
