@@ -7,6 +7,23 @@
 //! - Represent the ANF, typed, Layout-tagged Core IR data model.
 //! - Keep allocation-bearing nodes explicit about their `Layout`.
 //! - Serve consumers: `anf`, `lower`, `interp`, `zig_codegen`, and `pretty`.
+//!
+//! Ctor layout policy (F10):
+//! ```text
+//! Some(x) -> Ctor { name = "Some", args = [x],
+//!                   ty = option<int>,
+//!                   layout = { region = Arena, repr = Boxed } }
+//!   The backend heap-allocates the discriminant plus payload in the arena,
+//!   because payload-bearing ADT values are boxed in P1.
+//!
+//! None    -> Ctor { name = "None", args = [],
+//!                   ty = option<int>,
+//!                   layout = { region = Static, repr = TaggedImmediate } }
+//!   The value is zero-sized at runtime: only the constructor tag is needed.
+//!
+//! Ok(x) and Error(e) follow the same result<T,E> rule: payload variants are
+//! Arena/Boxed, while future nullary variants would be Static/TaggedImmediate.
+//! ```
 
 const layout = @import("layout.zig");
 
@@ -48,6 +65,7 @@ pub const Expr = union(enum) {
     Constant: Constant,
     Let: LetExpr,
     Var: Var,
+    Ctor: Ctor,
 };
 
 /// Lexically-scoped let expression in ANF form.
@@ -61,9 +79,15 @@ pub const LetExpr = struct {
 
 /// Integer constant expression with type and layout annotations.
 pub const Constant = struct {
-    value: i64,
+    value: ConstantValue,
     ty: Ty,
     layout: layout.Layout,
+};
+
+/// Literal payload carried by a constant expression.
+pub const ConstantValue = union(enum) {
+    Int: i64,
+    String: []const u8,
 };
 
 /// Variable reference with type and layout inherited from its binding.
@@ -73,11 +97,27 @@ pub const Var = struct {
     layout: layout.Layout,
 };
 
+/// Constructor expression for whitelisted option/result ADTs.
+pub const Ctor = struct {
+    name: []const u8,
+    args: []const *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
 /// M1 type language needed to describe current examples.
 pub const Ty = union(enum) {
     Int,
     Unit,
+    String,
+    Adt: Adt,
     Arrow: Arrow,
+};
+
+/// Algebraic data type reference with concrete parameter types.
+pub const Adt = struct {
+    name: []const u8,
+    params: []const Ty,
 };
 
 /// Multi-argument arrow type.

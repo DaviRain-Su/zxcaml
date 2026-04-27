@@ -27,6 +27,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\// stack slot and take the stack copy's address. Otherwise LLVM may
         \\// place the array at low addresses (0x0/0x20) rejected by Solana.
         \\const Arena = @import("runtime/arena.zig").Arena;
+        \\const prelude = @import("runtime/prelude.zig");
         \\
         \\
     );
@@ -44,7 +45,9 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
     try append(out, allocator, "pub fn ");
     try append(out, allocator, try emittedFunctionName(allocator, func.name));
     try append(out, allocator, "(arena: *Arena, input: [*]const u8) callconv(.c) u64 {\n");
-    try append(out, allocator, "    _ = arena;\n");
+    if (!exprNeedsArena(func.body)) {
+        try append(out, allocator, "    _ = arena;\n");
+    }
     try append(out, allocator, "    _ = input;\n");
     try append(out, allocator, "    return ");
     var ctx: EmitContext = .{};
@@ -88,10 +91,58 @@ fn emitExpr(
                 const unsigned = std.math.cast(u64, value) orelse return error.NegativeIntegerResultUnsupported;
                 try appendPrint(out, allocator, "{d}", .{unsigned});
             },
+            .String => |value| try appendPrint(out, allocator, "\"{f}\"", .{std.zig.fmtString(value)}),
         },
         .Var => |var_ref| try emitIdentifier(out, allocator, var_ref.name),
         .Let => |let_expr| try emitLetExpr(out, allocator, let_expr, indent_level, ctx),
+        .Ctor => |ctor_expr| try emitCtorExpr(out, allocator, ctor_expr, indent_level, ctx),
     }
+}
+
+fn emitCtorExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ctor_expr: lir.LCtor,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const ty_name = try zigTypeName(allocator, ctor_expr.ty);
+    defer allocator.free(ty_name);
+    const variant = try ctorVariantName(ctor_expr.name);
+
+    if (ctor_expr.args.len == 0) {
+        try appendPrint(out, allocator, "{s}.{s}", .{ ty_name, variant });
+        return;
+    }
+
+    if (ctor_expr.args.len != 1) return error.UnsupportedExpr;
+
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_ctor_payload_{d} = {s}{{ .{s} = ", .{ block_id, ty_name, variant });
+    try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, " };\n");
+
+    switch (ctor_expr.layout.region) {
+        .Arena => {
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_ctor_box_{d} = arena.alloc({s}, 1) catch unreachable;\n", .{ block_id, ty_name });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "omlz_ctor_box_{d}[0] = omlz_ctor_payload_{d};\n", .{ block_id, block_id });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} omlz_ctor_box_{d}[0];\n", .{ block_id, block_id });
+        },
+        .Static, .Stack => {
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} omlz_ctor_payload_{d};\n", .{ block_id, block_id });
+        },
+    }
+
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitLetExpr(
@@ -106,12 +157,19 @@ fn emitLetExpr(
 
     try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try append(out, allocator, "const ");
-    try emitIdentifier(out, allocator, let_expr.name);
-    try append(out, allocator, " = ");
-    try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
-    try append(out, allocator, ";\n");
-    if (!exprUsesName(let_expr.body.*, let_expr.name)) {
+    const is_discard = std.mem.eql(u8, let_expr.name, "_");
+    if (is_discard) {
+        try append(out, allocator, "_ = ");
+        try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+    } else {
+        try append(out, allocator, "const ");
+        try emitIdentifier(out, allocator, let_expr.name);
+        try append(out, allocator, " = ");
+        try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+    }
+    if (!is_discard and !exprUsesName(let_expr.body.*, let_expr.name)) {
         try emitIndent(out, allocator, indent_level + 1);
         try append(out, allocator, "_ = ");
         try emitIdentifier(out, allocator, let_expr.name);
@@ -131,7 +189,59 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
         .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
         .Let => |let_expr| exprUsesName(let_expr.value.*, name) or
             (!std.mem.eql(u8, let_expr.name, name) and exprUsesName(let_expr.body.*, name)),
+        .Ctor => |ctor_expr| {
+            for (ctor_expr.args) |arg| {
+                if (exprUsesName(arg.*, name)) return true;
+            }
+            return false;
+        },
     };
+}
+
+fn exprNeedsArena(expr: lir.LExpr) bool {
+    return switch (expr) {
+        .Constant, .Var => false,
+        .Let => |let_expr| exprNeedsArena(let_expr.value.*) or exprNeedsArena(let_expr.body.*),
+        .Ctor => |ctor_expr| ctor_expr.layout.region == .Arena or blk: {
+            for (ctor_expr.args) |arg| {
+                if (exprNeedsArena(arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
+    return switch (ty) {
+        .Int => allocator.dupe(u8, "i64"),
+        .Unit => allocator.dupe(u8, "void"),
+        .String => allocator.dupe(u8, "[]const u8"),
+        .Adt => |adt| blk: {
+            if (std.mem.eql(u8, adt.name, "option")) {
+                if (adt.params.len != 1) return error.UnsupportedExpr;
+                const inner = try zigTypeName(allocator, adt.params[0]);
+                defer allocator.free(inner);
+                break :blk try std.fmt.allocPrint(allocator, "prelude.Option({s})", .{inner});
+            }
+            if (std.mem.eql(u8, adt.name, "result")) {
+                if (adt.params.len != 2) return error.UnsupportedExpr;
+                const ok_ty = try zigTypeName(allocator, adt.params[0]);
+                defer allocator.free(ok_ty);
+                const err_ty = try zigTypeName(allocator, adt.params[1]);
+                defer allocator.free(err_ty);
+                break :blk try std.fmt.allocPrint(allocator, "prelude.Result({s}, {s})", .{ ok_ty, err_ty });
+            }
+            return error.UnsupportedExpr;
+        },
+    };
+}
+
+fn ctorVariantName(name: []const u8) EmitError![]const u8 {
+    if (std.mem.eql(u8, name, "None")) return "none";
+    if (std.mem.eql(u8, name, "Some")) return "some";
+    if (std.mem.eql(u8, name, "Ok")) return "ok";
+    if (std.mem.eql(u8, name, "Error")) return "err";
+    return error.UnsupportedExpr;
 }
 
 fn emitIdentifier(out: *std.ArrayList(u8), allocator: std.mem.Allocator, source_name: []const u8) EmitError!void {
@@ -257,4 +367,28 @@ test "ZigBackend emits let expressions as const declarations inside blocks" {
     try std.testing.expect(std.mem.indexOf(u8, source, "return blk0: {") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "const x = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
+}
+
+test "ZigBackend emits option constructors through prelude tagged unions" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .Ctor = .{
+                .name = "Some",
+                .args = &.{&.{ .Constant = .{ .Int = 1 } }},
+                .ty = .{ .Adt = .{ .name = "option", .params = &.{.Int} } },
+                .layout = @import("../core/layout.zig").ctor(1),
+            } },
+            .body = &.{ .Constant = .{ .Int = 0 } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const prelude = @import(\"runtime/prelude.zig\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Option(i64)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".some = 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "arena.alloc(prelude.Option(i64), 1) catch unreachable") != null);
 }

@@ -389,6 +389,7 @@ fn shouldPrintGenericFrontendFailure(err: anyerror) bool {
         error.MalformedLambda,
         error.MalformedLet,
         error.MalformedVar,
+        error.MalformedCtor,
         error.MalformedConstant,
         => false,
         else => true,

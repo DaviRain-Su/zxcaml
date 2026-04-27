@@ -1,7 +1,7 @@
 //! Typed Zig mirror for the M1 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 0.2 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 0.3 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -10,7 +10,7 @@ const Io = std.Io;
 const sexp_parser = @import("sexp_parser.zig");
 const Sexp = sexp_parser.Sexp;
 
-pub const expected_wire_version = "0.2";
+pub const expected_wire_version = "0.3";
 
 /// Typed mirror of an accepted frontend module.
 pub const Module = struct {
@@ -34,6 +34,7 @@ pub const Expr = union(enum) {
     Constant: Constant,
     Let: LetExpr,
     Var: Var,
+    Ctor: Ctor,
 };
 
 /// Single lambda form.
@@ -54,9 +55,16 @@ pub const Var = struct {
     name: []const u8,
 };
 
+/// Constructor expression such as `None`, `Some x`, `Ok x`, or `Error e`.
+pub const Ctor = struct {
+    name: []const u8,
+    args: []const Expr,
+};
+
 /// Typed mirror of constants.
 pub const Constant = union(enum) {
     Int: i64,
+    String: []const u8,
 };
 
 /// Errors that can occur while validating and decoding the typed mirror.
@@ -73,6 +81,7 @@ pub const BridgeError = sexp_parser.ParseError || error{
     MalformedLambda,
     MalformedLet,
     MalformedVar,
+    MalformedCtor,
     MalformedConstant,
 };
 
@@ -97,9 +106,13 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=0.2\n");
-            if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1")) {
-                try writeStderr(io, "hint: frontend wire format 0.1 produced by an older zxc-frontend; rebuild with this omlz\n");
+            try writeStderr(io, " expected=0.3\n");
+            if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.2"))
+            {
+                try writeStderr(io, "hint: frontend wire format ");
+                try writeStderr(io, extractHeaderVersion(bytes));
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits constructor-aware sexp 0.3.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -108,7 +121,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.2 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.3 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -147,8 +160,10 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     const tag = try expectAtom(items[0]);
     if (std.mem.eql(u8, tag, "lambda")) return .{ .Lambda = try parseLambda(arena, items) };
     if (std.mem.eql(u8, tag, "const-int")) return .{ .Constant = .{ .Int = try parseConstInt(items) } };
+    if (std.mem.eql(u8, tag, "const-string")) return .{ .Constant = .{ .String = try parseConstString(arena, items) } };
     if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items) };
     if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
+    if (std.mem.eql(u8, tag, "ctor")) return .{ .Ctor = try parseCtor(arena, items) };
     return error.UnsupportedNode;
 }
 
@@ -192,9 +207,29 @@ fn parseVar(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeE
     return .{ .name = try dupeAtom(arena, items[1]) };
 }
 
+fn parseCtor(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Ctor {
+    if (items.len < 2) return error.MalformedCtor;
+
+    var args = std.ArrayList(Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (items[2..]) |arg_node| {
+        try args.append(arena.allocator(), try parseExpr(arena, arg_node));
+    }
+
+    return .{
+        .name = try dupeAtom(arena, items[1]),
+        .args = try args.toOwnedSlice(arena.allocator()),
+    };
+}
+
 fn parseConstInt(items: []const *const Sexp) BridgeError!i64 {
     if (items.len != 2) return error.MalformedConstant;
     return expectInteger(items[1]);
+}
+
+fn parseConstString(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError![]const u8 {
+    if (items.len != 2) return error.MalformedConstant;
+    return arena.allocator().dupe(u8, try expectAtom(items[1]));
 }
 
 fn expectList(node: *const Sexp) BridgeError![]const *const Sexp {
@@ -260,7 +295,7 @@ test "parse empty module sexp" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.2 (module))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.3 (module))");
     try std.testing.expectEqual(@as(usize, 0), module.decls.len);
 }
 
@@ -268,7 +303,7 @@ test "parse single int constant module" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.2 (module (let entrypoint (lambda (_) (const-int 0)))))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_) (const-int 0)))))");
     try std.testing.expectEqual(@as(usize, 1), module.decls.len);
 
     const decl = switch (module.decls[0]) {
@@ -289,6 +324,7 @@ test "parse single int constant module" {
     };
     switch (constant) {
         .Int => |value| try std.testing.expectEqual(@as(i64, 0), value),
+        .String => return error.TestUnexpectedResult,
     }
 }
 
@@ -298,7 +334,7 @@ test "parse top-level and nested let expressions with variable references" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.2 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
+        "(zxcaml-cir 0.3 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
     );
     try std.testing.expectEqual(@as(usize, 2), module.decls.len);
 
@@ -334,15 +370,15 @@ test "malformed sexp cases are rejected" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    try std.testing.expectError(error.UnmatchedParen, parseModule(&arena, "(zxcaml-cir 0.2 (module)"));
-    try std.testing.expectError(error.BadAtom, parseModule(&arena, "(zxcaml-cir 0.2 (module bad@atom))"));
+    try std.testing.expectError(error.UnmatchedParen, parseModule(&arena, "(zxcaml-cir 0.3 (module)"));
+    try std.testing.expectError(error.BadAtom, parseModule(&arena, "(zxcaml-cir 0.3 (module bad@atom))"));
 }
 
 test "version mismatch is rejected" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    try std.testing.expectError(error.WireFormatVersionMismatch, parseModule(&arena, "(zxcaml-cir 0.1 (module))"));
+    try std.testing.expectError(error.WireFormatVersionMismatch, parseModule(&arena, "(zxcaml-cir 0.2 (module))"));
 }
 
 test "empty stdin is rejected" {
@@ -350,4 +386,39 @@ test "empty stdin is rejected" {
     defer arena.deinit();
 
     try std.testing.expectError(error.EmptyInput, parseModule(&arena, ""));
+}
+
+test "parse constructor expressions and string payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(&arena, "(zxcaml-cir 0.3 (module (let some_value (ctor Some (const-int 1))) (let error_value (ctor Error (const-string \"oops\")))))");
+    try std.testing.expectEqual(@as(usize, 2), module.decls.len);
+
+    const some_decl = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const some_ctor = switch (some_decl.body) {
+        .Ctor => |ctor| ctor,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", some_ctor.name);
+    try std.testing.expectEqual(@as(usize, 1), some_ctor.args.len);
+
+    const error_decl = switch (module.decls[1]) {
+        .Let => |let_decl| let_decl,
+    };
+    const error_ctor = switch (error_decl.body) {
+        .Ctor => |ctor| ctor,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Error", error_ctor.name);
+    const string_arg = switch (error_ctor.args[0]) {
+        .Constant => |constant| switch (constant) {
+            .String => |value| value,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("oops", string_arg);
 }

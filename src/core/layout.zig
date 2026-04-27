@@ -68,10 +68,20 @@ pub fn topLevelLambda() Layout {
     return defaultFor(.TopLevelLambda);
 }
 
+/// Returns the M1 layout for a constructor with `arg_count` payload fields.
+pub fn ctor(arg_count: usize) Layout {
+    if (arg_count == 0) {
+        return .{ .region = .Static, .repr = .TaggedImmediate };
+    }
+    return defaultFor(.Aggregate);
+}
+
 test "M0 default layout derivation" {
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Flat }, intConstant());
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Flat }, unitValue());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Flat }, topLevelLambda());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Boxed }, defaultFor(.Aggregate));
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Boxed }, defaultFor(.StringLiteral));
+    try std.testing.expectEqual(Layout{ .region = .Static, .repr = .TaggedImmediate }, ctor(0));
+    try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Boxed }, ctor(1));
 }

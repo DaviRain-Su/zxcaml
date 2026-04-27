@@ -55,7 +55,10 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
     switch (expr) {
         .Lambda => |lambda| try formatLambda(out, allocator, lambda),
         .Constant => |constant| {
-            try appendPrint(out, allocator, "(const {d} :ty ", .{constant.value});
+            switch (constant.value) {
+                .Int => |value| try appendPrint(out, allocator, "(const {d} :ty ", .{value}),
+                .String => |value| try appendPrint(out, allocator, "(const-string \"{f}\" :ty ", .{std.zig.fmtString(value)}),
+            }
             try formatTy(out, allocator, constant.ty);
             try append(out, allocator, " :layout ");
             try formatLayout(out, allocator, constant.layout);
@@ -83,6 +86,19 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, var_ref.layout);
             try append(out, allocator, ")");
         },
+        .Ctor => |ctor_expr| {
+            try append(out, allocator, "(ctor ");
+            try append(out, allocator, ctor_expr.name);
+            for (ctor_expr.args) |arg| {
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, arg.*);
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, ctor_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, ctor_expr.layout);
+            try append(out, allocator, ")");
+        },
     }
 }
 
@@ -90,6 +106,16 @@ fn formatTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) !v
     switch (ty) {
         .Int => try append(out, allocator, "int"),
         .Unit => try append(out, allocator, "unit"),
+        .String => try append(out, allocator, "string"),
+        .Adt => |adt| {
+            try append(out, allocator, "(");
+            try append(out, allocator, adt.name);
+            for (adt.params) |param_ty| {
+                try append(out, allocator, " ");
+                try formatTy(out, allocator, param_ty);
+            }
+            try append(out, allocator, ")");
+        },
         .Arrow => |arrow| {
             try append(out, allocator, "(arrow");
             for (arrow.params) |param_ty| {

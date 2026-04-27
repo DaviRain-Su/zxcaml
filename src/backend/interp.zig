@@ -39,6 +39,13 @@ pub const EvalError = error{
 
 const Value = union(enum) {
     Int: i64,
+    String: []const u8,
+    Ctor: CtorValue,
+};
+
+const CtorValue = struct {
+    name: []const u8,
+    args: []const Value,
 };
 
 /// Evaluates a Core IR module by invoking its top-level `entrypoint` lambda.
@@ -61,7 +68,7 @@ pub fn evalModule(module: ir.Module) EvalError!u64 {
                     .Lambda => continue,
                     else => {},
                 }
-                try env.put(let_decl.name, try evalTopLevelValue(let_decl.value.*, &env));
+                try env.put(let_decl.name, try evalTopLevelValue(arena.allocator(), let_decl.value.*, &env));
             },
         }
     }
@@ -71,7 +78,7 @@ pub fn evalModule(module: ir.Module) EvalError!u64 {
         .Lambda => |value| value,
         else => return error.UnsupportedTopLevelValue,
     };
-    return valueToU64(try evalExpr(lambda.body.*, &env));
+    return valueToU64(try evalExpr(arena.allocator(), lambda.body.*, &env));
 }
 
 /// Returns the user-facing diagnostic for an interpreter error.
@@ -92,24 +99,39 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
     return evalModule(module);
 }
 
-fn evalTopLevelValue(expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
+fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .Var => evalExpr(expr, env),
+        .Constant, .Let, .Var, .Ctor => evalExpr(allocator, expr, env),
         .Lambda => error.UnsupportedTopLevelValue,
     };
 }
 
-fn evalExpr(expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
+fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant => |constant| .{ .Int = constant.value },
-        .Let => |let_expr| evalLet(let_expr, env),
+        .Constant => |constant| switch (constant.value) {
+            .Int => |value| .{ .Int = value },
+            .String => |value| .{ .String = value },
+        },
+        .Let => |let_expr| evalLet(allocator, let_expr, env),
         .Var => |var_ref| env.get(var_ref.name) orelse error.UnboundVariable,
+        .Ctor => |ctor_expr| evalCtor(allocator, ctor_expr, env),
         .Lambda => error.UnsupportedExpr,
     };
 }
 
-fn evalLet(let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value {
-    const value = try evalExpr(let_expr.value.*, env);
+fn evalCtor(allocator: std.mem.Allocator, ctor_expr: ir.Ctor, env: *std.StringHashMap(Value)) EvalError!Value {
+    const args = try allocator.alloc(Value, ctor_expr.args.len);
+    for (ctor_expr.args, 0..) |arg, index| {
+        args[index] = try evalExpr(allocator, arg.*, env);
+    }
+    return .{ .Ctor = .{
+        .name = ctor_expr.name,
+        .args = args,
+    } };
+}
+
+fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value {
+    const value = try evalExpr(allocator, let_expr.value.*, env);
     const previous = env.get(let_expr.name);
     try env.put(let_expr.name, value);
     defer {
@@ -119,12 +141,13 @@ fn evalLet(let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value
             _ = env.remove(let_expr.name);
         }
     }
-    return evalExpr(let_expr.body.*, env);
+    return evalExpr(allocator, let_expr.body.*, env);
 }
 
 fn valueToU64(value: Value) EvalError!u64 {
     return switch (value) {
         .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
+        .String, .Ctor => error.UnsupportedExpr,
     };
 }
 
@@ -141,7 +164,7 @@ fn testLet(comptime name: []const u8, comptime value: i64) ir.Decl {
         .value = makeExpr(.{ .Lambda = .{
             .params = &.{},
             .body = makeExpr(.{ .Constant = .{
-                .value = value,
+                .value = .{ .Int = value },
                 .ty = .Int,
                 .layout = layout.intConstant(),
             } }),
@@ -165,7 +188,7 @@ test "interpreter evaluates top-level and nested let variable bindings" {
     const x_decl: ir.Decl = .{ .Let = .{
         .name = "x",
         .value = makeExpr(.{ .Constant = .{
-            .value = 1,
+            .value = .{ .Int = 1 },
             .ty = .Int,
             .layout = layout.intConstant(),
         } }),
@@ -179,7 +202,7 @@ test "interpreter evaluates top-level and nested let variable bindings" {
             .body = makeExpr(.{ .Let = .{
                 .name = "y",
                 .value = makeExpr(.{ .Constant = .{
-                    .value = 7,
+                    .value = .{ .Int = 7 },
                     .ty = .Int,
                     .layout = layout.intConstant(),
                 } }),
@@ -200,6 +223,67 @@ test "interpreter evaluates top-level and nested let variable bindings" {
     const decls = [_]ir.Decl{ x_decl, entrypoint_decl };
 
     try std.testing.expectEqual(@as(u64, 1), try evalModule(.{ .decls = &decls }));
+}
+
+test "interpreter constructs option constructor values inside lets" {
+    const entrypoint_decl: ir.Decl = .{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .Let = .{
+                .name = "_",
+                .value = makeExpr(.{ .Ctor = .{
+                    .name = "Some",
+                    .args = &.{makeExpr(.{ .Constant = .{
+                        .value = .{ .Int = 1 },
+                        .ty = .Int,
+                        .layout = layout.intConstant(),
+                    } })},
+                    .ty = .{ .Adt = .{ .name = "option", .params = &.{.Int} } },
+                    .layout = layout.ctor(1),
+                } }),
+                .body = makeExpr(.{ .Constant = .{
+                    .value = .{ .Int = 0 },
+                    .ty = .Int,
+                    .layout = layout.intConstant(),
+                } }),
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } };
+    const decls = [_]ir.Decl{entrypoint_decl};
+
+    try std.testing.expectEqual(@as(u64, 0), try evalModule(.{ .decls = &decls }));
+}
+
+test "interpreter can materialize all F10 whitelisted constructors" {
+    const option_params = [_]ir.Ty{.Int};
+    const result_ok_params = [_]ir.Ty{ .Int, .Unit };
+    const result_error_params = [_]ir.Ty{ .Unit, .Int };
+    const ctor_exprs = [_]ir.Expr{
+        .{ .Ctor = .{ .name = "None", .args = &.{}, .ty = .{ .Adt = .{ .name = "option", .params = &option_params } }, .layout = layout.ctor(0) } },
+        .{ .Ctor = .{ .name = "Some", .args = &.{makeExpr(.{ .Constant = .{ .value = .{ .Int = 1 }, .ty = .Int, .layout = layout.intConstant() } })}, .ty = .{ .Adt = .{ .name = "option", .params = &option_params } }, .layout = layout.ctor(1) } },
+        .{ .Ctor = .{ .name = "Ok", .args = &.{makeExpr(.{ .Constant = .{ .value = .{ .Int = 2 }, .ty = .Int, .layout = layout.intConstant() } })}, .ty = .{ .Adt = .{ .name = "result", .params = &result_ok_params } }, .layout = layout.ctor(1) } },
+        .{ .Ctor = .{ .name = "Error", .args = &.{makeExpr(.{ .Constant = .{ .value = .{ .Int = 3 }, .ty = .Int, .layout = layout.intConstant() } })}, .ty = .{ .Adt = .{ .name = "result", .params = &result_error_params } }, .layout = layout.ctor(1) } },
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var env = std.StringHashMap(Value).init(arena.allocator());
+    defer env.deinit();
+    for (ctor_exprs) |expr| {
+        const value = try evalExpr(arena.allocator(), expr, &env);
+        const ctor_value = switch (value) {
+            .Ctor => |ctor| ctor,
+            else => return error.TestUnexpectedResult,
+        };
+        try std.testing.expect(ctor_value.name.len > 0);
+    }
 }
 
 test "interpreter backend trait exposes direct eval and rejects source emission" {

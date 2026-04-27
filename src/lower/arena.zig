@@ -99,15 +99,53 @@ fn lowerExprPtr(allocator: std.mem.Allocator, expr: ir.Expr) LowerError!*lir.LEx
 
 fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr) LowerError!lir.LExpr {
     return switch (expr) {
-        .Constant => |constant| .{ .Constant = .{ .Int = constant.value } },
+        .Constant => |constant| .{ .Constant = switch (constant.value) {
+            .Int => |value| .{ .Int = value },
+            .String => |value| .{ .String = try allocator.dupe(u8, value) },
+        } },
         .Let => |let_expr| .{ .Let = .{
             .name = try allocator.dupe(u8, let_expr.name),
             .value = try lowerExprPtr(allocator, let_expr.value.*),
             .body = try lowerExprPtr(allocator, let_expr.body.*),
         } },
         .Var => |var_ref| .{ .Var = .{ .name = try allocator.dupe(u8, var_ref.name) } },
+        .Ctor => |ctor_expr| .{ .Ctor = .{
+            .name = try allocator.dupe(u8, ctor_expr.name),
+            .args = try lowerExprPtrs(allocator, ctor_expr.args),
+            .ty = try lowerTy(allocator, ctor_expr.ty),
+            .layout = ctor_expr.layout,
+        } },
         .Lambda => error.UnsupportedExpr,
     };
+}
+
+fn lowerExprPtrs(allocator: std.mem.Allocator, exprs: []const *const ir.Expr) LowerError![]const *const lir.LExpr {
+    const lowered = try allocator.alloc(*const lir.LExpr, exprs.len);
+    for (exprs, 0..) |expr, index| {
+        lowered[index] = try lowerExprPtr(allocator, expr.*);
+    }
+    return lowered;
+}
+
+fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
+    return switch (ty) {
+        .Int => .Int,
+        .Unit => .Unit,
+        .String => .String,
+        .Arrow => error.UnsupportedExpr,
+        .Adt => |adt| .{ .Adt = .{
+            .name = try allocator.dupe(u8, adt.name),
+            .params = try lowerTySlice(allocator, adt.params),
+        } },
+    };
+}
+
+fn lowerTySlice(allocator: std.mem.Allocator, tys: []const ir.Ty) LowerError![]const lir.LTy {
+    const lowered = try allocator.alloc(lir.LTy, tys.len);
+    for (tys, 0..) |ty, index| {
+        lowered[index] = try lowerTy(allocator, ty);
+    }
+    return lowered;
 }
 
 fn makeExpr(comptime expr: ir.Expr) *const ir.Expr {
@@ -123,7 +161,7 @@ test "ArenaStrategy lowers M0 entrypoint constant and records arena threading" {
         .value = makeExpr(.{ .Lambda = .{
             .params = &.{},
             .body = makeExpr(.{ .Constant = .{
-                .value = 0,
+                .value = .{ .Int = 0 },
                 .ty = .Int,
                 .layout = @import("../core/layout.zig").intConstant(),
             } }),
@@ -148,6 +186,7 @@ test "ArenaStrategy lowers M0 entrypoint constant and records arena threading" {
     };
     switch (constant) {
         .Int => |value| try std.testing.expectEqual(@as(i64, 0), value),
+        .String => return error.TestUnexpectedResult,
     }
 }
 
@@ -157,7 +196,7 @@ test "ArenaStrategy wraps previous top-level lets around entrypoint body" {
         .{ .Let = .{
             .name = "x",
             .value = makeExpr(.{ .Constant = .{
-                .value = 1,
+                .value = .{ .Int = 1 },
                 .ty = .Int,
                 .layout = layout.intConstant(),
             } }),

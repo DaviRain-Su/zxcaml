@@ -16,6 +16,8 @@ const pretty = @import("pretty.zig");
 pub const LowerError = std.mem.Allocator.Error || error{
     UnsupportedNode,
     UnboundVariable,
+    UnsupportedCtor,
+    UnsupportedCtorArity,
 };
 
 const BindingInfo = struct {
@@ -28,19 +30,24 @@ const ScopedBinding = struct {
     previous: ?BindingInfo,
 };
 
+const LowerContext = struct {
+    scope: std.StringHashMap(BindingInfo),
+    next_temp: usize = 0,
+};
+
 /// Lowers a frontend typed-tree module into an arena-owned Core IR module.
 pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerError!ir.Module {
     var decls = std.ArrayList(ir.Decl).empty;
     errdefer decls.deinit(arena.allocator());
 
-    var scope = std.StringHashMap(BindingInfo).init(arena.allocator());
-    defer scope.deinit();
+    var ctx: LowerContext = .{ .scope = std.StringHashMap(BindingInfo).init(arena.allocator()) };
+    defer ctx.scope.deinit();
 
     for (module.decls) |decl| {
-        const lowered = try lowerDecl(arena, &scope, decl);
+        const lowered = try lowerDecl(arena, &ctx, decl);
         try decls.append(arena.allocator(), lowered);
         switch (lowered) {
-            .Let => |let_decl| try scope.put(let_decl.name, .{
+            .Let => |let_decl| try ctx.scope.put(let_decl.name, .{
                 .ty = let_decl.ty,
                 .layout = let_decl.layout,
             }),
@@ -50,10 +57,10 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
     return .{ .decls = try decls.toOwnedSlice(arena.allocator()) };
 }
 
-fn lowerDecl(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingInfo), decl: ttree.Decl) LowerError!ir.Decl {
+fn lowerDecl(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, decl: ttree.Decl) LowerError!ir.Decl {
     return switch (decl) {
         .Let => |let_decl| blk: {
-            const value = try lowerExprPtr(arena, scope, let_decl.body);
+            const value = try lowerExprPtr(arena, ctx, let_decl.body);
             break :blk .{ .Let = .{
                 .name = try arena.allocator().dupe(u8, let_decl.name),
                 .value = value,
@@ -64,7 +71,7 @@ fn lowerDecl(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingI
     };
 }
 
-fn lowerLambda(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingInfo), lambda: ttree.Lambda) LowerError!ir.Lambda {
+fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttree.Lambda) LowerError!ir.Lambda {
     var params = std.ArrayList(ir.Param).empty;
     errdefer params.deinit(arena.allocator());
 
@@ -77,8 +84,8 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(Bindin
             .name = owned_name,
             .ty = .Unit,
         });
-        const previous = scope.get(owned_name);
-        try scope.put(owned_name, .{
+        const previous = ctx.scope.get(owned_name);
+        try ctx.scope.put(owned_name, .{
             .ty = .Unit,
             .layout = layout.unitValue(),
         });
@@ -90,15 +97,15 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(Bindin
             index -= 1;
             const inserted = inserted_params.items[index];
             if (inserted.previous) |binding| {
-                scope.getPtr(inserted.name).?.* = binding;
+                ctx.scope.getPtr(inserted.name).?.* = binding;
             } else {
-                _ = scope.remove(inserted.name);
+                _ = ctx.scope.remove(inserted.name);
             }
         }
     }
 
     const owned_params = try params.toOwnedSlice(arena.allocator());
-    const body = try lowerExprPtr(arena, scope, lambda.body.*);
+    const body = try lowerExprPtr(arena, ctx, lambda.body.*);
     const lambda_ty = try makeArrowTy(arena, owned_params, exprTy(body.*));
 
     return .{
@@ -109,39 +116,40 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(Bindin
     };
 }
 
-fn lowerExprPtr(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingInfo), expr: ttree.Expr) LowerError!*const ir.Expr {
+fn lowerExprPtr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr) LowerError!*const ir.Expr {
     const ptr = try arena.allocator().create(ir.Expr);
-    ptr.* = try lowerExpr(arena, scope, expr);
+    ptr.* = try lowerExpr(arena, ctx, expr);
     return ptr;
 }
 
-fn lowerExpr(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingInfo), expr: ttree.Expr) LowerError!ir.Expr {
+fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr) LowerError!ir.Expr {
     return switch (expr) {
-        .Lambda => |lambda| .{ .Lambda = try lowerLambda(arena, scope, lambda) },
-        .Constant => |constant| .{ .Constant = lowerConstant(constant) },
-        .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, scope, let_expr) },
-        .Var => |var_ref| .{ .Var = try lowerVar(arena, scope, var_ref) },
+        .Lambda => |lambda| .{ .Lambda = try lowerLambda(arena, ctx, lambda) },
+        .Constant => |constant| .{ .Constant = try lowerConstant(arena, constant) },
+        .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
+        .Var => |var_ref| .{ .Var = try lowerVar(arena, ctx, var_ref) },
+        .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr),
     };
 }
 
-fn lowerLetExpr(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingInfo), let_expr: ttree.LetExpr) LowerError!ir.LetExpr {
-    const value = try lowerExprPtr(arena, scope, let_expr.value.*);
+fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: ttree.LetExpr) LowerError!ir.LetExpr {
+    const value = try lowerExprPtr(arena, ctx, let_expr.value.*);
     const owned_name = try arena.allocator().dupe(u8, let_expr.name);
 
-    const previous = scope.get(owned_name);
-    try scope.put(owned_name, .{
+    const previous = ctx.scope.get(owned_name);
+    try ctx.scope.put(owned_name, .{
         .ty = exprTy(value.*),
         .layout = exprLayout(value.*),
     });
     defer {
         if (previous) |binding| {
-            scope.getPtr(owned_name).?.* = binding;
+            ctx.scope.getPtr(owned_name).?.* = binding;
         } else {
-            _ = scope.remove(owned_name);
+            _ = ctx.scope.remove(owned_name);
         }
     }
 
-    const body = try lowerExprPtr(arena, scope, let_expr.body.*);
+    const body = try lowerExprPtr(arena, ctx, let_expr.body.*);
     return .{
         .name = owned_name,
         .value = value,
@@ -151,8 +159,8 @@ fn lowerLetExpr(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(Bindi
     };
 }
 
-fn lowerVar(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingInfo), var_ref: ttree.Var) LowerError!ir.Var {
-    const binding = scope.get(var_ref.name) orelse return error.UnboundVariable;
+fn lowerVar(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.Var) LowerError!ir.Var {
+    const binding = ctx.scope.get(var_ref.name) orelse return error.UnboundVariable;
     return .{
         .name = try arena.allocator().dupe(u8, var_ref.name),
         .ty = binding.ty,
@@ -160,14 +168,120 @@ fn lowerVar(arena: *std.heap.ArenaAllocator, scope: *std.StringHashMap(BindingIn
     };
 }
 
-fn lowerConstant(constant: ttree.Constant) ir.Constant {
+fn lowerConstant(arena: *std.heap.ArenaAllocator, constant: ttree.Constant) LowerError!ir.Constant {
     return switch (constant) {
         .Int => |value| .{
-            .value = value,
+            .value = .{ .Int = value },
             .ty = .Int,
             .layout = layout.intConstant(),
         },
+        .String => |value| .{
+            .value = .{ .String = try arena.allocator().dupe(u8, value) },
+            .ty = .String,
+            .layout = layout.defaultFor(.StringLiteral),
+        },
     };
+}
+
+fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttree.Ctor) LowerError!ir.Expr {
+    try validateCtor(ctor_expr.name, ctor_expr.args.len);
+
+    var args = std.ArrayList(*const ir.Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    var wrappers = std.ArrayList(struct {
+        name: []const u8,
+        value: *const ir.Expr,
+    }).empty;
+    errdefer wrappers.deinit(arena.allocator());
+
+    for (ctor_expr.args) |arg| {
+        if (isAtomicTtree(arg)) {
+            try args.append(arena.allocator(), try lowerExprPtr(arena, ctx, arg));
+        } else {
+            const value = try lowerExprPtr(arena, ctx, arg);
+            const temp_name = try freshTemp(arena, ctx);
+            const var_ptr = try arena.allocator().create(ir.Expr);
+            var_ptr.* = .{ .Var = .{
+                .name = temp_name,
+                .ty = exprTy(value.*),
+                .layout = exprLayout(value.*),
+            } };
+            try wrappers.append(arena.allocator(), .{ .name = temp_name, .value = value });
+            try args.append(arena.allocator(), var_ptr);
+        }
+    }
+
+    const owned_args = try args.toOwnedSlice(arena.allocator());
+    const ctor_ty = try ctorTy(arena, ctor_expr.name, owned_args);
+    const ctor_layout = layout.ctor(owned_args.len);
+    var current = try arena.allocator().create(ir.Expr);
+    current.* = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, ctor_expr.name),
+        .args = owned_args,
+        .ty = ctor_ty,
+        .layout = ctor_layout,
+    } };
+
+    var index = wrappers.items.len;
+    while (index > 0) {
+        index -= 1;
+        const wrapper = wrappers.items[index];
+        const body = current;
+        current = try arena.allocator().create(ir.Expr);
+        current.* = .{ .Let = .{
+            .name = wrapper.name,
+            .value = wrapper.value,
+            .body = body,
+            .ty = ctor_ty,
+            .layout = ctor_layout,
+        } };
+    }
+
+    return current.*;
+}
+
+fn validateCtor(name: []const u8, arg_count: usize) LowerError!void {
+    if (std.mem.eql(u8, name, "None")) {
+        if (arg_count != 0) return error.UnsupportedCtorArity;
+        return;
+    }
+    if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Error")) {
+        if (arg_count != 1) return error.UnsupportedCtorArity;
+        return;
+    }
+    return error.UnsupportedCtor;
+}
+
+fn isAtomicTtree(expr: ttree.Expr) bool {
+    return switch (expr) {
+        .Constant, .Var => true,
+        else => false,
+    };
+}
+
+fn freshTemp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext) LowerError![]const u8 {
+    const name = try std.fmt.allocPrint(arena.allocator(), "__omlz_ctor_arg_{d}", .{ctx.next_temp});
+    ctx.next_temp += 1;
+    return name;
+}
+
+fn ctorTy(arena: *std.heap.ArenaAllocator, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
+    const adt_name = if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "None")) "option" else "result";
+    const param_count: usize = if (std.mem.eql(u8, adt_name, "option")) 1 else 2;
+    const params = try arena.allocator().alloc(ir.Ty, param_count);
+    if (std.mem.eql(u8, adt_name, "option")) {
+        params[0] = if (args.len == 1) exprTy(args[0].*) else .Int;
+    } else if (std.mem.eql(u8, name, "Ok")) {
+        params[0] = exprTy(args[0].*);
+        params[1] = .Unit;
+    } else {
+        params[0] = .Unit;
+        params[1] = exprTy(args[0].*);
+    }
+    return .{ .Adt = .{
+        .name = adt_name,
+        .params = params,
+    } };
 }
 
 fn makeArrowTy(
@@ -195,6 +309,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .Let => |let_expr| let_expr.ty,
         .Var => |var_ref| var_ref.ty,
+        .Ctor => |ctor_expr| ctor_expr.ty,
     };
 }
 
@@ -204,6 +319,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .Let => |let_expr| let_expr.layout,
         .Var => |var_ref| var_ref.layout,
+        .Ctor => |ctor_expr| ctor_expr.layout,
     };
 }
 
@@ -213,7 +329,7 @@ test "lower M0 constant module through ANF to Core IR" {
 
     const frontend = try ttree.parseModule(
         &frontend_arena,
-        "(zxcaml-cir 0.2 (module (let entrypoint (lambda (_input) (const-int 0)))))",
+        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (const-int 0)))))",
     );
 
     var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -238,7 +354,10 @@ test "lower M0 constant module through ANF to Core IR" {
         .Constant => |value| value,
         else => return error.TestUnexpectedResult,
     };
-    try std.testing.expectEqual(@as(i64, 0), constant.value);
+    switch (constant.value) {
+        .Int => |value| try std.testing.expectEqual(@as(i64, 0), value),
+        .String => return error.TestUnexpectedResult,
+    }
     try std.testing.expectEqual(layout.Layout{ .region = .Static, .repr = .Flat }, constant.layout);
 
     const printed = try pretty.formatModule(std.testing.allocator, module);
@@ -255,7 +374,7 @@ test "lower top-level and nested lets with lexical var references" {
 
     const frontend = try ttree.parseModule(
         &frontend_arena,
-        "(zxcaml-cir 0.2 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
+        "(zxcaml-cir 0.3 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
     );
 
     var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -289,4 +408,42 @@ test "lower top-level and nested lets with lexical var references" {
     };
     try std.testing.expectEqualStrings("x", var_ref.name);
     try std.testing.expectEqual(layout.intConstant(), var_ref.layout);
+}
+
+test "lower constructor expressions with layout policy" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (let _ (ctor Some (const-int 1)) (const-int 0))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const nested = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const ctor_expr = switch (nested.value.*) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", ctor_expr.name);
+    try std.testing.expectEqual(@as(usize, 1), ctor_expr.args.len);
+    try std.testing.expectEqual(layout.Layout{ .region = .Arena, .repr = .Boxed }, ctor_expr.layout);
+
+    const printed = try pretty.formatModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(printed);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "(ctor Some") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, ":layout (arena boxed)") != null);
 }

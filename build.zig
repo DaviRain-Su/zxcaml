@@ -84,7 +84,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_runtime_arena_tests = b.addRunArtifact(runtime_arena_tests);
 
+    const runtime_prelude_test_module = b.createModule(.{
+        .root_source_file = b.path("runtime/zig/prelude.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const runtime_prelude_tests = b.addTest(.{
+        .root_module = runtime_prelude_test_module,
+    });
+    const run_runtime_prelude_tests = b.addRunArtifact(runtime_prelude_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
+    test_step.dependOn(&run_runtime_prelude_tests.step);
 }

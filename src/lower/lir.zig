@@ -34,11 +34,13 @@ pub const LExpr = union(enum) {
     Constant: LConstant,
     Let: LLet,
     Var: LVar,
+    Ctor: LCtor,
 };
 
 /// M0 lowered constants.
 pub const LConstant = union(enum) {
     Int: i64,
+    String: []const u8,
 };
 
 /// Lowered lexical let expression.
@@ -51,4 +53,26 @@ pub const LLet = struct {
 /// Lowered variable reference.
 pub const LVar = struct {
     name: []const u8,
+};
+
+/// Lowered constructor expression.
+pub const LCtor = struct {
+    name: []const u8,
+    args: []const *const LExpr,
+    ty: LTy,
+    layout: @import("../core/layout.zig").Layout,
+};
+
+/// Lowered type information needed by source emission.
+pub const LTy = union(enum) {
+    Int,
+    Unit,
+    String,
+    Adt: LAdt,
+};
+
+/// Lowered ADT type reference.
+pub const LAdt = struct {
+    name: []const u8,
+    params: []const LTy,
 };
