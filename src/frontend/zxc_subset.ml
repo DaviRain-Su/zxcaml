@@ -1,9 +1,8 @@
-(* Typedtree subset checker for the M0 ZxCaml frontend.
+(* Typedtree subset checker for the ZxCaml frontend.
 
    This module consumes the fully typed OCaml Typedtree loaded from a .cmt
-   file, accepts only the tiny M0 shape (`let f _ = <int>` at module scope),
-   and reports the first unsupported Typedtree node as a JSON-friendly
-   diagnostic. *)
+   file, accepts the current frontend subset, and reports the first
+   unsupported Typedtree node as a JSON-friendly diagnostic. *)
 
 open Asttypes
 open Typedtree
@@ -24,13 +23,27 @@ type diagnostic = {
   message : string;
 }
 
-type expr = Const_int of int
-
 type param = Anonymous
+
+type expr =
+  | Const_int of int
+  | Var of string
+  | Lambda of lambda
+  | Let of let_expr
+
+and lambda = {
+  params : param list;
+  body : expr;
+}
+
+and let_expr = {
+  name : string;
+  value : expr;
+  body : expr;
+}
 
 type decl = {
   name : string;
-  param : param;
   body : expr;
 }
 
@@ -62,8 +75,10 @@ let unsupported ~node_kind ~loc =
          loc = loc_of_location loc;
          message =
            Printf.sprintf
-             "%s is not supported in the M0 ZxCaml subset; expected a \
-              top-level `let name _ = <int>`"
+             "%s is not supported in the current ZxCaml subset; expected \
+              top-level `let` declarations, integer constants, identifiers, \
+              one-argument functions, or non-recursive nested `let` \
+              expressions"
              node_kind;
        })
 
@@ -135,6 +150,8 @@ let pat_kind : type k. k pattern_desc -> string = function
 
 let ident_name ident = Ident.name ident
 
+let longident_name (lid : Longident.t Location.loc) = Longident.last lid.txt
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_var (ident, _, _) -> ident_name ident
@@ -151,28 +168,36 @@ let parse_param (param : function_param) =
   | _, Tparam_optional_default (pat, _) ->
       unsupported ~node_kind:"optional-parameter" ~loc:pat.pat_loc
 
-let parse_const_expr (expr : expression) =
+let rec parse_expr (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
-  | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc
-  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
-
-let parse_rhs (expr : expression) =
-  match expr.exp_desc with
+  | Texp_ident (_, lid, _) -> Var (longident_name lid)
   | Texp_function ([ param ], Tfunction_body body) ->
       let param = parse_param param in
-      let body = parse_const_expr body in
-      (param, body)
+      let body = parse_expr body in
+      Lambda { params = [ param ]; body }
   | Texp_function (_params, Tfunction_body _) ->
       unsupported ~node_kind:"Texp_function" ~loc:expr.exp_loc
   | Texp_function (_params, Tfunction_cases _) ->
       unsupported ~node_kind:"Tfunction_cases" ~loc:expr.exp_loc
+  | Texp_let (Nonrecursive, [ binding ], body) ->
+      let name = parse_binding_name binding.vb_pat in
+      let value = parse_expr binding.vb_expr in
+      let body = parse_expr body in
+      Let { name; value; body }
+  | Texp_let (Recursive, _, _) ->
+      unsupported ~node_kind:"Texp_let(recursive)" ~loc:expr.exp_loc
+  | Texp_let (_, [], _) ->
+      unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc
+  | Texp_let (_, _ :: _ :: _, _) ->
+      unsupported ~node_kind:"Texp_let(and)" ~loc:expr.exp_loc
+  | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
 
 let parse_value_binding (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
-  let param, body = parse_rhs binding.vb_expr in
-  { name; param; body }
+  let body = parse_expr binding.vb_expr in
+  { name; body }
 
 let parse_structure_item (item : structure_item) =
   match item.str_desc with
