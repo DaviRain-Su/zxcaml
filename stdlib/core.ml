@@ -8,3 +8,7 @@
 type 'a option = None | Some of 'a
 
 type ('a, 'b) result = Ok of 'a | Error of 'b
+
+let head xs = match xs with [] -> None | x :: _ -> Some x
+
+let tail xs = match xs with [] -> None | _ :: rest -> Some rest

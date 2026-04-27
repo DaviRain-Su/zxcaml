@@ -128,8 +128,8 @@ let unsupported ~node_kind ~loc =
               top-level `let` declarations, integer constants, identifiers, \
               string constants, one-argument functions, non-recursive nested \
               `let` expressions, or the whitelisted constructors \
-              None/Some/Ok/Error, including basic pattern matches over those \
-              values"
+              None/Some/Ok/Error/[]/::, including basic pattern matches over \
+              those values"
              node_kind;
        })
 
@@ -204,7 +204,7 @@ let ident_name ident = Ident.name ident
 let longident_name (lid : Longident.t Location.loc) = Longident.last lid.txt
 
 let is_whitelisted_constructor = function
-  | "None" | "Some" | "Ok" | "Error" -> true
+  | "None" | "Some" | "Ok" | "Error" | "[]" | "::" -> true
   | _ -> false
 
 let is_whitelisted_prim = function

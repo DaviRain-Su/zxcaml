@@ -3,7 +3,7 @@
 `zxc-frontend --emit=sexp <input.ml>` emits exactly one S-expression on
 stdout. Version `0.4` widens the M1 format with basic pattern matching over
 values and match patterns for wildcard, variable binding, and the whitelisted
-option/result constructors.
+option/result/list constructors.
 
 ## Grammar
 
@@ -21,7 +21,7 @@ match_expr   ::= "(" "match" value_expr case+ ")"
 case         ::= "(" "case" pattern expr ")"
 pattern      ::= "_" | "(" "var" ident ")" | "(" "ctor" ctor_name pattern* ")"
 value_expr   ::= const_int | var | "(" "ctor" ctor_name value_expr* ")"
-ctor_name    ::= "None" | "Some" | "Ok" | "Error"
+ctor_name    ::= "None" | "Some" | "Ok" | "Error" | "[]" | "::"
 ident        ::= atom | quoted-string
 integer      ::= OCaml Const_int rendered in decimal
 quoted-string ::= OCaml string literal syntax
@@ -29,7 +29,9 @@ quoted-string ::= OCaml string literal syntax
 
 Whitespace may appear between nodes.  Atoms currently use OCaml value names
 when they are safe S-expression atoms; other names are quoted as strings.
-Constructor names are emitted verbatim using the OCaml constructor identifier.
+Constructor names are emitted verbatim using the OCaml constructor identifier;
+list constructor names are quoted as needed by the atom syntax (for example
+`"[]"` and `"::"`).
 
 ## Examples
 
@@ -121,6 +123,18 @@ the frontend prints:
 (zxcaml-cir 0.4 (module (let value (ctor Error (const-string "oops")))))
 ```
 
+For the list literal `[1; 2]`:
+
+```ocaml
+let value = [1; 2]
+```
+
+the frontend prints:
+
+```text
+(zxcaml-cir 0.4 (module (let value (ctor "::" (const-int 1) (ctor "::" (const-int 2) (ctor "[]"))))))
+```
+
 For wildcard let-bindings:
 
 ```ocaml
@@ -176,6 +190,21 @@ the frontend prints:
 
 ```text
 (zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (match (ctor Some (const-int 7)) (case (var value) (const-int 1)))))))
+```
+
+For list pattern matching:
+
+```ocaml
+let head xs =
+  match xs with
+  | [] -> None
+  | x :: _ -> Some x
+```
+
+the match arms include the built-in list constructors:
+
+```text
+(match (var xs) (case (ctor "[]") (ctor None)) (case (ctor "::" (var x) _) (ctor Some (var x))))
 ```
 
 ## Version compatibility
