@@ -124,7 +124,8 @@ Backend:
 
 P1 实现：
 
-- `ZigBackend` —— 产出 `.zig` 源码，再驱动 `zig build-obj` 产出 BPF `.o`。
+- `ZigBackend` —— 产出 `.zig` 源码，再驱动 `zig build-lib -femit-llvm-bc`
+  与 `sbpf-linker` 产出 Solana BPF `.so`。
 - `Interpreter` —— 直接执行 Core IR（**不**走 Lowered IR）。
   用于 `omlz run`、REPL、以及在测试中作为语义参考。
 
@@ -151,12 +152,14 @@ flowchart TD
     LIR["Lowered IR"]
     BE["ZigBackend (P1)"]
     ZSRC[".zig"]
-    ZTOOL["zig build-obj"]
-    BPF["Solana BPF .o"]
+    ZTOOL["zig build-lib -femit-llvm-bc"]
+    BC[".bc (LLVM bitcode)"]
+    LINK["sbpf-linker --cpu v2（v3 可选）"]
+    BPF["Solana BPF .so"]
 
     SRC --> OCAMLC --> CMT --> XFE --> SEXP --> BRIDGE --> TT --> ANF --> CIR
     CIR --> INTERP
-    CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BPF
+    CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BC --> LINK --> BPF
 ```
 
 ## 5. 各阶段归属

@@ -135,8 +135,8 @@ Backend:
 
 P1 implementations:
 
-- `ZigBackend` — emits `.zig` source, then drives `zig build-obj`
-  to produce the BPF `.o`.
+- `ZigBackend` — emits `.zig` source, then drives `zig build-lib
+  -femit-llvm-bc` and `sbpf-linker` to produce the Solana BPF `.so`.
 - `Interpreter` — executes Core IR directly (does **not** go through
   Lowered IR). Used for `omlz run`, REPL, and as a semantic oracle in
   tests.
@@ -165,12 +165,14 @@ flowchart TD
     LIR["Lowered IR"]
     BE["ZigBackend (P1)"]
     ZSRC[".zig"]
-    ZTOOL["zig build-obj"]
-    BPF["Solana BPF .o"]
+    ZTOOL["zig build-lib -femit-llvm-bc"]
+    BC[".bc (LLVM bitcode)"]
+    LINK["sbpf-linker --cpu v2 (v3 opt-in)"]
+    BPF["Solana BPF .so"]
 
     SRC --> OCAMLC --> CMT --> XFE --> SEXP --> BRIDGE --> TT --> ANF --> CIR
     CIR --> INTERP
-    CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BPF
+    CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BC --> LINK --> BPF
 ```
 
 ## 5. What lives where
