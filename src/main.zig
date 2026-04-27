@@ -5,6 +5,7 @@
 //! - Dispatch `omlz check <file.ml>` through the OCaml frontend subprocess.
 //! - Emit the M0 Core IR contract with `omlz check --emit=core-ir <file.ml>`.
 //! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
+//! - Dispatch `omlz build --target=native --keep-zig <file.ml> -o <out>` through Zig source emission.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
@@ -12,8 +13,10 @@ const Io = std.Io;
 const build_options = @import("build_options");
 const pipeline = @import("driver/pipeline.zig");
 const interp = @import("backend/interp.zig");
+const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
 const core_pretty = @import("core/pretty.zig");
+const arena_lower = @import("lower/arena.zig");
 
 /// Parses top-level CLI flags and dispatches implemented bootstrap commands.
 pub fn main(init: std.process.Init) !void {
@@ -78,6 +81,36 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (args.len >= 3 and std.mem.eql(u8, args[1], "build")) {
+        const build_args = parseBuildArgs(args) catch {
+            try writeStderr(init.io, "error: unsupported build option; run `omlz --help` for usage.\n");
+            std.process.exit(1);
+        };
+
+        if (!std.mem.eql(u8, build_args.target, "native")) {
+            try writeStderr(init.io, "error: only --target=native is wired in F06; BPF build lands in F08.\n");
+            std.process.exit(1);
+        }
+        if (!build_args.keep_zig) {
+            try writeStderr(init.io, "error: native binary build lands in F07; use --keep-zig in F06.\n");
+            std.process.exit(1);
+        }
+
+        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], build_args.input_file) catch |err| {
+            if (shouldPrintGenericFrontendFailure(err)) {
+                try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
+            }
+            std.process.exit(1);
+        };
+        defer result.deinit();
+
+        switch (result) {
+            .success => |parsed| try emitZigSource(init, parsed.module, build_args),
+            .failed => |code| std.process.exit(if (code == 0) 1 else code),
+        }
+        return;
+    }
+
     try writeStderr(init.io, "error: unsupported command or option; run `omlz --help` for usage.\n");
     std.process.exit(1);
 }
@@ -94,7 +127,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz --help
         \\  omlz check <file.ml>
         \\  omlz check --emit=core-ir <file.ml>
-        \\  omlz build <file.ml>   (not yet implemented)
+        \\  omlz build --target=native --keep-zig <file.ml> -o <out>
         \\  omlz run <file.ml>
         \\
     );
@@ -111,6 +144,47 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         return .{ .emit = args[2]["--emit=".len..], .input_file = args[3] };
     }
     return error.UnsupportedCheckArgs;
+}
+
+const BuildArgs = struct {
+    target: []const u8,
+    keep_zig: bool,
+    input_file: []const u8,
+    output_path: []const u8,
+};
+
+fn parseBuildArgs(args: []const []const u8) !BuildArgs {
+    var target: ?[]const u8 = null;
+    var keep_zig = false;
+    var input_file: ?[]const u8 = null;
+    var output_path: ?[]const u8 = null;
+
+    var index: usize = 2;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.startsWith(u8, arg, "--target=")) {
+            target = arg["--target=".len..];
+        } else if (std.mem.eql(u8, arg, "--keep-zig")) {
+            keep_zig = true;
+        } else if (std.mem.eql(u8, arg, "-o")) {
+            index += 1;
+            if (index >= args.len) return error.UnsupportedBuildArgs;
+            output_path = args[index];
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            return error.UnsupportedBuildArgs;
+        } else if (input_file == null) {
+            input_file = arg;
+        } else {
+            return error.UnsupportedBuildArgs;
+        }
+    }
+
+    return .{
+        .target = target orelse return error.UnsupportedBuildArgs,
+        .keep_zig = keep_zig,
+        .input_file = input_file orelse return error.UnsupportedBuildArgs,
+        .output_path = output_path orelse return error.UnsupportedBuildArgs,
+    };
 }
 
 fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module) !void {
@@ -158,6 +232,51 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
     var buffer: [32]u8 = undefined;
     const rendered = try std.fmt.bufPrint(&buffer, "{d}\n", .{value});
     try writeStdout(init.io, rendered);
+}
+
+fn emitZigSource(
+    init: std.process.Init,
+    module: @import("frontend_bridge/ttree.zig").Module,
+    build_args: BuildArgs,
+) !void {
+    _ = build_args.output_path;
+
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
+
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer lowered_arena.deinit();
+
+    var impl: arena_lower.ArenaStrategy = .{ .allocator = lowered_arena.allocator() };
+    const lowered_module = impl.loweringStrategy().lowerModule(core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower with ArenaStrategy: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    const source = zig_codegen.emitModule(init.gpa, lowered_module) catch |err| {
+        try writeStderr(init.io, "error: failed to emit Zig source: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(source);
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(init.io, "out");
+    try cwd.writeFile(init.io, .{
+        .sub_path = "out/program.zig",
+        .data = source,
+        .flags = .{ .truncate = true },
+    });
 }
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
@@ -208,13 +327,37 @@ test "package version comes from build manifest" {
     try std.testing.expectEqualStrings("0.1.0", build_options.version);
 }
 
+test "parse F06 keep-zig build arguments" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "--target=native",
+        "--keep-zig",
+        "examples/m0_zero.ml",
+        "-o",
+        "/tmp/m0",
+    };
+
+    const parsed = try parseBuildArgs(&args);
+    try std.testing.expectEqualStrings("native", parsed.target);
+    try std.testing.expect(parsed.keep_zig);
+    try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
+    try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path);
+}
+
 test {
     _ = @import("backend/api.zig");
     _ = @import("backend/interp.zig");
+    _ = @import("backend/llvm_stub.zig");
+    _ = @import("backend/ocaml_stub.zig");
+    _ = @import("backend/zig_codegen.zig");
     _ = @import("core/anf.zig");
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");
+    _ = @import("lower/arena.zig");
+    _ = @import("lower/lir.zig");
+    _ = @import("lower/strategy.zig");
     _ = pipeline;
     _ = @import("frontend_bridge/sexp_lexer.zig");
     _ = @import("frontend_bridge/sexp_parser.zig");
