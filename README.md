@@ -63,6 +63,31 @@ and locked in ADR-009 / ADR-010.
 
 ---
 
+## Native execution comes for free
+
+Because every ZxCaml program is by construction valid OCaml
+(ADR-001), and because `omlz` already requires a working OCaml
+toolchain on the developer's machine (ADR-010), the **same `.ml`
+file** can be compiled and run two ways:
+
+```
+one .ml file
+  ├── ocaml / dune  →  native x86_64 / arm64 binary   (local testing, fuzzing, REPL)
+  └── omlz          →  Solana BPF .o                  (deployment)
+```
+
+This means **ZxCaml does not need a dedicated x86 backend** to give
+you native execution. Install `ocaml` (which you already have
+installed for `omlz`), or install OxCaml, and run the same file
+with `dune exec`. The two paths compute the same result; this is
+guaranteed by the determinism invariant (ADR-008).
+
+For the longer discussion of how OxCaml relates to this project —
+and why we still don't fork it — see
+[`docs/oxcaml-relationship.md`](./docs/oxcaml-relationship.md).
+
+---
+
 ## Status
 
 **Spec / planning phase.** No compiler code exists yet. This repo
@@ -91,6 +116,7 @@ Read in order:
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |
+| —  | [OxCaml relationship](./docs/oxcaml-relationship.md) | What OxCaml is, four ways to "use" it, which to pick |
 
 ---
 

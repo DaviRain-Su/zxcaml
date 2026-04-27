@@ -59,6 +59,28 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 
 ---
 
+## Native 执行是顺带免费的
+
+因为每个 ZxCaml 程序按构造都是合法 OCaml（ADR-001），
+而且 `omlz` 本来就要求开发者机器上有一套可用的 OCaml 工具链（ADR-010），
+所以 **同一份 `.ml` 文件** 能用两条路径编译并运行：
+
+```
+一份 .ml 文件
+  ├── ocaml / dune  →  native x86_64 / arm64 二进制   （本地测试、fuzzing、REPL）
+  └── omlz          →  Solana BPF .o                  （部署）
+```
+
+这意味着 **ZxCaml 不需要一个专门的 x86 后端** 也能给你原生执行能力。
+装 `ocaml`（你为了 `omlz` 已经装了）或者装 OxCaml，
+然后用 `dune exec` 跑同一份文件。
+两条路径产生相同结果；这是由确定性不变量（ADR-008）保证的。
+
+更长的讨论 —— OxCaml 和本项目是什么关系、为什么还是不 fork ——
+见 [`oxcaml-relationship.md`](./oxcaml-relationship.md)。
+
+---
+
 ## 项目状态
 
 **规划 / 设计阶段。** 还没有编译器代码。
@@ -84,6 +106,7 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 | 09 | [决策（ADR）](./09-decisions.md) | 锁定的决策，附带理由 |
 | 10 | [前端桥接](./10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | —  | [备选方案对比](./alternatives-considered.md) | 为什么不自写、为什么不 fork OxCaml |
+| —  | [OxCaml 关系](./oxcaml-relationship.md) | OxCaml 是什么，"用 OxCaml" 的四种解读，该选哪种 |
 
 > 所有中文文档都是英文版的对照翻译，结构完全一致；
 > 真理来源是英文版。如果两边出现冲突，以英文版为准。

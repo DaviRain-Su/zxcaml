@@ -183,6 +183,19 @@ PX 仅在某个具体目标 **同时满足** 下述四条时激活：
   在 Solana BPF 之外，但相邻。
   门槛：有个具体的 eBPF 程序需要交付。
 
+### 注意：x86 / arm native **不是** PX 候选
+
+如果你的目标是"我想在 x86 / arm 上跑我的 ZxCaml 程序做本地测试或 fuzzing"，
+你**不需要** PX —— 因为每个 ZxCaml 程序按构造都是合法 OCaml 程序（ADR-001），
+而开发者机器为了 `omlz` 的前端桥接（ADR-010）已经装了 OCaml 工具链。
+直接用 `ocaml`（或 OxCaml）编同一份 `.ml` 然后运行即可。
+详见 README 里 "Native 执行是顺带免费的" 一节，以及
+`docs/oxcaml-relationship.md` 的完整讨论。
+
+PX 留给的目标是那些**不**适用上面这个技巧的：
+也就是说，今天上游 OCaml 和 `omlz` 都不会产出可运行二进制，
+而又有人有具体理由让 `omlz` 去产一个。
+
 ### PX **不是** 什么
 
 - 不是"支持每一个 Zig 目标"。工具链广度不等于 ZxCaml 广度。

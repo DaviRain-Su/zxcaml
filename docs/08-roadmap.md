@@ -204,6 +204,22 @@ multi-target support is a leak, not a feature.
   Solana's BPF flavour but adjacent. Gate: a specific eBPF program
   someone needs to ship.
 
+### Note: x86 / arm native is **not** a PX candidate
+
+If your goal is "I want to run my ZxCaml program on x86 / arm for
+local testing or fuzzing", you do **not** need PX, because every
+ZxCaml program is by construction a valid OCaml program (ADR-001)
+and the developer's machine already has an OCaml toolchain
+installed for `omlz`'s frontend bridge (ADR-010). Just compile the
+same `.ml` with `ocaml` (or OxCaml) and run it. See the README
+section "Native execution comes for free" and
+`docs/oxcaml-relationship.md` for the full discussion.
+
+PX is reserved for targets where this trick does **not** apply —
+i.e., targets where neither upstream OCaml nor `omlz` produces a
+runnable binary today, and where someone has a concrete reason to
+make `omlz` produce one.
+
 ### What PX is **not**
 
 - Not "support every Zig target". The toolchain breadth does not
