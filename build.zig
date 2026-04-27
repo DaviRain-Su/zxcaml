@@ -94,8 +94,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_runtime_prelude_tests = b.addRunArtifact(runtime_prelude_tests);
 
+    // Determinism property test (F16 / G09): runs every .ml in examples/
+    // through both interpreter and Zig native, byte-diffs the results.
+    const determinism_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/property/determinism.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Pass the absolute path to omlz so the test can invoke it as a subprocess
+    // regardless of the test runner's working directory.
+    const det_options = b.addOptions();
+    // b.path().getPath() resolves to an absolute path joined with the build root.
+    const omlz_abs = b.path("zig-out/bin/omlz").getPath(b);
+    det_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    determinism_test_module.addOptions("det_options", det_options);
+    const determinism_tests = b.addTest(.{
+        .root_module = determinism_test_module,
+    });
+    const run_determinism_tests = b.addRunArtifact(determinism_tests);
+    // The determinism harness invokes `omlz` as a subprocess, so omlz
+    // (and zxc-frontend) must be built before the test runs.
+    run_determinism_tests.step.dependOn(b.getInstallStep());
+    // Set working directory to the project root so relative paths resolve.
+    run_determinism_tests.setCwd(b.path(""));
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);
+    test_step.dependOn(&run_determinism_tests.step);
 }
