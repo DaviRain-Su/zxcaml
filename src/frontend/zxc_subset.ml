@@ -32,6 +32,7 @@ type expr =
   | Lambda of lambda
   | Let of let_expr
   | Ctor of ctor
+  | Match of match_expr
 
 and lambda = {
   params : param list;
@@ -47,6 +48,26 @@ and let_expr = {
 and ctor = {
   name : string;
   args : expr list;
+}
+
+and match_expr = {
+  scrutinee : expr;
+  arms : match_arm list;
+}
+
+and match_arm = {
+  pattern : match_pattern;
+  body : expr;
+}
+
+and match_pattern =
+  | Pat_any
+  | Pat_var of string
+  | Pat_ctor of ctor_pattern
+
+and ctor_pattern = {
+  name : string;
+  args : match_pattern list;
 }
 
 type decl = {
@@ -86,7 +107,8 @@ let unsupported ~node_kind ~loc =
               top-level `let` declarations, integer constants, identifiers, \
               string constants, one-argument functions, non-recursive nested \
               `let` expressions, or the whitelisted constructors \
-              None/Some/Ok/Error"
+              None/Some/Ok/Error, including basic pattern matches over those \
+              values"
              node_kind;
        })
 
@@ -166,6 +188,7 @@ let is_whitelisted_constructor = function
 
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
+  | Tpat_any -> "_"
   | Tpat_var (ident, _, _) -> ident_name ident
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
 
@@ -180,7 +203,49 @@ let parse_param (param : function_param) =
   | _, Tparam_optional_default (pat, _) ->
       unsupported ~node_kind:"optional-parameter" ~loc:pat.pat_loc
 
-let rec parse_expr (expr : expression) =
+let rec parse_match_scrutinee (expr : expression) =
+  match expr.exp_desc with
+  | Texp_constant (Const_int n) -> Const_int n
+  | Texp_ident (_, lid, _) -> Var (longident_name lid)
+  | Texp_construct (_lid, constructor, args) ->
+      let name = constructor.Types.cstr_name in
+      if is_whitelisted_constructor name then
+        Ctor { name; args = List.map parse_match_scrutinee args }
+      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc
+  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
+
+let parse_simple_pattern (pat : pattern) =
+  match pat.pat_desc with
+  | Tpat_any -> Pat_any
+  | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+
+let rec parse_match_pattern (pat : pattern) =
+  match pat.pat_desc with
+  | Tpat_any -> Pat_any
+  | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
+  | Tpat_construct (_lid, constructor, args, _) ->
+      let name = constructor.Types.cstr_name in
+      if is_whitelisted_constructor name then
+        Pat_ctor { name; args = List.map parse_simple_pattern args }
+      else unsupported ~node_kind:("Tpat_construct(" ^ name ^ ")") ~loc:pat.pat_loc
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+
+let parse_computation_pattern (pat : computation general_pattern) =
+  match pat.pat_desc with
+  | Tpat_value value_pat -> parse_match_pattern (value_pat :> pattern)
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+
+let rec parse_match_case (case : computation case) =
+  (match case.c_guard with
+  | None -> ()
+  | Some guard ->
+      unsupported ~node_kind:"Texp_match(guard)" ~loc:guard.exp_loc);
+  let pattern = parse_computation_pattern case.c_lhs in
+  let body = parse_expr case.c_rhs in
+  { pattern; body }
+
+and parse_expr (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
   | Texp_constant (Const_string (value, _, _)) -> Const_string value
@@ -210,6 +275,10 @@ let rec parse_expr (expr : expression) =
       if is_whitelisted_constructor name then
         Ctor { name; args = List.map parse_expr args }
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc
+  | Texp_match (scrutinee, cases, _) ->
+      let scrutinee = parse_match_scrutinee scrutinee in
+      let arms = List.map parse_match_case cases in
+      Match { scrutinee; arms }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
 
 let parse_value_binding (binding : value_binding) =
