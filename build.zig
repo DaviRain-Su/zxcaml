@@ -2,6 +2,7 @@
 //!
 //! RESPONSIBILITIES:
 //! - Build and install the `omlz` executable from `src/main.zig`.
+//! - Build and install the OCaml `zxc-frontend` glue via ocamlfind.
 //! - Keep the default target on the host until BPF wiring lands later.
 //! - Expose a `zig build test` step for future unit tests.
 
@@ -29,6 +30,44 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(exe);
+
+    const frontend_output = b.getInstallPath(.bin, "zxc-frontend");
+    const install_bin_dir = std.fs.path.dirname(frontend_output).?;
+    const make_install_bin = b.addSystemCommand(&.{ "mkdir", "-p", install_bin_dir });
+    const frontend = b.addSystemCommand(&.{
+        "opam",
+        "exec",
+        "--switch=zxcaml-p1",
+        "--",
+        "ocamlfind",
+        "ocamlopt",
+        "-package",
+        "compiler-libs.common",
+        "-linkpkg",
+        "-I",
+        "src/frontend",
+        "src/frontend/zxc_subset.ml",
+        "src/frontend/zxc_sexp.ml",
+        "src/frontend/zxc_frontend.ml",
+        "-o",
+        frontend_output,
+    });
+    frontend.step.dependOn(&make_install_bin.step);
+    const cleanup_frontend = b.addSystemCommand(&.{
+        "rm",
+        "-f",
+        "src/frontend/zxc_subset.cmi",
+        "src/frontend/zxc_subset.cmx",
+        "src/frontend/zxc_subset.o",
+        "src/frontend/zxc_sexp.cmi",
+        "src/frontend/zxc_sexp.cmx",
+        "src/frontend/zxc_sexp.o",
+        "src/frontend/zxc_frontend.cmi",
+        "src/frontend/zxc_frontend.cmx",
+        "src/frontend/zxc_frontend.o",
+    });
+    cleanup_frontend.step.dependOn(&frontend.step);
+    b.getInstallStep().dependOn(&cleanup_frontend.step);
 
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
