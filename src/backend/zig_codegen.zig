@@ -47,7 +47,8 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
     try append(out, allocator, "    _ = arena;\n");
     try append(out, allocator, "    _ = input;\n");
     try append(out, allocator, "    return ");
-    try emitExpr(out, allocator, func.body);
+    var ctx: EmitContext = .{};
+    try emitExpr(out, allocator, func.body, 1, &ctx);
     try append(out, allocator, ";\n");
     try append(out, allocator, "}\n");
 }
@@ -70,7 +71,17 @@ fn emittedFunctionName(allocator: std.mem.Allocator, source_name: []const u8) Em
     return out.toOwnedSlice(allocator);
 }
 
-fn emitExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: lir.LExpr) EmitError!void {
+const EmitContext = struct {
+    next_block_id: usize = 0,
+};
+
+fn emitExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
     switch (expr) {
         .Constant => |constant| switch (constant) {
             .Int => |value| {
@@ -78,6 +89,81 @@ fn emitExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: lir.LEx
                 try appendPrint(out, allocator, "{d}", .{unsigned});
             },
         },
+        .Var => |var_ref| try emitIdentifier(out, allocator, var_ref.name),
+        .Let => |let_expr| try emitLetExpr(out, allocator, let_expr, indent_level, ctx),
+    }
+}
+
+fn emitLetExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    let_expr: lir.LLet,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "const ");
+    try emitIdentifier(out, allocator, let_expr.name);
+    try append(out, allocator, " = ");
+    try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    if (!exprUsesName(let_expr.body.*, let_expr.name)) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "_ = ");
+        try emitIdentifier(out, allocator, let_expr.name);
+        try append(out, allocator, ";\n");
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+    try emitExpr(out, allocator, let_expr.body.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
+    return switch (expr) {
+        .Constant => false,
+        .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+        .Let => |let_expr| exprUsesName(let_expr.value.*, name) or
+            (!std.mem.eql(u8, let_expr.name, name) and exprUsesName(let_expr.body.*, name)),
+    };
+}
+
+fn emitIdentifier(out: *std.ArrayList(u8), allocator: std.mem.Allocator, source_name: []const u8) EmitError!void {
+    if (source_name.len == 0) {
+        try append(out, allocator, "omlz_empty");
+        return;
+    }
+
+    if (std.ascii.isAlphabetic(source_name[0]) or source_name[0] == '_') {
+        for (source_name) |ch| {
+            if (std.ascii.isAlphanumeric(ch) or ch == '_') {
+                try out.append(allocator, ch);
+            } else {
+                try out.append(allocator, '_');
+            }
+        }
+    } else {
+        try append(out, allocator, "omlz_");
+        for (source_name) |ch| {
+            if (std.ascii.isAlphanumeric(ch) or ch == '_') {
+                try out.append(allocator, ch);
+            } else {
+                try out.append(allocator, '_');
+            }
+        }
+    }
+}
+
+fn emitIndent(out: *std.ArrayList(u8), allocator: std.mem.Allocator, indent_level: usize) EmitError!void {
+    var index: usize = 0;
+    while (index < indent_level) : (index += 1) {
+        try append(out, allocator, "    ");
     }
 }
 
@@ -153,4 +239,22 @@ test "ZigBackend documents and emits the BPF const-array stack-copy shim" {
 
     try std.testing.expect(std.mem.indexOf(u8, shim.items, "var omlz_const_array_stack_copy = omlz_module_const_array;") != null);
     try std.testing.expect(std.mem.indexOf(u8, shim.items, "const omlz_const_array = &omlz_const_array_stack_copy;") != null);
+}
+
+test "ZigBackend emits let expressions as const declarations inside blocks" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "x",
+            .value = &.{ .Constant = .{ .Int = 1 } },
+            .body = &.{ .Var = .{ .name = "x" } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "return blk0: {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
 }

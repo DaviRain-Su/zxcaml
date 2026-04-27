@@ -36,6 +36,7 @@ pub const Layout = struct {
 /// M0 value classes that have a deterministic default layout.
 pub const DefaultKind = enum {
     IntConstant,
+    UnitValue,
     TopLevelLambda,
     Aggregate,
     StringLiteral,
@@ -45,6 +46,7 @@ pub const DefaultKind = enum {
 pub fn defaultFor(kind: DefaultKind) Layout {
     return switch (kind) {
         .IntConstant => .{ .region = .Static, .repr = .Flat },
+        .UnitValue => .{ .region = .Static, .repr = .Flat },
         .TopLevelLambda => .{ .region = .Arena, .repr = .Flat },
         .Aggregate => .{ .region = .Arena, .repr = .Boxed },
         .StringLiteral => .{ .region = .Static, .repr = .Boxed },
@@ -56,6 +58,11 @@ pub fn intConstant() Layout {
     return defaultFor(.IntConstant);
 }
 
+/// Returns the M1 layout for unit values and unit-typed lambda parameters.
+pub fn unitValue() Layout {
+    return defaultFor(.UnitValue);
+}
+
 /// Returns the M0 layout for top-level lambdas.
 pub fn topLevelLambda() Layout {
     return defaultFor(.TopLevelLambda);
@@ -63,6 +70,7 @@ pub fn topLevelLambda() Layout {
 
 test "M0 default layout derivation" {
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Flat }, intConstant());
+    try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Flat }, unitValue());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Flat }, topLevelLambda());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Boxed }, defaultFor(.Aggregate));
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Boxed }, defaultFor(.StringLiteral));

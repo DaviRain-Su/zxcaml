@@ -29,12 +29,26 @@ pub const SourceSpan = union(enum) {
     unavailable,
 };
 
-/// M0 lowered expression.
+/// Lowered expression.
 pub const LExpr = union(enum) {
     Constant: LConstant,
+    Let: LLet,
+    Var: LVar,
 };
 
 /// M0 lowered constants.
 pub const LConstant = union(enum) {
     Int: i64,
+};
+
+/// Lowered lexical let expression.
+pub const LLet = struct {
+    name: []const u8,
+    value: *const LExpr,
+    body: *const LExpr,
+};
+
+/// Lowered variable reference.
+pub const LVar = struct {
+    name: []const u8,
 };

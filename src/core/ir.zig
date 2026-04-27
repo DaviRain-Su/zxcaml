@@ -4,7 +4,7 @@
 //! changes to its shape must update all consumers in the same commit.
 //!
 //! RESPONSIBILITIES:
-//! - Represent the M0 ANF, typed, Layout-tagged Core IR data model.
+//! - Represent the ANF, typed, Layout-tagged Core IR data model.
 //! - Keep allocation-bearing nodes explicit about their `Layout`.
 //! - Serve consumers: `anf`, `lower`, `interp`, `zig_codegen`, and `pretty`.
 
@@ -20,16 +20,18 @@ pub const Decl = union(enum) {
     Let: Let,
 };
 
-/// M0 top-level let declaration, restricted to a lambda value.
+/// Top-level let declaration.
 pub const Let = struct {
     name: []const u8,
-    lambda: Lambda,
+    value: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
 };
 
 /// Core IR lambda in ANF form.
 pub const Lambda = struct {
     params: []const Param,
-    body: Expr,
+    body: *const Expr,
     ty: Ty,
     layout: layout.Layout,
 };
@@ -40,9 +42,21 @@ pub const Param = struct {
     ty: Ty,
 };
 
-/// M0 Core IR expression.
+/// Core IR expression.
 pub const Expr = union(enum) {
+    Lambda: Lambda,
     Constant: Constant,
+    Let: LetExpr,
+    Var: Var,
+};
+
+/// Lexically-scoped let expression in ANF form.
+pub const LetExpr = struct {
+    name: []const u8,
+    value: *const Expr,
+    body: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
 };
 
 /// Integer constant expression with type and layout annotations.
@@ -52,7 +66,14 @@ pub const Constant = struct {
     layout: layout.Layout,
 };
 
-/// M0 type language needed to describe `let entrypoint _input = 0`.
+/// Variable reference with type and layout inherited from its binding.
+pub const Var = struct {
+    name: []const u8,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// M1 type language needed to describe current examples.
 pub const Ty = union(enum) {
     Int,
     Unit,

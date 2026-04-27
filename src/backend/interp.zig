@@ -32,12 +32,46 @@ pub const EvalError = error{
     NegativeIntegerResultUnsupported,
     UnsupportedDecl,
     UnsupportedExpr,
+    UnsupportedTopLevelValue,
+    UnboundVariable,
+    OutOfMemory,
+};
+
+const Value = union(enum) {
+    Int: i64,
 };
 
 /// Evaluates a Core IR module by invoking its top-level `entrypoint` lambda.
 pub fn evalModule(module: ir.Module) EvalError!u64 {
-    const entrypoint = findEntrypoint(module) orelse return error.EntrypointNotFound;
-    return evalExpr(entrypoint.lambda.body);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var env = std.StringHashMap(Value).init(arena.allocator());
+    defer env.deinit();
+
+    var entrypoint: ?ir.Let = null;
+    for (module.decls) |decl| {
+        switch (decl) {
+            .Let => |let_decl| {
+                if (std.mem.eql(u8, let_decl.name, "entrypoint")) {
+                    entrypoint = let_decl;
+                    continue;
+                }
+                switch (let_decl.value.*) {
+                    .Lambda => continue,
+                    else => {},
+                }
+                try env.put(let_decl.name, try evalTopLevelValue(let_decl.value.*, &env));
+            },
+        }
+    }
+
+    const entry = entrypoint orelse return error.EntrypointNotFound;
+    const lambda = switch (entry.value.*) {
+        .Lambda => |value| value,
+        else => return error.UnsupportedTopLevelValue,
+    };
+    return valueToU64(try evalExpr(lambda.body.*, &env));
 }
 
 /// Returns the user-facing diagnostic for an interpreter error.
@@ -47,6 +81,8 @@ pub fn errorMessage(err: anyerror) []const u8 {
         error.NegativeIntegerResultUnsupported => "interpreter does not yet implement negative int results",
         error.UnsupportedDecl => "interpreter does not yet implement declaration node",
         error.UnsupportedExpr => "interpreter does not yet implement expression node",
+        error.UnsupportedTopLevelValue => "interpreter entrypoint must be a function",
+        error.UnboundVariable => "interpreter found an unbound variable",
         error.NotImplemented => "interpreter does not yet implement source emission",
         else => "interpreter failed",
     };
@@ -56,40 +92,64 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
     return evalModule(module);
 }
 
-fn findEntrypoint(module: ir.Module) ?ir.Let {
-    for (module.decls) |decl| {
-        switch (decl) {
-            .Let => |let_decl| {
-                if (std.mem.eql(u8, let_decl.name, "entrypoint")) return let_decl;
-            },
-        }
-    }
-    return null;
-}
-
-fn evalExpr(expr: ir.Expr) EvalError!u64 {
+fn evalTopLevelValue(expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant => |constant| evalConstant(constant),
+        .Constant, .Let, .Var => evalExpr(expr, env),
+        .Lambda => error.UnsupportedTopLevelValue,
     };
 }
 
-fn evalConstant(constant: ir.Constant) EvalError!u64 {
-    return std.math.cast(u64, constant.value) orelse error.NegativeIntegerResultUnsupported;
+fn evalExpr(expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
+    return switch (expr) {
+        .Constant => |constant| .{ .Int = constant.value },
+        .Let => |let_expr| evalLet(let_expr, env),
+        .Var => |var_ref| env.get(var_ref.name) orelse error.UnboundVariable,
+        .Lambda => error.UnsupportedExpr,
+    };
 }
 
-fn testLet(name: []const u8, value: i64) ir.Decl {
+fn evalLet(let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value {
+    const value = try evalExpr(let_expr.value.*, env);
+    const previous = env.get(let_expr.name);
+    try env.put(let_expr.name, value);
+    defer {
+        if (previous) |binding| {
+            env.getPtr(let_expr.name).?.* = binding;
+        } else {
+            _ = env.remove(let_expr.name);
+        }
+    }
+    return evalExpr(let_expr.body.*, env);
+}
+
+fn valueToU64(value: Value) EvalError!u64 {
+    return switch (value) {
+        .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
+    };
+}
+
+fn makeExpr(comptime expr: ir.Expr) *const ir.Expr {
+    const S = struct {
+        const value = expr;
+    };
+    return &S.value;
+}
+
+fn testLet(comptime name: []const u8, comptime value: i64) ir.Decl {
     return .{ .Let = .{
         .name = name,
-        .lambda = .{
+        .value = makeExpr(.{ .Lambda = .{
             .params = &.{},
-            .body = .{ .Constant = .{
+            .body = makeExpr(.{ .Constant = .{
                 .value = value,
                 .ty = .Int,
                 .layout = layout.intConstant(),
-            } },
+            } }),
             .ty = .Unit,
             .layout = layout.topLevelLambda(),
-        },
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
     } };
 }
 
@@ -99,6 +159,47 @@ test "interpreter evaluates M0 integer constants directly from Core IR" {
 
     try std.testing.expectEqual(@as(u64, 0), try evalModule(.{ .decls = &zero_decls }));
     try std.testing.expectEqual(@as(u64, 42), try evalModule(.{ .decls = &answer_decls }));
+}
+
+test "interpreter evaluates top-level and nested let variable bindings" {
+    const x_decl: ir.Decl = .{ .Let = .{
+        .name = "x",
+        .value = makeExpr(.{ .Constant = .{
+            .value = 1,
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } }),
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } };
+    const entrypoint_decl: ir.Decl = .{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .Let = .{
+                .name = "y",
+                .value = makeExpr(.{ .Constant = .{
+                    .value = 7,
+                    .ty = .Int,
+                    .layout = layout.intConstant(),
+                } }),
+                .body = makeExpr(.{ .Var = .{
+                    .name = "x",
+                    .ty = .Int,
+                    .layout = layout.intConstant(),
+                } }),
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } };
+    const decls = [_]ir.Decl{ x_decl, entrypoint_decl };
+
+    try std.testing.expectEqual(@as(u64, 1), try evalModule(.{ .decls = &decls }));
 }
 
 test "interpreter backend trait exposes direct eval and rejects source emission" {

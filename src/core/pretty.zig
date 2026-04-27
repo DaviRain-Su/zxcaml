@@ -30,13 +30,13 @@ fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.De
             try append(out, allocator, "(let ");
             try append(out, allocator, let_decl.name);
             try append(out, allocator, " ");
-            try formatLambda(out, allocator, let_decl.lambda);
+            try formatExpr(out, allocator, let_decl.value.*);
             try append(out, allocator, ")");
         },
     }
 }
 
-fn formatLambda(out: *std.ArrayList(u8), allocator: std.mem.Allocator, lambda: ir.Lambda) !void {
+fn formatLambda(out: *std.ArrayList(u8), allocator: std.mem.Allocator, lambda: ir.Lambda) anyerror!void {
     try append(out, allocator, "(lambda (");
     for (lambda.params, 0..) |param, index| {
         if (index != 0) try append(out, allocator, " ");
@@ -47,17 +47,40 @@ fn formatLambda(out: *std.ArrayList(u8), allocator: std.mem.Allocator, lambda: i
     try append(out, allocator, " :layout ");
     try formatLayout(out, allocator, lambda.layout);
     try append(out, allocator, ") ");
-    try formatExpr(out, allocator, lambda.body);
+    try formatExpr(out, allocator, lambda.body.*);
     try append(out, allocator, ")");
 }
 
-fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Expr) !void {
+fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Expr) anyerror!void {
     switch (expr) {
+        .Lambda => |lambda| try formatLambda(out, allocator, lambda),
         .Constant => |constant| {
             try appendPrint(out, allocator, "(const {d} :ty ", .{constant.value});
             try formatTy(out, allocator, constant.ty);
             try append(out, allocator, " :layout ");
             try formatLayout(out, allocator, constant.layout);
+            try append(out, allocator, ")");
+        },
+        .Let => |let_expr| {
+            try append(out, allocator, "(let ");
+            try append(out, allocator, let_expr.name);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, let_expr.value.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, let_expr.body.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, let_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, let_expr.layout);
+            try append(out, allocator, ")");
+        },
+        .Var => |var_ref| {
+            try append(out, allocator, "(var ");
+            try append(out, allocator, var_ref.name);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, var_ref.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, var_ref.layout);
             try append(out, allocator, ")");
         },
     }

@@ -118,7 +118,7 @@ test "parser handles a nested module sexp" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const root = try parse(&arena, "(zxcaml-cir 0.1 (module))");
+    const root = try parse(&arena, "(zxcaml-cir 0.2 (module))");
     const items = switch (root.*) {
         .list => |list| list,
         else => return error.TestUnexpectedResult,
