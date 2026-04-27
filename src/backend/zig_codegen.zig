@@ -49,10 +49,10 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
         try append(out, allocator, "    _ = arena;\n");
     }
     try append(out, allocator, "    _ = input;\n");
-    try append(out, allocator, "    return ");
+    try append(out, allocator, "    return @intCast(");
     var ctx: EmitContext = .{};
     try emitExpr(out, allocator, func.body, 1, &ctx);
-    try append(out, allocator, ";\n");
+    try append(out, allocator, ");\n");
     try append(out, allocator, "}\n");
 }
 
@@ -96,6 +96,173 @@ fn emitExpr(
         .Var => |var_ref| try emitIdentifier(out, allocator, var_ref.name),
         .Let => |let_expr| try emitLetExpr(out, allocator, let_expr, indent_level, ctx),
         .Ctor => |ctor_expr| try emitCtorExpr(out, allocator, ctor_expr, indent_level, ctx),
+        .Match => |match_expr| try emitMatchExpr(out, allocator, match_expr, indent_level, ctx),
+    }
+}
+
+fn emitMatchExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    match_expr: lir.LMatch,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    const scrutinee_name = try std.fmt.allocPrint(allocator, "omlz_match_scrutinee_{d}", .{block_id});
+    defer allocator.free(scrutinee_name);
+
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const {s} = ", .{scrutinee_name});
+    try emitExpr(out, allocator, match_expr.scrutinee.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+
+    if (!matchHasCtorArm(match_expr)) {
+        try emitNonCtorMatch(out, allocator, match_expr, scrutinee_name, block_id, indent_level, ctx);
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return;
+    }
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "switch ({s}) {{\n", .{scrutinee_name});
+
+    var emitted = std.ArrayList([]const u8).empty;
+    defer emitted.deinit(allocator);
+    var emitted_catch_all = false;
+    for (match_expr.arms) |arm| {
+        if (emitted_catch_all) break;
+        switch (arm.pattern) {
+            .Ctor => |ctor_pattern| {
+                const variant = try ctorVariantName(ctor_pattern.name);
+                if (containsString(emitted.items, variant)) continue;
+                try emitted.append(allocator, variant);
+                try emitCtorMatchArm(out, allocator, ctor_pattern, arm.body.*, block_id, indent_level + 2, ctx);
+            },
+            .Wildcard, .Var => {
+                try emitCatchAllMatchArm(out, allocator, arm.pattern, arm.body.*, scrutinee_name, block_id, indent_level + 2, ctx);
+                emitted_catch_all = true;
+            },
+        }
+    }
+
+    if (!emitted_catch_all and !allKnownVariantsCovered(emitted.items)) {
+        try emitIndent(out, allocator, indent_level + 2);
+        try append(out, allocator, "else => unreachable,\n");
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "}\n");
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitNonCtorMatch(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    match_expr: lir.LMatch,
+    scrutinee_name: []const u8,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (match_expr.arms.len == 0) return error.UnsupportedExpr;
+    const arm = match_expr.arms[0];
+    var scrutinee_used = false;
+    switch (arm.pattern) {
+        .Wildcard => {},
+        .Var => |name| if (!std.mem.eql(u8, name, "_") and exprUsesName(arm.body.*, name)) {
+            try emitIndent(out, allocator, indent_level + 1);
+            try append(out, allocator, "const ");
+            try emitIdentifier(out, allocator, name);
+            try appendPrint(out, allocator, " = {s};\n", .{scrutinee_name});
+            scrutinee_used = true;
+        },
+        .Ctor => unreachable,
+    }
+    if (!scrutinee_used) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "_ = {s};\n", .{scrutinee_name});
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+    try emitExpr(out, allocator, arm.body.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+}
+
+fn emitCtorMatchArm(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ctor_pattern: lir.LCtorPattern,
+    body: lir.LExpr,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const variant = try ctorVariantName(ctor_pattern.name);
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, ".{s} => ", .{variant});
+    if (ctor_pattern.args.len == 1) {
+        const arg = ctor_pattern.args[0];
+        const capture_name: ?[]const u8 = switch (arg) {
+            .Wildcard => null,
+            .Var => |name| if (exprUsesName(body, name)) name else null,
+            .Ctor => return error.UnsupportedExpr,
+        };
+        if (capture_name) |name| {
+            try append(out, allocator, "|");
+            try emitIdentifier(out, allocator, name);
+            try append(out, allocator, "| ");
+        } else {
+            try append(out, allocator, "|_| ");
+        }
+    } else if (ctor_pattern.args.len > 1) {
+        return error.UnsupportedExpr;
+    }
+    try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+    try emitExpr(out, allocator, body, indent_level, ctx);
+    try append(out, allocator, ",\n");
+}
+
+fn emitCatchAllMatchArm(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    pattern: lir.LPattern,
+    body: lir.LExpr,
+    scrutinee_name: []const u8,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "else => ");
+    const should_bind = switch (pattern) {
+        .Var => |name| !std.mem.eql(u8, name, "_") and exprUsesName(body, name),
+        .Wildcard => false,
+        .Ctor => return error.UnsupportedExpr,
+    };
+    if (should_bind) {
+        const bind_block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        const name = switch (pattern) {
+            .Var => |value| value,
+            else => unreachable,
+        };
+        try appendPrint(out, allocator, "break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "const ");
+        try emitIdentifier(out, allocator, name);
+        try appendPrint(out, allocator, " = {s};\n", .{scrutinee_name});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
+        try emitExpr(out, allocator, body, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "},\n");
+    } else {
+        try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+        try emitExpr(out, allocator, body, indent_level, ctx);
+        try append(out, allocator, ",\n");
     }
 }
 
@@ -195,6 +362,13 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
             }
             return false;
         },
+        .Match => |match_expr| {
+            if (exprUsesName(match_expr.scrutinee.*, name)) return true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsName(arm.pattern, name) and exprUsesName(arm.body.*, name)) return true;
+            }
+            return false;
+        },
     };
 }
 
@@ -202,6 +376,13 @@ fn exprNeedsArena(expr: lir.LExpr) bool {
     return switch (expr) {
         .Constant, .Var => false,
         .Let => |let_expr| exprNeedsArena(let_expr.value.*) or exprNeedsArena(let_expr.body.*),
+        .Match => |match_expr| blk: {
+            if (exprNeedsArena(match_expr.scrutinee.*)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (exprNeedsArena(arm.body.*)) break :blk true;
+            }
+            break :blk false;
+        },
         .Ctor => |ctor_expr| ctor_expr.layout.region == .Arena or blk: {
             for (ctor_expr.args) |arg| {
                 if (exprNeedsArena(arg.*)) break :blk true;
@@ -209,6 +390,41 @@ fn exprNeedsArena(expr: lir.LExpr) bool {
             break :blk false;
         },
     };
+}
+
+fn patternBindsName(pattern: lir.LPattern, name: []const u8) bool {
+    return switch (pattern) {
+        .Wildcard => false,
+        .Var => |var_name| std.mem.eql(u8, var_name, name),
+        .Ctor => |ctor_pattern| {
+            for (ctor_pattern.args) |arg| {
+                if (patternBindsName(arg, name)) return true;
+            }
+            return false;
+        },
+    };
+}
+
+fn matchHasCtorArm(match_expr: lir.LMatch) bool {
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => return true,
+            .Wildcard, .Var => {},
+        }
+    }
+    return false;
+}
+
+fn containsString(haystack: []const []const u8, needle: []const u8) bool {
+    for (haystack) |value| {
+        if (std.mem.eql(u8, value, needle)) return true;
+    }
+    return false;
+}
+
+fn allKnownVariantsCovered(variants: []const []const u8) bool {
+    return (containsString(variants, "some") and containsString(variants, "none")) or
+        (containsString(variants, "ok") and containsString(variants, "err"));
 }
 
 fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
@@ -328,7 +544,7 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
         source,
         "omlz_user_entrypoint(arena: *Arena, input: [*]const u8) callconv(.c) u64",
     ) != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "    return 0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(0);") != null);
 }
 
 test "ZigBackend documents and emits the BPF const-array stack-copy shim" {
@@ -364,7 +580,7 @@ test "ZigBackend emits let expressions as const declarations inside blocks" {
     const source = try emitModule(std.testing.allocator, module);
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "return blk0: {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(blk0: {") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "const x = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
 }
@@ -391,4 +607,39 @@ test "ZigBackend emits option constructors through prelude tagged unions" {
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Option(i64)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".some = 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "arena.alloc(prelude.Option(i64), 1) catch unreachable") != null);
+}
+
+test "ZigBackend emits switch-on-discriminant for constructor matches" {
+    const option_ty = lir.LTy{ .Adt = .{ .name = "option", .params = &.{.Int} } };
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Match = .{
+            .scrutinee = &.{ .Ctor = .{
+                .name = "Some",
+                .args = &.{&.{ .Constant = .{ .Int = 1 } }},
+                .ty = option_ty,
+                .layout = @import("../core/layout.zig").ctor(1),
+            } },
+            .arms = &.{
+                .{
+                    .pattern = .{ .Ctor = .{
+                        .name = "Some",
+                        .args = &.{.{ .Var = "x" }},
+                    } },
+                    .body = &.{ .Var = .{ .name = "x" } },
+                },
+                .{
+                    .pattern = .{ .Ctor = .{ .name = "None", .args = &.{} } },
+                    .body = &.{ .Constant = .{ .Int = 0 } },
+                },
+            },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".some => |x| break") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".none => break") != null);
 }

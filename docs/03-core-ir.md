@@ -154,6 +154,11 @@ Multi-argument constructors and primops are flattened — arguments are
 emitted as a sequence of `let`-binders, then the operation consumes
 all of them as atoms.
 
+Pattern-match arms are semantically tested in source order,
+top-to-bottom. The first arm whose pattern matches the scrutinee wins;
+later arms are not evaluated. This order is part of the determinism
+contract and must be preserved by both the interpreter and Zig codegen.
+
 ## 4. Layout assignment (P1 rules)
 
 The ANF lowering pass assigns a `Layout` to every `RLam`, `RCtor`,

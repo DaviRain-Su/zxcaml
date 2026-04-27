@@ -35,6 +35,7 @@ pub const LExpr = union(enum) {
     Let: LLet,
     Var: LVar,
     Ctor: LCtor,
+    Match: LMatch,
 };
 
 /// M0 lowered constants.
@@ -61,6 +62,31 @@ pub const LCtor = struct {
     args: []const *const LExpr,
     ty: LTy,
     layout: @import("../core/layout.zig").Layout,
+};
+
+/// Lowered pattern match expression. Arms keep source order; first match wins.
+pub const LMatch = struct {
+    scrutinee: *const LExpr,
+    arms: []const LArm,
+};
+
+/// Lowered match arm.
+pub const LArm = struct {
+    pattern: LPattern,
+    body: *const LExpr,
+};
+
+/// Lowered F11 basic pattern subset.
+pub const LPattern = union(enum) {
+    Wildcard,
+    Var: []const u8,
+    Ctor: LCtorPattern,
+};
+
+/// Lowered single-level constructor pattern.
+pub const LCtorPattern = struct {
+    name: []const u8,
+    args: []const LPattern,
 };
 
 /// Lowered type information needed by source emission.

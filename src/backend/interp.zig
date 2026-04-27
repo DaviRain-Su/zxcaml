@@ -34,6 +34,7 @@ pub const EvalError = error{
     UnsupportedExpr,
     UnsupportedTopLevelValue,
     UnboundVariable,
+    MatchFailure,
     OutOfMemory,
 };
 
@@ -90,6 +91,7 @@ pub fn errorMessage(err: anyerror) []const u8 {
         error.UnsupportedExpr => "interpreter does not yet implement expression node",
         error.UnsupportedTopLevelValue => "interpreter entrypoint must be a function",
         error.UnboundVariable => "interpreter found an unbound variable",
+        error.MatchFailure => "interpreter pattern match was non-exhaustive",
         error.NotImplemented => "interpreter does not yet implement source emission",
         else => "interpreter failed",
     };
@@ -101,7 +103,7 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .Var, .Ctor => evalExpr(allocator, expr, env),
+        .Constant, .Let, .Var, .Ctor, .Match => evalExpr(allocator, expr, env),
         .Lambda => error.UnsupportedTopLevelValue,
     };
 }
@@ -115,8 +117,24 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         .Let => |let_expr| evalLet(allocator, let_expr, env),
         .Var => |var_ref| env.get(var_ref.name) orelse error.UnboundVariable,
         .Ctor => |ctor_expr| evalCtor(allocator, ctor_expr, env),
+        .Match => |match_expr| evalMatch(allocator, match_expr, env),
         .Lambda => error.UnsupportedExpr,
     };
+}
+
+fn evalMatch(allocator: std.mem.Allocator, match_expr: ir.Match, env: *std.StringHashMap(Value)) EvalError!Value {
+    const scrutinee = try evalExpr(allocator, match_expr.scrutinee.*, env);
+    for (match_expr.arms) |arm| {
+        var inserted = std.ArrayList(EnvBinding).empty;
+        defer inserted.deinit(allocator);
+
+        if (try patternMatches(allocator, arm.pattern, scrutinee, env, &inserted)) {
+            defer restoreEnv(env, inserted.items);
+            return evalExpr(allocator, arm.body.*, env);
+        }
+        restoreEnv(env, inserted.items);
+    }
+    return error.MatchFailure;
 }
 
 fn evalCtor(allocator: std.mem.Allocator, ctor_expr: ir.Ctor, env: *std.StringHashMap(Value)) EvalError!Value {
@@ -142,6 +160,55 @@ fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringH
         }
     }
     return evalExpr(allocator, let_expr.body.*, env);
+}
+
+const EnvBinding = struct {
+    name: []const u8,
+    previous: ?Value,
+};
+
+fn patternMatches(
+    allocator: std.mem.Allocator,
+    pattern: ir.Pattern,
+    value: Value,
+    env: *std.StringHashMap(Value),
+    inserted: *std.ArrayList(EnvBinding),
+) EvalError!bool {
+    return switch (pattern) {
+        .Wildcard => true,
+        .Var => |var_pattern| blk: {
+            if (std.mem.eql(u8, var_pattern.name, "_")) break :blk true;
+            const previous = env.get(var_pattern.name);
+            try env.put(var_pattern.name, value);
+            try inserted.append(allocator, .{ .name = var_pattern.name, .previous = previous });
+            break :blk true;
+        },
+        .Ctor => |ctor_pattern| blk: {
+            const ctor_value = switch (value) {
+                .Ctor => |ctor| ctor,
+                else => break :blk false,
+            };
+            if (!std.mem.eql(u8, ctor_pattern.name, ctor_value.name)) break :blk false;
+            if (ctor_pattern.args.len != ctor_value.args.len) break :blk false;
+            for (ctor_pattern.args, ctor_value.args) |arg_pattern, arg_value| {
+                if (!try patternMatches(allocator, arg_pattern, arg_value, env, inserted)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void {
+    var index = inserted.len;
+    while (index > 0) {
+        index -= 1;
+        const binding = inserted[index];
+        if (binding.previous) |previous| {
+            env.getPtr(binding.name).?.* = previous;
+        } else {
+            _ = env.remove(binding.name);
+        }
+    }
 }
 
 fn valueToU64(value: Value) EvalError!u64 {
@@ -284,6 +351,77 @@ test "interpreter can materialize all F10 whitelisted constructors" {
         };
         try std.testing.expect(ctor_value.name.len > 0);
     }
+}
+
+test "interpreter matches constructor arms top-to-bottom" {
+    const option_ty = ir.Ty{ .Adt = .{ .name = "option", .params = &.{.Int} } };
+    const entrypoint_decl: ir.Decl = .{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .Match = .{
+                .scrutinee = makeExpr(.{ .Ctor = .{
+                    .name = "Some",
+                    .args = &.{makeExpr(.{ .Constant = .{ .value = .{ .Int = 1 }, .ty = .Int, .layout = layout.intConstant() } })},
+                    .ty = option_ty,
+                    .layout = layout.ctor(1),
+                } }),
+                .arms = &.{
+                    .{
+                        .pattern = .{ .Ctor = .{
+                            .name = "Some",
+                            .args = &.{.{ .Var = .{ .name = "x", .ty = .Int, .layout = layout.intConstant() } }},
+                        } },
+                        .body = makeExpr(.{ .Var = .{ .name = "x", .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                    .{
+                        .pattern = .{ .Ctor = .{ .name = "None", .args = &.{} } },
+                        .body = makeExpr(.{ .Constant = .{ .value = .{ .Int = 0 }, .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                },
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } };
+    const decls = [_]ir.Decl{entrypoint_decl};
+
+    try std.testing.expectEqual(@as(u64, 1), try evalModule(.{ .decls = &decls }));
+}
+
+test "interpreter supports wildcard and variable match patterns" {
+    const entrypoint_decl: ir.Decl = .{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .Match = .{
+                .scrutinee = makeExpr(.{ .Constant = .{ .value = .{ .Int = 4 }, .ty = .Int, .layout = layout.intConstant() } }),
+                .arms = &.{
+                    .{
+                        .pattern = .{ .Var = .{ .name = "n", .ty = .Int, .layout = layout.intConstant() } },
+                        .body = makeExpr(.{ .Var = .{ .name = "n", .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                    .{
+                        .pattern = .Wildcard,
+                        .body = makeExpr(.{ .Constant = .{ .value = .{ .Int = 0 }, .ty = .Int, .layout = layout.intConstant() } }),
+                    },
+                },
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } };
+    const decls = [_]ir.Decl{entrypoint_decl};
+
+    try std.testing.expectEqual(@as(u64, 4), try evalModule(.{ .decls = &decls }));
 }
 
 test "interpreter backend trait exposes direct eval and rejects source emission" {

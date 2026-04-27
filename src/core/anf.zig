@@ -18,6 +18,8 @@ pub const LowerError = std.mem.Allocator.Error || error{
     UnboundVariable,
     UnsupportedCtor,
     UnsupportedCtorArity,
+    UnsupportedPattern,
+    MatchWithoutArms,
 };
 
 const BindingInfo = struct {
@@ -129,6 +131,7 @@ fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Ex
         .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
         .Var => |var_ref| .{ .Var = try lowerVar(arena, ctx, var_ref) },
         .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr),
+        .Match => |match_expr| try lowerMatch(arena, ctx, match_expr),
     };
 }
 
@@ -240,6 +243,129 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
     return current.*;
 }
 
+fn lowerMatch(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, match_expr: ttree.Match) LowerError!ir.Expr {
+    if (match_expr.arms.len == 0) return error.MatchWithoutArms;
+
+    const scrutinee_value = try lowerExprPtr(arena, ctx, match_expr.scrutinee.*);
+    const scrutinee_atom = if (isAtomicCore(scrutinee_value.*)) scrutinee_value else blk: {
+        const temp_name = try freshMatchTemp(arena, ctx);
+        const var_ptr = try arena.allocator().create(ir.Expr);
+        var_ptr.* = .{ .Var = .{
+            .name = temp_name,
+            .ty = exprTy(scrutinee_value.*),
+            .layout = exprLayout(scrutinee_value.*),
+        } };
+        break :blk var_ptr;
+    };
+
+    const lowered_match = try lowerMatchWithScrutinee(arena, ctx, match_expr, scrutinee_atom);
+    if (scrutinee_atom == scrutinee_value) return lowered_match.*;
+
+    const temp_name = switch (scrutinee_atom.*) {
+        .Var => |var_ref| var_ref.name,
+        else => unreachable,
+    };
+    const wrapped = try arena.allocator().create(ir.Expr);
+    wrapped.* = .{ .Let = .{
+        .name = temp_name,
+        .value = scrutinee_value,
+        .body = lowered_match,
+        .ty = exprTy(lowered_match.*),
+        .layout = exprLayout(lowered_match.*),
+    } };
+    return wrapped.*;
+}
+
+fn lowerMatchWithScrutinee(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    match_expr: ttree.Match,
+    scrutinee: *const ir.Expr,
+) LowerError!*const ir.Expr {
+    var arms = std.ArrayList(ir.Arm).empty;
+    errdefer arms.deinit(arena.allocator());
+
+    for (match_expr.arms) |arm| {
+        var inserted = std.ArrayList(ScopedBinding).empty;
+        defer inserted.deinit(arena.allocator());
+
+        const lowered_pattern = try lowerPattern(arena, ctx, arm.pattern, exprTy(scrutinee.*), exprLayout(scrutinee.*), &inserted);
+        const body = try lowerExprPtr(arena, ctx, arm.body.*);
+        try arms.append(arena.allocator(), .{
+            .pattern = lowered_pattern,
+            .body = body,
+        });
+
+        restoreBindings(ctx, inserted.items);
+    }
+
+    const owned_arms = try arms.toOwnedSlice(arena.allocator());
+    const match_ty = exprTy(owned_arms[0].body.*);
+    const match_layout = exprLayout(owned_arms[0].body.*);
+
+    const ptr = try arena.allocator().create(ir.Expr);
+    ptr.* = .{ .Match = .{
+        .scrutinee = scrutinee,
+        .arms = owned_arms,
+        .ty = match_ty,
+        .layout = match_layout,
+    } };
+    return ptr;
+}
+
+fn lowerPattern(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    pattern: ttree.Pattern,
+    matched_ty: ir.Ty,
+    matched_layout: layout.Layout,
+    inserted: *std.ArrayList(ScopedBinding),
+) LowerError!ir.Pattern {
+    return switch (pattern) {
+        .Wildcard => .Wildcard,
+        .Var => |name| blk: {
+            if (std.mem.eql(u8, name, "_")) break :blk .Wildcard;
+            const owned_name = try arena.allocator().dupe(u8, name);
+            try bindPatternName(arena.allocator(), ctx, inserted, owned_name, .{
+                .ty = matched_ty,
+                .layout = matched_layout,
+            });
+            break :blk .{ .Var = .{
+                .name = owned_name,
+                .ty = matched_ty,
+                .layout = matched_layout,
+            } };
+        },
+        .Ctor => |ctor_pattern| try lowerCtorPattern(arena, ctx, ctor_pattern, matched_ty, inserted),
+    };
+}
+
+fn lowerCtorPattern(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    ctor_pattern: ttree.CtorPattern,
+    matched_ty: ir.Ty,
+    inserted: *std.ArrayList(ScopedBinding),
+) LowerError!ir.Pattern {
+    try validateCtor(ctor_pattern.name, ctor_pattern.args.len);
+    const payload_ty = try ctorPatternPayloadTy(ctor_pattern.name, matched_ty);
+    const payload_layout = layout.intConstant();
+
+    var args = std.ArrayList(ir.Pattern).empty;
+    errdefer args.deinit(arena.allocator());
+    for (ctor_pattern.args) |arg| {
+        switch (arg) {
+            .Ctor => return error.UnsupportedPattern,
+            .Wildcard, .Var => try args.append(arena.allocator(), try lowerPattern(arena, ctx, arg, payload_ty, payload_layout, inserted)),
+        }
+    }
+
+    return .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, ctor_pattern.name),
+        .args = try args.toOwnedSlice(arena.allocator()),
+    } };
+}
+
 fn validateCtor(name: []const u8, arg_count: usize) LowerError!void {
     if (std.mem.eql(u8, name, "None")) {
         if (arg_count != 0) return error.UnsupportedCtorArity;
@@ -259,10 +385,70 @@ fn isAtomicTtree(expr: ttree.Expr) bool {
     };
 }
 
+fn isAtomicCore(expr: ir.Expr) bool {
+    return switch (expr) {
+        .Constant, .Var => true,
+        else => false,
+    };
+}
+
 fn freshTemp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext) LowerError![]const u8 {
     const name = try std.fmt.allocPrint(arena.allocator(), "__omlz_ctor_arg_{d}", .{ctx.next_temp});
     ctx.next_temp += 1;
     return name;
+}
+
+fn freshMatchTemp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext) LowerError![]const u8 {
+    const name = try std.fmt.allocPrint(arena.allocator(), "__omlz_match_scrutinee_{d}", .{ctx.next_temp});
+    ctx.next_temp += 1;
+    return name;
+}
+
+fn bindPatternName(
+    allocator: std.mem.Allocator,
+    ctx: *LowerContext,
+    inserted: *std.ArrayList(ScopedBinding),
+    name: []const u8,
+    binding: BindingInfo,
+) LowerError!void {
+    const previous = ctx.scope.get(name);
+    try ctx.scope.put(name, binding);
+    try inserted.append(allocator, .{ .name = name, .previous = previous });
+}
+
+fn restoreBindings(ctx: *LowerContext, inserted: []const ScopedBinding) void {
+    var index = inserted.len;
+    while (index > 0) {
+        index -= 1;
+        const binding = inserted[index];
+        if (binding.previous) |previous| {
+            ctx.scope.getPtr(binding.name).?.* = previous;
+        } else {
+            _ = ctx.scope.remove(binding.name);
+        }
+    }
+}
+
+fn ctorPatternPayloadTy(name: []const u8, matched_ty: ir.Ty) LowerError!ir.Ty {
+    const adt = switch (matched_ty) {
+        .Adt => |value| value,
+        else => return error.UnsupportedPattern,
+    };
+
+    if (std.mem.eql(u8, name, "Some")) {
+        if (adt.params.len != 1) return error.UnsupportedPattern;
+        return adt.params[0];
+    }
+    if (std.mem.eql(u8, name, "Ok")) {
+        if (adt.params.len != 2) return error.UnsupportedPattern;
+        return adt.params[0];
+    }
+    if (std.mem.eql(u8, name, "Error")) {
+        if (adt.params.len != 2) return error.UnsupportedPattern;
+        return adt.params[1];
+    }
+    if (std.mem.eql(u8, name, "None")) return .Unit;
+    return error.UnsupportedPattern;
 }
 
 fn ctorTy(arena: *std.heap.ArenaAllocator, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
@@ -310,6 +496,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Let => |let_expr| let_expr.ty,
         .Var => |var_ref| var_ref.ty,
         .Ctor => |ctor_expr| ctor_expr.ty,
+        .Match => |match_expr| match_expr.ty,
     };
 }
 
@@ -320,6 +507,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Let => |let_expr| let_expr.layout,
         .Var => |var_ref| var_ref.layout,
         .Ctor => |ctor_expr| ctor_expr.layout,
+        .Match => |match_expr| match_expr.layout,
     };
 }
 
@@ -446,4 +634,51 @@ test "lower constructor expressions with layout policy" {
     defer std.testing.allocator.free(printed);
     try std.testing.expect(std.mem.indexOf(u8, printed, "(ctor Some") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, ":layout (arena boxed)") != null);
+}
+
+test "lower basic match expressions with top-to-bottom arms" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) ((pattern (ctor Some (var x))) (var x)) ((pattern (ctor None)) (const-int 0)))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const scrutinee_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(std.mem.startsWith(u8, scrutinee_let.name, "__omlz_match_scrutinee_"));
+    const match_expr = switch (scrutinee_let.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 2), match_expr.arms.len);
+    const some_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", some_pattern.name);
+    const bound = switch (some_pattern.args[0]) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("x", bound.name);
+
+    const printed = try pretty.formatModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(printed);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "(match") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "((pattern (ctor Some (var x)))") != null);
 }

@@ -99,6 +99,42 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, ctor_expr.layout);
             try append(out, allocator, ")");
         },
+        .Match => |match_expr| {
+            try append(out, allocator, "(match ");
+            try formatExpr(out, allocator, match_expr.scrutinee.*);
+            for (match_expr.arms) |arm| {
+                try append(out, allocator, " ((pattern ");
+                try formatPattern(out, allocator, arm.pattern);
+                try append(out, allocator, ") ");
+                try formatExpr(out, allocator, arm.body.*);
+                try append(out, allocator, ")");
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, match_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, match_expr.layout);
+            try append(out, allocator, ")");
+        },
+    }
+}
+
+fn formatPattern(out: *std.ArrayList(u8), allocator: std.mem.Allocator, pattern: ir.Pattern) anyerror!void {
+    switch (pattern) {
+        .Wildcard => try append(out, allocator, "_"),
+        .Var => |var_pattern| {
+            try append(out, allocator, "(var ");
+            try append(out, allocator, var_pattern.name);
+            try append(out, allocator, ")");
+        },
+        .Ctor => |ctor_pattern| {
+            try append(out, allocator, "(ctor ");
+            try append(out, allocator, ctor_pattern.name);
+            for (ctor_pattern.args) |arg| {
+                try append(out, allocator, " ");
+                try formatPattern(out, allocator, arg);
+            }
+            try append(out, allocator, ")");
+        },
     }
 }
 

@@ -115,8 +115,42 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr) LowerError!lir.LExpr {
             .ty = try lowerTy(allocator, ctor_expr.ty),
             .layout = ctor_expr.layout,
         } },
+        .Match => |match_expr| .{ .Match = .{
+            .scrutinee = try lowerExprPtr(allocator, match_expr.scrutinee.*),
+            .arms = try lowerArms(allocator, match_expr.arms),
+        } },
         .Lambda => error.UnsupportedExpr,
     };
+}
+
+fn lowerArms(allocator: std.mem.Allocator, arms: []const ir.Arm) LowerError![]const lir.LArm {
+    const lowered = try allocator.alloc(lir.LArm, arms.len);
+    for (arms, 0..) |arm, index| {
+        lowered[index] = .{
+            .pattern = try lowerPattern(allocator, arm.pattern),
+            .body = try lowerExprPtr(allocator, arm.body.*),
+        };
+    }
+    return lowered;
+}
+
+fn lowerPattern(allocator: std.mem.Allocator, pattern: ir.Pattern) LowerError!lir.LPattern {
+    return switch (pattern) {
+        .Wildcard => .Wildcard,
+        .Var => |var_pattern| .{ .Var = try allocator.dupe(u8, var_pattern.name) },
+        .Ctor => |ctor_pattern| .{ .Ctor = .{
+            .name = try allocator.dupe(u8, ctor_pattern.name),
+            .args = try lowerPatterns(allocator, ctor_pattern.args),
+        } },
+    };
+}
+
+fn lowerPatterns(allocator: std.mem.Allocator, patterns: []const ir.Pattern) LowerError![]const lir.LPattern {
+    const lowered = try allocator.alloc(lir.LPattern, patterns.len);
+    for (patterns, 0..) |pattern, index| {
+        lowered[index] = try lowerPattern(allocator, pattern);
+    }
+    return lowered;
 }
 
 fn lowerExprPtrs(allocator: std.mem.Allocator, exprs: []const *const ir.Expr) LowerError![]const *const lir.LExpr {

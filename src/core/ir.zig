@@ -7,6 +7,8 @@
 //! - Represent the ANF, typed, Layout-tagged Core IR data model.
 //! - Keep allocation-bearing nodes explicit about their `Layout`.
 //! - Serve consumers: `anf`, `lower`, `interp`, `zig_codegen`, and `pretty`.
+//! - Preserve pattern-match order: arms are tested top-to-bottom and the first
+//!   matching arm wins in every backend.
 //!
 //! Ctor layout policy (F10):
 //! ```text
@@ -66,6 +68,7 @@ pub const Expr = union(enum) {
     Let: LetExpr,
     Var: Var,
     Ctor: Ctor,
+    Match: Match,
 };
 
 /// Lexically-scoped let expression in ANF form.
@@ -103,6 +106,40 @@ pub const Ctor = struct {
     args: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
+};
+
+/// Pattern match expression; arms are evaluated top-to-bottom.
+pub const Match = struct {
+    scrutinee: *const Expr,
+    arms: []const Arm,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// One pattern-match arm.
+pub const Arm = struct {
+    pattern: Pattern,
+    body: *const Expr,
+};
+
+/// Basic, non-nested pattern subset used by F11.
+pub const Pattern = union(enum) {
+    Wildcard,
+    Var: PatternVar,
+    Ctor: PatternCtor,
+};
+
+/// Variable pattern that binds the matched value into the arm body.
+pub const PatternVar = struct {
+    name: []const u8,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Single-level constructor pattern such as `Some x`, `None`, `Ok x`, `Error e`.
+pub const PatternCtor = struct {
+    name: []const u8,
+    args: []const Pattern,
 };
 
 /// M1 type language needed to describe current examples.

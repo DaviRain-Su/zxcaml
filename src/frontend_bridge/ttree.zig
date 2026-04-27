@@ -35,6 +35,7 @@ pub const Expr = union(enum) {
     Let: LetExpr,
     Var: Var,
     Ctor: Ctor,
+    Match: Match,
 };
 
 /// Single lambda form.
@@ -61,6 +62,31 @@ pub const Ctor = struct {
     args: []const Expr,
 };
 
+/// Pattern match expression with arms evaluated top-to-bottom.
+pub const Match = struct {
+    scrutinee: *const Expr,
+    arms: []const Arm,
+};
+
+/// Single match arm.
+pub const Arm = struct {
+    pattern: Pattern,
+    body: *const Expr,
+};
+
+/// Basic, non-nested pattern forms accepted for F11.
+pub const Pattern = union(enum) {
+    Wildcard,
+    Var: []const u8,
+    Ctor: CtorPattern,
+};
+
+/// Single-level constructor pattern such as `Some x` or `None`.
+pub const CtorPattern = struct {
+    name: []const u8,
+    args: []const Pattern,
+};
+
 /// Typed mirror of constants.
 pub const Constant = union(enum) {
     Int: i64,
@@ -82,6 +108,8 @@ pub const BridgeError = sexp_parser.ParseError || error{
     MalformedLet,
     MalformedVar,
     MalformedCtor,
+    MalformedMatch,
+    MalformedPattern,
     MalformedConstant,
 };
 
@@ -164,6 +192,7 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items) };
     if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
     if (std.mem.eql(u8, tag, "ctor")) return .{ .Ctor = try parseCtor(arena, items) };
+    if (std.mem.eql(u8, tag, "match")) return .{ .Match = try parseMatch(arena, items) };
     return error.UnsupportedNode;
 }
 
@@ -220,6 +249,76 @@ fn parseCtor(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Bridge
         .name = try dupeAtom(arena, items[1]),
         .args = try args.toOwnedSlice(arena.allocator()),
     };
+}
+
+fn parseMatch(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Match {
+    if (items.len < 3) return error.MalformedMatch;
+
+    const scrutinee = try arena.allocator().create(Expr);
+    scrutinee.* = try parseExpr(arena, items[1]);
+
+    var arms = std.ArrayList(Arm).empty;
+    errdefer arms.deinit(arena.allocator());
+    for (items[2..]) |arm_node| {
+        try arms.append(arena.allocator(), try parseArm(arena, arm_node));
+    }
+
+    return .{
+        .scrutinee = scrutinee,
+        .arms = try arms.toOwnedSlice(arena.allocator()),
+    };
+}
+
+fn parseArm(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Arm {
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedMatch;
+
+    const pattern_items = try expectList(items[0]);
+    if (pattern_items.len != 2) return error.MalformedPattern;
+    try expectAtomValue(pattern_items[0], "pattern");
+
+    const body = try arena.allocator().create(Expr);
+    body.* = try parseExpr(arena, items[1]);
+
+    return .{
+        .pattern = try parsePattern(arena, pattern_items[1]),
+        .body = body,
+    };
+}
+
+fn parsePattern(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Pattern {
+    if (node.atomLike()) |atom| {
+        if (std.mem.eql(u8, atom, "_")) return .Wildcard;
+        return .{ .Var = try arena.allocator().dupe(u8, atom) };
+    }
+
+    const items = try expectList(node);
+    if (items.len == 0) return error.MalformedPattern;
+
+    const tag = try expectAtom(items[0]);
+    if (std.mem.eql(u8, tag, "wildcard")) {
+        if (items.len != 1) return error.MalformedPattern;
+        return .Wildcard;
+    }
+    if (std.mem.eql(u8, tag, "var")) {
+        if (items.len != 2) return error.MalformedPattern;
+        const name = try dupeAtom(arena, items[1]);
+        if (std.mem.eql(u8, name, "_")) return .Wildcard;
+        return .{ .Var = name };
+    }
+    if (std.mem.eql(u8, tag, "ctor")) {
+        if (items.len < 2) return error.MalformedPattern;
+        var args = std.ArrayList(Pattern).empty;
+        errdefer args.deinit(arena.allocator());
+        for (items[2..]) |arg_node| {
+            try args.append(arena.allocator(), try parsePattern(arena, arg_node));
+        }
+        return .{ .Ctor = .{
+            .name = try dupeAtom(arena, items[1]),
+            .args = try args.toOwnedSlice(arena.allocator()),
+        } };
+    }
+    return error.MalformedPattern;
 }
 
 fn parseConstInt(items: []const *const Sexp) BridgeError!i64 {
@@ -421,4 +520,46 @@ test "parse constructor expressions and string payloads" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings("oops", string_arg);
+}
+
+test "parse basic match expressions and patterns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.3 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) ((pattern (ctor Some (var x))) (var x)) ((pattern (ctor None)) (const-int 0)) ((pattern (wildcard)) (const-int 9)))))))",
+    );
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const lambda = switch (entrypoint.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const match_expr = switch (lambda.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 3), match_expr.arms.len);
+
+    const some_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |pattern| pattern,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", some_pattern.name);
+    const payload_pattern = switch (some_pattern.args[0]) {
+        .Var => |name| name,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("x", payload_pattern);
+
+    _ = switch (match_expr.arms[1].pattern) {
+        .Ctor => |pattern| pattern,
+        else => return error.TestUnexpectedResult,
+    };
+    _ = switch (match_expr.arms[2].pattern) {
+        .Wildcard => {},
+        else => return error.TestUnexpectedResult,
+    };
 }
