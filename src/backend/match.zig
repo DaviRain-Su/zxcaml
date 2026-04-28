@@ -100,6 +100,7 @@ fn firstRowIrrefutable(patterns: []const lir.LPattern) bool {
 fn specializeRows(allocator: std.mem.Allocator, rows: []const Row, column: usize, constructor: []const u8) ![]Row {
     var out = std.ArrayList(Row).empty;
     errdefer freeRows(allocator, out.items);
+    const payload_arity = constructorPayloadArity(rows, column, constructor) orelse 0;
     for (rows) |row| {
         if (row.patterns.len <= column) continue;
         switch (row.patterns[column]) {
@@ -111,10 +112,13 @@ fn specializeRows(allocator: std.mem.Allocator, rows: []const Row, column: usize
                 });
             },
             .Wildcard, .Var => {
+                const wildcard_payloads = try wildcardPatterns(allocator, payload_arity);
+                errdefer allocator.free(wildcard_payloads);
                 try out.append(allocator, .{
-                    .patterns = try removeColumn(allocator, row.patterns, column),
+                    .patterns = try replaceColumnWith(allocator, row.patterns, column, wildcard_payloads),
                     .action = row.action,
                 });
+                allocator.free(wildcard_payloads);
             },
         }
     }
@@ -159,6 +163,25 @@ fn removeColumn(allocator: std.mem.Allocator, patterns: []const lir.LPattern, co
     return replaceColumnWith(allocator, patterns, column, &.{});
 }
 
+fn constructorPayloadArity(rows: []const Row, column: usize, constructor: []const u8) ?usize {
+    for (rows) |row| {
+        if (row.patterns.len <= column) continue;
+        switch (row.patterns[column]) {
+            .Ctor => |ctor| {
+                if (std.mem.eql(u8, ctor.name, constructor)) return ctor.args.len;
+            },
+            .Wildcard, .Var => {},
+        }
+    }
+    return null;
+}
+
+fn wildcardPatterns(allocator: std.mem.Allocator, count: usize) ![]lir.LPattern {
+    const out = try allocator.alloc(lir.LPattern, count);
+    for (out) |*pattern| pattern.* = .{ .Wildcard = {} };
+    return out;
+}
+
 fn freeRows(allocator: std.mem.Allocator, rows: []const Row) void {
     for (rows) |row| allocator.free(row.patterns);
     allocator.free(rows);
@@ -190,4 +213,29 @@ test "compileMatrix emits switch with specialized cases and default" {
     try std.testing.expectEqual(@as(usize, 10), tree.Switch.cases[0].tree.Leaf);
     try std.testing.expect(tree.Switch.default != null);
     try std.testing.expectEqual(@as(usize, 30), tree.Switch.default.?.Leaf);
+}
+
+test "compileMatrix expands wildcard defaults across constructor payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const matrix = &.{
+        &.{lir.LPattern{ .Ctor = .{ .name = "Some", .args = &.{.{ .Ctor = .{ .name = "Some", .args = &.{.{ .Var = "v" }} } }} } }},
+        &.{lir.LPattern{ .Wildcard = {} }},
+    };
+    const actions = &.{ @as(usize, 10), @as(usize, 20) };
+
+    const tree = try compileMatrix(allocator, matrix, actions);
+    try std.testing.expectEqual(@as(usize, 0), tree.Switch.column);
+    try std.testing.expectEqual(@as(usize, 1), tree.Switch.cases.len);
+    try std.testing.expectEqualStrings("Some", tree.Switch.cases[0].constructor);
+
+    const some_tree = tree.Switch.cases[0].tree;
+    try std.testing.expectEqual(@as(usize, 0), some_tree.Switch.column);
+    try std.testing.expectEqual(@as(usize, 1), some_tree.Switch.cases.len);
+    try std.testing.expectEqualStrings("Some", some_tree.Switch.cases[0].constructor);
+    try std.testing.expectEqual(@as(usize, 10), some_tree.Switch.cases[0].tree.Leaf);
+    try std.testing.expect(some_tree.Switch.default != null);
+    try std.testing.expectEqual(@as(usize, 20), some_tree.Switch.default.?.Leaf);
 }
