@@ -31,6 +31,10 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\
         \\
     );
+    for (module.type_decls) |type_decl| {
+        try emitVariantType(&out, allocator, type_decl);
+        try append(&out, allocator, "\n");
+    }
     for (module.functions) |func| {
         try emitFunction(&out, allocator, func);
         try append(&out, allocator, "\n");
@@ -38,6 +42,67 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
     try emitFunction(&out, allocator, module.entrypoint);
 
     return out.toOwnedSlice(allocator);
+}
+
+fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: lir.LVariantType) EmitError!void {
+    const type_name = try userTypeName(allocator, type_decl.name);
+    defer allocator.free(type_name);
+
+    try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+    try append(out, allocator, "    const Self = @This();\n");
+    try append(out, allocator, "    const Tag = enum(u32) { ");
+    for (type_decl.variants, 0..) |variant, index| {
+        if (index != 0) try append(out, allocator, ", ");
+        const variant_name = try userVariantName(allocator, variant.name);
+        defer allocator.free(variant_name);
+        try appendPrint(out, allocator, "{s} = {d}", .{ variant_name, variant.tag });
+    }
+    try append(out, allocator, " };\n");
+
+    try append(out, allocator, "    const Payload = union { ");
+    var payload_count: usize = 0;
+    for (type_decl.variants) |variant| {
+        if (variant.payload_types.len == 0) continue;
+        if (payload_count != 0) try append(out, allocator, ", ");
+        const variant_name = try userVariantName(allocator, variant.name);
+        defer allocator.free(variant_name);
+        const payload_ty = try payloadTypeName(allocator, variant);
+        defer allocator.free(payload_ty);
+        try appendPrint(out, allocator, "{s}: {s}", .{ variant_name, payload_ty });
+        payload_count += 1;
+    }
+    if (payload_count == 0) try append(out, allocator, "_none: void");
+    try append(out, allocator, " };\n");
+    try append(out, allocator, "    tag: Tag,\n");
+    try append(out, allocator, "    payload: Payload = undefined,\n\n");
+
+    for (type_decl.variants) |variant| {
+        try emitVariantConstructorHelper(out, allocator, variant);
+    }
+    try append(out, allocator, "};\n");
+}
+
+fn emitVariantConstructorHelper(out: *std.ArrayList(u8), allocator: std.mem.Allocator, variant: lir.LVariantCtor) EmitError!void {
+    const variant_name = try userVariantName(allocator, variant.name);
+    defer allocator.free(variant_name);
+
+    try appendPrint(out, allocator, "    pub fn {s}(", .{variant_name});
+    if (variant.payload_types.len == 1) {
+        const payload_ty = try zigTypeExprName(allocator, variant.payload_types[0]);
+        defer allocator.free(payload_ty);
+        try appendPrint(out, allocator, "value: {s}", .{payload_ty});
+    } else if (variant.payload_types.len > 1) {
+        const payload_ty = try payloadTypeName(allocator, variant);
+        defer allocator.free(payload_ty);
+        try appendPrint(out, allocator, "value: {s}", .{payload_ty});
+    }
+    try append(out, allocator, ") Self {\n");
+    try appendPrint(out, allocator, "        return .{{ .tag = .{s}", .{variant_name});
+    if (variant.payload_types.len > 0) {
+        try appendPrint(out, allocator, ", .payload = .{{ .{s} = value }}", .{variant_name});
+    }
+    try append(out, allocator, " };\n");
+    try append(out, allocator, "    }\n");
 }
 
 fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir.LFunc) EmitError!void {
@@ -294,20 +359,32 @@ fn emitMatchExpr(
         return;
     }
 
+    const user_ctor_match = matchHasUserCtorArm(match_expr);
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "switch ({s}) {{\n", .{scrutinee_name});
+    if (user_ctor_match) {
+        try appendPrint(out, allocator, "switch ({s}.tag) {{\n", .{scrutinee_name});
+    } else {
+        try appendPrint(out, allocator, "switch ({s}) {{\n", .{scrutinee_name});
+    }
 
     var emitted = std.ArrayList([]const u8).empty;
-    defer emitted.deinit(allocator);
+    defer {
+        for (emitted.items) |name| allocator.free(name);
+        emitted.deinit(allocator);
+    }
     var emitted_catch_all = false;
     for (match_expr.arms) |arm| {
         if (emitted_catch_all) break;
         switch (arm.pattern) {
             .Ctor => |ctor_pattern| {
-                const variant = try ctorVariantName(ctor_pattern.name);
+                const variant = if (ctor_pattern.type_name != null)
+                    try userVariantName(allocator, ctor_pattern.name)
+                else
+                    try allocator.dupe(u8, try ctorVariantName(ctor_pattern.name));
+                defer allocator.free(variant);
                 if (containsString(emitted.items, variant)) continue;
-                try emitted.append(allocator, variant);
-                try emitCtorMatchArm(out, allocator, ctor_pattern, arm.body.*, block_id, indent_level + 2, ctx);
+                try emitted.append(allocator, try allocator.dupe(u8, variant));
+                try emitCtorMatchArm(out, allocator, ctor_pattern, arm.body.*, scrutinee_name, block_id, indent_level + 2, ctx);
             },
             .Wildcard, .Var => {
                 try emitCatchAllMatchArm(out, allocator, arm.pattern, arm.body.*, scrutinee_name, block_id, indent_level + 2, ctx);
@@ -316,7 +393,7 @@ fn emitMatchExpr(
         }
     }
 
-    if (!emitted_catch_all and !allKnownVariantsCovered(emitted.items)) {
+    if (!emitted_catch_all and (user_ctor_match or !allKnownVariantsCovered(emitted.items))) {
         try emitIndent(out, allocator, indent_level + 2);
         try append(out, allocator, "else => unreachable,\n");
     }
@@ -364,13 +441,49 @@ fn emitCtorMatchArm(
     allocator: std.mem.Allocator,
     ctor_pattern: lir.LCtorPattern,
     body: lir.LExpr,
+    scrutinee_name: []const u8,
     block_id: usize,
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
-    const variant = try ctorVariantName(ctor_pattern.name);
+    const variant = if (ctor_pattern.type_name != null)
+        try userVariantName(allocator, ctor_pattern.name)
+    else
+        try allocator.dupe(u8, try ctorVariantName(ctor_pattern.name));
+    defer allocator.free(variant);
     try emitIndent(out, allocator, indent_level);
     try appendPrint(out, allocator, ".{s} => ", .{variant});
+    if (ctor_pattern.type_name != null) {
+        if (ctor_pattern.args.len > 1) return error.UnsupportedExpr;
+        if (ctor_pattern.args.len == 1) {
+            const arg = ctor_pattern.args[0];
+            const capture_name: ?[]const u8 = switch (arg) {
+                .Wildcard => null,
+                .Var => |name| if (exprUsesName(body, name)) name else null,
+                .Ctor => return error.UnsupportedExpr,
+            };
+            if (capture_name) |name| {
+                const bind_block_id = ctx.next_block_id;
+                ctx.next_block_id += 1;
+                try appendPrint(out, allocator, "break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
+                try emitIndent(out, allocator, indent_level + 1);
+                try append(out, allocator, "const ");
+                try emitIdentifier(out, allocator, name);
+                try appendPrint(out, allocator, " = {s}.payload.{s};\n", .{ scrutinee_name, variant });
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
+                try emitExpr(out, allocator, body, indent_level + 1, ctx);
+                try append(out, allocator, ";\n");
+                try emitIndent(out, allocator, indent_level);
+                try append(out, allocator, "},\n");
+                return;
+            }
+        }
+        try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
+        try emitExpr(out, allocator, body, indent_level, ctx);
+        try append(out, allocator, ",\n");
+        return;
+    }
     if (std.mem.eql(u8, ctor_pattern.name, "::")) {
         if (ctor_pattern.args.len != 2) return error.UnsupportedExpr;
         const bind_block_id = ctx.next_block_id;
@@ -477,7 +590,23 @@ fn emitCtorExpr(
 ) EmitError!void {
     const ty_name = try zigTypeName(allocator, ctor_expr.ty);
     defer allocator.free(ty_name);
-    const variant = try ctorVariantName(ctor_expr.name);
+    const variant = if (ctor_expr.type_name != null)
+        try userVariantName(allocator, ctor_expr.name)
+    else
+        try allocator.dupe(u8, try ctorVariantName(ctor_expr.name));
+    defer allocator.free(variant);
+
+    if (ctor_expr.type_name != null) {
+        if (ctor_expr.args.len == 0) {
+            try appendPrint(out, allocator, "{s}{{ .tag = .{s} }}", .{ ty_name, variant });
+            return;
+        }
+        if (ctor_expr.args.len > 1) return error.UnsupportedExpr;
+        try appendPrint(out, allocator, "{s}{{ .tag = .{s}, .payload = .{{ .{s} = ", .{ ty_name, variant, variant });
+        try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level, ctx);
+        try append(out, allocator, " } }");
+        return;
+    }
 
     if (ctor_expr.args.len == 0) {
         try appendPrint(out, allocator, "{s}.{s}", .{ ty_name, variant });
@@ -745,6 +874,16 @@ fn matchHasCtorArm(match_expr: lir.LMatch) bool {
     return false;
 }
 
+fn matchHasUserCtorArm(match_expr: lir.LMatch) bool {
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => |ctor| if (ctor.type_name != null) return true,
+            .Wildcard, .Var => {},
+        }
+    }
+    return false;
+}
+
 fn containsString(haystack: []const []const u8, needle: []const u8) bool {
     for (haystack) |value| {
         if (std.mem.eql(u8, value, needle)) return true;
@@ -786,9 +925,88 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
                 defer allocator.free(inner);
                 break :blk try std.fmt.allocPrint(allocator, "prelude.List({s})", .{inner});
             }
-            return error.UnsupportedExpr;
+            break :blk try userTypeName(allocator, adt.name);
         },
     };
+}
+
+fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr) EmitError![]const u8 {
+    return switch (ty) {
+        .TypeVar => allocator.dupe(u8, "i64"),
+        .TypeRef => |ref| try zigTypeRefName(allocator, ref),
+        .RecursiveRef => |ref| try zigTypeRefName(allocator, ref),
+        .Tuple => |items| blk: {
+            if (items.len == 0) break :blk try allocator.dupe(u8, "void");
+            var out = std.ArrayList(u8).empty;
+            errdefer out.deinit(allocator);
+            try append(&out, allocator, "struct { ");
+            for (items, 0..) |item, index| {
+                if (index != 0) try append(&out, allocator, ", ");
+                const item_ty = try zigTypeExprName(allocator, item);
+                defer allocator.free(item_ty);
+                try appendPrint(&out, allocator, "_{d}: {s}", .{ index, item_ty });
+            }
+            try append(&out, allocator, " }");
+            break :blk try out.toOwnedSlice(allocator);
+        },
+    };
+}
+
+fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef) EmitError![]const u8 {
+    if (std.mem.eql(u8, ref.name, "int")) return allocator.dupe(u8, "i64");
+    if (std.mem.eql(u8, ref.name, "bool")) return allocator.dupe(u8, "prelude.Bool");
+    if (std.mem.eql(u8, ref.name, "unit")) return allocator.dupe(u8, "void");
+    if (std.mem.eql(u8, ref.name, "string")) return allocator.dupe(u8, "[]const u8");
+    return userTypeName(allocator, ref.name);
+}
+
+fn payloadTypeName(allocator: std.mem.Allocator, variant: lir.LVariantCtor) EmitError![]const u8 {
+    if (variant.payload_types.len == 0) return allocator.dupe(u8, "void");
+    if (variant.payload_types.len == 1) return zigTypeExprName(allocator, variant.payload_types[0]);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, "struct { ");
+    for (variant.payload_types, 0..) |payload_ty, index| {
+        if (index != 0) try append(&out, allocator, ", ");
+        const ty_name = try zigTypeExprName(allocator, payload_ty);
+        defer allocator.free(ty_name);
+        try appendPrint(&out, allocator, "_{d}: {s}", .{ index, ty_name });
+    }
+    try append(&out, allocator, " }");
+    return out.toOwnedSlice(allocator);
+}
+
+fn userTypeName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, "omlz_type_");
+    try appendSanitized(&out, allocator, source_name);
+    return out.toOwnedSlice(allocator);
+}
+
+fn userVariantName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendSanitized(&out, allocator, source_name);
+    return out.toOwnedSlice(allocator);
+}
+
+fn appendSanitized(out: *std.ArrayList(u8), allocator: std.mem.Allocator, source_name: []const u8) EmitError!void {
+    if (source_name.len == 0) {
+        try append(out, allocator, "_");
+        return;
+    }
+    if (!std.ascii.isAlphabetic(source_name[0]) and source_name[0] != '_') {
+        try out.append(allocator, '_');
+    }
+    for (source_name) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '_') {
+            try out.append(allocator, ch);
+        } else {
+            try out.append(allocator, '_');
+        }
+    }
 }
 
 fn primOpToken(op: lir.LPrimOp) []const u8 {
@@ -1017,6 +1235,52 @@ test "ZigBackend emits option constructors through prelude tagged unions" {
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Option(i64)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".some = @as(i64, 1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "arena.alloc(prelude.Option(i64), 1) catch unreachable") != null);
+}
+
+test "ZigBackend emits user ADTs as explicit tag and payload structs" {
+    const user_ty = lir.LTy{ .Adt = .{ .name = "t", .params = &.{} } };
+    const module: lir.LModule = .{
+        .type_decls = &.{.{
+            .name = "t",
+            .variants = &.{
+                .{ .name = "A", .tag = 0 },
+                .{ .name = "B", .tag = 1 },
+                .{ .name = "C", .tag = 2, .payload_types = &.{.{ .TypeRef = .{ .name = "int" } }} },
+            },
+        }},
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .Match = .{
+                .scrutinee = &.{ .Ctor = .{
+                    .name = "C",
+                    .args = &.{&.{ .Constant = .{ .Int = 42 } }},
+                    .ty = user_ty,
+                    .layout = @import("../core/layout.zig").ctor(1),
+                    .tag = 2,
+                    .type_name = "t",
+                } },
+                .arms = &.{
+                    .{
+                        .pattern = .{ .Ctor = .{ .name = "A", .args = &.{}, .tag = 0, .type_name = "t" } },
+                        .body = &.{ .Constant = .{ .Int = 0 } },
+                    },
+                    .{
+                        .pattern = .{ .Ctor = .{ .name = "C", .args = &.{.{ .Var = "x" }}, .tag = 2, .type_name = "t" } },
+                        .body = &.{ .Var = .{ .name = "x" } },
+                    },
+                },
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const Tag = enum(u32) { A = 0, B = 1, C = 2 };") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const Payload = union { C: i64 };") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".tag = .C, .payload = .{ .C = @as(i64, 42) }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_0.tag)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_match_scrutinee_0.payload.C;") != null);
 }
 
 test "ZigBackend emits switch-on-discriminant for constructor matches" {

@@ -15,6 +15,10 @@ pub fn formatModule(allocator: std.mem.Allocator, module: ir.Module) ![]u8 {
     errdefer out.deinit(allocator);
 
     try append(&out, allocator, "(module");
+    for (module.type_decls) |type_decl| {
+        try append(&out, allocator, " ");
+        try formatTypeDecl(&out, allocator, type_decl);
+    }
     for (module.decls) |decl| {
         try append(&out, allocator, " ");
         try formatDecl(&out, allocator, decl);
@@ -34,6 +38,61 @@ fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.De
             try append(out, allocator, ")");
         },
     }
+}
+
+fn formatTypeDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: @import("types.zig").VariantType) !void {
+    try append(out, allocator, "(type ");
+    try append(out, allocator, type_decl.name);
+    if (type_decl.params.len > 0) {
+        try append(out, allocator, " (params");
+        for (type_decl.params) |param| {
+            try append(out, allocator, " ");
+            try append(out, allocator, param);
+        }
+        try append(out, allocator, ")");
+    }
+    if (type_decl.is_recursive) try append(out, allocator, " :recursive true");
+    try append(out, allocator, " (variants");
+    for (type_decl.variants) |variant| {
+        try appendPrint(out, allocator, " ({s} :tag {d}", .{ variant.name, variant.tag });
+        if (variant.payload_types.len > 0) {
+            try append(out, allocator, " :payload");
+            for (variant.payload_types) |payload_ty| {
+                try append(out, allocator, " ");
+                try formatTypeExpr(out, allocator, payload_ty);
+            }
+        }
+        try append(out, allocator, ")");
+    }
+    try append(out, allocator, "))");
+}
+
+fn formatTypeExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: @import("types.zig").TypeExpr) anyerror!void {
+    switch (expr) {
+        .TypeVar => |name| try append(out, allocator, name),
+        .TypeRef => |ref| try formatTypeRef(out, allocator, "type-ref", ref),
+        .RecursiveRef => |ref| try formatTypeRef(out, allocator, "recursive-ref", ref),
+        .Tuple => |items| {
+            try append(out, allocator, "(tuple");
+            for (items) |item| {
+                try append(out, allocator, " ");
+                try formatTypeExpr(out, allocator, item);
+            }
+            try append(out, allocator, ")");
+        },
+    }
+}
+
+fn formatTypeRef(out: *std.ArrayList(u8), allocator: std.mem.Allocator, tag: []const u8, ref: @import("types.zig").TypeRef) anyerror!void {
+    try append(out, allocator, "(");
+    try append(out, allocator, tag);
+    try append(out, allocator, " ");
+    try append(out, allocator, ref.name);
+    for (ref.args) |arg| {
+        try append(out, allocator, " ");
+        try formatTypeExpr(out, allocator, arg);
+    }
+    try append(out, allocator, ")");
 }
 
 fn formatLambda(out: *std.ArrayList(u8), allocator: std.mem.Allocator, lambda: ir.Lambda) anyerror!void {

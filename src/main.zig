@@ -484,6 +484,7 @@ test {
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");
+    _ = @import("core/types.zig");
     _ = @import("driver/build.zig");
     _ = @import("driver/bpf.zig");
     _ = @import("lower/arena.zig");

@@ -39,10 +39,12 @@
 //! ```
 
 const layout = @import("layout.zig");
+const types = @import("types.zig");
 
 /// A Core IR module containing top-level declarations.
 pub const Module = struct {
     decls: []const Decl,
+    type_decls: []const types.VariantType = &.{},
 };
 
 /// Top-level Core IR declarations.
@@ -162,6 +164,8 @@ pub const Ctor = struct {
     args: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    tag: u32 = 0,
+    type_name: ?[]const u8 = null,
 };
 
 /// Pattern match expression; arms are evaluated top-to-bottom.
@@ -196,6 +200,8 @@ pub const PatternVar = struct {
 pub const PatternCtor = struct {
     name: []const u8,
     args: []const Pattern,
+    tag: u32 = 0,
+    type_name: ?[]const u8 = null,
 };
 
 /// M1 type language needed to describe current examples.

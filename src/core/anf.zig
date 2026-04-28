@@ -11,6 +11,7 @@ const ttree = @import("../frontend_bridge/ttree.zig");
 const ir = @import("ir.zig");
 const layout = @import("layout.zig");
 const pretty = @import("pretty.zig");
+const types = @import("types.zig");
 
 /// Errors that can occur while lowering the frontend mirror to Core IR.
 pub const LowerError = std.mem.Allocator.Error || error{
@@ -29,6 +30,13 @@ const BindingInfo = struct {
     layout: layout.Layout,
 };
 
+const ConstructorInfo = struct {
+    type_name: []const u8,
+    tag: u32,
+    payload_types: []const types.TypeExpr,
+    type_params: []const []const u8,
+};
+
 const ScopedBinding = struct {
     name: []const u8,
     previous: ?BindingInfo,
@@ -36,6 +44,7 @@ const ScopedBinding = struct {
 
 const LowerContext = struct {
     scope: std.StringHashMap(BindingInfo),
+    constructors: std.StringHashMap(ConstructorInfo),
     next_temp: usize = 0,
 };
 
@@ -44,8 +53,15 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
     var decls = std.ArrayList(ir.Decl).empty;
     errdefer decls.deinit(arena.allocator());
 
-    var ctx: LowerContext = .{ .scope = std.StringHashMap(BindingInfo).init(arena.allocator()) };
+    var ctx: LowerContext = .{
+        .scope = std.StringHashMap(BindingInfo).init(arena.allocator()),
+        .constructors = std.StringHashMap(ConstructorInfo).init(arena.allocator()),
+    };
+    defer ctx.constructors.deinit();
     defer ctx.scope.deinit();
+
+    const type_decls = try lowerTypeDecls(arena, module.type_decls);
+    try indexConstructors(&ctx, type_decls);
 
     for (module.decls) |decl| {
         switch (decl) {
@@ -71,7 +87,75 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
         }
     }
 
-    return .{ .decls = try decls.toOwnedSlice(arena.allocator()) };
+    return .{
+        .decls = try decls.toOwnedSlice(arena.allocator()),
+        .type_decls = type_decls,
+    };
+}
+
+fn lowerTypeDecls(arena: *std.heap.ArenaAllocator, decls: []const ttree.TypeDecl) LowerError![]const types.VariantType {
+    const lowered = try arena.allocator().alloc(types.VariantType, decls.len);
+    for (decls, 0..) |decl, decl_index| {
+        const variants = try arena.allocator().alloc(types.VariantCtor, decl.variants.len);
+        for (decl.variants, 0..) |variant, variant_index| {
+            variants[variant_index] = .{
+                .name = try arena.allocator().dupe(u8, variant.name),
+                .tag = @intCast(variant_index),
+                .payload_types = try lowerTypeExprs(arena, variant.payload_types),
+            };
+        }
+        lowered[decl_index] = .{
+            .name = try arena.allocator().dupe(u8, decl.name),
+            .params = try dupeStringSlice(arena, decl.params),
+            .variants = variants,
+            .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerTypeExprs(arena: *std.heap.ArenaAllocator, exprs: []const ttree.TypeExpr) LowerError![]const types.TypeExpr {
+    const lowered = try arena.allocator().alloc(types.TypeExpr, exprs.len);
+    for (exprs, 0..) |expr, index| {
+        lowered[index] = try lowerTypeExpr(arena, expr);
+    }
+    return lowered;
+}
+
+fn lowerTypeExpr(arena: *std.heap.ArenaAllocator, expr: ttree.TypeExpr) LowerError!types.TypeExpr {
+    return switch (expr) {
+        .TypeVar => |name| .{ .TypeVar = try arena.allocator().dupe(u8, name) },
+        .TypeRef => |ref| .{ .TypeRef = .{
+            .name = try arena.allocator().dupe(u8, ref.name),
+            .args = try lowerTypeExprs(arena, ref.args),
+        } },
+        .RecursiveRef => |ref| .{ .RecursiveRef = .{
+            .name = try arena.allocator().dupe(u8, ref.name),
+            .args = try lowerTypeExprs(arena, ref.args),
+        } },
+        .Tuple => |items| .{ .Tuple = try lowerTypeExprs(arena, items) },
+    };
+}
+
+fn dupeStringSlice(arena: *std.heap.ArenaAllocator, values: []const []const u8) LowerError![]const []const u8 {
+    const out = try arena.allocator().alloc([]const u8, values.len);
+    for (values, 0..) |value, index| {
+        out[index] = try arena.allocator().dupe(u8, value);
+    }
+    return out;
+}
+
+fn indexConstructors(ctx: *LowerContext, type_decls: []const types.VariantType) LowerError!void {
+    for (type_decls) |type_decl| {
+        for (type_decl.variants) |variant| {
+            try ctx.constructors.put(variant.name, .{
+                .type_name = type_decl.name,
+                .tag = variant.tag,
+                .payload_types = variant.payload_types,
+                .type_params = type_decl.params,
+            });
+        }
+    }
 }
 
 fn lowerDecl(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, decl: ttree.Decl) LowerError!ir.Decl {
@@ -319,7 +403,7 @@ fn lowerConstant(arena: *std.heap.ArenaAllocator, constant: ttree.Constant) Lowe
 }
 
 fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttree.Ctor) LowerError!ir.Expr {
-    try validateCtor(ctor_expr.name, ctor_expr.args.len);
+    const ctor_info = try validateCtor(ctx, ctor_expr.name, ctor_expr.args.len);
 
     var args = std.ArrayList(*const ir.Expr).empty;
     errdefer args.deinit(arena.allocator());
@@ -347,7 +431,7 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
     }
 
     const owned_args = try args.toOwnedSlice(arena.allocator());
-    const ctor_ty = try ctorTy(arena, ctor_expr.name, owned_args);
+    const ctor_ty = try ctorTy(arena, ctx, ctor_expr.name, owned_args);
     const ctor_layout = layout.ctor(owned_args.len);
     var current = try arena.allocator().create(ir.Expr);
     current.* = .{ .Ctor = .{
@@ -355,6 +439,8 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
         .args = owned_args,
         .ty = ctor_ty,
         .layout = ctor_layout,
+        .tag = if (ctor_info) |info| info.tag else builtinCtorTag(ctor_expr.name),
+        .type_name = if (ctor_info) |info| try arena.allocator().dupe(u8, info.type_name) else null,
     } };
 
     var index = wrappers.items.len;
@@ -479,8 +565,8 @@ fn lowerCtorPattern(
     matched_ty: ir.Ty,
     inserted: *std.ArrayList(ScopedBinding),
 ) LowerError!ir.Pattern {
-    try validateCtor(ctor_pattern.name, ctor_pattern.args.len);
-    const payload_tys = try ctorPatternPayloadTys(arena, ctor_pattern.name, matched_ty);
+    const ctor_info = try validateCtor(ctx, ctor_pattern.name, ctor_pattern.args.len);
+    const payload_tys = try ctorPatternPayloadTys(arena, ctx, ctor_pattern.name, matched_ty);
 
     var args = std.ArrayList(ir.Pattern).empty;
     errdefer args.deinit(arena.allocator());
@@ -497,27 +583,43 @@ fn lowerCtorPattern(
     return .{ .Ctor = .{
         .name = try arena.allocator().dupe(u8, ctor_pattern.name),
         .args = try args.toOwnedSlice(arena.allocator()),
+        .tag = if (ctor_info) |info| info.tag else builtinCtorTag(ctor_pattern.name),
+        .type_name = if (ctor_info) |info| try arena.allocator().dupe(u8, info.type_name) else null,
     } };
 }
 
-fn validateCtor(name: []const u8, arg_count: usize) LowerError!void {
+fn validateCtor(ctx: *LowerContext, name: []const u8, arg_count: usize) LowerError!?ConstructorInfo {
+    if (ctx.constructors.get(name)) |info| {
+        if (arg_count != info.payload_types.len) return error.UnsupportedCtorArity;
+        return info;
+    }
     if (std.mem.eql(u8, name, "None")) {
         if (arg_count != 0) return error.UnsupportedCtorArity;
-        return;
+        return null;
     }
     if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Error")) {
         if (arg_count != 1) return error.UnsupportedCtorArity;
-        return;
+        return null;
     }
     if (std.mem.eql(u8, name, "[]")) {
         if (arg_count != 0) return error.UnsupportedCtorArity;
-        return;
+        return null;
     }
     if (std.mem.eql(u8, name, "::")) {
         if (arg_count != 2) return error.UnsupportedCtorArity;
-        return;
+        return null;
     }
     return error.UnsupportedCtor;
+}
+
+fn builtinCtorTag(name: []const u8) u32 {
+    if (std.mem.eql(u8, name, "None")) return 0;
+    if (std.mem.eql(u8, name, "Some")) return 1;
+    if (std.mem.eql(u8, name, "Ok")) return 0;
+    if (std.mem.eql(u8, name, "Error")) return 1;
+    if (std.mem.eql(u8, name, "[]")) return 0;
+    if (std.mem.eql(u8, name, "::")) return 1;
+    return 0;
 }
 
 fn isAtomicTtree(expr: ttree.Expr) bool {
@@ -571,7 +673,11 @@ fn restoreBindings(ctx: *LowerContext, inserted: []const ScopedBinding) void {
     }
 }
 
-fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, name: []const u8, matched_ty: ir.Ty) LowerError![]const ir.Ty {
+fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8, matched_ty: ir.Ty) LowerError![]const ir.Ty {
+    if (ctx.constructors.get(name)) |info| {
+        return typeExprsToTys(arena, info.payload_types);
+    }
+
     const adt = switch (matched_ty) {
         .Adt => |value| value,
         else => return error.UnsupportedPattern,
@@ -610,7 +716,18 @@ fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, name: []const u8, matc
     return error.UnsupportedPattern;
 }
 
-fn ctorTy(arena: *std.heap.ArenaAllocator, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
+fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
+    if (ctx.constructors.get(name)) |info| {
+        const params = try arena.allocator().alloc(ir.Ty, info.type_params.len);
+        for (info.type_params, 0..) |_, index| {
+            params[index] = if (args.len > 0) exprTy(args[0].*) else .Int;
+        }
+        return .{ .Adt = .{
+            .name = info.type_name,
+            .params = params,
+        } };
+    }
+
     if (std.mem.eql(u8, name, "[]")) {
         return listTy(arena, .Int);
     }
@@ -632,6 +749,34 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, name: []const u8, args: []const *cons
     return .{ .Adt = .{
         .name = adt_name,
         .params = params,
+    } };
+}
+
+fn typeExprsToTys(arena: *std.heap.ArenaAllocator, exprs: []const types.TypeExpr) LowerError![]const ir.Ty {
+    const out = try arena.allocator().alloc(ir.Ty, exprs.len);
+    for (exprs, 0..) |expr, index| {
+        out[index] = try typeExprToTy(arena, expr);
+    }
+    return out;
+}
+
+fn typeExprToTy(arena: *std.heap.ArenaAllocator, expr: types.TypeExpr) LowerError!ir.Ty {
+    return switch (expr) {
+        .TypeVar => .Int,
+        .TypeRef => |ref| try typeRefToTy(arena, ref),
+        .RecursiveRef => |ref| try typeRefToTy(arena, ref),
+        .Tuple => .Unit,
+    };
+}
+
+fn typeRefToTy(arena: *std.heap.ArenaAllocator, ref: types.TypeRef) LowerError!ir.Ty {
+    if (std.mem.eql(u8, ref.name, "int")) return .Int;
+    if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
+    if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
+    if (std.mem.eql(u8, ref.name, "string")) return .String;
+    return .{ .Adt = .{
+        .name = ref.name,
+        .params = try typeExprsToTys(arena, ref.args),
     } };
 }
 
@@ -1141,4 +1286,45 @@ test "lower basic match expressions with top-to-bottom arms" {
     defer std.testing.allocator.free(printed);
     try std.testing.expect(std.mem.indexOf(u8, printed, "(match") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "((pattern (ctor Some (var x)))") != null);
+}
+
+test "lower user-defined ADT constructors with explicit tags" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.5 (module (type_decl (name t) (params) (variants ((A (payload_types)) (B (payload_types)) (C (payload_types (type-ref int)))))) (let entrypoint (lambda (_) (match (ctor C (const-int 42)) (case (ctor A) (const-int 0)) (case (ctor C (var x)) (var x)))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    try std.testing.expectEqual(@as(usize, 1), module.type_decls.len);
+    try std.testing.expectEqualStrings("t", module.type_decls[0].name);
+    try std.testing.expectEqual(@as(u32, 2), module.type_decls[0].variants[2].tag);
+
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const scrutinee_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const ctor_expr = switch (scrutinee_let.value.*) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("C", ctor_expr.name);
+    try std.testing.expectEqual(@as(u32, 2), ctor_expr.tag);
+    try std.testing.expectEqualStrings("t", ctor_expr.type_name.?);
+
+    const printed = try pretty.formatModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(printed);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "(type t (variants (A :tag 0) (B :tag 1) (C :tag 2 :payload (type-ref int))))") != null);
 }

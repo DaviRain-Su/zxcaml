@@ -9,6 +9,7 @@
 pub const LModule = struct {
     entrypoint: LFunc,
     functions: []const LFunc = &.{},
+    type_decls: []const LVariantType = &.{},
 };
 
 /// A lowered function using the P1 arena-threaded calling convention.
@@ -131,6 +132,8 @@ pub const LCtor = struct {
     args: []const *const LExpr,
     ty: LTy,
     layout: @import("../core/layout.zig").Layout,
+    tag: u32 = 0,
+    type_name: ?[]const u8 = null,
 };
 
 /// Lowered pattern match expression. Arms keep source order; first match wins.
@@ -156,6 +159,37 @@ pub const LPattern = union(enum) {
 pub const LCtorPattern = struct {
     name: []const u8,
     args: []const LPattern,
+    tag: u32 = 0,
+    type_name: ?[]const u8 = null,
+};
+
+/// Lowered user-defined ADT declaration.
+pub const LVariantType = struct {
+    name: []const u8,
+    params: []const []const u8 = &.{},
+    variants: []const LVariantCtor,
+    is_recursive: bool = false,
+};
+
+/// Lowered user-defined ADT constructor metadata.
+pub const LVariantCtor = struct {
+    name: []const u8,
+    tag: u32,
+    payload_types: []const LTypeExpr = &.{},
+};
+
+/// Lowered type expressions used by user-defined constructor payloads.
+pub const LTypeExpr = union(enum) {
+    TypeVar: []const u8,
+    TypeRef: LTypeRef,
+    RecursiveRef: LTypeRef,
+    Tuple: []const LTypeExpr,
+};
+
+/// Lowered named type reference.
+pub const LTypeRef = struct {
+    name: []const u8,
+    args: []const LTypeExpr = &.{},
 };
 
 /// Lowered type information needed by source emission.

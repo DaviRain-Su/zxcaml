@@ -9,6 +9,7 @@ const std = @import("std");
 const ir = @import("../core/ir.zig");
 const lir = @import("lir.zig");
 const strategy = @import("strategy.zig");
+const core_types = @import("../core/types.zig");
 
 /// M0 ArenaStrategy implementation over an allocator-owned output arena.
 pub const ArenaStrategy = struct {
@@ -91,7 +92,60 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
     return .{
         .entrypoint = try lowerEntrypointLet(allocator, module, entrypoint_index),
         .functions = try functions.toOwnedSlice(allocator),
+        .type_decls = try lowerTypeDecls(allocator, module.type_decls),
     };
+}
+
+fn lowerTypeDecls(allocator: std.mem.Allocator, decls: []const core_types.VariantType) LowerError![]const lir.LVariantType {
+    const lowered = try allocator.alloc(lir.LVariantType, decls.len);
+    for (decls, 0..) |decl, decl_index| {
+        const variants = try allocator.alloc(lir.LVariantCtor, decl.variants.len);
+        for (decl.variants, 0..) |variant, variant_index| {
+            variants[variant_index] = .{
+                .name = try allocator.dupe(u8, variant.name),
+                .tag = variant.tag,
+                .payload_types = try lowerTypeExprs(allocator, variant.payload_types),
+            };
+        }
+        lowered[decl_index] = .{
+            .name = try allocator.dupe(u8, decl.name),
+            .params = try dupeStringSlice(allocator, decl.params),
+            .variants = variants,
+            .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerTypeExprs(allocator: std.mem.Allocator, exprs: []const core_types.TypeExpr) LowerError![]const lir.LTypeExpr {
+    const lowered = try allocator.alloc(lir.LTypeExpr, exprs.len);
+    for (exprs, 0..) |expr, index| {
+        lowered[index] = try lowerTypeExpr(allocator, expr);
+    }
+    return lowered;
+}
+
+fn lowerTypeExpr(allocator: std.mem.Allocator, expr: core_types.TypeExpr) LowerError!lir.LTypeExpr {
+    return switch (expr) {
+        .TypeVar => |name| .{ .TypeVar = try allocator.dupe(u8, name) },
+        .TypeRef => |ref| .{ .TypeRef = .{
+            .name = try allocator.dupe(u8, ref.name),
+            .args = try lowerTypeExprs(allocator, ref.args),
+        } },
+        .RecursiveRef => |ref| .{ .RecursiveRef = .{
+            .name = try allocator.dupe(u8, ref.name),
+            .args = try lowerTypeExprs(allocator, ref.args),
+        } },
+        .Tuple => |items| .{ .Tuple = try lowerTypeExprs(allocator, items) },
+    };
+}
+
+fn dupeStringSlice(allocator: std.mem.Allocator, values: []const []const u8) LowerError![]const []const u8 {
+    const out = try allocator.alloc([]const u8, values.len);
+    for (values, 0..) |value, index| {
+        out[index] = try allocator.dupe(u8, value);
+    }
+    return out;
 }
 
 fn lowerBackend(ptr: *anyopaque, module: ir.Module) anyerror!lir.LModule {
@@ -349,6 +403,8 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
             .args = try lowerExprPtrs(allocator, ctor_expr.args, ctx),
             .ty = try lowerTy(allocator, ctor_expr.ty),
             .layout = ctor_expr.layout,
+            .tag = ctor_expr.tag,
+            .type_name = if (ctor_expr.type_name) |name| try allocator.dupe(u8, name) else null,
         } },
         .Match => |match_expr| .{ .Match = .{
             .scrutinee = try lowerExprPtrWithContext(allocator, match_expr.scrutinee.*, ctx),
@@ -616,6 +672,8 @@ fn lowerPattern(allocator: std.mem.Allocator, pattern: ir.Pattern) LowerError!li
         .Ctor => |ctor_pattern| .{ .Ctor = .{
             .name = try allocator.dupe(u8, ctor_pattern.name),
             .args = try lowerPatterns(allocator, ctor_pattern.args),
+            .tag = ctor_pattern.tag,
+            .type_name = if (ctor_pattern.type_name) |name| try allocator.dupe(u8, name) else null,
         } },
     };
 }
