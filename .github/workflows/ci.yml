@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  ZIG_VERSION: "0.16.0"
+  OCAML_VERSION: "5.2.1"
+  OPAM_SWITCH: zxcaml-p1
+  SBPF_LINKER_VERSION: "0.1.8"
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+    env:
+      # BPF acceptance is opt-in everywhere, with macOS enabled by default
+      # because that is the primary development environment for this project.
+      # Ubuntu can opt in by setting the repository variable SOLANA_BPF=1.
+      SOLANA_BPF: ${{ matrix.os == 'macos-latest' && '1' || vars.SOLANA_BPF }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache opam switch
+        uses: actions/cache@v4
+        with:
+          path: ~/.opam
+          key: ${{ runner.os }}-opam-${{ env.OCAML_VERSION }}-${{ env.OPAM_SWITCH }}-${{ hashFiles('init.sh', '*.opam', '**/*.opam', 'opam.locked') }}
+          restore-keys: |
+            ${{ runner.os }}-opam-${{ env.OCAML_VERSION }}-${{ env.OPAM_SWITCH }}-
+
+      - name: Cache Zig install
+        uses: actions/cache@v4
+        with:
+          path: ~/zig
+          key: ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}
+
+      - name: Cache sbpf-linker cargo install
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/sbpf-linker
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-sbpf-linker-${{ env.SBPF_LINKER_VERSION }}-${{ hashFiles('init.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-sbpf-linker-${{ env.SBPF_LINKER_VERSION }}-
+
+      - name: Initialize toolchain
+        run: ./init.sh
+
+      - name: Build
+        run: zig build
+
+      - name: Test
+        run: zig build test
+
+      - name: Check examples corpus
+        run: |
+          set -euo pipefail
+          for file in examples/*.ml; do
+            if [[ "$file" == "examples/m0_unsupported.ml" ]]; then
+              echo "==> skipping diagnostic fixture $file"
+              continue
+            fi
+            echo "==> omlz check $file"
+            zig-out/bin/omlz check "$file"
+          done
+
+      - name: Solana BPF acceptance
+        if: env.SOLANA_BPF == '1'
+        run: tests/solana/hello/invoke.sh
