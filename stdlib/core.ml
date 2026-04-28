@@ -13,12 +13,57 @@ module Option = struct
   let map f = function None -> None | Some x -> Some (f x)
 
   let bind x f = match x with None -> None | Some v -> f v
+
+  let is_none x = match x with None -> true | Some _ -> false
+
+  let is_some x = match x with None -> false | Some _ -> true
+
+  let value x default = match x with None -> default | Some v -> v
+
+  let rec unreachable () = unreachable ()
+
+  let get x = match x with Some v -> v | None -> unreachable ()
 end
 
 module Result = struct
   let map f = function Ok x -> Ok (f x) | Error e -> Error e
 
   let bind x f = match x with Ok v -> f v | Error e -> Error e
+
+  let is_ok x = match x with Ok _ -> true | Error _ -> false
+
+  let is_error x = match x with Ok _ -> false | Error _ -> true
+
+  let ok x = match x with Ok v -> Some v | Error _ -> None
+
+  let error x = match x with Ok _ -> None | Error e -> Some e
+end
+
+module List = struct
+  let rec length xs = match xs with [] -> 0 | _ :: rest -> 1 + length rest
+
+  let rec map f xs =
+    match xs with [] -> [] | x :: rest -> f x :: map f rest
+
+  let rec filter predicate xs =
+    match xs with
+    | [] -> []
+    | x :: rest ->
+        if predicate x then x :: filter predicate rest else filter predicate rest
+
+  let rec fold_left f acc xs =
+    match xs with [] -> acc | x :: rest -> fold_left f (f acc x) rest
+
+  let rev xs = fold_left (fun acc x -> x :: acc) [] xs
+
+  let rec append left right =
+    match left with [] -> right | x :: rest -> x :: append rest right
+
+  let rec unreachable () = unreachable ()
+
+  let hd xs = match xs with [] -> unreachable () | x :: _ -> x
+
+  let tl xs = match xs with [] -> unreachable () | _ :: rest -> rest
 end
 
 let head xs = match xs with [] -> None | x :: _ -> Some x
