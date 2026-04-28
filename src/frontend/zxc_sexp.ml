@@ -1,16 +1,14 @@
 (* S-expression serializer for the ZxCaml OCaml frontend wire format.
 
    The serializer is intentionally hand-written to avoid any dependency beyond
-   compiler-libs.common.  Version 0.6 contains top-level let declarations,
-   one-argument lambdas, integer/string constants, identifiers, nested lets,
+   compiler-libs.common.  Version 0.7 contains top-level let declarations,
    whitelisted option/result constructor expressions, basic match expressions,
-   user-authored ADT type declarations, nested constructor patterns, and
-   guarded match arms. *)
-
+   user-authored ADT type declarations, nested constructor patterns, guarded
+   match arms, and tuple/record construction/projection forms. *)
 open Format
 open Zxc_subset
 
-let version = "0.6"
+let version = "0.7"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' -> true
@@ -52,10 +50,38 @@ let rec pp_expr ppf = function
       fprintf ppf "(ctor %a" pp_atom ctor.name;
       List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) ctor.args;
       fprintf ppf ")"
+  | Tuple items ->
+      fprintf ppf "(tuple (items";
+      List.iter (fun item -> fprintf ppf " %a" pp_expr item) items;
+      fprintf ppf "))"
+  | Tuple_project tuple_project ->
+      fprintf ppf "(tuple_project %a (index %d))" pp_expr
+        tuple_project.tuple_expr tuple_project.index
+  | Record record ->
+      fprintf ppf "(record (fields (";
+      pp_record_expr_fields ppf record.fields;
+      fprintf ppf ")))"
+  | Field_access field_access ->
+      fprintf ppf "(field_access %a %a)" pp_expr field_access.record_expr pp_atom
+        field_access.field_name
+  | Record_update record_update ->
+      fprintf ppf "(record_update %a (fields (" pp_expr record_update.base_expr;
+      pp_record_expr_fields ppf record_update.fields;
+      fprintf ppf ")))"
   | Match match_expr ->
       fprintf ppf "(match %a" pp_expr match_expr.scrutinee;
       List.iter (fun arm -> fprintf ppf " %a" pp_match_arm arm) match_expr.arms;
       fprintf ppf ")"
+
+and pp_record_expr_fields ppf = function
+  | [] -> ()
+  | [ field ] -> pp_record_expr_field ppf field
+  | field :: rest ->
+      pp_record_expr_field ppf field;
+      List.iter (fun field -> fprintf ppf " %a" pp_record_expr_field field) rest
+
+and pp_record_expr_field ppf field =
+  fprintf ppf "(%a %a)" pp_atom field.field_name pp_expr field.field_value
 
 and pp_params ppf = function
   | [] -> ()
@@ -78,6 +104,25 @@ and pp_match_pattern ppf = function
       fprintf ppf "(ctor %a" pp_atom ctor.name;
       List.iter (fun arg -> fprintf ppf " %a" pp_match_pattern arg) ctor.args;
       fprintf ppf ")"
+  | Pat_tuple items ->
+      fprintf ppf "(tuple_pattern";
+      List.iter (fun item -> fprintf ppf " %a" pp_match_pattern item) items;
+      fprintf ppf ")"
+  | Pat_record fields ->
+      fprintf ppf "(record_pattern (fields (";
+      pp_record_pattern_fields ppf fields;
+      fprintf ppf ")))"
+
+and pp_record_pattern_fields ppf = function
+  | [] -> ()
+  | [ field ] -> pp_record_pattern_field ppf field
+  | field :: rest ->
+      pp_record_pattern_field ppf field;
+      List.iter (fun field -> fprintf ppf " %a" pp_record_pattern_field field) rest
+
+and pp_record_pattern_field ppf field =
+  fprintf ppf "(%a %a)" pp_atom field.pattern_field_name pp_match_pattern
+    field.pattern_field_value
 
 let rec pp_decl ppf decl =
   match decl with
@@ -94,6 +139,24 @@ let rec pp_decl ppf decl =
       fprintf ppf " (variants (";
       pp_type_variants ppf decl.variants;
       fprintf ppf ")))"
+  | Tuple_type_decl decl ->
+      fprintf ppf "(tuple_type_decl (name %a)" pp_atom decl.tuple_type_name;
+      fprintf ppf " (params";
+      List.iter (fun param -> fprintf ppf " %a" pp_atom param) decl.tuple_params;
+      fprintf ppf ")";
+      if decl.tuple_is_recursive then fprintf ppf " (recursive true)";
+      fprintf ppf " (items";
+      List.iter (fun ty -> fprintf ppf " %a" pp_type_expr ty) decl.tuple_items;
+      fprintf ppf "))"
+  | Record_type_decl decl ->
+      fprintf ppf "(record_type_decl (name %a)" pp_atom decl.record_type_name;
+      fprintf ppf " (params";
+      List.iter (fun param -> fprintf ppf " %a" pp_atom param) decl.record_params;
+      fprintf ppf ")";
+      if decl.record_is_recursive then fprintf ppf " (recursive true)";
+      fprintf ppf " (fields (";
+      pp_record_type_fields ppf decl.record_fields;
+      fprintf ppf ")))"
 
 and pp_type_variants ppf = function
   | [] -> ()
@@ -106,6 +169,19 @@ and pp_type_variant ppf variant =
   fprintf ppf "(%a (payload_types" pp_atom variant.constr_name;
   List.iter (fun ty -> fprintf ppf " %a" pp_type_expr ty) variant.payload_types;
   fprintf ppf "))"
+
+and pp_record_type_fields ppf = function
+  | [] -> ()
+  | [ field ] -> pp_record_type_field ppf field
+  | field :: rest ->
+      pp_record_type_field ppf field;
+      List.iter (fun field -> fprintf ppf " %a" pp_record_type_field field) rest
+
+and pp_record_type_field ppf field =
+  fprintf ppf "(%a %a" pp_atom field.record_field_name pp_type_expr
+    field.record_field_type;
+  if field.record_field_mutable then fprintf ppf " (mutable true)";
+  fprintf ppf ")"
 
 and pp_type_expr ppf = function
   | Type_var name -> fprintf ppf "(type-var %a)" pp_atom name

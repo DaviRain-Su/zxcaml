@@ -25,21 +25,21 @@ CASES: list[tuple[str, str, str]] = [
     (
         "type decl sexp - enum",
         "type color = Red | Green | Blue\n",
-        "(zxcaml-cir 0.6 (module (type_decl (name color) (params) "
+        "(zxcaml-cir 0.7 (module (type_decl (name color) (params) "
         "(variants ((Red (payload_types)) (Green (payload_types)) "
         "(Blue (payload_types)))))))\n",
     ),
     (
         "type decl sexp - parameterized option",
         "type 'a option = None | Some of 'a\n",
-        "(zxcaml-cir 0.6 (module (type_decl (name option) (params 'a) "
+        "(zxcaml-cir 0.7 (module (type_decl (name option) (params 'a) "
         "(variants ((None (payload_types)) "
         "(Some (payload_types (type-var 'a))))))))\n",
     ),
     (
         "type decl sexp - recursive tree",
         "type 'a tree = Leaf | Node of 'a tree * 'a tree\n",
-        "(zxcaml-cir 0.6 (module (type_decl (name tree) (params 'a) "
+        "(zxcaml-cir 0.7 (module (type_decl (name tree) (params 'a) "
         "(recursive true) (variants ((Leaf (payload_types)) "
         "(Node (payload_types (recursive-ref tree (type-var 'a)) "
         "(recursive-ref tree (type-var 'a)))))))))\n",
@@ -47,7 +47,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "user adt constructor expression",
         "type color = Red | Green | Blue\nlet entrypoint _ = Red\n",
-        "(zxcaml-cir 0.6 (module (type_decl (name color) (params) "
+        "(zxcaml-cir 0.7 (module (type_decl (name color) (params) "
         "(variants ((Red (payload_types)) (Green (payload_types)) "
         "(Blue (payload_types))))) (let entrypoint (lambda (_) (ctor Red)))))\n",
     ),
@@ -57,7 +57,7 @@ CASES: list[tuple[str, str, str]] = [
             "type color = Red | Green | Blue\n"
             "let entrypoint c = match c with Red -> 1 | Green -> 2 | Blue -> 3\n"
         ),
-        "(zxcaml-cir 0.6 (module (type_decl (name color) (params) "
+        "(zxcaml-cir 0.7 (module (type_decl (name color) (params) "
         "(variants ((Red (payload_types)) (Green (payload_types)) "
         "(Blue (payload_types))))) (let entrypoint (lambda (c) "
         "(match (var c) (case (ctor Red) (const-int 1)) "
@@ -67,7 +67,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "nested builtin and user adt constructor expression",
         "type tree = Leaf of int\nlet entrypoint _ = Some (Leaf 42)\n",
-        "(zxcaml-cir 0.6 (module (type_decl (name tree) (params) "
+        "(zxcaml-cir 0.7 (module (type_decl (name tree) (params) "
         "(variants ((Leaf (payload_types (type-ref int)))))) "
         "(let entrypoint (lambda (_) (ctor Some (ctor Leaf (const-int 42)))))))\n",
     ),
@@ -77,7 +77,7 @@ CASES: list[tuple[str, str, str]] = [
             "type ('a, 'b) either = Left of 'a | Right of 'b\n"
             "let entrypoint x = match x with Some (Left v) -> v | Some _ -> 0 | None -> 0\n"
         ),
-        "(zxcaml-cir 0.6 (module (type_decl (name either) (params 'a 'b) "
+        "(zxcaml-cir 0.7 (module (type_decl (name either) (params 'a 'b) "
         "(variants ((Left (payload_types (type-var 'a))) "
         "(Right (payload_types (type-var 'b)))))) "
         "(let entrypoint (lambda (x) (match (var x) "
@@ -88,11 +88,64 @@ CASES: list[tuple[str, str, str]] = [
     (
         "guarded match arm",
         "let entrypoint x = match x with Some v when v > 10 -> 1 | Some _ -> 2 | None -> 3\n",
-        "(zxcaml-cir 0.6 (module (let entrypoint (lambda (x) "
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (x) "
         "(match (var x) "
         "(case (ctor Some (var v)) (when_guard (prim \">\" (var v) (const-int 10)) (const-int 1))) "
         "(case (ctor Some _) (const-int 2)) "
         "(case (ctor None) (const-int 3)))))))\n",
+    ),
+    (
+        "tuple construction",
+        "let entrypoint _ = (1, true, 42)\n",
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
+        "(tuple (items (const-int 1) (ctor true) (const-int 42)))))))\n",
+    ),
+    (
+        "tuple projection",
+        "let entrypoint _ = let t = (1, 2) in fst t\n",
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
+        "(let t (tuple (items (const-int 1) (const-int 2))) "
+        "(tuple_project (var t) (index 0)))))))\n",
+    ),
+    (
+        "tuple type declaration",
+        "type pair = int * bool\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 0.7 (module "
+        "(tuple_type_decl (name pair) (params) "
+        "(items (type-ref int) (type-ref bool))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "record construction",
+        "type person = { name : string; age : int }\n"
+        "let entrypoint _ = { name = \"alice\"; age = 30 }\n",
+        "(zxcaml-cir 0.7 (module "
+        "(record_type_decl (name person) (params) "
+        "(fields ((name (type-ref string)) (age (type-ref int))))) "
+        "(let entrypoint (lambda (_) "
+        "(record (fields ((name (const-string \"alice\")) (age (const-int 30)))))))))\n",
+    ),
+    (
+        "record field access",
+        "type person = { name : string; age : int }\n"
+        "let entrypoint _ = let r = { name = \"alice\"; age = 30 } in r.name\n",
+        "(zxcaml-cir 0.7 (module "
+        "(record_type_decl (name person) (params) "
+        "(fields ((name (type-ref string)) (age (type-ref int))))) "
+        "(let entrypoint (lambda (_) "
+        "(let r (record (fields ((name (const-string \"alice\")) (age (const-int 30))))) "
+        "(field_access (var r) name))))))\n",
+    ),
+    (
+        "record functional update",
+        "type person = { name : string; age : int }\n"
+        "let entrypoint _ = let r = { name = \"alice\"; age = 30 } in { r with age = 31 }\n",
+        "(zxcaml-cir 0.7 (module "
+        "(record_type_decl (name person) (params) "
+        "(fields ((name (type-ref string)) (age (type-ref int))))) "
+        "(let entrypoint (lambda (_) "
+        "(let r (record (fields ((name (const-string \"alice\")) (age (const-int 30))))) "
+        "(record_update (var r) (fields ((age (const-int 31))))))))))\n",
     ),
 ]
 

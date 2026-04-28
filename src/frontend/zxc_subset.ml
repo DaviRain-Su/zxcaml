@@ -38,6 +38,11 @@ type expr =
   | If of if_expr
   | Prim of prim
   | Ctor of ctor
+  | Tuple of expr list
+  | Tuple_project of tuple_project
+  | Record of record_expr
+  | Field_access of field_access
+  | Record_update of record_update
   | Match of match_expr
 
 and lambda = {
@@ -73,6 +78,30 @@ and ctor = {
   args : expr list;
 }
 
+and tuple_project = {
+  tuple_expr : expr;
+  index : int;
+}
+
+and record_expr = {
+  fields : record_expr_field list;
+}
+
+and record_expr_field = {
+  field_name : string;
+  field_value : expr;
+}
+
+and field_access = {
+  record_expr : expr;
+  field_name : string;
+}
+
+and record_update = {
+  base_expr : expr;
+  fields : record_expr_field list;
+}
+
 and match_expr = {
   scrutinee : expr;
   arms : match_arm list;
@@ -88,10 +117,17 @@ and match_pattern =
   | Pat_any
   | Pat_var of string
   | Pat_ctor of ctor_pattern
+  | Pat_tuple of match_pattern list
+  | Pat_record of record_pattern_field list
 
 and ctor_pattern = {
   name : string;
   args : match_pattern list;
+}
+
+and record_pattern_field = {
+  pattern_field_name : string;
+  pattern_field_value : match_pattern;
 }
 
 type type_expr =
@@ -123,9 +159,31 @@ type type_decl = {
   is_recursive : bool;
 }
 
+type tuple_type_decl = {
+  tuple_type_name : string;
+  tuple_params : string list;
+  tuple_items : type_expr list;
+  tuple_is_recursive : bool;
+}
+
+type record_type_field = {
+  record_field_name : string;
+  record_field_type : type_expr;
+  record_field_mutable : bool;
+}
+
+type record_type_decl = {
+  record_type_name : string;
+  record_params : string list;
+  record_fields : record_type_field list;
+  record_is_recursive : bool;
+}
+
 type decl =
   | Let_decl of value_decl
   | Type_decl of type_decl
+  | Tuple_type_decl of tuple_type_decl
+  | Record_type_decl of record_type_decl
 
 type modul = Module of decl list
 
@@ -133,7 +191,8 @@ exception Unsupported of diagnostic
 
 type type_env = { constructors : StringSet.t }
 
-let builtin_constructor_names = [ "None"; "Some"; "Ok"; "Error"; "[]"; "::" ]
+let builtin_constructor_names =
+  [ "None"; "Some"; "Ok"; "Error"; "[]"; "::"; "true"; "false" ]
 
 let initial_type_env =
   {
@@ -290,6 +349,11 @@ let is_mutation_primitive = function
   | "ref" | ":=" | "!" -> true
   | _ -> false
 
+let tuple_projection_index = function
+  | "fst" -> Some 0
+  | "snd" -> Some 1
+  | _ -> None
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> "_"
@@ -311,18 +375,37 @@ let parse_param (param : function_param) =
 let rec parse_match_scrutinee env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
+  | Texp_constant (Const_string (value, _, _)) -> Const_string value
   | Texp_ident (_, lid, _) -> Var (longident_name lid)
   | Texp_construct (_lid, constructor, args) ->
       let name = constructor.Types.cstr_name in
       if type_env_has_constructor env name then
         Ctor { name; args = List.map (parse_match_scrutinee env) args }
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
+  | Texp_tuple items -> Tuple (List.map (parse_match_scrutinee env) items)
+  | Texp_field (record_expr, _lid, label) ->
+      Field_access
+        {
+          record_expr = parse_match_scrutinee env record_expr;
+          field_name = label.Types.lbl_name;
+        }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let rec parse_match_pattern env (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> Pat_any
   | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
+  | Tpat_tuple items -> Pat_tuple (List.map (parse_match_pattern env) items)
+  | Tpat_record (fields, _) ->
+      Pat_record
+        (List.map
+           (fun (_lid, label, field_pattern) ->
+             {
+               pattern_field_name = label.Types.lbl_name;
+               pattern_field_value =
+                 parse_match_pattern env (field_pattern :> pattern);
+             })
+           fields)
   | Tpat_construct (_lid, constructor, args, _) ->
       let name = constructor.Types.cstr_name in
       if type_env_has_constructor env name then
@@ -348,6 +431,30 @@ and parse_apply_args env args =
     | _, None -> unsupported ~node_kind:"partial-application" ~loc:Location.none ()
   in
   List.map parse_one args
+
+and parse_tuple_projection_args env ~index args ~loc =
+  match args with
+  | [ Nolabel, Some arg ] -> Tuple_project { tuple_expr = parse_expr env arg; index }
+  | [ _, Some arg ] -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc ()
+  | [ _, None ] -> unsupported ~node_kind:"partial-application" ~loc ()
+  | _ ->
+      unsupported ~node_kind:"tuple-projection-arity" ~loc
+        ~message:"tuple projection helpers fst/snd require exactly one argument"
+        ()
+
+and parse_record_field_expr env (label, definition) =
+  match definition with
+  | Overridden (_lid, expr) ->
+      Some { field_name = label.Types.lbl_name; field_value = parse_expr env expr }
+  | Kept _ -> None
+
+and parse_record_fields env fields =
+  Array.fold_right
+    (fun field acc ->
+      match parse_record_field_expr env field with
+      | Some field -> field :: acc
+      | None -> acc)
+    fields []
 
 and parse_expr env (expr : expression) =
   match expr.exp_desc with
@@ -382,6 +489,18 @@ and parse_expr env (expr : expression) =
       if type_env_has_constructor env name then
         Ctor { name; args = List.map (parse_expr env) args }
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
+  | Texp_tuple items -> Tuple (List.map (parse_expr env) items)
+  | Texp_record { fields; extended_expression = None; _ } ->
+      Record { fields = parse_record_fields env fields }
+  | Texp_record { fields; extended_expression = Some base_expr; _ } ->
+      Record_update
+        {
+          base_expr = parse_expr env base_expr;
+          fields = parse_record_fields env fields;
+        }
+  | Texp_field (record_expr, _lid, label) ->
+      Field_access
+        { record_expr = parse_expr env record_expr; field_name = label.Types.lbl_name }
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when is_whitelisted_prim (longident_name lid) ->
       Prim { op = longident_name lid; args = parse_apply_args env args }
@@ -389,6 +508,10 @@ and parse_expr env (expr : expression) =
     when is_mutation_primitive (longident_name lid) ->
       unsupported_mutation ~feature:(longident_name lid) ~node_kind:"Texp_apply"
         ~loc:expr.exp_loc
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args) -> (
+      match tuple_projection_index (longident_name lid) with
+      | Some index -> parse_tuple_projection_args env ~index args ~loc:expr.exp_loc
+      | None -> App { callee = Var (longident_name lid); args = parse_apply_args env args })
   | Texp_apply (callee, args) ->
       App { callee = parse_expr env callee; args = parse_apply_args env args }
   | Texp_ifthenelse (cond, then_branch, Some else_branch) ->
@@ -421,6 +544,7 @@ let rec parse_type_expr ~current_type (ctyp : core_type) =
           args = List.map (parse_type_expr ~current_type) args;
           is_recursive_ref = String.equal type_name current_type;
         }
+  | Ttyp_poly ([], inner) -> parse_type_expr ~current_type inner
   | _ ->
       unsupported ~node_kind:(core_type_kind ctyp) ~loc:ctyp.ctyp_loc
         ~message:
@@ -448,6 +572,11 @@ let rec type_expr_has_recursive_ref = function
 let variant_has_recursive_ref variant =
   List.exists type_expr_has_recursive_ref variant.payload_types
 
+let record_field_has_recursive_ref field =
+  type_expr_has_recursive_ref field.record_field_type
+
+let parse_type_params params = List.map parse_type_param params
+
 let parse_constructor_decl ~current_type (constructor : constructor_declaration) =
   (match constructor.cd_res with
   | None -> ()
@@ -474,22 +603,22 @@ let parse_constructor_decl ~current_type (constructor : constructor_declaration)
 let parse_type_declaration (type_decl : type_declaration) =
   if type_decl.typ_cstrs <> [] then
     unsupported ~node_kind:"type-constraint" ~loc:type_decl.typ_loc
-      ~message:"type constraints are not supported in P2 M0 ADT declarations"
+      ~message:"type constraints are not supported in P2 type declarations"
       ();
   (match type_decl.typ_private with
   | Public -> ()
   | Private ->
       unsupported ~node_kind:"private-type" ~loc:type_decl.typ_loc
-        ~message:"private type declarations are not supported in P2 M0"
-        ());
-  (match type_decl.typ_manifest with
-  | None -> ()
-  | Some manifest ->
-      unsupported ~node_kind:"type-alias" ~loc:manifest.ctyp_loc
-        ~message:"type aliases are not supported in P2 M0 ADT declarations"
+        ~message:"private type declarations are not supported in P2"
         ());
   match type_decl.typ_kind with
   | Ttype_variant constructors ->
+      (match type_decl.typ_manifest with
+      | None -> ()
+      | Some manifest ->
+          unsupported ~node_kind:"type-alias" ~loc:manifest.ctyp_loc
+            ~message:"variant declarations with manifests are not supported in P2"
+            ());
       let current_type = type_decl.typ_name.txt in
       let variants =
         List.map (parse_constructor_decl ~current_type) constructors
@@ -497,21 +626,60 @@ let parse_type_declaration (type_decl : type_declaration) =
       Type_decl
         {
           type_name = current_type;
-          params = List.map parse_type_param type_decl.typ_params;
+          params = parse_type_params type_decl.typ_params;
           variants;
           is_recursive = List.exists variant_has_recursive_ref variants;
         }
-  | Ttype_record _ ->
-      unsupported ~node_kind:"Ttype_record" ~loc:type_decl.typ_loc
-        ~message:"record type declarations are not supported until P2 M2"
-        ()
-  | Ttype_abstract ->
-      unsupported ~node_kind:"Ttype_abstract" ~loc:type_decl.typ_loc
-        ~message:"abstract type declarations are not supported in P2 M0"
-        ()
+  | Ttype_record fields ->
+      (match type_decl.typ_manifest with
+      | None -> ()
+      | Some manifest ->
+          unsupported ~node_kind:"type-alias" ~loc:manifest.ctyp_loc
+            ~message:"record declarations with manifests are not supported in P2"
+            ());
+      let current_type = type_decl.typ_name.txt in
+      let record_fields =
+        List.map
+          (fun field ->
+            {
+              record_field_name = field.ld_name.txt;
+              record_field_type = parse_type_expr ~current_type field.ld_type;
+              record_field_mutable = (field.ld_mutable = Mutable);
+            })
+          fields
+      in
+      Record_type_decl
+        {
+          record_type_name = current_type;
+          record_params = parse_type_params type_decl.typ_params;
+          record_fields;
+          record_is_recursive =
+            List.exists record_field_has_recursive_ref record_fields;
+        }
+  | Ttype_abstract -> (
+      match type_decl.typ_manifest with
+      | Some { ctyp_desc = Ttyp_tuple items; _ } ->
+          let current_type = type_decl.typ_name.txt in
+          let tuple_items = List.map (parse_type_expr ~current_type) items in
+          Tuple_type_decl
+            {
+              tuple_type_name = current_type;
+              tuple_params = parse_type_params type_decl.typ_params;
+              tuple_items;
+              tuple_is_recursive =
+                List.exists type_expr_has_recursive_ref tuple_items;
+            }
+      | Some manifest ->
+          unsupported ~node_kind:(core_type_kind manifest) ~loc:manifest.ctyp_loc
+            ~message:"only tuple type aliases are supported in P2 M2"
+            ()
+      | None ->
+          unsupported ~node_kind:"Ttype_abstract" ~loc:type_decl.typ_loc
+            ~message:"abstract type declarations are not supported in P2"
+            ())
   | Ttype_open ->
       unsupported ~node_kind:"Ttype_open" ~loc:type_decl.typ_loc
-        ~message:"open type declarations are not supported in P2 M0"
+        ~message:"open type declarations are not supported in P2"
         ()
 
 
@@ -528,14 +696,14 @@ let parse_structure_item env (item : structure_item) =
       let decl =
         match parse_value_binding env binding with
         | Let_decl decl -> Let_decl { decl with is_rec = true }
-        | Type_decl _ -> assert false
+        | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ -> assert false
       in
       (env, [ decl ])
   | Tstr_type (_, declarations) ->
       let decls = List.map parse_type_declaration declarations in
       let type_decls =
-        List.map
-          (function Type_decl type_decl -> type_decl | Let_decl _ -> assert false)
+        List.filter_map
+          (function Type_decl type_decl -> Some type_decl | _ -> None)
           decls
       in
       (type_env_add_type_decls env type_decls, decls)
