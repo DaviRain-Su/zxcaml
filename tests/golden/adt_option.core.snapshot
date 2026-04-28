@@ -1,0 +1,1 @@
+(module (let entrypoint (lambda (_ :ty (arrow unit int) :layout (arena flat)) (let _ignored (ctor Some (const 1 :ty int :layout (static flat)) :ty (option int) :layout (arena boxed)) (const 0 :ty int :layout (static flat)) :ty int :layout (static flat)))))

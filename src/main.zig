@@ -55,7 +55,7 @@ pub fn main(init: std.process.Init) !void {
             .success => |parsed| {
                 if (check_args.emit) |emit_kind| {
                     if (std.mem.eql(u8, emit_kind, "core-ir")) {
-                        try emitCoreIr(init, parsed.module);
+                        try emitCoreIr(init, parsed.module, check_args);
                         return;
                     }
 
@@ -131,7 +131,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz --version
         \\  omlz --help
         \\  omlz check <file.ml>
-        \\  omlz check --emit=core-ir <file.ml>
+        \\  omlz check --emit=core-ir [--bless] <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
         \\  omlz run <file.ml>
@@ -142,14 +142,35 @@ fn writeHelp(io: Io) !void {
 const CheckArgs = struct {
     emit: ?[]const u8,
     input_file: []const u8,
+    bless: bool = false,
 };
 
 fn parseCheckArgs(args: []const []const u8) !CheckArgs {
-    if (args.len == 3) return .{ .emit = null, .input_file = args[2] };
-    if (args.len == 4 and std.mem.startsWith(u8, args[2], "--emit=")) {
-        return .{ .emit = args[2]["--emit=".len..], .input_file = args[3] };
+    var emit: ?[]const u8 = null;
+    var input_file: ?[]const u8 = null;
+    var bless = false;
+
+    var index: usize = 2;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.startsWith(u8, arg, "--emit=")) {
+            emit = arg["--emit=".len..];
+        } else if (std.mem.eql(u8, arg, "--bless")) {
+            bless = true;
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            return error.UnsupportedCheckArgs;
+        } else if (input_file == null) {
+            input_file = arg;
+        } else {
+            return error.UnsupportedCheckArgs;
+        }
     }
-    return error.UnsupportedCheckArgs;
+
+    return .{
+        .emit = emit,
+        .input_file = input_file orelse return error.UnsupportedCheckArgs,
+        .bless = bless,
+    };
 }
 
 const BuildArgs = struct {
@@ -193,7 +214,7 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
     };
 }
 
-fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module) !void {
+fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, check_args: CheckArgs) !void {
     var core_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer core_arena.deinit();
 
@@ -212,8 +233,39 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
     };
     defer init.gpa.free(rendered);
 
-    try writeStdout(init.io, rendered);
-    try writeStdout(init.io, "\n");
+    if (check_args.bless) {
+        const snapshot_path = try deriveSnapshotPath(init.gpa, check_args.input_file);
+        defer init.gpa.free(snapshot_path);
+
+        const cwd = std.Io.Dir.cwd();
+        cwd.writeFile(init.io, .{
+            .sub_path = snapshot_path,
+            .data = rendered,
+            .flags = .{ .truncate = true },
+        }) catch |err| {
+            try writeStderr(init.io, "error: failed to write snapshot ");
+            try writeStderr(init.io, snapshot_path);
+            try writeStderr(init.io, ": ");
+            try writeStderr(init.io, @errorName(err));
+            try writeStderr(init.io, "\n");
+            std.process.exit(1);
+        };
+        try writeStdout(init.io, "blessed: ");
+        try writeStdout(init.io, snapshot_path);
+        try writeStdout(init.io, "\n");
+    } else {
+        try writeStdout(init.io, rendered);
+        try writeStdout(init.io, "\n");
+    }
+}
+
+/// Derives the `.core.snapshot` path from an `.ml` input path.
+fn deriveSnapshotPath(allocator: std.mem.Allocator, input_path: []const u8) ![]u8 {
+    if (std.mem.endsWith(u8, input_path, ".ml")) {
+        const stem = input_path[0 .. input_path.len - 3];
+        return std.fmt.allocPrint(allocator, "{s}.core.snapshot", .{stem});
+    }
+    return std.fmt.allocPrint(allocator, "{s}.core.snapshot", .{input_path});
 }
 
 fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module) !void {

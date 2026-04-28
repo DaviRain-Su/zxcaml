@@ -118,9 +118,30 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_determinism_tests.setCwd(b.path(""));
 
+    // Golden tests (F17 / G10): verify Core IR pretty-printer output
+    // matches committed `.core.snapshot` files in tests/golden/.
+    const golden_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/golden/run.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const golden_options = b.addOptions();
+    golden_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    golden_test_module.addOptions("golden_options", golden_options);
+    const golden_tests = b.addTest(.{
+        .root_module = golden_test_module,
+    });
+    const run_golden_tests = b.addRunArtifact(golden_tests);
+    // The golden harness invokes `omlz` as a subprocess, so omlz
+    // (and zxc-frontend) must be built before the test runs.
+    run_golden_tests.step.dependOn(b.getInstallStep());
+    // Set working directory to the project root so relative paths resolve.
+    run_golden_tests.setCwd(b.path(""));
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);
     test_step.dependOn(&run_determinism_tests.step);
+    test_step.dependOn(&run_golden_tests.step);
 }
