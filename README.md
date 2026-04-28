@@ -104,11 +104,24 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**Spec / planning phase.** No compiler code exists yet. This repo
-currently contains only design documents under [`docs/`](./docs/).
+**P1 Walking Skeleton is complete.** All 35 features implemented, 14/14 gates passed, 73+ tests.
 
-The implementation will be driven by a separate task system; this repo
-is the source of truth for *what* to build.
+The `omlz` CLI works end-to-end: parse OCaml → Core IR → codegen → native or BPF binary.
+
+### P1 Features
+
+- **CLI commands:** `omlz check <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`
+- **Wire format:** version 0.4 (evolved through 0.1 → 0.2 → 0.3 → 0.4)
+- **OCaml subset:** let bindings, nested let, let rec, pattern matching (constructors, variables, wildcards), ADTs (option, result), lists (`[]` / `::`), arithmetic (`+`, `-`, `*`, `/`, `mod` with i64 wrap), if/then/else, comparison operators, function application
+- **Memory model:** arena-only, fully inferred, hidden from the user
+- **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
+- **Solana acceptance:** deploy + invoke against `solana-test-validator` works
+- **Determinism:** interpreter ≡ Zig native across the entire corpus
+- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix
+- **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
+- **Examples:** 16 programs in `examples/` plus 10 UI tests (7 positive, 3 negative)
+- **Golden tests:** 9 Core IR snapshot pairs with `--bless` support
+- **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
 ---
 

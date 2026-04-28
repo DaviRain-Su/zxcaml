@@ -97,10 +97,24 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 
 ## 项目状态
 
-**规划 / 设计阶段。** 还没有编译器代码。
-当前 repo 里只有 [`docs/`](../) 下的设计文档（英文）和 [`docs/zh/`](./)（中文）。
+**P1 Walking Skeleton 已完成。** 35 项功能全部实现，14/14 关卡通过，73+ 测试。
 
-具体实现会由一套独立的任务系统驱动；这个 repo 是关于 *要做什么* 的真理来源。
+`omlz` CLI 已端到端工作：解析 OCaml → Core IR → 代码生成 → native 或 BPF 二进制。
+
+### P1 功能
+
+- **CLI 命令：** `omlz check <file>`、`omlz run <file>`、`omlz build --target=native <file> -o <out>`、`omlz build --target=bpf <file> -o <out>`
+- **Wire 格式：** 版本 0.4（经 0.1 → 0.2 → 0.3 → 0.4 演进）
+- **OCaml 子集：** let 绑定、嵌套 let、let rec、模式匹配（构造器、变量、通配符）、ADT（option、result）、列表（`[]` / `::`）、算术（`+`、`-`、`*`、`/`、`mod`，i64 回绕）、if/then/else、比较运算符、函数应用
+- **内存模型：** 仅 arena，完全推断，对用户隐藏
+- **后端：** 树遍历解释器、Zig native 代码生成、通过 `sbpf-linker --cpu v2` 的 BPF 代码生成
+- **Solana 验收：** 对 `solana-test-validator` 部署 + 调用成功
+- **确定性：** 解释器 ≡ Zig native，覆盖全部语料
+- **CI：** GitHub Actions 工作流，`macos-latest` + `ubuntu-latest` 矩阵
+- **诊断信息：** 人性化的 `path:line:col: severity: message` 渲染
+- **示例：** `examples/` 下 16 个程序，外加 10 个 UI 测试（7 正向、3 负向）
+- **Golden 测试：** 9 对 Core IR 快照，支持 `--bless`
+- **安装：** `./init.sh && zig build`（见 [INSTALLING.md](./INSTALLING.md)）
 
 ---
 
