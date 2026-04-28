@@ -217,11 +217,26 @@ them as equivalent, because `0.4` adds match expressions and pattern nodes.
 ## Diagnostic schema
 
 Unsupported programs exit non-zero and write one JSON object per line on
-stderr:
+stderr. Diagnostics are deliberately hand-serialized by the OCaml frontend
+without a JSON library. The required fields are:
 
-```json
-{"severity":"error","code":"M0-UNSUPPORTED","message":"...","node_kind":"Texp_apply","loc":{"file":"examples/m0_unsupported.ml","line":1,"col":8,"end_line":1,"end_col":13}}
+```text
+{
+  "file": string,
+  "line": integer,      // 1-indexed
+  "col": integer,       // 0-indexed
+  "severity": "error" | "warn" | "info",
+  "message": string,
+  "node_kind": string?, // Typedtree node name, when applicable
+  "hint": string?       // optional remediation text
+}
 ```
 
-Locations are 1-indexed lines and 0-indexed columns, matching OCaml
-`Lexing.position` (`pos_cnum - pos_bol`).
+Example:
+
+```json
+{"file":"examples/m0_unsupported.ml","line":1,"col":8,"severity":"error","message":"mutation (ref) is not supported in P1","node_kind":"Texp_apply","hint":"ZxCaml P1 is arena-only and does not support OCaml refs or mutable updates"}
+```
+
+Syntax and type errors reported by upstream `ocamlc` are converted into the
+same line-delimited JSON shape, using `node_kind: "ocamlc"`.

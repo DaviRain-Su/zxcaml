@@ -21,6 +21,7 @@ type diagnostic = {
   node_kind : string;
   loc : loc;
   message : string;
+  hint : string option;
 }
 
 type param = Anonymous | Param of string
@@ -114,24 +115,34 @@ let loc_of_location (location : Location.t) =
     end_col = finish.Lexing.pos_cnum - finish.Lexing.pos_bol;
   }
 
-let unsupported ~node_kind ~loc =
+let unsupported ?message ?hint ~node_kind ~loc () =
   raise
     (Unsupported
        {
          severity = "error";
-         code = "M0-UNSUPPORTED";
+         code = "P1-UNSUPPORTED";
          node_kind;
          loc = loc_of_location loc;
          message =
-           Printf.sprintf
-             "%s is not supported in the current ZxCaml subset; expected \
-              top-level `let` declarations, integer constants, identifiers, \
-              string constants, one-argument functions, non-recursive nested \
-              `let` expressions, or the whitelisted constructors \
-              None/Some/Ok/Error/[]/::, including basic pattern matches over \
-              those values"
-             node_kind;
+           (match message with
+           | Some message -> message
+           | None ->
+               Printf.sprintf
+                 "%s is not supported in the current ZxCaml subset; expected \
+                  top-level `let` declarations, integer constants, identifiers, \
+                  string constants, one-argument functions, non-recursive nested \
+                  `let` expressions, or the whitelisted constructors \
+                  None/Some/Ok/Error/[]/::, including basic pattern matches over \
+                  those values"
+                 node_kind);
+         hint;
        })
+
+let unsupported_mutation ~feature ~node_kind ~loc =
+  unsupported ~node_kind ~loc
+    ~message:(Printf.sprintf "mutation (%s) is not supported in P1" feature)
+    ~hint:"ZxCaml P1 is arena-only and does not support OCaml refs or mutable updates"
+    ()
 
 let structure_item_kind = function
   | Tstr_eval _ -> "Tstr_eval"
@@ -211,11 +222,15 @@ let is_whitelisted_prim = function
   | "+" | "-" | "*" | "/" | "mod" | "=" | "<>" | "<" | "<=" | ">" | ">=" -> true
   | _ -> false
 
+let is_mutation_primitive = function
+  | "ref" | ":=" | "!" -> true
+  | _ -> false
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> "_"
   | Tpat_var (ident, _, _) -> ident_name ident
-  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let parse_param (param : function_param) =
   match (param.fp_arg_label, param.fp_kind) with
@@ -223,11 +238,11 @@ let parse_param (param : function_param) =
       match pat.pat_desc with
       | Tpat_any -> Anonymous
       | Tpat_var (ident, _, _) -> Param (ident_name ident)
-      | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc)
+      | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ())
   | _, Tparam_pat pat ->
-      unsupported ~node_kind:"labelled-parameter" ~loc:pat.pat_loc
+      unsupported ~node_kind:"labelled-parameter" ~loc:pat.pat_loc ()
   | _, Tparam_optional_default (pat, _) ->
-      unsupported ~node_kind:"optional-parameter" ~loc:pat.pat_loc
+      unsupported ~node_kind:"optional-parameter" ~loc:pat.pat_loc ()
 
 let rec parse_match_scrutinee (expr : expression) =
   match expr.exp_desc with
@@ -237,14 +252,14 @@ let rec parse_match_scrutinee (expr : expression) =
       let name = constructor.Types.cstr_name in
       if is_whitelisted_constructor name then
         Ctor { name; args = List.map parse_match_scrutinee args }
-      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc
-  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
+      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
+  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let parse_simple_pattern (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> Pat_any
   | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
-  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let rec parse_match_pattern (pat : pattern) =
   match pat.pat_desc with
@@ -254,19 +269,19 @@ let rec parse_match_pattern (pat : pattern) =
       let name = constructor.Types.cstr_name in
       if is_whitelisted_constructor name then
         Pat_ctor { name; args = List.map parse_simple_pattern args }
-      else unsupported ~node_kind:("Tpat_construct(" ^ name ^ ")") ~loc:pat.pat_loc
-  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+      else unsupported ~node_kind:("Tpat_construct(" ^ name ^ ")") ~loc:pat.pat_loc ()
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let parse_computation_pattern (pat : computation general_pattern) =
   match pat.pat_desc with
   | Tpat_value value_pat -> parse_match_pattern (value_pat :> pattern)
-  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc
+  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let rec parse_match_case (case : computation case) =
   (match case.c_guard with
   | None -> ()
   | Some guard ->
-      unsupported ~node_kind:"Texp_match(guard)" ~loc:guard.exp_loc);
+      unsupported ~node_kind:"Texp_match(guard)" ~loc:guard.exp_loc ());
   let pattern = parse_computation_pattern case.c_lhs in
   let body = parse_expr case.c_rhs in
   { pattern; body }
@@ -274,8 +289,8 @@ let rec parse_match_case (case : computation case) =
 and parse_apply_args args =
   let parse_one = function
     | Nolabel, Some arg -> parse_expr arg
-    | _, Some arg -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc
-    | _, None -> unsupported ~node_kind:"partial-application" ~loc:Location.none
+    | _, Some arg -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc ()
+    | _, None -> unsupported ~node_kind:"partial-application" ~loc:Location.none ()
   in
   List.map parse_one args
 
@@ -289,9 +304,9 @@ and parse_expr (expr : expression) =
       let body = parse_expr body in
       Lambda { params = [ param ]; body }
   | Texp_function (_params, Tfunction_body _) ->
-      unsupported ~node_kind:"Texp_function" ~loc:expr.exp_loc
+      unsupported ~node_kind:"Texp_function" ~loc:expr.exp_loc ()
   | Texp_function (_params, Tfunction_cases _) ->
-      unsupported ~node_kind:"Tfunction_cases" ~loc:expr.exp_loc
+      unsupported ~node_kind:"Tfunction_cases" ~loc:expr.exp_loc ()
   | Texp_let (Nonrecursive, [ binding ], body) ->
       let name = parse_binding_name binding.vb_pat in
       let value = parse_expr binding.vb_expr in
@@ -303,18 +318,22 @@ and parse_expr (expr : expression) =
       let body = parse_expr body in
       Let { name; value; body; is_rec = true }
   | Texp_let (_, [], _) ->
-      unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc
+      unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc ()
   | Texp_let (_, _ :: _ :: _, _) ->
-      unsupported ~node_kind:"Texp_let(and)" ~loc:expr.exp_loc
-  | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc
+      unsupported ~node_kind:"Texp_let(and)" ~loc:expr.exp_loc ()
+  | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc ()
   | Texp_construct (_lid, constructor, args) ->
       let name = constructor.Types.cstr_name in
       if is_whitelisted_constructor name then
         Ctor { name; args = List.map parse_expr args }
-      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc
+      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when is_whitelisted_prim (longident_name lid) ->
       Prim { op = longident_name lid; args = parse_apply_args args }
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, _args)
+    when is_mutation_primitive (longident_name lid) ->
+      unsupported_mutation ~feature:(longident_name lid) ~node_kind:"Texp_apply"
+        ~loc:expr.exp_loc
   | Texp_apply (callee, args) -> App { callee = parse_expr callee; args = parse_apply_args args }
   | Texp_ifthenelse (cond, then_branch, Some else_branch) ->
       If
@@ -324,12 +343,12 @@ and parse_expr (expr : expression) =
           else_branch = parse_expr else_branch;
         }
   | Texp_ifthenelse (_, _, None) ->
-      unsupported ~node_kind:"Texp_ifthenelse(no-else)" ~loc:expr.exp_loc
+      unsupported ~node_kind:"Texp_ifthenelse(no-else)" ~loc:expr.exp_loc ()
   | Texp_match (scrutinee, cases, _) ->
       let scrutinee = parse_match_scrutinee scrutinee in
       let arms = List.map parse_match_case cases in
       Match { scrutinee; arms }
-  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc
+  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let parse_value_binding (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
@@ -343,11 +362,11 @@ let parse_structure_item (item : structure_item) =
       let decl = parse_value_binding binding in
       [ { decl with is_rec = true } ]
   | Tstr_value (_, []) ->
-      unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc
+      unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()
   | Tstr_value (_, _ :: _ :: _) ->
-      unsupported ~node_kind:"Tstr_value(and)" ~loc:item.str_loc
+      unsupported ~node_kind:"Tstr_value(and)" ~loc:item.str_loc ()
   | other ->
-      unsupported ~node_kind:(structure_item_kind other) ~loc:item.str_loc
+      unsupported ~node_kind:(structure_item_kind other) ~loc:item.str_loc ()
 
 let of_structure (structure : structure) =
   Module (List.concat_map parse_structure_item structure.str_items)

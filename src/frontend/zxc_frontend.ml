@@ -26,13 +26,16 @@ let pp_json_string ppf value = Format.fprintf ppf "\"%s\"" (json_escape value)
 
 let emit_diagnostic (diagnostic : Zxc_subset.diagnostic) =
   let loc = diagnostic.loc in
+  let pp_optional_field ppf = function
+    | None -> ()
+    | Some value -> Format.fprintf ppf ",\"hint\":%a" pp_json_string value
+  in
   Format.eprintf
-    "@[<h>{\"severity\":%a,\"code\":%a,\"message\":%a,\"node_kind\":%a,\
-     \"loc\":{\"file\":%a,\"line\":%d,\"col\":%d,\"end_line\":%d,\
-     \"end_col\":%d}}@]@."
-    pp_json_string diagnostic.severity pp_json_string diagnostic.code pp_json_string
-    diagnostic.message pp_json_string diagnostic.node_kind pp_json_string loc.file
-    loc.line loc.col loc.end_line loc.end_col
+    "@[<h>{\"file\":%a,\"line\":%d,\"col\":%d,\"severity\":%a,\"message\":%a,\
+     \"node_kind\":%a%a}@]@."
+    pp_json_string loc.file loc.line loc.col pp_json_string diagnostic.severity
+    pp_json_string diagnostic.message pp_json_string diagnostic.node_kind
+    pp_optional_field diagnostic.hint
 
 let emit_internal_error ~message =
   let diagnostic : Zxc_subset.diagnostic =
@@ -49,6 +52,98 @@ let emit_internal_error ~message =
           end_col = 0;
         };
       message;
+      hint = None;
+    }
+  in
+  emit_diagnostic diagnostic
+
+let starts_with ~prefix s =
+  let prefix_len = String.length prefix in
+  String.length s >= prefix_len && String.sub s 0 prefix_len = prefix
+
+let find_line predicate text =
+  let lines = String.split_on_char '\n' text in
+  List.find_opt predicate lines
+
+let parse_int_at s start =
+  let len = String.length s in
+  let rec advance index =
+    if index < len then
+      match s.[index] with '0' .. '9' -> advance (index + 1) | _ -> index
+    else index
+  in
+  let finish = advance start in
+  if finish = start then None
+  else int_of_string_opt (String.sub s start (finish - start))
+
+let find_sub_from s sub start =
+  let s_len = String.length s in
+  let sub_len = String.length sub in
+  let rec loop index =
+    if index + sub_len > s_len then None
+    else if String.sub s index sub_len = sub then Some index
+    else loop (index + 1)
+  in
+  loop start
+
+let parse_ocamlc_location ~input stderr =
+  match find_line (starts_with ~prefix:"File \"") stderr with
+  | None -> { Zxc_subset.file = input; line = 1; col = 0; end_line = 1; end_col = 0 }
+  | Some line -> (
+      try
+        let file_start = String.length "File \"" in
+        let file_end = String.index_from line file_start '"' in
+        let file = String.sub line file_start (file_end - file_start) in
+        let line_prefix = ", line " in
+        let chars_prefix = ", characters " in
+        let line_number =
+          match find_sub_from line line_prefix file_end with
+          | Some index -> parse_int_at line (index + String.length line_prefix)
+          | None -> None
+        in
+        let col =
+          match find_sub_from line chars_prefix file_end with
+          | Some index -> parse_int_at line (index + String.length chars_prefix)
+          | None -> None
+        in
+        let line_number = Option.value line_number ~default:1 in
+        let col = Option.value col ~default:0 in
+        { Zxc_subset.file; line = line_number; col; end_line = line_number; end_col = col }
+      with Invalid_argument _ ->
+        { Zxc_subset.file = input; line = 1; col = 0; end_line = 1; end_col = 0 })
+
+let parse_ocamlc_message stderr =
+  match
+    find_line
+      (fun line -> starts_with ~prefix:"Error:" (String.trim line))
+      stderr
+  with
+  | Some line ->
+      let trimmed = String.trim line in
+      String.trim
+        (String.sub trimmed (String.length "Error:")
+           (String.length trimmed - String.length "Error:"))
+  | None ->
+      let trimmed = String.trim stderr in
+      if trimmed = "" then "ocamlc -bin-annot failed" else trimmed
+
+let read_file path =
+  let channel = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr channel)
+    (fun () ->
+      let length = in_channel_length channel in
+      really_input_string channel length)
+
+let emit_ocamlc_error ~input ~stderr =
+  let diagnostic : Zxc_subset.diagnostic =
+    {
+      severity = "error";
+      code = "OCAML-FRONTEND";
+      node_kind = "ocamlc";
+      loc = parse_ocamlc_location ~input stderr;
+      message = parse_ocamlc_message stderr;
+      hint = None;
     }
   in
   emit_diagnostic diagnostic
@@ -74,17 +169,27 @@ let compile_to_cmt input =
   let tmp_cmo = Filename.temp_file "Zxcaml_" ".cmo" in
   let tmp_prefix = Filename.remove_extension tmp_cmo in
   let tmp_cmt = tmp_prefix ^ ".cmt" in
+  let tmp_stderr = tmp_prefix ^ ".stderr" in
   let command =
-    Printf.sprintf "%s -bin-annot -c %s -o %s" (ocamlc_command ())
+    Printf.sprintf "%s -bin-annot -c %s -o %s 2> %s" (ocamlc_command ())
       (Filename.quote input) (Filename.quote tmp_cmo)
+      (Filename.quote tmp_stderr)
   in
   match Sys.command command with
-  | 0 -> (tmp_cmo, tmp_cmt)
+  | 0 ->
+      (try Sys.remove tmp_stderr with Sys_error _ -> ());
+      (tmp_cmo, tmp_cmt)
   | status ->
-      emit_internal_error
-        ~message:
-          (Printf.sprintf "ocamlc -bin-annot failed for %s with status %d" input
-             status);
+      let stderr =
+        try read_file tmp_stderr
+        with Sys_error message ->
+          Printf.sprintf "ocamlc -bin-annot failed for %s with status %d: %s"
+            input status message
+      in
+      emit_ocamlc_error ~input ~stderr;
+      List.iter
+        (fun path -> try Sys.remove path with Sys_error _ -> ())
+        [ tmp_cmo; tmp_cmt; Filename.remove_extension tmp_cmo ^ ".cmi"; tmp_stderr ];
       exit 2
 
 let cleanup paths =
