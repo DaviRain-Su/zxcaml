@@ -1040,6 +1040,7 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
         .Bool => allocator.dupe(u8, "prelude.Bool"),
         .Unit => allocator.dupe(u8, "void"),
         .String => allocator.dupe(u8, "[]const u8"),
+        .Var => return error.UnsupportedExpr,
         .Closure => allocator.dupe(u8, "*const prelude.Closure"),
         .Adt => |adt| blk: {
             if (std.mem.eql(u8, adt.name, "option")) {

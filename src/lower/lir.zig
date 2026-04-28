@@ -198,6 +198,7 @@ pub const LTy = union(enum) {
     Bool,
     Unit,
     String,
+    Var: []const u8,
     Adt: LAdt,
     Closure,
 };

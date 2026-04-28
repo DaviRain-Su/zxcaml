@@ -210,6 +210,7 @@ pub const Ty = union(enum) {
     Bool,
     Unit,
     String,
+    Var: []const u8,
     Adt: Adt,
     Arrow: Arrow,
 };

@@ -242,6 +242,7 @@ fn formatTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) !v
         .Bool => try append(out, allocator, "bool"),
         .Unit => try append(out, allocator, "unit"),
         .String => try append(out, allocator, "string"),
+        .Var => |name| try append(out, allocator, name),
         .Adt => |adt| {
             try append(out, allocator, "(");
             try append(out, allocator, adt.name);

@@ -700,6 +700,7 @@ fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
         .Bool => .Bool,
         .Unit => .Unit,
         .String => .String,
+        .Var => |name| .{ .Var = try allocator.dupe(u8, name) },
         .Arrow => .Closure,
         .Adt => |adt| .{ .Adt = .{
             .name = try allocator.dupe(u8, adt.name),

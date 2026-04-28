@@ -230,12 +230,25 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
 }
 
 fn lowerExprPtr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr) LowerError!*const ir.Expr {
+    return lowerExprPtrExpected(arena, ctx, expr, null);
+}
+
+fn lowerExprPtrExpected(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    expr: ttree.Expr,
+    expected_ty: ?ir.Ty,
+) LowerError!*const ir.Expr {
     const ptr = try arena.allocator().create(ir.Expr);
-    ptr.* = try lowerExpr(arena, ctx, expr);
+    ptr.* = try lowerExprExpected(arena, ctx, expr, expected_ty);
     return ptr;
 }
 
 fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr) LowerError!ir.Expr {
+    return lowerExprExpected(arena, ctx, expr, null);
+}
+
+fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr, expected_ty: ?ir.Ty) LowerError!ir.Expr {
     return switch (expr) {
         .Lambda => |lambda| .{ .Lambda = try lowerLambda(arena, ctx, lambda) },
         .Constant => |constant| .{ .Constant = try lowerConstant(arena, constant) },
@@ -243,8 +256,8 @@ fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Ex
         .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
         .If => |if_expr| try lowerIf(arena, ctx, if_expr),
         .Prim => |prim| try lowerPrim(arena, ctx, prim),
-        .Var => |var_ref| try lowerVarExpr(arena, ctx, var_ref),
-        .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr),
+        .Var => |var_ref| try lowerVarExpr(arena, ctx, var_ref, expected_ty),
+        .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr, expected_ty),
         .Match => |match_expr| try lowerMatch(arena, ctx, match_expr),
     };
 }
@@ -312,7 +325,7 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
 }
 
 fn lowerIf(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, if_expr: ttree.IfExpr) LowerError!ir.Expr {
-    const cond = try lowerExprPtr(arena, ctx, if_expr.cond.*);
+    const cond = try lowerExprPtrExpected(arena, ctx, if_expr.cond.*, .Bool);
     const then_branch = try lowerExprPtr(arena, ctx, if_expr.then_branch.*);
     const else_branch = try lowerExprPtr(arena, ctx, if_expr.else_branch.*);
     return .{ .If = .{
@@ -368,9 +381,14 @@ fn lowerVar(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.
     };
 }
 
-fn lowerVarExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.Var) LowerError!ir.Expr {
+fn lowerVarExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.Var, expected_ty: ?ir.Ty) LowerError!ir.Expr {
     if (ctx.scope.contains(var_ref.name)) {
-        return .{ .Var = try lowerVar(arena, ctx, var_ref) };
+        var lowered = try lowerVar(arena, ctx, var_ref);
+        if (expected_ty) |ty| {
+            lowered.ty = ty;
+            lowered.layout = layoutForTy(ty);
+        }
+        return .{ .Var = lowered };
     }
     if (std.mem.eql(u8, var_ref.name, "max_int")) {
         return .{ .Constant = .{
@@ -404,8 +422,19 @@ fn lowerConstant(arena: *std.heap.ArenaAllocator, constant: ttree.Constant) Lowe
     };
 }
 
-fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttree.Ctor) LowerError!ir.Expr {
+fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttree.Ctor, expected_ty: ?ir.Ty) LowerError!ir.Expr {
     const ctor_info = try validateCtor(ctx, ctor_expr.name, ctor_expr.args.len);
+    var expected_payload_tys: ?[]const ir.Ty = null;
+    if (ctor_info) |info| {
+        if (expected_ty) |ty| {
+            var bindings = TypeBindings.init(arena.allocator());
+            defer bindings.deinit();
+            bindTypeParamsFromMatchedAdt(&bindings, info, ty) catch {};
+            if (bindings.count() > 0 or info.type_params.len == 0) {
+                expected_payload_tys = try typeExprsToTysWithBindings(arena, info.payload_types, &bindings);
+            }
+        }
+    }
 
     var args = std.ArrayList(*const ir.Expr).empty;
     errdefer args.deinit(arena.allocator());
@@ -415,11 +444,12 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
     }).empty;
     errdefer wrappers.deinit(arena.allocator());
 
-    for (ctor_expr.args) |arg| {
+    for (ctor_expr.args, 0..) |arg, index| {
+        const expected_arg_ty: ?ir.Ty = if (expected_payload_tys) |payload_tys| payload_tys[index] else null;
         if (isAtomicTtree(arg)) {
-            try args.append(arena.allocator(), try lowerExprPtr(arena, ctx, arg));
+            try args.append(arena.allocator(), try lowerExprPtrExpected(arena, ctx, arg, expected_arg_ty));
         } else {
-            const value = try lowerExprPtr(arena, ctx, arg);
+            const value = try lowerExprPtrExpected(arena, ctx, arg, expected_arg_ty);
             const temp_name = try freshTemp(arena, ctx);
             const var_ptr = try arena.allocator().create(ir.Expr);
             var_ptr.* = .{ .Var = .{
@@ -433,7 +463,7 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
     }
 
     const owned_args = try args.toOwnedSlice(arena.allocator());
-    const ctor_ty = try ctorTy(arena, ctx, ctor_expr.name, owned_args);
+    const ctor_ty = try ctorTy(arena, ctx, ctor_expr.name, owned_args, expected_ty);
     const ctor_layout = layout.ctor(owned_args.len);
     var current = try arena.allocator().create(ir.Expr);
     current.* = .{ .Ctor = .{
@@ -466,7 +496,8 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
 fn lowerMatch(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, match_expr: ttree.Match) LowerError!ir.Expr {
     if (match_expr.arms.len == 0) return error.MatchWithoutArms;
 
-    const scrutinee_value = try lowerExprPtr(arena, ctx, match_expr.scrutinee.*);
+    const expected_scrutinee_ty = try inferMatchScrutineeExpectedTy(arena, ctx, match_expr);
+    const scrutinee_value = try lowerExprPtrExpected(arena, ctx, match_expr.scrutinee.*, expected_scrutinee_ty);
     const scrutinee_atom = if (isAtomicCore(scrutinee_value.*)) scrutinee_value else blk: {
         const temp_name = try freshMatchTemp(arena, ctx);
         const var_ptr = try arena.allocator().create(ir.Expr);
@@ -531,6 +562,149 @@ fn lowerMatchWithScrutinee(
         .layout = match_layout,
     } };
     return ptr;
+}
+
+fn inferMatchScrutineeExpectedTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, match_expr: ttree.Match) LowerError!?ir.Ty {
+    var pattern_var_tys = TypeBindings.init(arena.allocator());
+    defer pattern_var_tys.deinit();
+
+    const result_ty = try inferMatchResultTy(arena, &pattern_var_tys, match_expr.arms);
+    for (match_expr.arms) |arm| {
+        try inferExprVarExpectations(arena, &pattern_var_tys, arm.body.*, result_ty);
+    }
+
+    var type_bindings = TypeBindings.init(arena.allocator());
+    defer type_bindings.deinit();
+
+    var candidate: ?ConstructorInfo = null;
+    for (match_expr.arms) |arm| {
+        const ctor_pattern = switch (arm.pattern) {
+            .Ctor => |ctor| ctor,
+            .Wildcard, .Var => continue,
+        };
+        const info = ctx.constructors.get(ctor_pattern.name) orelse continue;
+        if (candidate) |existing| {
+            if (!std.mem.eql(u8, existing.type_name, info.type_name)) continue;
+        } else {
+            candidate = info;
+        }
+        try bindTypeParamsFromPatternPayloads(&type_bindings, info.payload_types, ctor_pattern.args, &pattern_var_tys);
+    }
+
+    const info = candidate orelse return null;
+    const params = try arena.allocator().alloc(ir.Ty, info.type_params.len);
+    for (info.type_params, 0..) |param_name, index| {
+        params[index] = type_bindings.get(param_name) orelse .{ .Var = param_name };
+    }
+    return .{ .Adt = .{
+        .name = info.type_name,
+        .params = params,
+    } };
+}
+
+fn inferMatchResultTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBindings, arms: []const ttree.Arm) LowerError!?ir.Ty {
+    for (arms) |arm| {
+        if (try inferSimpleExprTy(arena, pattern_var_tys, arm.body.*)) |ty| return ty;
+    }
+    return null;
+}
+
+fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBindings, expr: ttree.Expr) LowerError!?ir.Ty {
+    return switch (expr) {
+        .Constant => |constant| switch (constant) {
+            .Int => .Int,
+            .String => .String,
+        },
+        .Prim => |prim| blk: {
+            const op = try lowerPrimOp(prim.op);
+            break :blk switch (op) {
+                .Add, .Sub, .Mul, .Div, .Mod => .Int,
+                .Eq, .Ne, .Lt, .Le, .Gt, .Ge => .Bool,
+            };
+        },
+        .If => |if_expr| blk: {
+            try inferExprVarExpectations(arena, pattern_var_tys, if_expr.cond.*, .Bool);
+            const then_ty = try inferSimpleExprTy(arena, pattern_var_tys, if_expr.then_branch.*);
+            const else_ty = try inferSimpleExprTy(arena, pattern_var_tys, if_expr.else_branch.*);
+            if (then_ty) |lhs| {
+                if (else_ty) |rhs| {
+                    if (tyEql(lhs, rhs)) break :blk lhs;
+                }
+            }
+            break :blk null;
+        },
+        .Var => |var_ref| pattern_var_tys.get(var_ref.name),
+        .Let => |let_expr| try inferSimpleExprTy(arena, pattern_var_tys, let_expr.body.*),
+        .Lambda, .App, .Ctor, .Match => null,
+    };
+}
+
+fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBindings, expr: ttree.Expr, expected_ty: ?ir.Ty) LowerError!void {
+    switch (expr) {
+        .Var => |var_ref| {
+            if (expected_ty) |ty| {
+                if (!pattern_var_tys.contains(var_ref.name)) try pattern_var_tys.put(var_ref.name, ty);
+            }
+        },
+        .If => |if_expr| {
+            try inferExprVarExpectations(arena, pattern_var_tys, if_expr.cond.*, .Bool);
+            try inferExprVarExpectations(arena, pattern_var_tys, if_expr.then_branch.*, expected_ty);
+            try inferExprVarExpectations(arena, pattern_var_tys, if_expr.else_branch.*, expected_ty);
+        },
+        .Prim => |prim| {
+            const op = try lowerPrimOp(prim.op);
+            const arg_ty: ?ir.Ty = switch (op) {
+                .Add, .Sub, .Mul, .Div, .Mod, .Lt, .Le, .Gt, .Ge => .Int,
+                .Eq, .Ne => null,
+            };
+            for (prim.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, arg_ty);
+        },
+        .Let => |let_expr| {
+            try inferExprVarExpectations(arena, pattern_var_tys, let_expr.value.*, null);
+            try inferExprVarExpectations(arena, pattern_var_tys, let_expr.body.*, expected_ty);
+        },
+        .App => |app| {
+            try inferExprVarExpectations(arena, pattern_var_tys, app.callee.*, null);
+            for (app.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, null);
+        },
+        .Ctor => |ctor| {
+            for (ctor.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, null);
+        },
+        .Match => |nested_match| {
+            try inferExprVarExpectations(arena, pattern_var_tys, nested_match.scrutinee.*, null);
+            for (nested_match.arms) |arm| try inferExprVarExpectations(arena, pattern_var_tys, arm.body.*, expected_ty);
+        },
+        .Lambda, .Constant => {},
+    }
+}
+
+fn bindTypeParamsFromPatternPayloads(
+    bindings: *TypeBindings,
+    expected_payloads: []const types.TypeExpr,
+    patterns: []const ttree.Pattern,
+    pattern_var_tys: *TypeBindings,
+) LowerError!void {
+    for (expected_payloads, patterns) |expected, pattern| {
+        try bindTypeParamsFromPattern(bindings, expected, pattern, pattern_var_tys);
+    }
+}
+
+fn bindTypeParamsFromPattern(
+    bindings: *TypeBindings,
+    expected: types.TypeExpr,
+    pattern: ttree.Pattern,
+    pattern_var_tys: *TypeBindings,
+) LowerError!void {
+    switch (pattern) {
+        .Var => |name| {
+            if (std.mem.eql(u8, name, "_")) return;
+            if (pattern_var_tys.get(name)) |actual| {
+                try bindTypeParamsFromPayload(bindings, expected, actual);
+            }
+        },
+        .Wildcard => {},
+        .Ctor => {},
+    }
 }
 
 fn lowerPattern(
@@ -721,9 +895,9 @@ fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, na
     return error.UnsupportedPattern;
 }
 
-fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
+fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8, args: []const *const ir.Expr, expected_ty: ?ir.Ty) LowerError!ir.Ty {
     if (ctx.constructors.get(name)) |info| {
-        const params = try inferConstructorTypeParams(arena, info, args);
+        const params = try inferConstructorTypeParams(arena, info, args, expected_ty);
         return .{ .Adt = .{
             .name = info.type_name,
             .params = params,
@@ -754,9 +928,13 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8,
     } };
 }
 
-fn inferConstructorTypeParams(arena: *std.heap.ArenaAllocator, info: ConstructorInfo, args: []const *const ir.Expr) LowerError![]const ir.Ty {
+fn inferConstructorTypeParams(arena: *std.heap.ArenaAllocator, info: ConstructorInfo, args: []const *const ir.Expr, expected_ty: ?ir.Ty) LowerError![]const ir.Ty {
     var bindings = TypeBindings.init(arena.allocator());
     defer bindings.deinit();
+
+    if (expected_ty) |ty| {
+        bindTypeParamsFromMatchedAdt(&bindings, info, ty) catch {};
+    }
 
     for (info.payload_types, args) |payload_ty, arg| {
         try bindTypeParamsFromPayload(&bindings, payload_ty, exprTy(arg.*));
@@ -764,7 +942,7 @@ fn inferConstructorTypeParams(arena: *std.heap.ArenaAllocator, info: Constructor
 
     const params = try arena.allocator().alloc(ir.Ty, info.type_params.len);
     for (info.type_params, 0..) |param_name, index| {
-        params[index] = bindings.get(param_name) orelse .Int;
+        params[index] = bindings.get(param_name) orelse .{ .Var = param_name };
     }
     return params;
 }
@@ -788,7 +966,13 @@ fn bindTypeParamsFromPayload(
 ) LowerError!void {
     switch (expected) {
         .TypeVar => |name| {
-            if (!bindings.contains(name)) try bindings.put(name, actual);
+            if (bindings.get(name)) |existing| {
+                if (std.meta.activeTag(existing) == .Var and std.meta.activeTag(actual) != .Var) {
+                    try bindings.put(name, actual);
+                }
+            } else {
+                try bindings.put(name, actual);
+            }
         },
         .TypeRef, .RecursiveRef => |ref| {
             const actual_adt = switch (actual) {
@@ -830,7 +1014,7 @@ fn typeExprToTyWithBindings(
     bindings: ?*TypeBindings,
 ) LowerError!ir.Ty {
     return switch (expr) {
-        .TypeVar => |name| if (bindings) |values| values.get(name) orelse .Int else .Int,
+        .TypeVar => |name| if (bindings) |values| values.get(name) orelse .{ .Var = name } else .{ .Var = name },
         .TypeRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
         .RecursiveRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
         .Tuple => .Unit,
@@ -867,7 +1051,7 @@ fn listTy(arena: *std.heap.ArenaAllocator, elem_ty: ir.Ty) LowerError!ir.Ty {
 
 fn layoutForTy(ty: ir.Ty) layout.Layout {
     return switch (ty) {
-        .Int, .Bool => layout.intConstant(),
+        .Int, .Bool, .Var => layout.intConstant(),
         .Unit => layout.unitValue(),
         .String => layout.defaultFor(.StringLiteral),
         .Adt => layout.ctor(1),
@@ -1077,6 +1261,30 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Var => |var_ref| var_ref.ty,
         .Ctor => |ctor_expr| ctor_expr.ty,
         .Match => |match_expr| match_expr.ty,
+    };
+}
+
+fn tyEql(lhs: ir.Ty, rhs: ir.Ty) bool {
+    return switch (lhs) {
+        .Int => std.meta.activeTag(rhs) == .Int,
+        .Bool => std.meta.activeTag(rhs) == .Bool,
+        .Unit => std.meta.activeTag(rhs) == .Unit,
+        .String => std.meta.activeTag(rhs) == .String,
+        .Var => |lhs_name| switch (rhs) {
+            .Var => |rhs_name| std.mem.eql(u8, lhs_name, rhs_name),
+            else => false,
+        },
+        .Adt => |lhs_adt| switch (rhs) {
+            .Adt => |rhs_adt| blk: {
+                if (!std.mem.eql(u8, lhs_adt.name, rhs_adt.name) or lhs_adt.params.len != rhs_adt.params.len) break :blk false;
+                for (lhs_adt.params, rhs_adt.params) |lhs_param, rhs_param| {
+                    if (!tyEql(lhs_param, rhs_param)) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        .Arrow => false,
     };
 }
 
@@ -1458,4 +1666,88 @@ test "lower user-defined ADT constructor type parameters from payload types" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(@as(std.meta.Tag(ir.Ty), .Bool), std.meta.activeTag(flag_pattern.ty));
+}
+
+test "lower nullary user ADT constructor type parameters from match context" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.5 (module (type_decl (name option) (params 'a) (variants ((None (payload_types)) (Some (payload_types (type-var 'a)))))) (let entrypoint (lambda (_) (match (ctor None) (case (ctor Some (var flag)) (if (var flag) (const-int 0) (const-int 1))) (case (ctor None) (const-int 2)))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const scrutinee_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const ctor_expr = switch (scrutinee_let.value.*) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const adt = switch (ctor_expr.ty) {
+        .Adt => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("option", adt.name);
+    try std.testing.expectEqual(@as(usize, 1), adt.params.len);
+    try std.testing.expectEqual(@as(std.meta.Tag(ir.Ty), .Bool), std.meta.activeTag(adt.params[0]));
+
+    const match_expr = switch (scrutinee_let.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const some_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const flag_pattern = switch (some_pattern.args[0]) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(std.meta.Tag(ir.Ty), .Bool), std.meta.activeTag(flag_pattern.ty));
+}
+
+test "lower nullary user ADT constructor without context stays polymorphic" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.5 (module (type_decl (name option) (params 'a) (variants ((None (payload_types)) (Some (payload_types (type-var 'a)))))) (let value (ctor None))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const value_decl = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const ctor_expr = switch (value_decl.value.*) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const adt = switch (ctor_expr.ty) {
+        .Adt => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("option", adt.name);
+    try std.testing.expectEqual(@as(usize, 1), adt.params.len);
+    const type_var = switch (adt.params[0]) {
+        .Var => |name| name,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("'a", type_var);
 }
