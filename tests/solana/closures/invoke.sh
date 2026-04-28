@@ -15,5 +15,6 @@ run_case() {
 }
 
 run_case "List.map immediate closure" "$ROOT/tests/solana/closures/list_map.ml"
-run_case "closure captures ADT value" "$ROOT/tests/solana/closures/closure_hardening.ml"
+run_case "match returns ADT-capturing closure" "$ROOT/tests/solana/closures/closure_hardening.ml"
+run_case "closure captures multiple environment values" "$ROOT/tests/solana/closures/multi_env.ml"
 run_case "escaping nested closure" "$ROOT/tests/solana/closures/nested_escape.ml"
