@@ -339,7 +339,15 @@ let core_type_kind (ctyp : core_type) =
 
 let ident_name ident = Ident.name ident
 
-let longident_name (lid : Longident.t Location.loc) = Longident.last lid.txt
+let longident_last (lid : Longident.t Location.loc) = Longident.last lid.txt
+
+let longident_name (lid : Longident.t Location.loc) =
+  let rec parts = function
+    | Longident.Lident name -> [ name ]
+    | Longident.Ldot (prefix, name) -> parts prefix @ [ name ]
+    | Longident.Lapply _ -> [ Longident.last lid.txt ]
+  in
+  String.concat "." (parts lid.txt)
 
 let is_whitelisted_prim = function
   | "+" | "-" | "*" | "/" | "mod" | "=" | "<>" | "<" | "<=" | ">" | ">=" -> true
@@ -461,12 +469,10 @@ and parse_expr env (expr : expression) =
   | Texp_constant (Const_int n) -> Const_int n
   | Texp_constant (Const_string (value, _, _)) -> Const_string value
   | Texp_ident (_, lid, _) -> Var (longident_name lid)
-  | Texp_function ([ param ], Tfunction_body body) ->
-      let param = parse_param param in
+  | Texp_function (params, Tfunction_body body) ->
+      let params = List.map parse_param params in
       let body = parse_expr env body in
-      Lambda { params = [ param ]; body }
-  | Texp_function (_params, Tfunction_body _) ->
-      unsupported ~node_kind:"Texp_function" ~loc:expr.exp_loc ()
+      Lambda { params; body }
   | Texp_function (_params, Tfunction_cases _) ->
       unsupported ~node_kind:"Tfunction_cases" ~loc:expr.exp_loc ()
   | Texp_let (Nonrecursive, [ binding ], body) ->
@@ -502,14 +508,14 @@ and parse_expr env (expr : expression) =
       Field_access
         { record_expr = parse_expr env record_expr; field_name = label.Types.lbl_name }
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
-    when is_whitelisted_prim (longident_name lid) ->
-      Prim { op = longident_name lid; args = parse_apply_args env args }
+    when is_whitelisted_prim (longident_last lid) ->
+      Prim { op = longident_last lid; args = parse_apply_args env args }
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, _args)
-    when is_mutation_primitive (longident_name lid) ->
-      unsupported_mutation ~feature:(longident_name lid) ~node_kind:"Texp_apply"
+    when is_mutation_primitive (longident_last lid) ->
+      unsupported_mutation ~feature:(longident_last lid) ~node_kind:"Texp_apply"
         ~loc:expr.exp_loc
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args) -> (
-      match tuple_projection_index (longident_name lid) with
+      match tuple_projection_index (longident_last lid) with
       | Some index -> parse_tuple_projection_args env ~index args ~loc:expr.exp_loc
       | None -> App { callee = Var (longident_name lid); args = parse_apply_args env args })
   | Texp_apply (callee, args) ->

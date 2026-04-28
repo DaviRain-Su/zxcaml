@@ -11,7 +11,7 @@ open Zxc_subset
 let version = "0.7"
 
 let is_atom_char = function
-  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' -> true
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
   | _ -> false
 
 let pp_atom ppf atom =

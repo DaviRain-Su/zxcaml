@@ -95,6 +95,21 @@ CASES: list[tuple[str, str, str]] = [
         "(case (ctor None) (const-int 3)))))))\n",
     ),
     (
+        "multi argument function returning closure",
+        "let make_op a b = fun x -> (x + a) * b\n",
+        "(zxcaml-cir 0.7 (module (let make_op "
+        "(lambda (a b) (lambda (x) "
+        "(prim \"*\" (prim \"+\" (var x) (var a)) (var b)))))))\n",
+    ),
+    (
+        "qualified stdlib module function reference",
+        "let entrypoint _ = List.map (fun x -> x + 1) [1; 2; 3]\n",
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
+        "(app (var List.map) (lambda (x) (prim \"+\" (var x) (const-int 1))) "
+        "(ctor \"::\" (const-int 1) (ctor \"::\" (const-int 2) "
+        "(ctor \"::\" (const-int 3) (ctor \"[]\")))))))))\n",
+    ),
+    (
         "tuple construction",
         "let entrypoint _ = (1, true, 42)\n",
         "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
