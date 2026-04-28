@@ -91,6 +91,17 @@ and why we still don't fork it — see
 
 ---
 
+## Quickstart
+
+For full install details and troubleshooting, see [Installing](./INSTALLING.md).
+From the repository root, build `omlz` and the canonical Solana BPF example:
+
+```sh
+./init.sh && zig build && zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
+```
+
+The command sequence uses the same `init.sh` setup script as CI.
+
 ## Status
 
 **Spec / planning phase.** No compiler code exists yet. This repo
@@ -107,6 +118,7 @@ Read in order:
 
 | # | Doc | What it pins down |
 |---|---|---|
+| —  | [Installing](./INSTALLING.md) | Fresh setup, prerequisites, quickstart, and troubleshooting |
 | 00 | [Overview](./docs/00-overview.md) | Vision, scope, three cold showers (anti-traps) |
 | 01 | [Architecture](./docs/01-architecture.md) | Pipeline, layered IR, extension points |
 | 02 | [Grammar](./docs/02-grammar.md) | OCaml subset accepted in P1 |

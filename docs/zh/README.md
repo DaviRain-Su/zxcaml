@@ -84,6 +84,17 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 
 ---
 
+## Quickstart
+
+完整安装细节和故障排查见 [安装](./INSTALLING.md)。
+从仓库根目录构建 `omlz` 和规范 Solana BPF 示例：
+
+```sh
+./init.sh && zig build && zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
+```
+
+这组命令使用的就是 CI 同一个 `init.sh` setup 脚本。
+
 ## 项目状态
 
 **规划 / 设计阶段。** 还没有编译器代码。
@@ -97,6 +108,7 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 
 | # | 文档 | 锁定了什么 |
 |---|---|---|
+| —  | [安装](./INSTALLING.md) | 全新 setup、前置依赖、quickstart 和故障排查 |
 | 00 | [概览](./00-overview.md) | 愿景、范围、三盆冷水（避免的陷阱） |
 | 01 | [架构](./01-architecture.md) | 管线、分层 IR、扩展点 |
 | 02 | [语法](./02-grammar.md) | P1 接受的 OCaml 子集 |
