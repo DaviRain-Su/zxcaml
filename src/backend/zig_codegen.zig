@@ -36,10 +36,10 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         try append(&out, allocator, "\n");
     }
     for (module.functions) |func| {
-        try emitFunction(&out, allocator, func);
+        try emitFunction(&out, allocator, func, module.type_decls);
         try append(&out, allocator, "\n");
     }
-    try emitFunction(&out, allocator, module.entrypoint);
+    try emitFunction(&out, allocator, module.entrypoint, module.type_decls);
 
     return out.toOwnedSlice(allocator);
 }
@@ -105,7 +105,7 @@ fn emitVariantConstructorHelper(out: *std.ArrayList(u8), allocator: std.mem.Allo
     try append(out, allocator, "    }\n");
 }
 
-fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir.LFunc) EmitError!void {
+fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir.LFunc, type_decls: []const lir.LVariantType) EmitError!void {
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
     const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
     try append(out, allocator, if (is_entrypoint) "pub fn " else "fn ");
@@ -132,7 +132,7 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
         }
         try append(out, allocator, ") i64 {\n");
     }
-    if (!exprNeedsArena(func.body)) {
+    if (!exprNeedsArena(func.body, type_decls)) {
         try append(out, allocator, "    _ = arena;\n");
     }
     if (is_entrypoint) try append(out, allocator, "    _ = input;\n");
@@ -140,7 +140,7 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
         try emitClosureCaptureBindings(out, allocator, func.captures);
     }
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
-    var ctx: EmitContext = .{};
+    var ctx: EmitContext = .{ .type_decls = type_decls };
     try emitExpr(out, allocator, func.body, 1, &ctx);
     try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
@@ -187,6 +187,7 @@ fn emitClosureCaptureBindings(out: *std.ArrayList(u8), allocator: std.mem.Alloca
 
 const EmitContext = struct {
     next_block_id: usize = 0,
+    type_decls: []const lir.LVariantType = &.{},
 };
 
 fn emitExpr(
@@ -393,7 +394,11 @@ fn emitMatchExpr(
         }
     }
 
-    if (!emitted_catch_all and (user_ctor_match or !allKnownVariantsCovered(emitted.items))) {
+    const needs_unreachable_else = if (user_ctor_match)
+        !allUserVariantsCovered(allocator, ctx.type_decls, match_expr, emitted.items)
+    else
+        !allKnownVariantsCovered(emitted.items);
+    if (!emitted_catch_all and needs_unreachable_else) {
         try emitIndent(out, allocator, indent_level + 2);
         try append(out, allocator, "else => unreachable,\n");
     }
@@ -454,30 +459,50 @@ fn emitCtorMatchArm(
     try emitIndent(out, allocator, indent_level);
     try appendPrint(out, allocator, ".{s} => ", .{variant});
     if (ctor_pattern.type_name != null) {
-        if (ctor_pattern.args.len > 1) return error.UnsupportedExpr;
-        if (ctor_pattern.args.len == 1) {
-            const arg = ctor_pattern.args[0];
-            const capture_name: ?[]const u8 = switch (arg) {
-                .Wildcard => null,
-                .Var => |name| if (exprUsesName(body, name)) name else null,
+        const type_name = ctor_pattern.type_name.?;
+        const variant_info = findUserVariant(ctx.type_decls, type_name, ctor_pattern.name) orelse return error.UnsupportedExpr;
+        if (variant_info.payload_types.len != ctor_pattern.args.len) return error.UnsupportedExpr;
+
+        var capture_count: usize = 0;
+        for (ctor_pattern.args) |arg| {
+            switch (arg) {
+                .Wildcard => {},
+                .Var => |name| {
+                    if (exprUsesName(body, name)) capture_count += 1;
+                },
                 .Ctor => return error.UnsupportedExpr,
-            };
-            if (capture_name) |name| {
-                const bind_block_id = ctx.next_block_id;
-                ctx.next_block_id += 1;
-                try appendPrint(out, allocator, "break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
-                try emitIndent(out, allocator, indent_level + 1);
-                try append(out, allocator, "const ");
-                try emitIdentifier(out, allocator, name);
-                try appendPrint(out, allocator, " = {s}.payload.{s};\n", .{ scrutinee_name, variant });
-                try emitIndent(out, allocator, indent_level + 1);
-                try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
-                try emitExpr(out, allocator, body, indent_level + 1, ctx);
-                try append(out, allocator, ";\n");
-                try emitIndent(out, allocator, indent_level);
-                try append(out, allocator, "},\n");
-                return;
             }
+        }
+        if (capture_count != 0) {
+            const bind_block_id = ctx.next_block_id;
+            ctx.next_block_id += 1;
+            try appendPrint(out, allocator, "break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
+            for (ctor_pattern.args, variant_info.payload_types, 0..) |arg, payload_ty, index| {
+                const capture_name: ?[]const u8 = switch (arg) {
+                    .Wildcard => null,
+                    .Var => |name| if (exprUsesName(body, name)) name else null,
+                    .Ctor => unreachable,
+                };
+                if (capture_name) |name| {
+                    try emitIndent(out, allocator, indent_level + 1);
+                    try append(out, allocator, "const ");
+                    try emitIdentifier(out, allocator, name);
+                    if (ctor_pattern.args.len == 1) {
+                        try appendPrint(out, allocator, " = {s}.payload.{s}", .{ scrutinee_name, variant });
+                    } else {
+                        try appendPrint(out, allocator, " = {s}.payload.{s}._{d}", .{ scrutinee_name, variant, index });
+                    }
+                    if (isRecursivePayload(payload_ty)) try append(out, allocator, ".*");
+                    try append(out, allocator, ";\n");
+                }
+            }
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
+            try emitExpr(out, allocator, body, indent_level + 1, ctx);
+            try append(out, allocator, ";\n");
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "},\n");
+            return;
         }
         try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
         try emitExpr(out, allocator, body, indent_level, ctx);
@@ -588,7 +613,10 @@ fn emitCtorExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
-    const ty_name = try zigTypeName(allocator, ctor_expr.ty);
+    const ty_name = if (ctor_expr.type_name) |type_name|
+        try userTypeName(allocator, type_name)
+    else
+        try zigTypeName(allocator, ctor_expr.ty);
     defer allocator.free(ty_name);
     const variant = if (ctor_expr.type_name != null)
         try userVariantName(allocator, ctor_expr.name)
@@ -601,10 +629,64 @@ fn emitCtorExpr(
             try appendPrint(out, allocator, "{s}{{ .tag = .{s} }}", .{ ty_name, variant });
             return;
         }
-        if (ctor_expr.args.len > 1) return error.UnsupportedExpr;
-        try appendPrint(out, allocator, "{s}{{ .tag = .{s}, .payload = .{{ .{s} = ", .{ ty_name, variant, variant });
-        try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level, ctx);
-        try append(out, allocator, " } }");
+        const type_name = ctor_expr.type_name.?;
+        const variant_info = findUserVariant(ctx.type_decls, type_name, ctor_expr.name) orelse return error.UnsupportedExpr;
+        if (variant_info.payload_types.len != ctor_expr.args.len) return error.UnsupportedExpr;
+
+        var needs_block = ctor_expr.args.len > 1;
+        for (variant_info.payload_types) |payload_ty| {
+            if (isRecursivePayload(payload_ty)) needs_block = true;
+        }
+
+        if (!needs_block) {
+            try appendPrint(out, allocator, "{s}{{ .tag = .{s}, .payload = .{{ .{s} = ", .{ ty_name, variant, variant });
+            try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level, ctx);
+            try append(out, allocator, " } }");
+            return;
+        }
+
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        for (ctor_expr.args, variant_info.payload_types, 0..) |arg, payload_ty, index| {
+            if (!isRecursivePayload(payload_ty)) continue;
+            const ref = switch (payload_ty) {
+                .RecursiveRef => |value| value,
+                else => unreachable,
+            };
+            const child_ty_name = try userTypeName(allocator, ref.name);
+            defer allocator.free(child_ty_name);
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_recursive_payload_{d}_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, index, child_ty_name });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "omlz_recursive_payload_{d}_{d}.* = ", .{ block_id, index });
+            try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+            try append(out, allocator, ";\n");
+        }
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} {s}{{ .tag = .{s}, .payload = .{{ .{s} = ", .{ block_id, ty_name, variant, variant });
+        if (ctor_expr.args.len == 1) {
+            if (isRecursivePayload(variant_info.payload_types[0])) {
+                try appendPrint(out, allocator, "omlz_recursive_payload_{d}_0", .{block_id});
+            } else {
+                try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level + 1, ctx);
+            }
+        } else {
+            try append(out, allocator, ".{ ");
+            for (ctor_expr.args, variant_info.payload_types, 0..) |arg, payload_ty, index| {
+                if (index != 0) try append(out, allocator, ", ");
+                try appendPrint(out, allocator, "._{d} = ", .{index});
+                if (isRecursivePayload(payload_ty)) {
+                    try appendPrint(out, allocator, "omlz_recursive_payload_{d}_{d}", .{ block_id, index });
+                } else {
+                    try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+                }
+            }
+            try append(out, allocator, " }");
+        }
+        try append(out, allocator, " } };\n");
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
         return;
     }
 
@@ -822,28 +904,38 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
     };
 }
 
-fn exprNeedsArena(expr: lir.LExpr) bool {
+fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
     return switch (expr) {
         .Constant, .Var => false,
         .App => true,
-        .Let => |let_expr| exprNeedsArena(let_expr.value.*) or exprNeedsArena(let_expr.body.*),
-        .If => |if_expr| exprNeedsArena(if_expr.cond.*) or exprNeedsArena(if_expr.then_branch.*) or exprNeedsArena(if_expr.else_branch.*),
+        .Let => |let_expr| exprNeedsArena(let_expr.value.*, type_decls) or exprNeedsArena(let_expr.body.*, type_decls),
+        .If => |if_expr| exprNeedsArena(if_expr.cond.*, type_decls) or exprNeedsArena(if_expr.then_branch.*, type_decls) or exprNeedsArena(if_expr.else_branch.*, type_decls),
         .Prim => |prim| blk: {
             for (prim.args) |arg| {
-                if (exprNeedsArena(arg.*)) break :blk true;
+                if (exprNeedsArena(arg.*, type_decls)) break :blk true;
             }
             break :blk false;
         },
         .Match => |match_expr| blk: {
-            if (exprNeedsArena(match_expr.scrutinee.*)) break :blk true;
+            if (exprNeedsArena(match_expr.scrutinee.*, type_decls)) break :blk true;
             for (match_expr.arms) |arm| {
-                if (exprNeedsArena(arm.body.*)) break :blk true;
+                if (exprNeedsArena(arm.body.*, type_decls)) break :blk true;
             }
             break :blk false;
         },
-        .Ctor => |ctor_expr| ctor_expr.layout.region == .Arena or blk: {
+        .Ctor => |ctor_expr| blk: {
+            if (ctor_expr.type_name) |type_name| {
+                const variant = findUserVariant(type_decls, type_name, ctor_expr.name);
+                if (variant) |variant_info| {
+                    for (variant_info.payload_types) |payload_ty| {
+                        if (isRecursivePayload(payload_ty)) break :blk true;
+                    }
+                }
+            } else if (ctor_expr.layout.region == .Arena) {
+                break :blk true;
+            }
             for (ctor_expr.args) |arg| {
-                if (exprNeedsArena(arg.*)) break :blk true;
+                if (exprNeedsArena(arg.*, type_decls)) break :blk true;
             }
             break :blk false;
         },
@@ -897,6 +989,30 @@ fn allKnownVariantsCovered(variants: []const []const u8) bool {
         (containsString(variants, "nil") and containsString(variants, "cons"));
 }
 
+fn allUserVariantsCovered(allocator: std.mem.Allocator, type_decls: []const lir.LVariantType, match_expr: lir.LMatch, variants: []const []const u8) bool {
+    const type_name = userMatchTypeName(match_expr) orelse return false;
+    for (type_decls) |type_decl| {
+        if (!std.mem.eql(u8, type_decl.name, type_name)) continue;
+        for (type_decl.variants) |variant| {
+            const variant_name = userVariantName(allocator, variant.name) catch return false;
+            defer allocator.free(variant_name);
+            if (!containsString(variants, variant_name)) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+fn userMatchTypeName(match_expr: lir.LMatch) ?[]const u8 {
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => |ctor| if (ctor.type_name) |type_name| return type_name,
+            .Wildcard, .Var => {},
+        }
+    }
+    return null;
+}
+
 fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
     return switch (ty) {
         .Int => allocator.dupe(u8, "i64"),
@@ -934,7 +1050,7 @@ fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr) EmitError![]
     return switch (ty) {
         .TypeVar => allocator.dupe(u8, "i64"),
         .TypeRef => |ref| try zigTypeRefName(allocator, ref),
-        .RecursiveRef => |ref| try zigTypeRefName(allocator, ref),
+        .RecursiveRef => |ref| try zigRecursiveTypeRefName(allocator, ref),
         .Tuple => |items| blk: {
             if (items.len == 0) break :blk try allocator.dupe(u8, "void");
             var out = std.ArrayList(u8).empty;
@@ -950,6 +1066,12 @@ fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr) EmitError![]
             break :blk try out.toOwnedSlice(allocator);
         },
     };
+}
+
+fn zigRecursiveTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef) EmitError![]const u8 {
+    const type_name = try userTypeName(allocator, ref.name);
+    defer allocator.free(type_name);
+    return std.fmt.allocPrint(allocator, "*const {s}", .{type_name});
 }
 
 fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef) EmitError![]const u8 {
@@ -975,6 +1097,23 @@ fn payloadTypeName(allocator: std.mem.Allocator, variant: lir.LVariantCtor) Emit
     }
     try append(&out, allocator, " }");
     return out.toOwnedSlice(allocator);
+}
+
+fn findUserVariant(type_decls: []const lir.LVariantType, type_name: []const u8, ctor_name: []const u8) ?lir.LVariantCtor {
+    for (type_decls) |type_decl| {
+        if (!std.mem.eql(u8, type_decl.name, type_name)) continue;
+        for (type_decl.variants) |variant| {
+            if (std.mem.eql(u8, variant.name, ctor_name)) return variant;
+        }
+    }
+    return null;
+}
+
+fn isRecursivePayload(ty: lir.LTypeExpr) bool {
+    return switch (ty) {
+        .RecursiveRef => true,
+        else => false,
+    };
 }
 
 fn userTypeName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
