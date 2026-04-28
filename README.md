@@ -38,7 +38,7 @@ Solana BPF .so
   **Zig 0.16**.
 - Source language: **OCaml** (subset, growing).
 - Primary target: **Solana BPF** (`bpfel-freestanding`).
-- Memory model (P1): **arena, fully inferred, hidden from the user**.
+- Memory model (P2): **arena, fully inferred, hidden from the user**.
 - Core IR shape: **ANF** (A-Normal Form), typed, layout-tagged.
 - CLI binary name: **`omlz`** (OCaml on Zig).
 - Build driver: a single **`build.zig`** orchestrates both the
@@ -118,10 +118,10 @@ build native Zig, or build Solana BPF `.so` artifacts.
 - **CLI commands:** `omlz check <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`
 - **Wire format:** version 0.7 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, tuples, records, field access, functional record update, lists (`[]` / `::`), and pattern matching over all of those forms
-- **Stdlib:** bundled `Option`, `Result`, and `List` modules with common combinators such as `map`, `bind`, `value`, `length`, `filter`, `fold_left`, `rev`, and `append`
+- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`), `Option` (`is_none`, `is_some`, `value`, `get`), and `Result` (`is_ok`, `is_error`, `ok`, `error`) modules
 - **Memory model:** arena-only, fully inferred, hidden from the user
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
-- **BPF closures:** first-class closures with captured environments are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
+- **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
 - **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, with closure acceptance available under `tests/solana/closures/`
 - **Determinism:** interpreter ≡ Zig native across the P1 + P2 examples corpus
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, and an examples `omlz check` corpus loop
