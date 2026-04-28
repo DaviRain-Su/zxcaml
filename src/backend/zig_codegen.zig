@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const lir = @import("../lower/lir.zig");
+const match_compiler = @import("match.zig");
 
 /// Source emission errors for the M0 Zig backend.
 pub const EmitError = std.mem.Allocator.Error || error{
@@ -373,15 +374,6 @@ fn emitMatchExpr(
     try emitExpr(out, allocator, match_expr.scrutinee.*, indent_level + 1, ctx);
     try append(out, allocator, ";\n");
 
-    if (matchNeedsSequential(match_expr)) {
-        try emitSequentialMatchArms(out, allocator, match_expr, scrutinee_name, block_id, indent_level + 1, ctx);
-        try emitIndent(out, allocator, indent_level + 1);
-        try append(out, allocator, "unreachable;\n");
-        try emitIndent(out, allocator, indent_level);
-        try append(out, allocator, "}");
-        return;
-    }
-
     if (!matchHasCtorArm(match_expr)) {
         try emitNonCtorMatch(out, allocator, match_expr, scrutinee_name, block_id, indent_level, ctx);
         try emitIndent(out, allocator, indent_level);
@@ -389,55 +381,186 @@ fn emitMatchExpr(
         return;
     }
 
+    try emitDecisionMatchArms(out, allocator, match_expr, scrutinee_name, block_id, indent_level + 1, ctx);
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitDecisionMatchArms(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    match_expr: lir.LMatch,
+    scrutinee_name: []const u8,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
     const user_ctor_match = matchHasUserCtorArm(match_expr);
-    try emitIndent(out, allocator, indent_level + 1);
+    var emitted = std.ArrayList([]const u8).empty;
+    defer {
+        for (emitted.items) |name| allocator.free(name);
+        emitted.deinit(allocator);
+    }
+
+    try emitIndent(out, allocator, indent_level);
     if (user_ctor_match) {
         try appendPrint(out, allocator, "switch ({s}.tag) {{\n", .{scrutinee_name});
     } else {
         try appendPrint(out, allocator, "switch ({s}) {{\n", .{scrutinee_name});
     }
 
-    var emitted = std.ArrayList([]const u8).empty;
-    defer {
-        for (emitted.items) |name| allocator.free(name);
-        emitted.deinit(allocator);
-    }
-    var emitted_catch_all = false;
     for (match_expr.arms) |arm| {
-        if (emitted_catch_all) break;
         switch (arm.pattern) {
             .Ctor => |ctor_pattern| {
-                const variant = if (ctor_pattern.type_name != null)
-                    try userVariantName(allocator, ctor_pattern.name)
-                else
-                    try allocator.dupe(u8, try ctorVariantName(ctor_pattern.name));
+                const variant = try emittedVariantName(allocator, ctor_pattern);
                 defer allocator.free(variant);
                 if (containsString(emitted.items, variant)) continue;
                 try emitted.append(allocator, try allocator.dupe(u8, variant));
-                try emitCtorMatchArm(out, allocator, ctor_pattern, arm.body.*, scrutinee_name, block_id, indent_level + 2, ctx);
+                try emitDecisionCase(out, allocator, match_expr, ctor_pattern, variant, scrutinee_name, block_id, indent_level + 1, ctx);
+            },
+            .Wildcard, .Var => {},
+        }
+    }
+
+    if (matchHasDefaultRows(match_expr) or hasMissingConstructors(allocator, ctx.type_decls, match_expr, emitted.items)) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "else => {\n");
+        if (matchHasDefaultRows(match_expr)) {
+            try emitDefaultRows(out, allocator, match_expr, scrutinee_name, block_id, indent_level + 2, ctx);
+        }
+        if (!matchHasUnguardedCatchAll(match_expr)) {
+            try emitNonExhaustivePanic(out, allocator, ctx.type_decls, match_expr, emitted.items, indent_level + 2);
+        }
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "},\n");
+    }
+
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}\n");
+}
+
+fn emitDecisionCase(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    match_expr: lir.LMatch,
+    selected_ctor: lir.LCtorPattern,
+    variant: []const u8,
+    scrutinee_name: []const u8,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, ".{s}", .{variant});
+
+    const payload_name: ?[]const u8 = if (selected_ctor.type_name == null and selected_ctor.args.len > 0)
+        try std.fmt.allocPrint(allocator, "omlz_match_payload_{d}", .{ctx.next_block_id})
+    else
+        null;
+    defer if (payload_name) |name| allocator.free(name);
+    if (payload_name != null) ctx.next_block_id += 1;
+
+    if (payload_name) |name| {
+        try appendPrint(out, allocator, " => |{s}| {{\n", .{name});
+        if (!caseNeedsBuiltinPayload(match_expr, selected_ctor)) {
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "_ = {s};\n", .{name});
+        }
+    } else {
+        try append(out, allocator, " => {\n");
+    }
+
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => |ctor_pattern| {
+                if (!sameConstructor(ctor_pattern, selected_ctor)) continue;
+                try emitSpecializedCtorRow(out, allocator, ctor_pattern, arm.body.*, arm.guard, scrutinee_name, payload_name, block_id, indent_level + 1, ctx);
             },
             .Wildcard, .Var => {
-                try emitCatchAllMatchArm(out, allocator, arm.pattern, arm.body.*, scrutinee_name, block_id, indent_level + 2, ctx);
-                emitted_catch_all = true;
+                const patterns = [_]lir.LPattern{arm.pattern};
+                const sources = [_][]const u8{scrutinee_name};
+                try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level + 1, ctx);
             },
         }
     }
 
-    const needs_unreachable_else = if (user_ctor_match)
-        !allUserVariantsCovered(allocator, ctx.type_decls, match_expr, emitted.items)
-    else
-        !allKnownVariantsCovered(emitted.items);
-    if (!emitted_catch_all and needs_unreachable_else) {
-        try emitIndent(out, allocator, indent_level + 2);
-        try append(out, allocator, "else => unreachable,\n");
+    if (!caseUnconditionallyCovered(match_expr, selected_ctor)) {
+        try emitNonExhaustivePanic(out, allocator, ctx.type_decls, match_expr, &.{}, indent_level + 1);
     }
-    try emitIndent(out, allocator, indent_level + 1);
-    try append(out, allocator, "}\n");
     try emitIndent(out, allocator, indent_level);
-    try append(out, allocator, "}");
+    try append(out, allocator, "},\n");
 }
 
-fn emitSequentialMatchArms(
+fn emitSpecializedCtorRow(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ctor_pattern: lir.LCtorPattern,
+    body: lir.LExpr,
+    guard: ?*const lir.LExpr,
+    scrutinee_name: []const u8,
+    builtin_payload_name: ?[]const u8,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (ctor_pattern.type_name != null) {
+        const type_name = ctor_pattern.type_name.?;
+        const variant_info = findUserVariant(ctx.type_decls, type_name, ctor_pattern.name) orelse return error.UnsupportedExpr;
+        if (variant_info.payload_types.len != ctor_pattern.args.len) return error.UnsupportedExpr;
+        const variant = try userVariantName(allocator, ctor_pattern.name);
+        defer allocator.free(variant);
+
+        var payload_sources = std.ArrayList([]const u8).empty;
+        defer {
+            for (payload_sources.items) |payload_source| allocator.free(payload_source);
+            payload_sources.deinit(allocator);
+        }
+        for (ctor_pattern.args, variant_info.payload_types, 0..) |_, payload_ty, index| {
+            const payload_name = try std.fmt.allocPrint(allocator, "omlz_match_payload_{d}", .{ctx.next_block_id});
+            ctx.next_block_id += 1;
+            try emitIndent(out, allocator, indent_level);
+            try appendPrint(out, allocator, "const {s} = ", .{payload_name});
+            if (ctor_pattern.args.len == 1) {
+                try appendPrint(out, allocator, "{s}.payload.{s}", .{ scrutinee_name, variant });
+            } else {
+                try appendPrint(out, allocator, "{s}.payload.{s}._{d}", .{ scrutinee_name, variant, index });
+            }
+            if (isRecursivePayload(payload_ty)) try append(out, allocator, ".*");
+            try append(out, allocator, ";\n");
+            if (!patternNeedsSource(ctor_pattern.args[index], body, guard)) {
+                try emitIndent(out, allocator, indent_level);
+                try appendPrint(out, allocator, "_ = {s};\n", .{payload_name});
+            }
+            try payload_sources.append(allocator, payload_name);
+        }
+        try emitPatternSequence(out, allocator, ctor_pattern.args, payload_sources.items, body, guard, block_id, indent_level, ctx);
+        return;
+    }
+
+    if (ctor_pattern.args.len == 0) {
+        try emitGuardedMatchBreak(out, allocator, body, guard, block_id, indent_level, ctx);
+        return;
+    }
+    const payload_name = builtin_payload_name orelse return error.UnsupportedExpr;
+    var payload_sources = std.ArrayList([]const u8).empty;
+    defer {
+        for (payload_sources.items) |payload_source| {
+            if (!std.mem.eql(u8, payload_source, payload_name)) allocator.free(payload_source);
+        }
+        payload_sources.deinit(allocator);
+    }
+    if (std.mem.eql(u8, ctor_pattern.name, "::")) {
+        if (ctor_pattern.args.len != 2) return error.UnsupportedExpr;
+        try payload_sources.append(allocator, try std.fmt.allocPrint(allocator, "{s}.head", .{payload_name}));
+        try payload_sources.append(allocator, try std.fmt.allocPrint(allocator, "{s}.tail.*", .{payload_name}));
+    } else {
+        if (ctor_pattern.args.len != 1) return error.UnsupportedExpr;
+        try payload_sources.append(allocator, payload_name);
+    }
+    try emitPatternSequence(out, allocator, ctor_pattern.args, payload_sources.items, body, guard, block_id, indent_level, ctx);
+}
+
+fn emitDefaultRows(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     match_expr: lir.LMatch,
@@ -447,9 +570,14 @@ fn emitSequentialMatchArms(
     ctx: *EmitContext,
 ) EmitError!void {
     for (match_expr.arms) |arm| {
-        const patterns = [_]lir.LPattern{arm.pattern};
-        const sources = [_][]const u8{scrutinee_name};
-        try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level, ctx);
+        switch (arm.pattern) {
+            .Wildcard, .Var => {
+                const patterns = [_]lir.LPattern{arm.pattern};
+                const sources = [_][]const u8{scrutinee_name};
+                try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level, ctx);
+            },
+            .Ctor => {},
+        }
     }
 }
 
@@ -582,7 +710,9 @@ fn emitUserCtorPatternSequence(
     defer allocator.free(variant);
 
     try emitIndent(out, allocator, indent_level);
-    try appendPrint(out, allocator, "if ({s}.tag == .{s}) {{\n", .{ source, variant });
+    try appendPrint(out, allocator, "switch ({s}.tag) {{\n", .{source});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, ".{s} => {{\n", .{variant});
 
     var payload_sources = std.ArrayList([]const u8).empty;
     defer {
@@ -592,7 +722,7 @@ fn emitUserCtorPatternSequence(
     for (ctor_pattern.args, variant_info.payload_types, 0..) |_, payload_ty, index| {
         const payload_name = try std.fmt.allocPrint(allocator, "omlz_match_payload_{d}", .{ctx.next_block_id});
         ctx.next_block_id += 1;
-        try emitIndent(out, allocator, indent_level + 1);
+        try emitIndent(out, allocator, indent_level + 2);
         try appendPrint(out, allocator, "const {s} = ", .{payload_name});
         if (ctor_pattern.args.len == 1) {
             try appendPrint(out, allocator, "{s}.payload.{s}", .{ source, variant });
@@ -602,13 +732,17 @@ fn emitUserCtorPatternSequence(
         if (isRecursivePayload(payload_ty)) try append(out, allocator, ".*");
         try append(out, allocator, ";\n");
         if (!patternNeedsSource(ctor_pattern.args[index], body, guard)) {
-            try emitIndent(out, allocator, indent_level + 1);
+            try emitIndent(out, allocator, indent_level + 2);
             try appendPrint(out, allocator, "_ = {s};\n", .{payload_name});
         }
         try payload_sources.append(allocator, payload_name);
     }
 
-    try emitCombinedPatternSequence(out, allocator, ctor_pattern.args, payload_sources.items, rest_patterns, rest_sources, body, guard, block_id, indent_level + 1, ctx);
+    try emitCombinedPatternSequence(out, allocator, ctor_pattern.args, payload_sources.items, rest_patterns, rest_sources, body, guard, block_id, indent_level + 2, ctx);
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "},\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "else => {},\n");
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}\n");
 }
@@ -702,171 +836,6 @@ fn emitNonCtorMatch(
     try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
     try emitExpr(out, allocator, arm.body.*, indent_level + 1, ctx);
     try append(out, allocator, ";\n");
-}
-
-fn emitCtorMatchArm(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    ctor_pattern: lir.LCtorPattern,
-    body: lir.LExpr,
-    scrutinee_name: []const u8,
-    block_id: usize,
-    indent_level: usize,
-    ctx: *EmitContext,
-) EmitError!void {
-    const variant = if (ctor_pattern.type_name != null)
-        try userVariantName(allocator, ctor_pattern.name)
-    else
-        try allocator.dupe(u8, try ctorVariantName(ctor_pattern.name));
-    defer allocator.free(variant);
-    try emitIndent(out, allocator, indent_level);
-    try appendPrint(out, allocator, ".{s} => ", .{variant});
-    if (ctor_pattern.type_name != null) {
-        const type_name = ctor_pattern.type_name.?;
-        const variant_info = findUserVariant(ctx.type_decls, type_name, ctor_pattern.name) orelse return error.UnsupportedExpr;
-        if (variant_info.payload_types.len != ctor_pattern.args.len) return error.UnsupportedExpr;
-
-        var capture_count: usize = 0;
-        for (ctor_pattern.args) |arg| {
-            switch (arg) {
-                .Wildcard => {},
-                .Var => |name| {
-                    if (exprUsesName(body, name)) capture_count += 1;
-                },
-                .Ctor => return error.UnsupportedExpr,
-            }
-        }
-        if (capture_count != 0) {
-            const bind_block_id = ctx.next_block_id;
-            ctx.next_block_id += 1;
-            try appendPrint(out, allocator, "break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
-            for (ctor_pattern.args, variant_info.payload_types, 0..) |arg, payload_ty, index| {
-                const capture_name: ?[]const u8 = switch (arg) {
-                    .Wildcard => null,
-                    .Var => |name| if (exprUsesName(body, name)) name else null,
-                    .Ctor => unreachable,
-                };
-                if (capture_name) |name| {
-                    try emitIndent(out, allocator, indent_level + 1);
-                    try append(out, allocator, "const ");
-                    try emitIdentifier(out, allocator, name);
-                    if (ctor_pattern.args.len == 1) {
-                        try appendPrint(out, allocator, " = {s}.payload.{s}", .{ scrutinee_name, variant });
-                    } else {
-                        try appendPrint(out, allocator, " = {s}.payload.{s}._{d}", .{ scrutinee_name, variant, index });
-                    }
-                    if (isRecursivePayload(payload_ty)) try append(out, allocator, ".*");
-                    try append(out, allocator, ";\n");
-                }
-            }
-            try emitIndent(out, allocator, indent_level + 1);
-            try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
-            try emitExpr(out, allocator, body, indent_level + 1, ctx);
-            try append(out, allocator, ";\n");
-            try emitIndent(out, allocator, indent_level);
-            try append(out, allocator, "},\n");
-            return;
-        }
-        try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
-        try emitExpr(out, allocator, body, indent_level, ctx);
-        try append(out, allocator, ",\n");
-        return;
-    }
-    if (std.mem.eql(u8, ctor_pattern.name, "::")) {
-        if (ctor_pattern.args.len != 2) return error.UnsupportedExpr;
-        const bind_block_id = ctx.next_block_id;
-        ctx.next_block_id += 1;
-        try appendPrint(out, allocator, "|omlz_cons| break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
-        try emitConsPatternBinding(out, allocator, ctor_pattern.args[0], "omlz_cons.head", body, indent_level + 1);
-        try emitConsPatternBinding(out, allocator, ctor_pattern.args[1], "omlz_cons.tail.*", body, indent_level + 1);
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
-        try emitExpr(out, allocator, body, indent_level + 1, ctx);
-        try append(out, allocator, ";\n");
-        try emitIndent(out, allocator, indent_level);
-        try append(out, allocator, "},\n");
-        return;
-    }
-    if (ctor_pattern.args.len == 1) {
-        const arg = ctor_pattern.args[0];
-        const capture_name: ?[]const u8 = switch (arg) {
-            .Wildcard => null,
-            .Var => |name| if (exprUsesName(body, name)) name else null,
-            .Ctor => return error.UnsupportedExpr,
-        };
-        if (capture_name) |name| {
-            try append(out, allocator, "|");
-            try emitIdentifier(out, allocator, name);
-            try append(out, allocator, "| ");
-        }
-    } else if (ctor_pattern.args.len > 1) {
-        return error.UnsupportedExpr;
-    }
-    try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
-    try emitExpr(out, allocator, body, indent_level, ctx);
-    try append(out, allocator, ",\n");
-}
-
-fn emitConsPatternBinding(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    pattern: lir.LPattern,
-    source_expr: []const u8,
-    body: lir.LExpr,
-    indent_level: usize,
-) EmitError!void {
-    switch (pattern) {
-        .Wildcard => {},
-        .Var => |name| if (!std.mem.eql(u8, name, "_") and exprUsesName(body, name)) {
-            try emitIndent(out, allocator, indent_level);
-            try append(out, allocator, "const ");
-            try emitIdentifier(out, allocator, name);
-            try appendPrint(out, allocator, " = {s};\n", .{source_expr});
-        },
-        .Ctor => return error.UnsupportedExpr,
-    }
-}
-
-fn emitCatchAllMatchArm(
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    pattern: lir.LPattern,
-    body: lir.LExpr,
-    scrutinee_name: []const u8,
-    block_id: usize,
-    indent_level: usize,
-    ctx: *EmitContext,
-) EmitError!void {
-    try emitIndent(out, allocator, indent_level);
-    try append(out, allocator, "else => ");
-    const should_bind = switch (pattern) {
-        .Var => |name| !std.mem.eql(u8, name, "_") and exprUsesName(body, name),
-        .Wildcard => false,
-        .Ctor => return error.UnsupportedExpr,
-    };
-    if (should_bind) {
-        const bind_block_id = ctx.next_block_id;
-        ctx.next_block_id += 1;
-        const name = switch (pattern) {
-            .Var => |value| value,
-            else => unreachable,
-        };
-        try appendPrint(out, allocator, "break :blk{d} blk{d}: {{\n", .{ block_id, bind_block_id });
-        try emitIndent(out, allocator, indent_level + 1);
-        try append(out, allocator, "const ");
-        try emitIdentifier(out, allocator, name);
-        try appendPrint(out, allocator, " = {s};\n", .{scrutinee_name});
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} ", .{bind_block_id});
-        try emitExpr(out, allocator, body, indent_level + 1, ctx);
-        try append(out, allocator, ";\n");
-        try emitIndent(out, allocator, indent_level);
-        try append(out, allocator, "},\n");
-    } else {
-        try appendPrint(out, allocator, "break :blk{d} ", .{block_id});
-        try emitExpr(out, allocator, body, indent_level, ctx);
-        try append(out, allocator, ",\n");
-    }
 }
 
 fn emitCtorExpr(
@@ -1250,30 +1219,6 @@ fn patternNeedsSource(pattern: lir.LPattern, body: lir.LExpr, guard: ?*const lir
     };
 }
 
-fn matchNeedsSequential(match_expr: lir.LMatch) bool {
-    for (match_expr.arms) |arm| {
-        if (arm.guard != null) return true;
-        if (patternHasNestedCtor(arm.pattern)) return true;
-    }
-    return false;
-}
-
-fn patternHasNestedCtor(pattern: lir.LPattern) bool {
-    return switch (pattern) {
-        .Ctor => |ctor_pattern| blk: {
-            for (ctor_pattern.args) |arg| {
-                switch (arg) {
-                    .Ctor => break :blk true,
-                    .Wildcard, .Var => {},
-                }
-                if (patternHasNestedCtor(arg)) break :blk true;
-            }
-            break :blk false;
-        },
-        .Wildcard, .Var => false,
-    };
-}
-
 fn matchHasCtorArm(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
@@ -1294,6 +1239,33 @@ fn matchHasUserCtorArm(match_expr: lir.LMatch) bool {
     return false;
 }
 
+fn emittedVariantName(allocator: std.mem.Allocator, ctor_pattern: lir.LCtorPattern) EmitError![]const u8 {
+    return if (ctor_pattern.type_name != null)
+        try userVariantName(allocator, ctor_pattern.name)
+    else
+        try allocator.dupe(u8, try ctorVariantName(ctor_pattern.name));
+}
+
+fn sameConstructor(a: lir.LCtorPattern, b: lir.LCtorPattern) bool {
+    const same_type = if (a.type_name == null and b.type_name == null)
+        true
+    else if (a.type_name != null and b.type_name != null)
+        std.mem.eql(u8, a.type_name.?, b.type_name.?)
+    else
+        false;
+    return same_type and std.mem.eql(u8, a.name, b.name);
+}
+
+fn matchHasDefaultRows(match_expr: lir.LMatch) bool {
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Wildcard, .Var => return true,
+            .Ctor => {},
+        }
+    }
+    return false;
+}
+
 fn containsString(haystack: []const []const u8, needle: []const u8) bool {
     for (haystack) |value| {
         if (std.mem.eql(u8, value, needle)) return true;
@@ -1301,24 +1273,144 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
-fn allKnownVariantsCovered(variants: []const []const u8) bool {
-    return (containsString(variants, "some") and containsString(variants, "none")) or
-        (containsString(variants, "ok") and containsString(variants, "err")) or
-        (containsString(variants, "nil") and containsString(variants, "cons"));
+fn hasMissingConstructors(allocator: std.mem.Allocator, type_decls: []const lir.LVariantType, match_expr: lir.LMatch, emitted_variants: []const []const u8) bool {
+    if (matchHasUnguardedCatchAll(match_expr)) return false;
+    const missing = missingConstructorsMessage(allocator, type_decls, match_expr, emitted_variants) catch return false;
+    defer allocator.free(missing);
+    return missing.len != 0;
 }
 
-fn allUserVariantsCovered(allocator: std.mem.Allocator, type_decls: []const lir.LVariantType, match_expr: lir.LMatch, variants: []const []const u8) bool {
-    const type_name = userMatchTypeName(match_expr) orelse return false;
-    for (type_decls) |type_decl| {
-        if (!std.mem.eql(u8, type_decl.name, type_name)) continue;
-        for (type_decl.variants) |variant| {
-            const variant_name = userVariantName(allocator, variant.name) catch return false;
-            defer allocator.free(variant_name);
-            if (!containsString(variants, variant_name)) return false;
+fn emitNonExhaustivePanic(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    type_decls: []const lir.LVariantType,
+    match_expr: lir.LMatch,
+    emitted_variants: []const []const u8,
+    indent_level: usize,
+) EmitError!void {
+    const missing = try missingConstructorsMessage(allocator, type_decls, match_expr, emitted_variants);
+    defer allocator.free(missing);
+    try emitIndent(out, allocator, indent_level);
+    if (missing.len == 0) {
+        try append(out, allocator, "@compileError(\"ZXCAML: non-exhaustive match: guard failure or missing nested constructor\");\n");
+    } else {
+        try appendPrint(out, allocator, "@compileError(\"ZXCAML: non-exhaustive match: missing constructors: {f}\");\n", .{std.zig.fmtString(missing)});
+    }
+}
+
+fn missingConstructorsMessage(allocator: std.mem.Allocator, type_decls: []const lir.LVariantType, match_expr: lir.LMatch, emitted_variants: []const []const u8) EmitError![]const u8 {
+    _ = emitted_variants;
+    var missing = std.ArrayList(u8).empty;
+    errdefer missing.deinit(allocator);
+
+    if (userMatchTypeName(match_expr)) |type_name| {
+        for (type_decls) |type_decl| {
+            if (!std.mem.eql(u8, type_decl.name, type_name)) continue;
+            for (type_decl.variants) |variant| {
+                if (constructorUnconditionallyCovered(match_expr, type_name, variant.name)) continue;
+                if (missing.items.len != 0) try append(&missing, allocator, ", ");
+                try append(&missing, allocator, variant.name);
+            }
+            return missing.toOwnedSlice(allocator);
         }
-        return true;
+        return missing.toOwnedSlice(allocator);
+    }
+
+    const family = builtinMatchFamily(match_expr) orelse return missing.toOwnedSlice(allocator);
+    for (family.constructors) |ctor_name| {
+        if (constructorUnconditionallyCovered(match_expr, null, ctor_name)) continue;
+        if (missing.items.len != 0) try append(&missing, allocator, ", ");
+        try append(&missing, allocator, ctor_name);
+    }
+    return missing.toOwnedSlice(allocator);
+}
+
+const BuiltinFamily = struct {
+    constructors: []const []const u8,
+};
+
+fn builtinMatchFamily(match_expr: lir.LMatch) ?BuiltinFamily {
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => |ctor| {
+                if (std.mem.eql(u8, ctor.name, "Some") or std.mem.eql(u8, ctor.name, "None")) {
+                    return .{ .constructors = &.{ "Some", "None" } };
+                }
+                if (std.mem.eql(u8, ctor.name, "Ok") or std.mem.eql(u8, ctor.name, "Error")) {
+                    return .{ .constructors = &.{ "Ok", "Error" } };
+                }
+                if (std.mem.eql(u8, ctor.name, "::") or std.mem.eql(u8, ctor.name, "[]")) {
+                    return .{ .constructors = &.{ "::", "[]" } };
+                }
+            },
+            .Wildcard, .Var => {},
+        }
+    }
+    return null;
+}
+
+fn matchHasUnguardedCatchAll(match_expr: lir.LMatch) bool {
+    for (match_expr.arms) |arm| {
+        if (arm.guard != null) continue;
+        switch (arm.pattern) {
+            .Wildcard, .Var => return true,
+            .Ctor => {},
+        }
     }
     return false;
+}
+
+fn constructorUnconditionallyCovered(match_expr: lir.LMatch, type_name: ?[]const u8, constructor: []const u8) bool {
+    for (match_expr.arms) |arm| {
+        if (arm.guard != null) continue;
+        switch (arm.pattern) {
+            .Wildcard, .Var => return true,
+            .Ctor => |ctor| {
+                const same_type = if (type_name == null and ctor.type_name == null)
+                    true
+                else if (type_name != null and ctor.type_name != null)
+                    std.mem.eql(u8, type_name.?, ctor.type_name.?)
+                else
+                    false;
+                if (same_type and std.mem.eql(u8, ctor.name, constructor) and ctorPayloadsIrrefutable(ctor.args)) return true;
+            },
+        }
+    }
+    return false;
+}
+
+fn caseUnconditionallyCovered(match_expr: lir.LMatch, selected_ctor: lir.LCtorPattern) bool {
+    for (match_expr.arms) |arm| {
+        if (arm.guard != null) continue;
+        switch (arm.pattern) {
+            .Wildcard, .Var => return true,
+            .Ctor => |ctor| if (sameConstructor(ctor, selected_ctor) and ctorPayloadsIrrefutable(ctor.args)) return true,
+        }
+    }
+    return false;
+}
+
+fn caseNeedsBuiltinPayload(match_expr: lir.LMatch, selected_ctor: lir.LCtorPattern) bool {
+    if (selected_ctor.type_name != null or selected_ctor.args.len == 0) return false;
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => |ctor| {
+                if (sameConstructor(ctor, selected_ctor) and patternsNeedSource(ctor.args, arm.body.*, arm.guard)) return true;
+            },
+            .Wildcard, .Var => {},
+        }
+    }
+    return false;
+}
+
+fn ctorPayloadsIrrefutable(patterns: []const lir.LPattern) bool {
+    for (patterns) |pattern| {
+        switch (pattern) {
+            .Wildcard, .Var => {},
+            .Ctor => return false,
+        }
+    }
+    return true;
 }
 
 fn userMatchTypeName(match_expr: lir.LMatch) ?[]const u8 {
@@ -1862,7 +1954,8 @@ test "ZigBackend emits user ADTs as explicit tag and payload structs" {
     try std.testing.expect(std.mem.indexOf(u8, source, "const Payload = union { C: i64 };") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".tag = .C, .payload = .{ .C = @as(i64, 42) }") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_0.tag)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_match_scrutinee_0.payload.C;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".payload.C") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_match_payload_") != null);
 }
 
 test "ZigBackend parameterizes user ADT TypeVar payloads" {
@@ -1933,8 +2026,9 @@ test "ZigBackend emits switch-on-discriminant for constructor matches" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".some => |x| break") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".none => break") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".some => |omlz_match_payload_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_match_payload_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".none => {") != null);
 }
 
 test "ZigBackend emits nested constructor checks with guard fallthrough" {
@@ -1993,6 +2087,121 @@ test "ZigBackend emits nested constructor checks with guard fallthrough" {
     try std.testing.expect(std.mem.indexOf(u8, source, "unreachable;") != null);
 }
 
+test "ZigBackend emits decision-tree switch for five-constructor user ADTs" {
+    const five_ty = lir.LTy{ .Adt = .{ .name = "five", .params = &.{} } };
+    const module: lir.LModule = .{
+        .type_decls = &.{.{
+            .name = "five",
+            .variants = &.{
+                .{ .name = "A", .tag = 0 },
+                .{ .name = "B", .tag = 1 },
+                .{ .name = "C", .tag = 2 },
+                .{ .name = "D", .tag = 3 },
+                .{ .name = "E", .tag = 4 },
+            },
+        }},
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .Match = .{
+                .scrutinee = &.{ .Ctor = .{
+                    .name = "C",
+                    .args = &.{},
+                    .ty = five_ty,
+                    .layout = @import("../core/layout.zig").ctor(0),
+                    .tag = 2,
+                    .type_name = "five",
+                } },
+                .arms = &.{
+                    .{ .pattern = .{ .Ctor = .{ .name = "A", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 1 } } },
+                    .{ .pattern = .{ .Ctor = .{ .name = "B", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 2 } } },
+                    .{ .pattern = .{ .Ctor = .{ .name = "C", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 3 } } },
+                    .{ .pattern = .{ .Ctor = .{ .name = "D", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 4 } } },
+                    .{ .pattern = .{ .Ctor = .{ .name = "E", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 5 } } },
+                },
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_0.tag)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".E => {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".tag == .") == null);
+}
+
+test "DecisionTree compileMatrix specializes first-column constructors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const matrix = &.{
+        &.{lir.LPattern{ .Ctor = .{ .name = "A", .args = &.{} } }},
+        &.{lir.LPattern{ .Ctor = .{ .name = "B", .args = &.{} } }},
+        &.{lir.LPattern{ .Wildcard = {} }},
+    };
+    const actions = &.{ @as(usize, 0), @as(usize, 1), @as(usize, 2) };
+
+    const tree = try match_compiler.compileMatrix(allocator, matrix, actions);
+    try std.testing.expectEqual(@as(usize, 0), tree.Switch.column);
+    try std.testing.expectEqual(@as(usize, 2), tree.Switch.cases.len);
+    try std.testing.expectEqualStrings("A", tree.Switch.cases[0].constructor);
+    try std.testing.expectEqual(@as(usize, 0), tree.Switch.cases[0].tree.Leaf);
+    try std.testing.expect(tree.Switch.default != null);
+    try std.testing.expectEqual(@as(usize, 2), tree.Switch.default.?.Leaf);
+}
+
+test "ZigBackend emits default branch and missing-constructor diagnostics" {
+    const five_ty = lir.LTy{ .Adt = .{ .name = "five", .params = &.{} } };
+    const type_decls = &[_]lir.LVariantType{.{
+        .name = "five",
+        .variants = &.{
+            .{ .name = "A", .tag = 0 },
+            .{ .name = "B", .tag = 1 },
+            .{ .name = "C", .tag = 2 },
+            .{ .name = "D", .tag = 3 },
+            .{ .name = "E", .tag = 4 },
+        },
+    }};
+    const scrutinee = &lir.LExpr{ .Ctor = .{
+        .name = "A",
+        .args = &.{},
+        .ty = five_ty,
+        .layout = @import("../core/layout.zig").ctor(0),
+        .tag = 0,
+        .type_name = "five",
+    } };
+
+    const with_default: lir.LModule = .{ .type_decls = type_decls, .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Match = .{
+            .scrutinee = scrutinee,
+            .arms = &.{
+                .{ .pattern = .{ .Ctor = .{ .name = "A", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 1 } } },
+                .{ .pattern = .{ .Wildcard = {} }, .body = &.{ .Constant = .{ .Int = 0 } } },
+            },
+        } },
+    } };
+    const default_source = try emitModule(std.testing.allocator, with_default);
+    defer std.testing.allocator.free(default_source);
+    try std.testing.expect(std.mem.indexOf(u8, default_source, "else => {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, default_source, "missing constructors") == null);
+
+    const incomplete: lir.LModule = .{ .type_decls = type_decls, .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Match = .{
+            .scrutinee = scrutinee,
+            .arms = &.{
+                .{ .pattern = .{ .Ctor = .{ .name = "A", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 1 } } },
+                .{ .pattern = .{ .Ctor = .{ .name = "B", .args = &.{}, .type_name = "five" } }, .body = &.{ .Constant = .{ .Int = 2 } } },
+            },
+        } },
+    } };
+    const incomplete_source = try emitModule(std.testing.allocator, incomplete);
+    defer std.testing.allocator.free(incomplete_source);
+    try std.testing.expect(std.mem.indexOf(u8, incomplete_source, "missing constructors: C, D, E") != null);
+}
+
 test "ZigBackend omits unused payload captures in constructor matches" {
     const result_ty = lir.LTy{ .Adt = .{ .name = "result", .params = &.{ .Int, .Int } } };
     const module: lir.LModule = .{ .entrypoint = .{
@@ -2026,7 +2235,7 @@ test "ZigBackend omits unused payload captures in constructor matches" {
     const source = try emitModule(std.testing.allocator, module);
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, ".err => break") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".err => |omlz_match_payload_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "|_|") == null);
 }
 
@@ -2071,8 +2280,8 @@ test "ZigBackend emits list constructors and cons pattern bindings" {
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.List(i64)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".nil") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".cons = .{ .head = omlz_list_head_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".cons => |omlz_cons|") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_cons.head;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".cons => |omlz_match_payload_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".head") != null);
 }
 
 test "ZigBackend emits direct recursive helper functions" {
