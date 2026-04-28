@@ -48,7 +48,18 @@ fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_d
     const type_name = try userTypeName(allocator, type_decl.name);
     defer allocator.free(type_name);
 
-    try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+    if (type_decl.params.len == 0) {
+        try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+    } else {
+        try appendPrint(out, allocator, "fn {s}(", .{type_name});
+        for (type_decl.params, 0..) |param, index| {
+            if (index != 0) try append(out, allocator, ", ");
+            const param_name = try typeParamName(allocator, param);
+            defer allocator.free(param_name);
+            try appendPrint(out, allocator, "comptime {s}: type", .{param_name});
+        }
+        try append(out, allocator, ") type {\n    return struct {\n");
+    }
     try append(out, allocator, "    const Self = @This();\n");
     try append(out, allocator, "    const Tag = enum(u32) { ");
     for (type_decl.variants, 0..) |variant, index| {
@@ -66,7 +77,7 @@ fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_d
         if (payload_count != 0) try append(out, allocator, ", ");
         const variant_name = try userVariantName(allocator, variant.name);
         defer allocator.free(variant_name);
-        const payload_ty = try payloadTypeName(allocator, variant);
+        const payload_ty = try payloadTypeName(allocator, variant, type_decl.params);
         defer allocator.free(payload_ty);
         try appendPrint(out, allocator, "{s}: {s}", .{ variant_name, payload_ty });
         payload_count += 1;
@@ -77,22 +88,31 @@ fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_d
     try append(out, allocator, "    payload: Payload = undefined,\n\n");
 
     for (type_decl.variants) |variant| {
-        try emitVariantConstructorHelper(out, allocator, variant);
+        try emitVariantConstructorHelper(out, allocator, variant, type_decl.params);
     }
-    try append(out, allocator, "};\n");
+    if (type_decl.params.len == 0) {
+        try append(out, allocator, "};\n");
+    } else {
+        try append(out, allocator, "    };\n}\n");
+    }
 }
 
-fn emitVariantConstructorHelper(out: *std.ArrayList(u8), allocator: std.mem.Allocator, variant: lir.LVariantCtor) EmitError!void {
+fn emitVariantConstructorHelper(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    variant: lir.LVariantCtor,
+    type_params: []const []const u8,
+) EmitError!void {
     const variant_name = try userVariantName(allocator, variant.name);
     defer allocator.free(variant_name);
 
     try appendPrint(out, allocator, "    pub fn {s}(", .{variant_name});
     if (variant.payload_types.len == 1) {
-        const payload_ty = try zigTypeExprName(allocator, variant.payload_types[0]);
+        const payload_ty = try zigTypeExprName(allocator, variant.payload_types[0], type_params);
         defer allocator.free(payload_ty);
         try appendPrint(out, allocator, "value: {s}", .{payload_ty});
     } else if (variant.payload_types.len > 1) {
-        const payload_ty = try payloadTypeName(allocator, variant);
+        const payload_ty = try payloadTypeName(allocator, variant, type_params);
         defer allocator.free(payload_ty);
         try appendPrint(out, allocator, "value: {s}", .{payload_ty});
     }
@@ -614,7 +634,7 @@ fn emitCtorExpr(
     ctx: *EmitContext,
 ) EmitError!void {
     const ty_name = if (ctor_expr.type_name) |type_name|
-        try userTypeName(allocator, type_name)
+        try zigUserAdtTypeName(allocator, ctor_expr.ty, type_name)
     else
         try zigTypeName(allocator, ctor_expr.ty);
     defer allocator.free(ty_name);
@@ -630,6 +650,7 @@ fn emitCtorExpr(
             return;
         }
         const type_name = ctor_expr.type_name.?;
+        const type_decl = findUserTypeDecl(ctx.type_decls, type_name) orelse return error.UnsupportedExpr;
         const variant_info = findUserVariant(ctx.type_decls, type_name, ctor_expr.name) orelse return error.UnsupportedExpr;
         if (variant_info.payload_types.len != ctor_expr.args.len) return error.UnsupportedExpr;
 
@@ -654,7 +675,7 @@ fn emitCtorExpr(
                 .RecursiveRef => |value| value,
                 else => unreachable,
             };
-            const child_ty_name = try userTypeName(allocator, ref.name);
+            const child_ty_name = try zigInstantiatedTypeRefName(allocator, ref, type_decl.params, ctor_expr.ty);
             defer allocator.free(child_ty_name);
             try emitIndent(out, allocator, indent_level + 1);
             try appendPrint(out, allocator, "const omlz_recursive_payload_{d}_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, index, child_ty_name });
@@ -1041,16 +1062,19 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
                 defer allocator.free(inner);
                 break :blk try std.fmt.allocPrint(allocator, "prelude.List({s})", .{inner});
             }
-            break :blk try userTypeName(allocator, adt.name);
+            break :blk try zigUserAdtNameFromAdt(allocator, adt);
         },
     };
 }
 
-fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr) EmitError![]const u8 {
+fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr, type_params: []const []const u8) EmitError![]const u8 {
     return switch (ty) {
-        .TypeVar => allocator.dupe(u8, "i64"),
-        .TypeRef => |ref| try zigTypeRefName(allocator, ref),
-        .RecursiveRef => |ref| try zigRecursiveTypeRefName(allocator, ref),
+        .TypeVar => |name| blk: {
+            if (!containsString(type_params, name)) return error.UnsupportedExpr;
+            break :blk try typeParamName(allocator, name);
+        },
+        .TypeRef => |ref| try zigTypeRefName(allocator, ref, type_params),
+        .RecursiveRef => |ref| try zigRecursiveTypeRefName(allocator, ref, type_params),
         .Tuple => |items| blk: {
             if (items.len == 0) break :blk try allocator.dupe(u8, "void");
             var out = std.ArrayList(u8).empty;
@@ -1058,7 +1082,7 @@ fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr) EmitError![]
             try append(&out, allocator, "struct { ");
             for (items, 0..) |item, index| {
                 if (index != 0) try append(&out, allocator, ", ");
-                const item_ty = try zigTypeExprName(allocator, item);
+                const item_ty = try zigTypeExprName(allocator, item, type_params);
                 defer allocator.free(item_ty);
                 try appendPrint(&out, allocator, "_{d}: {s}", .{ index, item_ty });
             }
@@ -1068,30 +1092,45 @@ fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr) EmitError![]
     };
 }
 
-fn zigRecursiveTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef) EmitError![]const u8 {
-    const type_name = try userTypeName(allocator, ref.name);
+fn zigRecursiveTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef, type_params: []const []const u8) EmitError![]const u8 {
+    const type_name = try zigTypeRefName(allocator, ref, type_params);
     defer allocator.free(type_name);
     return std.fmt.allocPrint(allocator, "*const {s}", .{type_name});
 }
 
-fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef) EmitError![]const u8 {
+fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef, type_params: []const []const u8) EmitError![]const u8 {
     if (std.mem.eql(u8, ref.name, "int")) return allocator.dupe(u8, "i64");
     if (std.mem.eql(u8, ref.name, "bool")) return allocator.dupe(u8, "prelude.Bool");
     if (std.mem.eql(u8, ref.name, "unit")) return allocator.dupe(u8, "void");
     if (std.mem.eql(u8, ref.name, "string")) return allocator.dupe(u8, "[]const u8");
-    return userTypeName(allocator, ref.name);
+    const base = try userTypeName(allocator, ref.name);
+    if (ref.args.len == 0) return base;
+    defer allocator.free(base);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, base);
+    try append(&out, allocator, "(");
+    for (ref.args, 0..) |arg, index| {
+        if (index != 0) try append(&out, allocator, ", ");
+        const arg_name = try zigTypeExprName(allocator, arg, type_params);
+        defer allocator.free(arg_name);
+        try append(&out, allocator, arg_name);
+    }
+    try append(&out, allocator, ")");
+    return out.toOwnedSlice(allocator);
 }
 
-fn payloadTypeName(allocator: std.mem.Allocator, variant: lir.LVariantCtor) EmitError![]const u8 {
+fn payloadTypeName(allocator: std.mem.Allocator, variant: lir.LVariantCtor, type_params: []const []const u8) EmitError![]const u8 {
     if (variant.payload_types.len == 0) return allocator.dupe(u8, "void");
-    if (variant.payload_types.len == 1) return zigTypeExprName(allocator, variant.payload_types[0]);
+    if (variant.payload_types.len == 1) return zigTypeExprName(allocator, variant.payload_types[0], type_params);
 
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
     try append(&out, allocator, "struct { ");
     for (variant.payload_types, 0..) |payload_ty, index| {
         if (index != 0) try append(&out, allocator, ", ");
-        const ty_name = try zigTypeExprName(allocator, payload_ty);
+        const ty_name = try zigTypeExprName(allocator, payload_ty, type_params);
         defer allocator.free(ty_name);
         try appendPrint(&out, allocator, "_{d}: {s}", .{ index, ty_name });
     }
@@ -1107,6 +1146,104 @@ fn findUserVariant(type_decls: []const lir.LVariantType, type_name: []const u8, 
         }
     }
     return null;
+}
+
+fn findUserTypeDecl(type_decls: []const lir.LVariantType, type_name: []const u8) ?lir.LVariantType {
+    for (type_decls) |type_decl| {
+        if (std.mem.eql(u8, type_decl.name, type_name)) return type_decl;
+    }
+    return null;
+}
+
+fn zigInstantiatedTypeRefName(
+    allocator: std.mem.Allocator,
+    ref: lir.LTypeRef,
+    type_params: []const []const u8,
+    concrete_ty: lir.LTy,
+) EmitError![]const u8 {
+    if (std.mem.eql(u8, ref.name, "int")) return allocator.dupe(u8, "i64");
+    if (std.mem.eql(u8, ref.name, "bool")) return allocator.dupe(u8, "prelude.Bool");
+    if (std.mem.eql(u8, ref.name, "unit")) return allocator.dupe(u8, "void");
+    if (std.mem.eql(u8, ref.name, "string")) return allocator.dupe(u8, "[]const u8");
+
+    const base = try userTypeName(allocator, ref.name);
+    if (ref.args.len == 0) return base;
+    defer allocator.free(base);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, base);
+    try append(&out, allocator, "(");
+    for (ref.args, 0..) |arg, index| {
+        if (index != 0) try append(&out, allocator, ", ");
+        const arg_name = try zigInstantiatedTypeExprName(allocator, arg, type_params, concrete_ty);
+        defer allocator.free(arg_name);
+        try append(&out, allocator, arg_name);
+    }
+    try append(&out, allocator, ")");
+    return out.toOwnedSlice(allocator);
+}
+
+fn zigInstantiatedTypeExprName(
+    allocator: std.mem.Allocator,
+    ty: lir.LTypeExpr,
+    type_params: []const []const u8,
+    concrete_ty: lir.LTy,
+) EmitError![]const u8 {
+    return switch (ty) {
+        .TypeVar => |name| try concreteTypeParamName(allocator, name, type_params, concrete_ty),
+        .TypeRef => |ref| try zigInstantiatedTypeRefName(allocator, ref, type_params, concrete_ty),
+        .RecursiveRef => |ref| blk: {
+            const type_name = try zigInstantiatedTypeRefName(allocator, ref, type_params, concrete_ty);
+            defer allocator.free(type_name);
+            break :blk try std.fmt.allocPrint(allocator, "*const {s}", .{type_name});
+        },
+        .Tuple => error.UnsupportedExpr,
+    };
+}
+
+fn concreteTypeParamName(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    type_params: []const []const u8,
+    concrete_ty: lir.LTy,
+) EmitError![]const u8 {
+    const adt = switch (concrete_ty) {
+        .Adt => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    for (type_params, 0..) |param_name, index| {
+        if (!std.mem.eql(u8, param_name, name)) continue;
+        if (index >= adt.params.len) return error.UnsupportedExpr;
+        return zigTypeName(allocator, adt.params[index]);
+    }
+    return error.UnsupportedExpr;
+}
+
+fn zigUserAdtTypeName(allocator: std.mem.Allocator, ty: lir.LTy, fallback_name: []const u8) EmitError![]const u8 {
+    return switch (ty) {
+        .Adt => |adt| try zigUserAdtNameFromAdt(allocator, adt),
+        else => try userTypeName(allocator, fallback_name),
+    };
+}
+
+fn zigUserAdtNameFromAdt(allocator: std.mem.Allocator, adt: lir.LAdt) EmitError![]const u8 {
+    const base = try userTypeName(allocator, adt.name);
+    if (adt.params.len == 0) return base;
+    defer allocator.free(base);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, base);
+    try append(&out, allocator, "(");
+    for (adt.params, 0..) |param, index| {
+        if (index != 0) try append(&out, allocator, ", ");
+        const param_name = try zigTypeName(allocator, param);
+        defer allocator.free(param_name);
+        try append(&out, allocator, param_name);
+    }
+    try append(&out, allocator, ")");
+    return out.toOwnedSlice(allocator);
 }
 
 fn isRecursivePayload(ty: lir.LTypeExpr) bool {
@@ -1127,6 +1264,14 @@ fn userTypeName(allocator: std.mem.Allocator, source_name: []const u8) EmitError
 fn userVariantName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
+    try appendSanitized(&out, allocator, source_name);
+    return out.toOwnedSlice(allocator);
+}
+
+fn typeParamName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, "omlz_tparam_");
     try appendSanitized(&out, allocator, source_name);
     return out.toOwnedSlice(allocator);
 }
@@ -1420,6 +1565,43 @@ test "ZigBackend emits user ADTs as explicit tag and payload structs" {
     try std.testing.expect(std.mem.indexOf(u8, source, ".tag = .C, .payload = .{ .C = @as(i64, 42) }") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_0.tag)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "const x = omlz_match_scrutinee_0.payload.C;") != null);
+}
+
+test "ZigBackend parameterizes user ADT TypeVar payloads" {
+    const box_bool_ty = lir.LTy{ .Adt = .{ .name = "box", .params = &.{.Bool} } };
+    const module: lir.LModule = .{
+        .type_decls = &.{.{
+            .name = "box",
+            .params = &.{"'a"},
+            .variants = &.{.{
+                .name = "Box",
+                .tag = 0,
+                .payload_types = &.{.{ .TypeVar = "'a" }},
+            }},
+        }},
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .Ctor = .{
+                .name = "Box",
+                .args = &.{&.{ .Prim = .{
+                    .op = .Eq,
+                    .args = &.{ &.{ .Constant = .{ .Int = 1 } }, &.{ .Constant = .{ .Int = 1 } } },
+                } }},
+                .ty = box_bool_ty,
+                .layout = @import("../core/layout.zig").ctor(1),
+                .tag = 0,
+                .type_name = "box",
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "fn omlz_type_box(comptime omlz_tparam___a: type) type") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "Box: omlz_tparam___a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_type_box(prelude.Bool){ .tag = .Box") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "Box: i64") == null);
 }
 
 test "ZigBackend emits switch-on-discriminant for constructor matches" {

@@ -42,6 +42,8 @@ const ScopedBinding = struct {
     previous: ?BindingInfo,
 };
 
+const TypeBindings = std.StringHashMap(ir.Ty);
+
 const LowerContext = struct {
     scope: std.StringHashMap(BindingInfo),
     constructors: std.StringHashMap(ConstructorInfo),
@@ -675,7 +677,10 @@ fn restoreBindings(ctx: *LowerContext, inserted: []const ScopedBinding) void {
 
 fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8, matched_ty: ir.Ty) LowerError![]const ir.Ty {
     if (ctx.constructors.get(name)) |info| {
-        return typeExprsToTys(arena, info.payload_types);
+        var bindings = TypeBindings.init(arena.allocator());
+        defer bindings.deinit();
+        try bindTypeParamsFromMatchedAdt(&bindings, info, matched_ty);
+        return typeExprsToTysWithBindings(arena, info.payload_types, &bindings);
     }
 
     const adt = switch (matched_ty) {
@@ -718,10 +723,7 @@ fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, na
 
 fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8, args: []const *const ir.Expr) LowerError!ir.Ty {
     if (ctx.constructors.get(name)) |info| {
-        const params = try arena.allocator().alloc(ir.Ty, info.type_params.len);
-        for (info.type_params, 0..) |_, index| {
-            params[index] = if (args.len > 0) exprTy(args[0].*) else .Int;
-        }
+        const params = try inferConstructorTypeParams(arena, info, args);
         return .{ .Adt = .{
             .name = info.type_name,
             .params = params,
@@ -752,31 +754,105 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8,
     } };
 }
 
+fn inferConstructorTypeParams(arena: *std.heap.ArenaAllocator, info: ConstructorInfo, args: []const *const ir.Expr) LowerError![]const ir.Ty {
+    var bindings = TypeBindings.init(arena.allocator());
+    defer bindings.deinit();
+
+    for (info.payload_types, args) |payload_ty, arg| {
+        try bindTypeParamsFromPayload(&bindings, payload_ty, exprTy(arg.*));
+    }
+
+    const params = try arena.allocator().alloc(ir.Ty, info.type_params.len);
+    for (info.type_params, 0..) |param_name, index| {
+        params[index] = bindings.get(param_name) orelse .Int;
+    }
+    return params;
+}
+
+fn bindTypeParamsFromMatchedAdt(bindings: *TypeBindings, info: ConstructorInfo, matched_ty: ir.Ty) LowerError!void {
+    const adt = switch (matched_ty) {
+        .Adt => |value| value,
+        else => return error.UnsupportedPattern,
+    };
+    if (!std.mem.eql(u8, adt.name, info.type_name)) return error.UnsupportedPattern;
+    if (adt.params.len != info.type_params.len) return error.UnsupportedPattern;
+    for (info.type_params, adt.params) |param_name, param_ty| {
+        try bindings.put(param_name, param_ty);
+    }
+}
+
+fn bindTypeParamsFromPayload(
+    bindings: *TypeBindings,
+    expected: types.TypeExpr,
+    actual: ir.Ty,
+) LowerError!void {
+    switch (expected) {
+        .TypeVar => |name| {
+            if (!bindings.contains(name)) try bindings.put(name, actual);
+        },
+        .TypeRef, .RecursiveRef => |ref| {
+            const actual_adt = switch (actual) {
+                .Adt => |value| value,
+                else => return,
+            };
+            if (!std.mem.eql(u8, ref.name, actual_adt.name)) return;
+            for (ref.args, actual_adt.params) |arg_expr, arg_ty| {
+                try bindTypeParamsFromPayload(bindings, arg_expr, arg_ty);
+            }
+        },
+        .Tuple => {},
+    }
+}
+
 fn typeExprsToTys(arena: *std.heap.ArenaAllocator, exprs: []const types.TypeExpr) LowerError![]const ir.Ty {
+    return typeExprsToTysWithBindings(arena, exprs, null);
+}
+
+fn typeExprsToTysWithBindings(
+    arena: *std.heap.ArenaAllocator,
+    exprs: []const types.TypeExpr,
+    bindings: ?*TypeBindings,
+) LowerError![]const ir.Ty {
     const out = try arena.allocator().alloc(ir.Ty, exprs.len);
     for (exprs, 0..) |expr, index| {
-        out[index] = try typeExprToTy(arena, expr);
+        out[index] = try typeExprToTyWithBindings(arena, expr, bindings);
     }
     return out;
 }
 
 fn typeExprToTy(arena: *std.heap.ArenaAllocator, expr: types.TypeExpr) LowerError!ir.Ty {
+    return typeExprToTyWithBindings(arena, expr, null);
+}
+
+fn typeExprToTyWithBindings(
+    arena: *std.heap.ArenaAllocator,
+    expr: types.TypeExpr,
+    bindings: ?*TypeBindings,
+) LowerError!ir.Ty {
     return switch (expr) {
-        .TypeVar => .Int,
-        .TypeRef => |ref| try typeRefToTy(arena, ref),
-        .RecursiveRef => |ref| try typeRefToTy(arena, ref),
+        .TypeVar => |name| if (bindings) |values| values.get(name) orelse .Int else .Int,
+        .TypeRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
+        .RecursiveRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
         .Tuple => .Unit,
     };
 }
 
 fn typeRefToTy(arena: *std.heap.ArenaAllocator, ref: types.TypeRef) LowerError!ir.Ty {
+    return typeRefToTyWithBindings(arena, ref, null);
+}
+
+fn typeRefToTyWithBindings(
+    arena: *std.heap.ArenaAllocator,
+    ref: types.TypeRef,
+    bindings: ?*TypeBindings,
+) LowerError!ir.Ty {
     if (std.mem.eql(u8, ref.name, "int")) return .Int;
     if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
     if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
     if (std.mem.eql(u8, ref.name, "string")) return .String;
     return .{ .Adt = .{
         .name = ref.name,
-        .params = try typeExprsToTys(arena, ref.args),
+        .params = try typeExprsToTysWithBindings(arena, ref.args, bindings),
     } };
 }
 
@@ -1327,4 +1403,59 @@ test "lower user-defined ADT constructors with explicit tags" {
     const printed = try pretty.formatModule(std.testing.allocator, module);
     defer std.testing.allocator.free(printed);
     try std.testing.expect(std.mem.indexOf(u8, printed, "(type t (variants (A :tag 0) (B :tag 1) (C :tag 2 :payload (type-ref int))))") != null);
+}
+
+test "lower user-defined ADT constructor type parameters from payload types" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.5 (module (type_decl (name box) (params 'a) (variants ((Box (payload_types (type-var 'a)))))) (let entrypoint (lambda (_) (let flag (prim \"=\" (const-int 1) (const-int 1)) (match (ctor Box (var flag)) (case (ctor Box (var boxed_flag)) (if (var boxed_flag) (const-int 0) (const-int 1)))))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const flag_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const scrutinee_let = switch (flag_let.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const ctor_expr = switch (scrutinee_let.value.*) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const adt = switch (ctor_expr.ty) {
+        .Adt => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("box", adt.name);
+    try std.testing.expectEqual(@as(usize, 1), adt.params.len);
+    try std.testing.expectEqual(@as(std.meta.Tag(ir.Ty), .Bool), std.meta.activeTag(adt.params[0]));
+
+    const match_expr = switch (scrutinee_let.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const box_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const flag_pattern = switch (box_pattern.args[0]) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(std.meta.Tag(ir.Ty), .Bool), std.meta.activeTag(flag_pattern.ty));
 }
