@@ -397,8 +397,6 @@ fn emitCtorMatchArm(
             try append(out, allocator, "|");
             try emitIdentifier(out, allocator, name);
             try append(out, allocator, "| ");
-        } else {
-            try append(out, allocator, "|_| ");
         }
     } else if (ctor_pattern.args.len > 1) {
         return error.UnsupportedExpr;
@@ -1054,6 +1052,43 @@ test "ZigBackend emits switch-on-discriminant for constructor matches" {
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".some => |x| break") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".none => break") != null);
+}
+
+test "ZigBackend omits unused payload captures in constructor matches" {
+    const result_ty = lir.LTy{ .Adt = .{ .name = "result", .params = &.{ .Int, .Int } } };
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Match = .{
+            .scrutinee = &.{ .Ctor = .{
+                .name = "Ok",
+                .args = &.{&.{ .Constant = .{ .Int = 5 } }},
+                .ty = result_ty,
+                .layout = @import("../core/layout.zig").ctor(1),
+            } },
+            .arms = &.{
+                .{
+                    .pattern = .{ .Ctor = .{
+                        .name = "Ok",
+                        .args = &.{.{ .Var = "x" }},
+                    } },
+                    .body = &.{ .Var = .{ .name = "x" } },
+                },
+                .{
+                    .pattern = .{ .Ctor = .{
+                        .name = "Error",
+                        .args = &.{.{ .Wildcard = {} }},
+                    } },
+                    .body = &.{ .Constant = .{ .Int = 0 } },
+                },
+            },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, ".err => break") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "|_|") == null);
 }
 
 test "ZigBackend emits list constructors and cons pattern bindings" {
