@@ -106,7 +106,18 @@ fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_d
 fn emitRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: lir.LRecordType) EmitError!void {
     const type_name = try userTypeName(allocator, type_decl.name);
     defer allocator.free(type_name);
-    try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+    if (type_decl.params.len == 0) {
+        try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+    } else {
+        try appendPrint(out, allocator, "fn {s}(", .{type_name});
+        for (type_decl.params, 0..) |param, index| {
+            if (index != 0) try append(out, allocator, ", ");
+            const param_name = try typeParamName(allocator, param);
+            defer allocator.free(param_name);
+            try appendPrint(out, allocator, "comptime {s}: type", .{param_name});
+        }
+        try append(out, allocator, ") type {\n    return struct {\n");
+    }
     for (type_decl.fields) |field| {
         try append(out, allocator, "    ");
         try emitIdentifier(out, allocator, field.name);
@@ -115,7 +126,11 @@ fn emitRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_de
         defer allocator.free(ty_name);
         try appendPrint(out, allocator, "{s},\n", .{ty_name});
     }
-    try append(out, allocator, "};\n");
+    if (type_decl.params.len == 0) {
+        try append(out, allocator, "};\n");
+    } else {
+        try append(out, allocator, "    };\n}\n");
+    }
 }
 
 fn emitVariantConstructorHelper(
@@ -1850,7 +1865,7 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
             try append(&out, allocator, " }");
             break :blk try out.toOwnedSlice(allocator);
         },
-        .Record => |record| try userTypeName(allocator, record.name),
+        .Record => |record| try zigUserRecordNameFromRecord(allocator, record),
         .Adt => |adt| blk: {
             if (std.mem.eql(u8, adt.name, "option")) {
                 if (adt.params.len != 1) return error.UnsupportedExpr;
@@ -2073,6 +2088,25 @@ fn zigUserAdtNameFromAdt(allocator: std.mem.Allocator, adt: lir.LAdt) EmitError!
     try append(&out, allocator, base);
     try append(&out, allocator, "(");
     for (adt.params, 0..) |param, index| {
+        if (index != 0) try append(&out, allocator, ", ");
+        const param_name = try zigTypeName(allocator, param);
+        defer allocator.free(param_name);
+        try append(&out, allocator, param_name);
+    }
+    try append(&out, allocator, ")");
+    return out.toOwnedSlice(allocator);
+}
+
+fn zigUserRecordNameFromRecord(allocator: std.mem.Allocator, record: lir.LRecordTy) EmitError![]const u8 {
+    const base = try userTypeName(allocator, record.name);
+    if (record.params.len == 0) return base;
+    defer allocator.free(base);
+
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, base);
+    try append(&out, allocator, "(");
+    for (record.params, 0..) |param, index| {
         if (index != 0) try append(&out, allocator, ", ");
         const param_name = try zigTypeName(allocator, param);
         defer allocator.free(param_name);

@@ -346,12 +346,18 @@ fn lowerRecord(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, record_expr:
     for (record_expr.fields, 0..) |field, index| {
         fields[index] = .{
             .name = try arena.allocator().dupe(u8, field.name),
-            .value = try lowerExprPtrExpected(arena, ctx, field.value, try recordFieldTy(arena, record_decl, field.name)),
+            .value = try lowerExprPtr(arena, ctx, field.value),
         };
+    }
+    var bindings = TypeBindings.init(arena.allocator());
+    defer bindings.deinit();
+    for (record_decl.fields) |decl_field| {
+        const field = findRecordExprField(fields, decl_field.name) orelse return error.UnsupportedNode;
+        try bindTypeParamsFromPayload(&bindings, decl_field.ty, exprTy(field.value.*));
     }
     return .{ .Record = .{
         .fields = fields,
-        .ty = try recordTy(arena, record_decl),
+        .ty = try recordTyWithBindings(arena, record_decl, &bindings),
         .layout = layout.structPack(),
     } };
 }
@@ -378,7 +384,7 @@ fn lowerRecordUpdate(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, record
     for (record_update.fields, 0..) |field, index| {
         fields[index] = .{
             .name = try arena.allocator().dupe(u8, field.name),
-            .value = try lowerExprPtrExpected(arena, ctx, field.value, try recordFieldTy(arena, record_decl, field.name)),
+            .value = try lowerExprPtrExpected(arena, ctx, field.value, try recordFieldTyForRecord(arena, ctx, record_decl, base_ty, field.name)),
         };
     }
     return .{ .RecordUpdate = .{
@@ -558,7 +564,7 @@ fn lowerCtor(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ctor_expr: ttr
             defer bindings.deinit();
             bindTypeParamsFromMatchedAdt(&bindings, info, ty) catch {};
             if (bindings.count() > 0 or info.type_params.len == 0) {
-                expected_payload_tys = try typeExprsToTysWithBindings(arena, info.payload_types, &bindings);
+                expected_payload_tys = try typeExprsToTysWithBindings(arena, ctx.record_type_decls, info.payload_types, &bindings);
             }
         }
     }
@@ -915,7 +921,7 @@ fn lowerPattern(
             const record_decl = findRecordDecl(ctx.record_type_decls, record.name) orelse return error.UnsupportedPattern;
             const lowered_fields = try arena.allocator().alloc(ir.RecordPatternField, fields.len);
             for (fields, 0..) |field, index| {
-                const field_ty = try recordFieldTy(arena, record_decl, field.name);
+                const field_ty = try recordFieldTyForRecord(arena, ctx, record_decl, matched_ty, field.name);
                 lowered_fields[index] = .{
                     .name = try arena.allocator().dupe(u8, field.name),
                     .pattern = try lowerPattern(arena, ctx, field.pattern, field_ty, layoutForTy(field_ty), inserted),
@@ -1049,7 +1055,7 @@ fn ctorPatternPayloadTys(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, na
         var bindings = TypeBindings.init(arena.allocator());
         defer bindings.deinit();
         try bindTypeParamsFromMatchedAdt(&bindings, info, matched_ty);
-        return typeExprsToTysWithBindings(arena, info.payload_types, &bindings);
+        return typeExprsToTysWithBindings(arena, ctx.record_type_decls, info.payload_types, &bindings);
     }
 
     const adt = switch (matched_ty) {
@@ -1173,12 +1179,17 @@ fn bindTypeParamsFromPayload(
             }
         },
         .TypeRef, .RecursiveRef => |ref| {
-            const actual_adt = switch (actual) {
-                .Adt => |value| value,
+            const ActualTypeRef = struct {
+                name: []const u8,
+                params: []const ir.Ty,
+            };
+            const actual_ref = switch (actual) {
+                .Adt => |value| ActualTypeRef{ .name = value.name, .params = value.params },
+                .Record => |value| ActualTypeRef{ .name = value.name, .params = value.params },
                 else => return,
             };
-            if (!std.mem.eql(u8, ref.name, actual_adt.name)) return;
-            for (ref.args, actual_adt.params) |arg_expr, arg_ty| {
+            if (!std.mem.eql(u8, ref.name, actual_ref.name)) return;
+            for (ref.args, actual_ref.params) |arg_expr, arg_ty| {
                 try bindTypeParamsFromPayload(bindings, arg_expr, arg_ty);
             }
         },
@@ -1195,44 +1206,47 @@ fn bindTypeParamsFromPayload(
 }
 
 fn typeExprsToTys(arena: *std.heap.ArenaAllocator, exprs: []const types.TypeExpr) LowerError![]const ir.Ty {
-    return typeExprsToTysWithBindings(arena, exprs, null);
+    return typeExprsToTysWithBindings(arena, &.{}, exprs, null);
 }
 
 fn typeExprsToTysWithBindings(
     arena: *std.heap.ArenaAllocator,
+    record_type_decls: []const types.RecordType,
     exprs: []const types.TypeExpr,
     bindings: ?*TypeBindings,
 ) LowerError![]const ir.Ty {
     const out = try arena.allocator().alloc(ir.Ty, exprs.len);
     for (exprs, 0..) |expr, index| {
-        out[index] = try typeExprToTyWithBindings(arena, expr, bindings);
+        out[index] = try typeExprToTyWithBindings(arena, record_type_decls, expr, bindings);
     }
     return out;
 }
 
 fn typeExprToTy(arena: *std.heap.ArenaAllocator, expr: types.TypeExpr) LowerError!ir.Ty {
-    return typeExprToTyWithBindings(arena, expr, null);
+    return typeExprToTyWithBindings(arena, &.{}, expr, null);
 }
 
 fn typeExprToTyWithBindings(
     arena: *std.heap.ArenaAllocator,
+    record_type_decls: []const types.RecordType,
     expr: types.TypeExpr,
     bindings: ?*TypeBindings,
 ) LowerError!ir.Ty {
     return switch (expr) {
         .TypeVar => |name| if (bindings) |values| values.get(name) orelse .{ .Var = name } else .{ .Var = name },
-        .TypeRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
-        .RecursiveRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
-        .Tuple => |items| .{ .Tuple = try typeExprsToTysWithBindings(arena, items, bindings) },
+        .TypeRef => |ref| try typeRefToTyWithBindings(arena, record_type_decls, ref, bindings),
+        .RecursiveRef => |ref| try typeRefToTyWithBindings(arena, record_type_decls, ref, bindings),
+        .Tuple => |items| .{ .Tuple = try typeExprsToTysWithBindings(arena, record_type_decls, items, bindings) },
     };
 }
 
 fn typeRefToTy(arena: *std.heap.ArenaAllocator, ref: types.TypeRef) LowerError!ir.Ty {
-    return typeRefToTyWithBindings(arena, ref, null);
+    return typeRefToTyWithBindings(arena, &.{}, ref, null);
 }
 
 fn typeRefToTyWithBindings(
     arena: *std.heap.ArenaAllocator,
+    record_type_decls: []const types.RecordType,
     ref: types.TypeRef,
     bindings: ?*TypeBindings,
 ) LowerError!ir.Ty {
@@ -1240,9 +1254,15 @@ fn typeRefToTyWithBindings(
     if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
     if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
     if (std.mem.eql(u8, ref.name, "string")) return .String;
+    if (findRecordDecl(record_type_decls, ref.name) != null) {
+        return .{ .Record = .{
+            .name = ref.name,
+            .params = try typeExprsToTysWithBindings(arena, record_type_decls, ref.args, bindings),
+        } };
+    }
     return .{ .Adt = .{
         .name = ref.name,
-        .params = try typeExprsToTysWithBindings(arena, ref.args, bindings),
+        .params = try typeExprsToTysWithBindings(arena, record_type_decls, ref.args, bindings),
     } };
 }
 
@@ -1256,8 +1276,14 @@ fn listTy(arena: *std.heap.ArenaAllocator, elem_ty: ir.Ty) LowerError!ir.Ty {
 }
 
 fn recordTy(arena: *std.heap.ArenaAllocator, decl: types.RecordType) LowerError!ir.Ty {
+    return recordTyWithBindings(arena, decl, null);
+}
+
+fn recordTyWithBindings(arena: *std.heap.ArenaAllocator, decl: types.RecordType, bindings: ?*TypeBindings) LowerError!ir.Ty {
     const params = try arena.allocator().alloc(ir.Ty, decl.params.len);
-    for (params) |*param| param.* = .Unit;
+    for (decl.params, 0..) |param_name, index| {
+        params[index] = if (bindings) |values| values.get(param_name) orelse .{ .Var = param_name } else .{ .Var = param_name };
+    }
     return .{ .Record = .{
         .name = decl.name,
         .params = params,
@@ -1293,11 +1319,55 @@ fn findRecordDeclForFields(decls: []const types.RecordType, fields: []const ttre
     return null;
 }
 
+fn findRecordExprField(fields: []const ir.RecordExprField, field_name: []const u8) ?ir.RecordExprField {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) return field;
+    }
+    return null;
+}
+
 fn recordFieldTy(arena: *std.heap.ArenaAllocator, decl: types.RecordType, field_name: []const u8) LowerError!ir.Ty {
     for (decl.fields) |field| {
         if (std.mem.eql(u8, field.name, field_name)) return typeExprToTy(arena, field.ty);
     }
     return error.UnsupportedNode;
+}
+
+fn recordFieldTyWithBindings(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    decl: types.RecordType,
+    bindings: ?*TypeBindings,
+    field_name: []const u8,
+) LowerError!ir.Ty {
+    for (decl.fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) {
+            return typeExprToTyWithBindings(arena, ctx.record_type_decls, field.ty, bindings);
+        }
+    }
+    return error.UnsupportedNode;
+}
+
+fn recordFieldTyForRecord(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    decl: types.RecordType,
+    ty: ir.Ty,
+    field_name: []const u8,
+) LowerError!ir.Ty {
+    const record = switch (ty) {
+        .Record => |value| value,
+        else => return error.UnsupportedNode,
+    };
+    if (!std.mem.eql(u8, record.name, decl.name)) return error.UnsupportedNode;
+    if (record.params.len != decl.params.len) return error.UnsupportedNode;
+
+    var bindings = TypeBindings.init(arena.allocator());
+    defer bindings.deinit();
+    for (decl.params, record.params) |param_name, param_ty| {
+        try bindings.put(param_name, param_ty);
+    }
+    return recordFieldTyWithBindings(arena, ctx, decl, &bindings, field_name);
 }
 
 fn recordFieldAccessTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ty: ir.Ty, field_name: []const u8) LowerError!ir.Ty {
@@ -1306,7 +1376,7 @@ fn recordFieldAccessTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ty: 
         else => return error.UnsupportedNode,
     };
     const decl = findRecordDecl(ctx.record_type_decls, record.name) orelse return error.UnsupportedNode;
-    return recordFieldTy(arena, decl, field_name);
+    return recordFieldTyForRecord(arena, ctx, decl, ty, field_name);
 }
 
 fn layoutForTy(ty: ir.Ty) layout.Layout {
