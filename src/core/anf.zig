@@ -446,6 +446,12 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
     if (isVarNamed(app.callee.*, "List.map")) {
         return lowerListMapLiteralApp(arena, ctx, app);
     }
+    if (isVarNamed(app.callee.*, "List.filter")) {
+        return lowerListFilterLiteralApp(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "List.fold_left")) {
+        return lowerListFoldLeftLiteralApp(arena, ctx, app);
+    }
     const callee = try lowerExprPtr(arena, ctx, app.callee.*);
     var args = std.ArrayList(*const ir.Expr).empty;
     errdefer args.deinit(arena.allocator());
@@ -488,19 +494,23 @@ fn lowerListMapLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, a
     while (index > 0) {
         index -= 1;
         const elem = try lowerExprPtrExpected(arena, ctx, items.items[index], .Int);
-        const param_name = try arena.allocator().dupe(u8, lambda.params[0]);
-        const previous = ctx.scope.get(param_name);
-        try ctx.scope.put(param_name, .{ .ty = .Int, .layout = layout.intConstant() });
-        const mapped_body = try lowerExprPtrExpected(arena, ctx, lambda.body.*, .Int);
+        const source_param_name = try arena.allocator().dupe(u8, lambda.params[0]);
+        const lowered_param_name = try freshSyntheticName(arena, ctx, source_param_name);
+        const previous = ctx.scope.get(source_param_name);
+        try ctx.scope.put(source_param_name, .{ .ty = .Int, .layout = layout.intConstant() });
+        const mapped_body_raw = try lowerExprPtrExpected(arena, ctx, lambda.body.*, .Int);
         if (previous) |binding| {
-            ctx.scope.getPtr(param_name).?.* = binding;
+            ctx.scope.getPtr(source_param_name).?.* = binding;
         } else {
-            _ = ctx.scope.remove(param_name);
+            _ = ctx.scope.remove(source_param_name);
         }
+        const mapped_body = try renameExprVars(arena, mapped_body_raw, &.{
+            .{ .from = source_param_name, .to = lowered_param_name },
+        });
 
         const mapped = try arena.allocator().create(ir.Expr);
         mapped.* = .{ .Let = .{
-            .name = param_name,
+            .name = lowered_param_name,
             .value = elem,
             .body = mapped_body,
             .ty = exprTy(mapped_body.*),
@@ -519,6 +529,153 @@ fn lowerListMapLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, a
             .tag = builtinCtorTag("::"),
         } };
         current = next;
+    }
+
+    return current.*;
+}
+
+fn lowerListFilterLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    const lambda = switch (app.args[0]) {
+        .Lambda => |value| value,
+        else => return error.UnsupportedNode,
+    };
+    if (lambda.params.len != 1) return error.UnsupportedNode;
+
+    var items = std.ArrayList(ttree.Expr).empty;
+    errdefer items.deinit(arena.allocator());
+    try collectListLiteralItems(arena.allocator(), app.args[1], &items);
+
+    const list_ty = try listTy(arena, .Int);
+    var current = try arena.allocator().create(ir.Expr);
+    current.* = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "[]"),
+        .args = &.{},
+        .ty = list_ty,
+        .layout = layout.ctor(0),
+        .tag = builtinCtorTag("[]"),
+    } };
+
+    var index = items.items.len;
+    while (index > 0) {
+        index -= 1;
+        const elem = try lowerExprPtrExpected(arena, ctx, items.items[index], .Int);
+        const source_param_name = try arena.allocator().dupe(u8, lambda.params[0]);
+        const lowered_param_name = try freshSyntheticName(arena, ctx, source_param_name);
+        const previous = ctx.scope.get(source_param_name);
+        try ctx.scope.put(source_param_name, .{ .ty = .Int, .layout = layout.intConstant() });
+        const predicate_body_raw = try lowerExprPtrExpected(arena, ctx, lambda.body.*, .Bool);
+        if (previous) |binding| {
+            ctx.scope.getPtr(source_param_name).?.* = binding;
+        } else {
+            _ = ctx.scope.remove(source_param_name);
+        }
+        const predicate_body = try renameExprVars(arena, predicate_body_raw, &.{
+            .{ .from = source_param_name, .to = lowered_param_name },
+        });
+
+        const item_var = try arena.allocator().create(ir.Expr);
+        item_var.* = .{ .Var = .{
+            .name = lowered_param_name,
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } };
+
+        const kept_args = try arena.allocator().alloc(*const ir.Expr, 2);
+        kept_args[0] = item_var;
+        kept_args[1] = current;
+        const kept = try arena.allocator().create(ir.Expr);
+        kept.* = .{ .Ctor = .{
+            .name = try arena.allocator().dupe(u8, "::"),
+            .args = kept_args,
+            .ty = list_ty,
+            .layout = layout.ctor(2),
+            .tag = builtinCtorTag("::"),
+        } };
+
+        const filtered = try arena.allocator().create(ir.Expr);
+        filtered.* = .{ .If = .{
+            .cond = predicate_body,
+            .then_branch = kept,
+            .else_branch = current,
+            .ty = list_ty,
+            .layout = layoutForTy(list_ty),
+        } };
+
+        const next = try arena.allocator().create(ir.Expr);
+        next.* = .{ .Let = .{
+            .name = lowered_param_name,
+            .value = elem,
+            .body = filtered,
+            .ty = list_ty,
+            .layout = layoutForTy(list_ty),
+        } };
+        current = next;
+    }
+
+    return current.*;
+}
+
+fn lowerListFoldLeftLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 3) return error.UnsupportedNode;
+    const lambda = switch (app.args[0]) {
+        .Lambda => |value| value,
+        else => return error.UnsupportedNode,
+    };
+    if (lambda.params.len != 2) return error.UnsupportedNode;
+
+    var items = std.ArrayList(ttree.Expr).empty;
+    errdefer items.deinit(arena.allocator());
+    try collectListLiteralItems(arena.allocator(), app.args[2], &items);
+
+    var current = try lowerExprPtrExpected(arena, ctx, app.args[1], .Int);
+    for (items.items) |item| {
+        const elem = try lowerExprPtrExpected(arena, ctx, item, .Int);
+        const source_acc_name = try arena.allocator().dupe(u8, lambda.params[0]);
+        const source_item_name = try arena.allocator().dupe(u8, lambda.params[1]);
+        const lowered_acc_name = try freshSyntheticName(arena, ctx, source_acc_name);
+        const lowered_item_name = try freshSyntheticName(arena, ctx, source_item_name);
+
+        const previous_acc = ctx.scope.get(source_acc_name);
+        try ctx.scope.put(source_acc_name, .{ .ty = .Int, .layout = layout.intConstant() });
+        const previous_item = ctx.scope.get(source_item_name);
+        try ctx.scope.put(source_item_name, .{ .ty = .Int, .layout = layout.intConstant() });
+
+        const folded_body_raw = try lowerExprPtrExpected(arena, ctx, lambda.body.*, .Int);
+        const folded_body = try renameExprVars(arena, folded_body_raw, &.{
+            .{ .from = source_acc_name, .to = lowered_acc_name },
+            .{ .from = source_item_name, .to = lowered_item_name },
+        });
+
+        if (previous_item) |binding| {
+            ctx.scope.getPtr(source_item_name).?.* = binding;
+        } else {
+            _ = ctx.scope.remove(source_item_name);
+        }
+        if (previous_acc) |binding| {
+            ctx.scope.getPtr(source_acc_name).?.* = binding;
+        } else {
+            _ = ctx.scope.remove(source_acc_name);
+        }
+
+        const item_let = try arena.allocator().create(ir.Expr);
+        item_let.* = .{ .Let = .{
+            .name = lowered_item_name,
+            .value = elem,
+            .body = folded_body,
+            .ty = exprTy(folded_body.*),
+            .layout = exprLayout(folded_body.*),
+        } };
+
+        const acc_let = try arena.allocator().create(ir.Expr);
+        acc_let.* = .{ .Let = .{
+            .name = lowered_acc_name,
+            .value = current,
+            .body = item_let,
+            .ty = exprTy(item_let.*),
+            .layout = exprLayout(item_let.*),
+        } };
+        current = acc_let;
     }
 
     return current.*;
@@ -543,6 +700,217 @@ fn isVarNamed(expr: ttree.Expr, name: []const u8) bool {
         .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
         else => false,
     };
+}
+
+const RenameBinding = struct {
+    from: []const u8,
+    to: []const u8,
+};
+
+fn freshSyntheticName(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, base: []const u8) LowerError![]const u8 {
+    const id = ctx.next_temp;
+    ctx.next_temp += 1;
+    return std.fmt.allocPrint(arena.allocator(), "{s}__omlz_{d}", .{ base, id });
+}
+
+fn renamedName(name: []const u8, renames: []const RenameBinding) []const u8 {
+    for (renames) |rename| {
+        if (std.mem.eql(u8, name, rename.from)) return rename.to;
+    }
+    return name;
+}
+
+fn renameExprVars(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, renames: []const RenameBinding) LowerError!*const ir.Expr {
+    const renamed = try arena.allocator().create(ir.Expr);
+    renamed.* = try renameExprValueVars(arena, expr.*, renames);
+    return renamed;
+}
+
+fn renameExprValueVars(arena: *std.heap.ArenaAllocator, expr: ir.Expr, renames: []const RenameBinding) LowerError!ir.Expr {
+    return switch (expr) {
+        .Lambda => |lambda| blk: {
+            const body_renames = try filterRenamesForParams(arena, renames, lambda.params);
+            break :blk .{ .Lambda = .{
+                .params = lambda.params,
+                .body = try renameExprVars(arena, lambda.body, body_renames),
+                .ty = lambda.ty,
+                .layout = lambda.layout,
+            } };
+        },
+        .Constant => |constant| .{ .Constant = constant },
+        .App => |app| .{ .App = .{
+            .callee = try renameExprVars(arena, app.callee, renames),
+            .args = try renameExprSliceVars(arena, app.args, renames),
+            .ty = app.ty,
+            .layout = app.layout,
+        } },
+        .Let => |let_expr| blk: {
+            const body_renames = try filterRenamesForName(arena, renames, let_expr.name);
+            break :blk .{ .Let = .{
+                .name = let_expr.name,
+                .value = try renameExprVars(arena, let_expr.value, renames),
+                .body = try renameExprVars(arena, let_expr.body, body_renames),
+                .ty = let_expr.ty,
+                .layout = let_expr.layout,
+                .is_rec = let_expr.is_rec,
+            } };
+        },
+        .If => |if_expr| .{ .If = .{
+            .cond = try renameExprVars(arena, if_expr.cond, renames),
+            .then_branch = try renameExprVars(arena, if_expr.then_branch, renames),
+            .else_branch = try renameExprVars(arena, if_expr.else_branch, renames),
+            .ty = if_expr.ty,
+            .layout = if_expr.layout,
+        } },
+        .Prim => |prim| .{ .Prim = .{
+            .op = prim.op,
+            .args = try renameExprSliceVars(arena, prim.args, renames),
+            .ty = prim.ty,
+            .layout = prim.layout,
+        } },
+        .Var => |var_ref| .{ .Var = .{
+            .name = renamedName(var_ref.name, renames),
+            .ty = var_ref.ty,
+            .layout = var_ref.layout,
+        } },
+        .Ctor => |ctor_expr| .{ .Ctor = .{
+            .name = ctor_expr.name,
+            .args = try renameExprSliceVars(arena, ctor_expr.args, renames),
+            .ty = ctor_expr.ty,
+            .layout = ctor_expr.layout,
+            .tag = ctor_expr.tag,
+            .type_name = ctor_expr.type_name,
+        } },
+        .Match => |match_expr| .{ .Match = .{
+            .scrutinee = try renameExprVars(arena, match_expr.scrutinee, renames),
+            .arms = try renameArmsVars(arena, match_expr.arms, renames),
+            .ty = match_expr.ty,
+            .layout = match_expr.layout,
+        } },
+        .Tuple => |tuple_expr| .{ .Tuple = .{
+            .items = try renameExprSliceVars(arena, tuple_expr.items, renames),
+            .ty = tuple_expr.ty,
+            .layout = tuple_expr.layout,
+        } },
+        .TupleProj => |tuple_proj| .{ .TupleProj = .{
+            .tuple_expr = try renameExprVars(arena, tuple_proj.tuple_expr, renames),
+            .index = tuple_proj.index,
+            .ty = tuple_proj.ty,
+            .layout = tuple_proj.layout,
+        } },
+        .Record => |record_expr| .{ .Record = .{
+            .fields = try renameRecordExprFieldsVars(arena, record_expr.fields, renames),
+            .ty = record_expr.ty,
+            .layout = record_expr.layout,
+        } },
+        .RecordField => |record_field| .{ .RecordField = .{
+            .record_expr = try renameExprVars(arena, record_field.record_expr, renames),
+            .field_name = record_field.field_name,
+            .ty = record_field.ty,
+            .layout = record_field.layout,
+        } },
+        .RecordUpdate => |record_update| .{ .RecordUpdate = .{
+            .base_expr = try renameExprVars(arena, record_update.base_expr, renames),
+            .fields = try renameRecordExprFieldsVars(arena, record_update.fields, renames),
+            .ty = record_update.ty,
+            .layout = record_update.layout,
+        } },
+    };
+}
+
+fn renameExprSliceVars(
+    arena: *std.heap.ArenaAllocator,
+    exprs: []const *const ir.Expr,
+    renames: []const RenameBinding,
+) LowerError![]const *const ir.Expr {
+    const out = try arena.allocator().alloc(*const ir.Expr, exprs.len);
+    for (exprs, 0..) |expr, index| out[index] = try renameExprVars(arena, expr, renames);
+    return out;
+}
+
+fn filterRenamesForName(
+    arena: *std.heap.ArenaAllocator,
+    renames: []const RenameBinding,
+    bound_name: []const u8,
+) LowerError![]const RenameBinding {
+    var kept: usize = 0;
+    for (renames) |rename| {
+        if (!std.mem.eql(u8, rename.from, bound_name)) kept += 1;
+    }
+    if (kept == renames.len) return renames;
+
+    const out = try arena.allocator().alloc(RenameBinding, kept);
+    var index: usize = 0;
+    for (renames) |rename| {
+        if (std.mem.eql(u8, rename.from, bound_name)) continue;
+        out[index] = rename;
+        index += 1;
+    }
+    return out;
+}
+
+fn filterRenamesForParams(
+    arena: *std.heap.ArenaAllocator,
+    renames: []const RenameBinding,
+    params: []const ir.Param,
+) LowerError![]const RenameBinding {
+    var current = renames;
+    for (params) |param| current = try filterRenamesForName(arena, current, param.name);
+    return current;
+}
+
+fn filterRenamesForPattern(
+    arena: *std.heap.ArenaAllocator,
+    renames: []const RenameBinding,
+    pattern: ir.Pattern,
+) LowerError![]const RenameBinding {
+    var current = renames;
+    switch (pattern) {
+        .Wildcard => {},
+        .Var => |var_pattern| current = try filterRenamesForName(arena, current, var_pattern.name),
+        .Ctor => |ctor_pattern| {
+            for (ctor_pattern.args) |arg| current = try filterRenamesForPattern(arena, current, arg);
+        },
+        .Tuple => |items| {
+            for (items) |item| current = try filterRenamesForPattern(arena, current, item);
+        },
+        .Record => |fields| {
+            for (fields) |field| current = try filterRenamesForPattern(arena, current, field.pattern);
+        },
+    }
+    return current;
+}
+
+fn renameArmsVars(
+    arena: *std.heap.ArenaAllocator,
+    arms: []const ir.Arm,
+    renames: []const RenameBinding,
+) LowerError![]const ir.Arm {
+    const out = try arena.allocator().alloc(ir.Arm, arms.len);
+    for (arms, 0..) |arm, index| {
+        const arm_renames = try filterRenamesForPattern(arena, renames, arm.pattern);
+        out[index] = .{
+            .pattern = arm.pattern,
+            .guard = if (arm.guard) |guard| try renameExprVars(arena, guard, arm_renames) else null,
+            .body = try renameExprVars(arena, arm.body, arm_renames),
+        };
+    }
+    return out;
+}
+
+fn renameRecordExprFieldsVars(
+    arena: *std.heap.ArenaAllocator,
+    fields: []const ir.RecordExprField,
+    renames: []const RenameBinding,
+) LowerError![]const ir.RecordExprField {
+    const out = try arena.allocator().alloc(ir.RecordExprField, fields.len);
+    for (fields, 0..) |field, index| {
+        out[index] = .{
+            .name = field.name,
+            .value = try renameExprVars(arena, field.value, renames),
+        };
+    }
+    return out;
 }
 
 fn appReturnTy(arena: *std.heap.ArenaAllocator, callee_ty: ir.Ty, arg_count: usize) LowerError!ir.Ty {
