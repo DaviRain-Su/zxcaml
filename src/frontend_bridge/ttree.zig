@@ -1,7 +1,7 @@
 //! Typed Zig mirror for the M1 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 0.5 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 0.6 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -30,7 +30,7 @@ pub const LetDecl = struct {
     is_rec: bool = false,
 };
 
-/// Top-level user-authored ADT declaration emitted by sexp v0.5.
+/// Top-level user-authored ADT declaration emitted by sexp v0.6.
 pub const TypeDecl = struct {
     name: []const u8,
     params: []const []const u8,
@@ -179,7 +179,10 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
     try expectAtomValue(header[0], "zxcaml-cir");
 
     const file_version = try expectAtom(header[1]);
-    if (!std.mem.eql(u8, file_version, expected_wire_version) and !std.mem.eql(u8, file_version, "0.4")) {
+    if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "0.5") and
+        !std.mem.eql(u8, file_version, "0.4"))
+    {
         return error.WireFormatVersionMismatch;
     }
 
@@ -192,15 +195,16 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=0.5\n");
+            try writeStderr(io, " expected=0.6\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
-                std.mem.eql(u8, extractHeaderVersion(bytes), "0.4"))
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.4") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.5"))
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits ADT-aware sexp 0.5.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits ADT-aware sexp 0.6.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -209,7 +213,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.5 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.6 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -627,7 +631,7 @@ test "parse empty module sexp" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.5 (module))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.6 (module))");
     try std.testing.expectEqual(@as(usize, 0), module.decls.len);
 }
 
@@ -635,7 +639,7 @@ test "parse single int constant module" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (const-int 0)))))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.6 (module (let entrypoint (lambda (_) (const-int 0)))))");
     try std.testing.expectEqual(@as(usize, 1), module.decls.len);
 
     const decl = switch (module.decls[0]) {
@@ -666,7 +670,7 @@ test "parse top-level and nested let expressions with variable references" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.5 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
+        "(zxcaml-cir 0.6 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
     );
     try std.testing.expectEqual(@as(usize, 2), module.decls.len);
 
@@ -704,7 +708,7 @@ test "parse type declaration sexp nodes" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.5 (module (type_decl (name tree) (params 'a) (recursive true) (variants ((Leaf (payload_types)) (Node (payload_types (recursive-ref tree (type-var 'a)) (recursive-ref tree (type-var 'a))))))) (let entrypoint (lambda (_) (const-int 0)))))",
+        "(zxcaml-cir 0.6 (module (type_decl (name tree) (params 'a) (recursive true) (variants ((Leaf (payload_types)) (Node (payload_types (recursive-ref tree (type-var 'a)) (recursive-ref tree (type-var 'a))))))) (let entrypoint (lambda (_) (const-int 0)))))",
     );
     try std.testing.expectEqual(@as(usize, 1), module.type_decls.len);
     try std.testing.expectEqual(@as(usize, 1), module.decls.len);
@@ -736,8 +740,8 @@ test "malformed sexp cases are rejected" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    try std.testing.expectError(error.UnmatchedParen, parseModule(&arena, "(zxcaml-cir 0.5 (module)"));
-    try std.testing.expectError(error.BadAtom, parseModule(&arena, "(zxcaml-cir 0.5 (module bad@atom))"));
+    try std.testing.expectError(error.UnmatchedParen, parseModule(&arena, "(zxcaml-cir 0.6 (module)"));
+    try std.testing.expectError(error.BadAtom, parseModule(&arena, "(zxcaml-cir 0.6 (module bad@atom))"));
 }
 
 test "version mismatch is rejected" {
@@ -758,7 +762,7 @@ test "parse constructor expressions and string payloads" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.5 (module (let some_value (ctor Some (const-int 1))) (let error_value (ctor Error (const-string \"oops\")))))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.6 (module (let some_value (ctor Some (const-int 1))) (let error_value (ctor Error (const-string \"oops\")))))");
     try std.testing.expectEqual(@as(usize, 2), module.decls.len);
 
     const some_decl = switch (module.decls[0]) {
@@ -795,7 +799,7 @@ test "parse basic match expressions and patterns" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.5 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)) (case _ (const-int 9)))))))",
+        "(zxcaml-cir 0.6 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)) (case _ (const-int 9)))))))",
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
@@ -837,7 +841,7 @@ test "parse quoted list constructor expressions and patterns" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.5 (module (let entrypoint (lambda (_input) (match (ctor \"::\" (const-int 1) (ctor \"[]\")) (case (ctor \"::\" (var x) (var rest)) (var x)) (case (ctor \"[]\") (const-int 0)))))))",
+        "(zxcaml-cir 0.6 (module (let entrypoint (lambda (_input) (match (ctor \"::\" (const-int 1) (ctor \"[]\")) (case (ctor \"::\" (var x) (var rest)) (var x)) (case (ctor \"[]\") (const-int 0)))))))",
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,

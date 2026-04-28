@@ -1,15 +1,16 @@
 (* S-expression serializer for the ZxCaml OCaml frontend wire format.
 
    The serializer is intentionally hand-written to avoid any dependency beyond
-   compiler-libs.common.  Version 0.5 contains top-level let declarations,
+   compiler-libs.common.  Version 0.6 contains top-level let declarations,
    one-argument lambdas, integer/string constants, identifiers, nested lets,
    whitelisted option/result constructor expressions, basic match expressions,
-   and user-authored ADT type declarations. *)
+   user-authored ADT type declarations, nested constructor patterns, and
+   guarded match arms. *)
 
 open Format
 open Zxc_subset
 
-let version = "0.5"
+let version = "0.6"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' -> true
@@ -64,7 +65,11 @@ and pp_params ppf = function
       List.iter (fun param -> fprintf ppf " %a" pp_param param) rest
 
 and pp_match_arm ppf arm =
-  fprintf ppf "(case %a %a)" pp_match_pattern arm.pattern pp_expr arm.body
+  match arm.guard with
+  | None -> fprintf ppf "(case %a %a)" pp_match_pattern arm.pattern pp_expr arm.body
+  | Some guard ->
+      fprintf ppf "(case %a (when_guard %a %a))" pp_match_pattern arm.pattern
+        pp_expr guard pp_expr arm.body
 
 and pp_match_pattern ppf = function
   | Pat_any -> fprintf ppf "_"

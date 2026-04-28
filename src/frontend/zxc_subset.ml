@@ -80,6 +80,7 @@ and match_expr = {
 
 and match_arm = {
   pattern : match_pattern;
+  guard : expr option;
   body : expr;
 }
 
@@ -318,12 +319,6 @@ let rec parse_match_scrutinee env (expr : expression) =
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
-let parse_simple_pattern (pat : pattern) =
-  match pat.pat_desc with
-  | Tpat_any -> Pat_any
-  | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
-  | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
-
 let rec parse_match_pattern env (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> Pat_any
@@ -331,7 +326,7 @@ let rec parse_match_pattern env (pat : pattern) =
   | Tpat_construct (_lid, constructor, args, _) ->
       let name = constructor.Types.cstr_name in
       if type_env_has_constructor env name then
-        Pat_ctor { name; args = List.map parse_simple_pattern args }
+        Pat_ctor { name; args = List.map (parse_match_pattern env) args }
       else unsupported ~node_kind:("Tpat_construct(" ^ name ^ ")") ~loc:pat.pat_loc ()
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
@@ -341,13 +336,10 @@ let parse_computation_pattern env (pat : computation general_pattern) =
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let rec parse_match_case env (case : computation case) =
-  (match case.c_guard with
-  | None -> ()
-  | Some guard ->
-      unsupported ~node_kind:"Texp_match(guard)" ~loc:guard.exp_loc ());
   let pattern = parse_computation_pattern env case.c_lhs in
+  let guard = Option.map (parse_expr env) case.c_guard in
   let body = parse_expr env case.c_rhs in
-  { pattern; body }
+  { pattern; guard; body }
 
 and parse_apply_args env args =
   let parse_one = function
