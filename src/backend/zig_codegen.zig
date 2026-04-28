@@ -134,7 +134,14 @@ fn emitExpr(
     switch (expr) {
         .Constant => |constant| switch (constant) {
             .Int => |value| {
-                try appendPrint(out, allocator, "{d}", .{value});
+                // Emit integer constants as @as(i64, value) instead of bare
+                // literals.  Bare integer literals are comptime_int in Zig;
+                // when used inside a labeled block that contains runtime
+                // control flow (e.g. if-then-else), the compiler rejects
+                // them with "value with comptime-only type depends on
+                // runtime control flow".  Wrapping in @as(i64, ...) gives
+                // a concrete runtime type that works in all contexts.
+                try appendPrint(out, allocator, "@as(i64, {d})", .{value});
             },
             .String => |value| try appendPrint(out, allocator, "\"{f}\"", .{std.zig.fmtString(value)}),
         },
@@ -895,7 +902,7 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
         source,
         "omlz_user_entrypoint(arena: *Arena, input: [*]const u8) callconv(.c) u64",
     ) != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(@as(i64, 0));") != null);
 }
 
 test "ZigBackend documents and emits the BPF const-array stack-copy shim" {
@@ -932,7 +939,7 @@ test "ZigBackend emits let expressions as const declarations inside blocks" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(blk0: {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "const x = 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = @as(i64, 1);") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
 }
 
@@ -965,9 +972,9 @@ test "ZigBackend emits pinned integer arithmetic operations" {
     const source = try emitModule(std.testing.allocator, module);
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "*% -1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intDiv(1, 0)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intMod(0, 0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "*% @as(i64, -1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intDiv(@as(i64, 1), @as(i64, 0))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.intMod(@as(i64, 0), @as(i64, 0))") != null);
 }
 
 test "ZigBackend emits comparison bool ADT values and Zig if-expressions" {
@@ -987,7 +994,7 @@ test "ZigBackend emits comparison bool ADT values and Zig if-expressions" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "if (prelude.Bool.toNative(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Bool.fromNative((2 <= 3))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Bool.fromNative((@as(i64, 2) <= @as(i64, 3)))") != null);
 }
 
 test "ZigBackend emits option constructors through prelude tagged unions" {
@@ -1010,7 +1017,7 @@ test "ZigBackend emits option constructors through prelude tagged unions" {
 
     try std.testing.expect(std.mem.indexOf(u8, source, "const prelude = @import(\"runtime/prelude.zig\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Option(i64)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".some = 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".some = @as(i64, 1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "arena.alloc(prelude.Option(i64), 1) catch unreachable") != null);
 }
 
@@ -1133,6 +1140,6 @@ test "ZigBackend emits direct recursive helper functions" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "fn omlz_user_fact(arena: *Arena, n: i64) i64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_fact(arena, (n -% 1))") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(omlz_user_fact(arena, 5));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_fact(arena, (n -% @as(i64, 1)))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(omlz_user_fact(arena, @as(i64, 5)));") != null);
 }

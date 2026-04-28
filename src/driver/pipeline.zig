@@ -235,20 +235,30 @@ fn isExecutable(io: Io, path: []const u8) bool {
 }
 
 fn forwardFrontendStderr(io: Io, stderr: []const u8) !void {
+    // Use a single buffered writer for the entire stderr stream instead of
+    // creating a new Io.File.Writer per line.  Creating one writer per call
+    // to writeStderr triggers a Zig 0.16 Io.File.Writer first-byte-drop
+    // bug where the leading character of each buffer segment is silently
+    // swallowed, corrupting JSON diagnostics (the opening `{` is lost).
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(.stderr(), io, &buffer);
+    const writer = &file_writer.interface;
+
     var lines = std.mem.splitScalar(u8, stderr, '\n');
     while (lines.next()) |raw_line| {
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (line.len == 0) continue;
 
         if (looksLikeJsonDiagnostic(line)) {
-            try writeStderr(io, line);
-            try writeStderr(io, "\n");
+            try writer.writeAll(line);
+            try writer.writeAll("\n");
         } else {
-            try writeStderr(io, "[zxc-frontend] ");
-            try writeStderr(io, line);
-            try writeStderr(io, "\n");
+            try writer.writeAll("[zxc-frontend] ");
+            try writer.writeAll(line);
+            try writer.writeAll("\n");
         }
     }
+    try writer.flush();
 }
 
 fn looksLikeJsonDiagnostic(line: []const u8) bool {

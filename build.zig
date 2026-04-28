@@ -138,10 +138,32 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_golden_tests.setCwd(b.path(""));
 
+    // UI tests (F18 / G11): end-to-end `omlz run` checks against `.expected`
+    // files in tests/ui/.  Positive tests (exit 0) diff stdout; negative tests
+    // (exit non-zero) diff stderr.
+    const ui_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/ui/run.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const ui_options = b.addOptions();
+    ui_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    ui_test_module.addOptions("ui_options", ui_options);
+    const ui_tests = b.addTest(.{
+        .root_module = ui_test_module,
+    });
+    const run_ui_tests = b.addRunArtifact(ui_tests);
+    // The UI harness invokes `omlz` as a subprocess, so omlz
+    // (and zxc-frontend) must be built before the test runs.
+    run_ui_tests.step.dependOn(b.getInstallStep());
+    // Set working directory to the project root so relative paths resolve.
+    run_ui_tests.setCwd(b.path(""));
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);
     test_step.dependOn(&run_determinism_tests.step);
     test_step.dependOn(&run_golden_tests.step);
+    test_step.dependOn(&run_ui_tests.step);
 }
