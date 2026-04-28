@@ -110,6 +110,24 @@ CASES: list[tuple[str, str, str]] = [
         "(ctor \"::\" (const-int 3) (ctor \"[]\")))))))))\n",
     ),
     (
+        "stdlib Option.value uses bundled unlabeled signature",
+        "let entrypoint _ = Option.value (Some 7) 3\n",
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
+        "(app (var Option.value) (ctor Some (const-int 7)) (const-int 3))))))\n",
+    ),
+    (
+        "stdlib Result.ok uses bundled function",
+        "let entrypoint _ = Result.ok (Ok 7)\n",
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
+        "(app (var Result.ok) (ctor Ok (const-int 7)))))))\n",
+    ),
+    (
+        "stdlib Result.error uses bundled function",
+        "let entrypoint _ = Result.error (Error 3)\n",
+        "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "
+        "(app (var Result.error) (ctor Error (const-int 3)))))))\n",
+    ),
+    (
         "tuple construction",
         "let entrypoint _ = (1, true, 42)\n",
         "(zxcaml-cir 0.7 (module (let entrypoint (lambda (_) "

@@ -165,18 +165,93 @@ let ocamlc_command () =
   | 0 -> "ocamlc"
   | _ -> "opam exec --switch=zxcaml-p1 -- ocamlc"
 
+let absolute_path path =
+  if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
+
+let file_exists path =
+  try Sys.file_exists path && not (Sys.is_directory path)
+  with Sys_error _ -> false
+
+let first_existing = List.find_opt file_exists
+
+let bundled_stdlib_core_path () =
+  let from_env =
+    match Sys.getenv_opt "ZXC_STDLIB_CORE" with
+    | Some path -> [ path ]
+    | None -> []
+  in
+  let from_cwd = [ Filename.concat (Sys.getcwd ()) "stdlib/core.ml" ] in
+  let from_executable =
+    let exe = absolute_path Sys.executable_name in
+    let bin_dir = Filename.dirname exe in
+    let zig_out_dir = Filename.dirname bin_dir in
+    let repo_root = Filename.dirname zig_out_dir in
+    [ Filename.concat repo_root "stdlib/core.ml" ]
+  in
+  match first_existing (from_env @ from_cwd @ from_executable) with
+  | Some path -> path
+  | None ->
+      emit_internal_error
+        ~message:
+          "could not locate bundled stdlib/core.ml; set ZXC_STDLIB_CORE or run \
+           zxc-frontend from the repository root";
+      exit 3
+
+let make_temp_dir prefix =
+  let marker = Filename.temp_file prefix ".dir" in
+  Sys.remove marker;
+  Sys.mkdir marker 0o700;
+  marker
+
+let cleanup_bundled_stdlib_dir dir =
+  List.iter
+    (fun name ->
+      let path = Filename.concat dir name in
+      try Sys.remove path with Sys_error _ -> ())
+    [ "core.cmi"; "core.cmo"; "core.o"; "core.stderr" ];
+  try Sys.rmdir dir with Sys_error _ -> ()
+
+let compile_bundled_stdlib ~dir =
+  let core_path = bundled_stdlib_core_path () in
+  let stderr_path = Filename.concat dir "core.stderr" in
+  let command =
+    Printf.sprintf "cd %s && %s -c %s -o core.cmo 2> %s"
+      (Filename.quote dir) (ocamlc_command ()) (Filename.quote core_path)
+      (Filename.quote stderr_path)
+  in
+  match Sys.command command with
+  | 0 -> ()
+  | status ->
+      let stderr =
+        try read_file stderr_path
+        with Sys_error message ->
+          Printf.sprintf "ocamlc failed to compile bundled stdlib/core.ml with \
+                          status %d: %s"
+            status message
+      in
+      emit_internal_error
+        ~message:
+          (Printf.sprintf "failed to compile bundled stdlib/core.ml: %s"
+             (String.trim stderr));
+      cleanup_bundled_stdlib_dir dir;
+      exit 3
+
 let compile_to_cmt input =
   let tmp_cmo = Filename.temp_file "Zxcaml_" ".cmo" in
   let tmp_prefix = Filename.remove_extension tmp_cmo in
   let tmp_cmt = tmp_prefix ^ ".cmt" in
   let tmp_stderr = tmp_prefix ^ ".stderr" in
+  let stdlib_dir = make_temp_dir "Zxcaml_stdlib_" in
+  compile_bundled_stdlib ~dir:stdlib_dir;
   let command =
-    Printf.sprintf "%s -bin-annot -c %s -o %s 2> %s" (ocamlc_command ())
-      (Filename.quote input) (Filename.quote tmp_cmo)
+    Printf.sprintf "%s -bin-annot -I %s -open Core -c %s -o %s 2> %s"
+      (ocamlc_command ()) (Filename.quote stdlib_dir) (Filename.quote input)
+      (Filename.quote tmp_cmo)
       (Filename.quote tmp_stderr)
   in
   match Sys.command command with
   | 0 ->
+      cleanup_bundled_stdlib_dir stdlib_dir;
       (try Sys.remove tmp_stderr with Sys_error _ -> ());
       (tmp_cmo, tmp_cmt)
   | status ->
@@ -190,6 +265,7 @@ let compile_to_cmt input =
       List.iter
         (fun path -> try Sys.remove path with Sys_error _ -> ())
         [ tmp_cmo; tmp_cmt; Filename.remove_extension tmp_cmo ^ ".cmi"; tmp_stderr ];
+      cleanup_bundled_stdlib_dir stdlib_dir;
       exit 2
 
 let cleanup paths =
