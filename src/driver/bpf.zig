@@ -67,6 +67,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         "sbpf-linker",
         "--cpu",
         default_sbpf_cpu,
+        "--llvm-args=-bpf-stack-size=4096",
         "--export",
         "entrypoint",
         "-o",
@@ -228,6 +229,7 @@ test "BPF linker argv pins ADR-013 default SBPF v2 CPU and entrypoint export" {
         "sbpf-linker",
         "--cpu",
         default_sbpf_cpu,
+        "--llvm-args=-bpf-stack-size=4096",
         "--export",
         "entrypoint",
         "-o",
@@ -238,6 +240,7 @@ test "BPF linker argv pins ADR-013 default SBPF v2 CPU and entrypoint export" {
     try std.testing.expectEqualStrings("sbpf-linker", linker_argv[0]);
     try std.testing.expectEqualStrings("--cpu", linker_argv[1]);
     try std.testing.expectEqualStrings("v2", linker_argv[2]);
-    try std.testing.expectEqualStrings("--export", linker_argv[3]);
-    try std.testing.expectEqualStrings("entrypoint", linker_argv[4]);
+    try std.testing.expectEqualStrings("--llvm-args=-bpf-stack-size=4096", linker_argv[3]);
+    try std.testing.expectEqualStrings("--export", linker_argv[4]);
+    try std.testing.expectEqualStrings("entrypoint", linker_argv[5]);
 }

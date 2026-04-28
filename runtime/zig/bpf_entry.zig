@@ -8,9 +8,8 @@
 const Arena = @import("runtime/arena.zig").Arena;
 const program = @import("program.zig");
 
-const arena_bytes = 32 * 1024;
+const arena_bytes = 1024;
 
-var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
 const loader_log_message linksection(".rodata") = "ZxCaml entrypoint".*;
 const sol_log_syscall = @as(*align(1) const fn ([*]const u8, u64) void, @ptrFromInt(0x207559bd));
 
@@ -18,6 +17,7 @@ const sol_log_syscall = @as(*align(1) const fn ([*]const u8, u64) void, @ptrFrom
 export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
     emitLoaderCompatibilityRelocation();
 
+    var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
     const status = program.omlz_user_entrypoint(&arena, input);
     arena.reset();

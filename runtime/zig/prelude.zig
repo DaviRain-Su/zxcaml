@@ -59,12 +59,12 @@ pub const ClosureValue = union(enum) {
 
 /// ADR-007 arena closure record: code pointer, captures, and recursive self-reference.
 pub const Closure = struct {
-    code: *const fn (*Arena, *const Closure, i64) i64,
+    code: u32,
     captures: []const ClosureValue,
     self: ?*const Closure = null,
 
     /// Constructs a closure record value; generated code stores it in the arena.
-    pub fn init(code: *const fn (*Arena, *const Closure, i64) i64, captures: []const ClosureValue) Closure {
+    pub fn init(code: u32, captures: []const ClosureValue) Closure {
         return .{
             .code = code,
             .captures = captures,
@@ -149,9 +149,9 @@ pub fn List(comptime T: type) type {
 
         /// Allocates a list value in the arena and returns a stable tail pointer.
         pub fn Box(arena: *Arena, value: Self) *const Self {
-            const slot = arena.alloc(Self, 1) catch unreachable;
-            slot[0] = value;
-            return &slot[0];
+            const slot = arena.allocOneOrTrap(Self);
+            slot.* = value;
+            return slot;
         }
 
         /// Allocates the tail value and constructs a cons cell that points at it.
@@ -213,21 +213,16 @@ test "List constructors preserve head and tail payloads" {
 }
 
 test "Closure records store code pointer, captures, and self-reference" {
-    const thunk = struct {
-        fn call(_: *Arena, closure: *const Closure, value: i64) i64 {
-            return closure.captures[0].asInt() + value;
-        }
-    }.call;
-
     var buf: [256]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&buf);
     const captures = arena.alloc(ClosureValue, 1) catch unreachable;
     captures[0] = ClosureValue.fromInt(2);
     const slot = arena.alloc(Closure, 1) catch unreachable;
-    slot[0] = Closure.init(thunk, captures);
+    slot[0] = Closure.init(7, captures);
     slot[0].self = &slot[0];
 
-    try std.testing.expectEqual(@as(i64, 5), slot[0].code(&arena, &slot[0], 3));
+    try std.testing.expectEqual(@as(u32, 7), slot[0].code);
+    try std.testing.expectEqual(@as(i64, 2), slot[0].captures[0].asInt());
     try std.testing.expect(slot[0].self.? == &slot[0]);
 }
 

@@ -42,6 +42,8 @@ const LowerContext = struct {
     bound: std.StringHashMap(ir.Ty),
     rec_captures: std.StringHashMap(CaptureSet),
     closure_bound: std.StringHashMap(void),
+    functions: ?*std.ArrayList(lir.LFunc) = null,
+    next_closure_id: ?*usize = null,
 
     fn init(allocator: std.mem.Allocator) LowerContext {
         return .{
@@ -68,6 +70,7 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
     const entrypoint_index = findEntrypointIndex(module) orelse return error.EntrypointNotFound;
     var functions = std.ArrayList(lir.LFunc).empty;
     errdefer functions.deinit(allocator);
+    var next_closure_id: usize = 0;
     for (module.decls, 0..) |decl, index| {
         if (index == entrypoint_index) continue;
         const let_decl = switch (decl) {
@@ -75,8 +78,8 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
         };
         switch (let_decl.value.*) {
             .Lambda => |lambda| {
-                try functions.append(allocator, try lowerFunction(allocator, let_decl.name, lambda, &.{}));
-                try collectNestedFunctionsInLambda(allocator, lambda, &functions);
+                try functions.append(allocator, try lowerFunction(allocator, let_decl.name, lambda, &.{}, &functions, &next_closure_id));
+                try collectNestedFunctionsInLambda(allocator, lambda, &functions, &next_closure_id);
             },
             else => {},
         }
@@ -88,9 +91,9 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
         .Lambda => |lambda| lambda,
         else => return error.UnsupportedEntrypoint,
     };
-    try collectNestedFunctionsInLambda(allocator, entry_lambda, &functions);
+    try collectNestedFunctionsInLambda(allocator, entry_lambda, &functions, &next_closure_id);
     return .{
-        .entrypoint = try lowerEntrypointLet(allocator, module, entrypoint_index),
+        .entrypoint = try lowerEntrypointLet(allocator, module, entrypoint_index, &functions, &next_closure_id),
         .functions = try functions.toOwnedSlice(allocator),
         .type_decls = try lowerTypeDecls(allocator, module.type_decls),
         .tuple_type_decls = try lowerTupleTypeDecls(allocator, module.tuple_type_decls),
@@ -200,7 +203,13 @@ fn findEntrypointIndex(module: ir.Module) ?usize {
     return null;
 }
 
-fn lowerEntrypointLet(allocator: std.mem.Allocator, module: ir.Module, entrypoint_index: usize) LowerError!lir.LFunc {
+fn lowerEntrypointLet(
+    allocator: std.mem.Allocator,
+    module: ir.Module,
+    entrypoint_index: usize,
+    functions: *std.ArrayList(lir.LFunc),
+    next_closure_id: *usize,
+) LowerError!lir.LFunc {
     const let_decl = switch (module.decls[entrypoint_index]) {
         .Let => |value| value,
     };
@@ -211,8 +220,11 @@ fn lowerEntrypointLet(allocator: std.mem.Allocator, module: ir.Module, entrypoin
 
     var ctx = LowerContext.init(allocator);
     defer ctx.deinit();
+    ctx.functions = functions;
+    ctx.next_closure_id = next_closure_id;
     for (lambda.params) |param| {
         try ctx.bound.put(param.name, param.ty);
+        if (isClosureTy(param.ty)) try ctx.closure_bound.put(param.name, {});
     }
     var top_index: usize = 0;
     while (top_index < entrypoint_index) : (top_index += 1) {
@@ -250,14 +262,24 @@ fn lowerEntrypointLet(allocator: std.mem.Allocator, module: ir.Module, entrypoin
     return .{
         .name = try allocator.dupe(u8, let_decl.name),
         .body = body.*,
+        .return_ty = try lowerTy(allocator, exprTy(lambda.body.*)),
         .calling_convention = .ArenaThreaded,
         .source_span = .unavailable,
     };
 }
 
-fn lowerFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lambda, captures: CaptureSet) LowerError!lir.LFunc {
+fn lowerFunction(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    lambda: ir.Lambda,
+    captures: CaptureSet,
+    functions: *std.ArrayList(lir.LFunc),
+    next_closure_id: *usize,
+) LowerError!lir.LFunc {
     var ctx = LowerContext.init(allocator);
     defer ctx.deinit();
+    ctx.functions = functions;
+    ctx.next_closure_id = next_closure_id;
     try ctx.rec_captures.put(name, captures);
     for (captures) |capture| {
         try ctx.bound.put(capture.name, capture.ty);
@@ -273,14 +295,24 @@ fn lowerFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lamb
         .name = try allocator.dupe(u8, name),
         .params = try lowerParams(allocator, params),
         .body = (try lowerExprPtrWithContext(allocator, lambda.body.*, &ctx)).*,
+        .return_ty = try lowerTy(allocator, exprTy(lambda.body.*)),
         .calling_convention = .ArenaThreaded,
         .source_span = .unavailable,
     };
 }
 
-fn lowerClosureFunction(allocator: std.mem.Allocator, name: []const u8, lambda: ir.Lambda, captures: CaptureSet) LowerError!lir.LFunc {
+fn lowerClosureFunction(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    lambda: ir.Lambda,
+    captures: CaptureSet,
+    functions: *std.ArrayList(lir.LFunc),
+    next_closure_id: *usize,
+) LowerError!lir.LFunc {
     var ctx = LowerContext.init(allocator);
     defer ctx.deinit();
+    ctx.functions = functions;
+    ctx.next_closure_id = next_closure_id;
     try ctx.rec_captures.put(name, captures);
     try ctx.closure_bound.put(name, {});
     for (captures) |capture| {
@@ -297,72 +329,86 @@ fn lowerClosureFunction(allocator: std.mem.Allocator, name: []const u8, lambda: 
         .params = try lowerParams(allocator, lambda.params),
         .captures = try lowerParams(allocator, captures),
         .body = (try lowerExprPtrWithContext(allocator, lambda.body.*, &ctx)).*,
+        .return_ty = try lowerTy(allocator, exprTy(lambda.body.*)),
         .calling_convention = .Closure,
         .source_span = .unavailable,
     };
 }
 
-fn collectNestedFunctionsInLambda(allocator: std.mem.Allocator, lambda: ir.Lambda, functions: *std.ArrayList(lir.LFunc)) LowerError!void {
+fn collectNestedFunctionsInLambda(
+    allocator: std.mem.Allocator,
+    lambda: ir.Lambda,
+    functions: *std.ArrayList(lir.LFunc),
+    next_closure_id: *usize,
+) LowerError!void {
     var bound = std.StringHashMap(ir.Ty).init(allocator);
     defer bound.deinit();
     for (lambda.params) |param| {
         try bound.put(param.name, param.ty);
     }
-    try collectNestedFunctions(allocator, lambda.body.*, functions, &bound);
+    try collectNestedFunctions(allocator, lambda.body.*, functions, next_closure_id, &bound);
 }
 
-fn collectNestedFunctions(allocator: std.mem.Allocator, expr: ir.Expr, functions: *std.ArrayList(lir.LFunc), bound: *std.StringHashMap(ir.Ty)) LowerError!void {
+fn collectNestedFunctions(
+    allocator: std.mem.Allocator,
+    expr: ir.Expr,
+    functions: *std.ArrayList(lir.LFunc),
+    next_closure_id: *usize,
+    bound: *std.StringHashMap(ir.Ty),
+) LowerError!void {
     switch (expr) {
         .Lambda => |lambda| {
             const snapshots = try pushParams(allocator, bound, lambda.params);
             defer restoreBound(bound, snapshots);
-            try collectNestedFunctions(allocator, lambda.body.*, functions, bound);
+            try collectNestedFunctions(allocator, lambda.body.*, functions, next_closure_id, bound);
         },
         .Let => |let_expr| {
             switch (let_expr.value.*) {
                 .Lambda => |lambda| {
                     if (let_expr.is_rec) {
                         const captures = try recursiveCaptures(allocator, let_expr.name, lambda, bound);
-                        try functions.append(allocator, try lowerFunction(allocator, let_expr.name, lambda, captures));
+                        try functions.append(allocator, try lowerFunction(allocator, let_expr.name, lambda, captures, functions, next_closure_id));
                         if (recBindingEscapes(let_expr.name, let_expr.body.*)) {
-                            try functions.append(allocator, try lowerClosureFunction(allocator, let_expr.name, lambda, captures));
+                            try functions.append(allocator, try lowerClosureFunction(allocator, let_expr.name, lambda, captures, functions, next_closure_id));
                         }
                     }
                     const snapshots = try pushParams(allocator, bound, lambda.params);
                     defer restoreBound(bound, snapshots);
-                    try collectNestedFunctions(allocator, lambda.body.*, functions, bound);
+                    try collectNestedFunctions(allocator, lambda.body.*, functions, next_closure_id, bound);
                 },
-                else => try collectNestedFunctions(allocator, let_expr.value.*, functions, bound),
+                else => try collectNestedFunctions(allocator, let_expr.value.*, functions, next_closure_id, bound),
             }
             const previous = bound.get(let_expr.name);
             try bound.put(let_expr.name, exprTy(let_expr.value.*));
             defer restoreSingleBound(bound, let_expr.name, previous);
-            try collectNestedFunctions(allocator, let_expr.body.*, functions, bound);
+            try collectNestedFunctions(allocator, let_expr.body.*, functions, next_closure_id, bound);
         },
         .If => |if_expr| {
-            try collectNestedFunctions(allocator, if_expr.cond.*, functions, bound);
-            try collectNestedFunctions(allocator, if_expr.then_branch.*, functions, bound);
-            try collectNestedFunctions(allocator, if_expr.else_branch.*, functions, bound);
+            try collectNestedFunctions(allocator, if_expr.cond.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, if_expr.then_branch.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, if_expr.else_branch.*, functions, next_closure_id, bound);
         },
-        .Prim => |prim| for (prim.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, bound),
+        .Prim => |prim| for (prim.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, next_closure_id, bound),
         .App => |app| {
-            try collectNestedFunctions(allocator, app.callee.*, functions, bound);
-            for (app.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, bound);
+            try collectNestedFunctions(allocator, app.callee.*, functions, next_closure_id, bound);
+            for (app.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, next_closure_id, bound);
         },
-        .Ctor => |ctor| for (ctor.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, bound),
-        .Tuple => |tuple_expr| for (tuple_expr.items) |item| try collectNestedFunctions(allocator, item.*, functions, bound),
-        .TupleProj => |tuple_proj| try collectNestedFunctions(allocator, tuple_proj.tuple_expr.*, functions, bound),
-        .Record => |record_expr| for (record_expr.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, bound),
-        .RecordField => |record_field| try collectNestedFunctions(allocator, record_field.record_expr.*, functions, bound),
+        .Ctor => |ctor| for (ctor.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, next_closure_id, bound),
+        .Tuple => |tuple_expr| for (tuple_expr.items) |item| try collectNestedFunctions(allocator, item.*, functions, next_closure_id, bound),
+        .TupleProj => |tuple_proj| try collectNestedFunctions(allocator, tuple_proj.tuple_expr.*, functions, next_closure_id, bound),
+        .Record => |record_expr| for (record_expr.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, next_closure_id, bound),
+        .RecordField => |record_field| try collectNestedFunctions(allocator, record_field.record_expr.*, functions, next_closure_id, bound),
         .RecordUpdate => |record_update| {
-            try collectNestedFunctions(allocator, record_update.base_expr.*, functions, bound);
-            for (record_update.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, bound);
+            try collectNestedFunctions(allocator, record_update.base_expr.*, functions, next_closure_id, bound);
+            for (record_update.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, next_closure_id, bound);
         },
         .Match => |match_expr| {
-            try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions, bound);
+            try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions, next_closure_id, bound);
             for (match_expr.arms) |arm| {
-                if (arm.guard) |guard_expr| try collectNestedFunctions(allocator, guard_expr.*, functions, bound);
-                try collectNestedFunctions(allocator, arm.body.*, functions, bound);
+                const snapshots = try pushPatternBindings(allocator, bound, arm.pattern);
+                defer restoreBound(bound, snapshots);
+                if (arm.guard) |guard_expr| try collectNestedFunctions(allocator, guard_expr.*, functions, next_closure_id, bound);
+                try collectNestedFunctions(allocator, arm.body.*, functions, next_closure_id, bound);
             }
         },
         .Constant, .Var => {},
@@ -383,6 +429,7 @@ fn lowerExprPtrWithContext(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *Lo
 
 fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) LowerError!lir.LExpr {
     return switch (expr) {
+        .Lambda => |lambda| (try lowerAnonymousClosureExpr(allocator, lambda, ctx)).*,
         .Constant => |constant| .{ .Constant = switch (constant.value) {
             .Int => |value| .{ .Int = value },
             .String => |value| .{ .String = try allocator.dupe(u8, value) },
@@ -478,7 +525,6 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
             .fields = try lowerRecordExprFields(allocator, record_update.fields, ctx),
             .ty = try lowerTy(allocator, record_update.ty),
         } },
-        .Lambda => error.UnsupportedExpr,
     };
 }
 
@@ -519,8 +565,20 @@ fn lowerApp(allocator: std.mem.Allocator, app: ir.App, ctx: *LowerContext) Lower
     return .{ .App = .{
         .callee = try lowerExprPtrWithContext(allocator, app.callee.*, ctx),
         .args = try args.toOwnedSlice(allocator),
+        .ty = try lowerTy(allocator, app.ty),
+        .callee_ty = try lowerTy(allocator, exprTy(app.callee.*)),
         .kind = kind,
     } };
+}
+
+fn lowerAnonymousClosureExpr(allocator: std.mem.Allocator, lambda: ir.Lambda, ctx: *LowerContext) LowerError!*lir.LExpr {
+    const functions = ctx.functions orelse return error.UnsupportedExpr;
+    const next_closure_id = ctx.next_closure_id orelse return error.UnsupportedExpr;
+    const name = try std.fmt.allocPrint(allocator, "__lambda_{d}", .{next_closure_id.*});
+    next_closure_id.* += 1;
+    const captures = try lambdaCaptures(allocator, lambda, &ctx.bound);
+    try functions.append(allocator, try lowerClosureFunction(allocator, name, lambda, captures, functions, next_closure_id));
+    return lowerClosureExpr(allocator, name, captures);
 }
 
 fn lowerClosureExpr(allocator: std.mem.Allocator, name: []const u8, captures: CaptureSet) LowerError!*lir.LExpr {
@@ -548,6 +606,23 @@ fn recursiveCaptures(
     var excluded = std.StringHashMap(void).init(allocator);
     defer excluded.deinit();
     try excluded.put(self_name, {});
+    for (lambda.params) |param| {
+        try excluded.put(param.name, {});
+    }
+
+    var captures = std.ArrayList(ir.Param).empty;
+    errdefer captures.deinit(allocator);
+    try collectCaptures(allocator, lambda.body.*, bound, &excluded, &captures);
+    return captures.toOwnedSlice(allocator);
+}
+
+fn lambdaCaptures(
+    allocator: std.mem.Allocator,
+    lambda: ir.Lambda,
+    bound: *std.StringHashMap(ir.Ty),
+) LowerError!CaptureSet {
+    var excluded = std.StringHashMap(void).init(allocator);
+    defer excluded.deinit();
     for (lambda.params) |param| {
         try excluded.put(param.name, {});
     }
@@ -638,6 +713,35 @@ fn pushParams(allocator: std.mem.Allocator, bound: *std.StringHashMap(ir.Ty), pa
         try bound.put(param.name, param.ty);
     }
     return snapshots;
+}
+
+fn pushPatternBindings(
+    allocator: std.mem.Allocator,
+    bound: *std.StringHashMap(ir.Ty),
+    pattern: ir.Pattern,
+) LowerError![]const BindingSnapshot {
+    var snapshots = std.ArrayList(BindingSnapshot).empty;
+    errdefer snapshots.deinit(allocator);
+    try pushPatternBindingsInto(allocator, bound, pattern, &snapshots);
+    return snapshots.toOwnedSlice(allocator);
+}
+
+fn pushPatternBindingsInto(
+    allocator: std.mem.Allocator,
+    bound: *std.StringHashMap(ir.Ty),
+    pattern: ir.Pattern,
+    snapshots: *std.ArrayList(BindingSnapshot),
+) LowerError!void {
+    switch (pattern) {
+        .Var => |var_pattern| {
+            try snapshots.append(allocator, .{ .name = var_pattern.name, .previous = bound.get(var_pattern.name) });
+            try bound.put(var_pattern.name, var_pattern.ty);
+        },
+        .Ctor => |ctor_pattern| for (ctor_pattern.args) |arg| try pushPatternBindingsInto(allocator, bound, arg, snapshots),
+        .Tuple => |items| for (items) |item| try pushPatternBindingsInto(allocator, bound, item, snapshots),
+        .Record => |fields| for (fields) |field| try pushPatternBindingsInto(allocator, bound, field.pattern, snapshots),
+        .Wildcard => {},
+    }
 }
 
 fn restoreBound(bound: *std.StringHashMap(ir.Ty), snapshots: []const BindingSnapshot) void {
@@ -750,6 +854,8 @@ fn lowerPrimOp(op: ir.PrimOp) lir.LPrimOp {
 fn lowerArms(allocator: std.mem.Allocator, arms: []const ir.Arm, ctx: *LowerContext) LowerError![]const lir.LArm {
     const lowered = try allocator.alloc(lir.LArm, arms.len);
     for (arms, 0..) |arm, index| {
+        const snapshots = try pushPatternBindings(allocator, &ctx.bound, arm.pattern);
+        defer restoreBound(&ctx.bound, snapshots);
         lowered[index] = .{
             .pattern = try lowerPattern(allocator, arm.pattern),
             .guard = if (arm.guard) |guard| try lowerExprPtrWithContext(allocator, guard.*, ctx) else null,
@@ -808,7 +914,14 @@ fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
         .Unit => .Unit,
         .String => .String,
         .Var => |name| .{ .Var = try allocator.dupe(u8, name) },
-        .Arrow => .Closure,
+        .Arrow => |arrow| blk: {
+            const ret = try allocator.create(lir.LTy);
+            ret.* = try lowerTy(allocator, arrow.ret.*);
+            break :blk .{ .Closure = .{
+                .params = try lowerTySlice(allocator, arrow.params),
+                .ret = ret,
+            } };
+        },
         .Adt => |adt| .{ .Adt = .{
             .name = try allocator.dupe(u8, adt.name),
             .params = try lowerTySlice(allocator, adt.params),

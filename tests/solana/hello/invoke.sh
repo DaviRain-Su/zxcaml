@@ -2,7 +2,8 @@
 #
 # Opt-in Solana BPF acceptance harness for ZxCaml's minimal hello program.
 # The script owns one temporary validator process and one temporary keypair,
-# then builds, deploys, and invokes tests/solana/hello/solana_hello.ml.
+# then builds, deploys, and invokes tests/solana/hello/solana_hello.ml
+# (or $ZXCAML_SOLANA_SRC when a feature-specific harness overrides it).
 
 set -Eeuo pipefail
 
@@ -12,11 +13,12 @@ if [[ "${SOLANA_BPF:-}" != "1" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-SRC="$ROOT/tests/solana/hello/solana_hello.ml"
+SRC="${ZXCAML_SOLANA_SRC:-$ROOT/tests/solana/hello/solana_hello.ml}"
+PROGRAM_STEM="$(basename "$SRC" .ml)"
 TMPDIR="$(mktemp -d -t zxcaml-solana-hello-XXXXXX)"
 LEDGER="$TMPDIR/ledger"
 KEYPAIR="$TMPDIR/payer.json"
-PROGRAM_SO="$TMPDIR/solana_hello.so"
+PROGRAM_SO="$TMPDIR/$PROGRAM_STEM.so"
 VALIDATOR_LOG="$TMPDIR/validator.log"
 BUILD_LOG="$TMPDIR/build.log"
 DEPLOY_LOG="$TMPDIR/deploy.log"

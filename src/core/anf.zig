@@ -443,18 +443,116 @@ fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: t
 }
 
 fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (isVarNamed(app.callee.*, "List.map")) {
+        return lowerListMapLiteralApp(arena, ctx, app);
+    }
     const callee = try lowerExprPtr(arena, ctx, app.callee.*);
     var args = std.ArrayList(*const ir.Expr).empty;
     errdefer args.deinit(arena.allocator());
     for (app.args) |arg| {
         try args.append(arena.allocator(), try lowerExprPtr(arena, ctx, arg));
     }
+    const owned_args = try args.toOwnedSlice(arena.allocator());
+    const ty = try appReturnTy(arena, exprTy(callee.*), owned_args.len);
     return .{ .App = .{
         .callee = callee,
-        .args = try args.toOwnedSlice(arena.allocator()),
-        .ty = .Int,
-        .layout = layout.intConstant(),
+        .args = owned_args,
+        .ty = ty,
+        .layout = layoutForTy(ty),
     } };
+}
+
+fn lowerListMapLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    const lambda = switch (app.args[0]) {
+        .Lambda => |value| value,
+        else => return error.UnsupportedNode,
+    };
+    if (lambda.params.len != 1) return error.UnsupportedNode;
+
+    var items = std.ArrayList(ttree.Expr).empty;
+    errdefer items.deinit(arena.allocator());
+    try collectListLiteralItems(arena.allocator(), app.args[1], &items);
+
+    const list_ty = try listTy(arena, .Int);
+    var current = try arena.allocator().create(ir.Expr);
+    current.* = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "[]"),
+        .args = &.{},
+        .ty = list_ty,
+        .layout = layout.ctor(0),
+        .tag = builtinCtorTag("[]"),
+    } };
+
+    var index = items.items.len;
+    while (index > 0) {
+        index -= 1;
+        const elem = try lowerExprPtrExpected(arena, ctx, items.items[index], .Int);
+        const param_name = try arena.allocator().dupe(u8, lambda.params[0]);
+        const previous = ctx.scope.get(param_name);
+        try ctx.scope.put(param_name, .{ .ty = .Int, .layout = layout.intConstant() });
+        const mapped_body = try lowerExprPtrExpected(arena, ctx, lambda.body.*, .Int);
+        if (previous) |binding| {
+            ctx.scope.getPtr(param_name).?.* = binding;
+        } else {
+            _ = ctx.scope.remove(param_name);
+        }
+
+        const mapped = try arena.allocator().create(ir.Expr);
+        mapped.* = .{ .Let = .{
+            .name = param_name,
+            .value = elem,
+            .body = mapped_body,
+            .ty = exprTy(mapped_body.*),
+            .layout = exprLayout(mapped_body.*),
+        } };
+
+        const args = try arena.allocator().alloc(*const ir.Expr, 2);
+        args[0] = mapped;
+        args[1] = current;
+        const next = try arena.allocator().create(ir.Expr);
+        next.* = .{ .Ctor = .{
+            .name = try arena.allocator().dupe(u8, "::"),
+            .args = args,
+            .ty = list_ty,
+            .layout = layout.ctor(2),
+            .tag = builtinCtorTag("::"),
+        } };
+        current = next;
+    }
+
+    return current.*;
+}
+
+fn collectListLiteralItems(allocator: std.mem.Allocator, expr: ttree.Expr, items: *std.ArrayList(ttree.Expr)) LowerError!void {
+    const ctor = switch (expr) {
+        .Ctor => |value| value,
+        else => return error.UnsupportedNode,
+    };
+    if (std.mem.eql(u8, ctor.name, "[]")) {
+        if (ctor.args.len != 0) return error.UnsupportedNode;
+        return;
+    }
+    if (!std.mem.eql(u8, ctor.name, "::") or ctor.args.len != 2) return error.UnsupportedNode;
+    try items.append(allocator, ctor.args[0]);
+    try collectListLiteralItems(allocator, ctor.args[1], items);
+}
+
+fn isVarNamed(expr: ttree.Expr, name: []const u8) bool {
+    return switch (expr) {
+        .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+        else => false,
+    };
+}
+
+fn appReturnTy(arena: *std.heap.ArenaAllocator, callee_ty: ir.Ty, arg_count: usize) LowerError!ir.Ty {
+    const arrow = switch (callee_ty) {
+        .Arrow => |value| value,
+        else => return .Int,
+    };
+    if (arg_count >= arrow.params.len) return arrow.ret.*;
+    const remaining = arrow.params[arg_count..];
+    return makeArrowTyFromPieces(arena, remaining, arrow.ret.*);
 }
 
 fn lowerIf(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, if_expr: ttree.IfExpr) LowerError!ir.Expr {
@@ -1654,6 +1752,21 @@ fn makeArrowTy(
     const ret = try arena.allocator().create(ir.Ty);
     ret.* = ret_ty;
 
+    return .{ .Arrow = .{
+        .params = param_tys,
+        .ret = ret,
+    } };
+}
+
+fn makeArrowTyFromPieces(
+    arena: *std.heap.ArenaAllocator,
+    param_tys_in: []const ir.Ty,
+    ret_ty: ir.Ty,
+) LowerError!ir.Ty {
+    const param_tys = try arena.allocator().alloc(ir.Ty, param_tys_in.len);
+    @memcpy(param_tys, param_tys_in);
+    const ret = try arena.allocator().create(ir.Ty);
+    ret.* = ret_ty;
     return .{ .Arrow = .{
         .params = param_tys,
         .ret = ret,

@@ -19,6 +19,7 @@ pub const LFunc = struct {
     name: []const u8,
     params: []const LParam = &.{},
     captures: []const LParam = &.{},
+    return_ty: LTy = .Int,
     body: LExpr,
     calling_convention: CallingConvention = .ArenaThreaded,
     source_span: SourceSpan = .unavailable,
@@ -65,6 +66,8 @@ pub const LExpr = union(enum) {
 pub const LApp = struct {
     callee: *const LExpr,
     args: []const *const LExpr,
+    ty: LTy = .Int,
+    callee_ty: LTy = .Int,
     kind: LCallKind = .Direct,
 };
 
@@ -278,13 +281,19 @@ pub const LTy = union(enum) {
     Adt: LAdt,
     Tuple: []const LTy,
     Record: LRecordTy,
-    Closure,
+    Closure: LClosureTy,
 };
 
 /// Lowered ADT type reference.
 pub const LAdt = struct {
     name: []const u8,
     params: []const LTy,
+};
+
+/// Lowered first-class function type carried for typed closure calls.
+pub const LClosureTy = struct {
+    params: []const LTy,
+    ret: *const LTy,
 };
 
 /// Lowered nominal record type reference.
