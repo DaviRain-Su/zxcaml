@@ -37,11 +37,15 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         try emitVariantType(&out, allocator, type_decl);
         try append(&out, allocator, "\n");
     }
-    for (module.functions) |func| {
-        try emitFunction(&out, allocator, func, module.type_decls);
+    for (module.record_type_decls) |type_decl| {
+        try emitRecordType(&out, allocator, type_decl);
         try append(&out, allocator, "\n");
     }
-    try emitFunction(&out, allocator, module.entrypoint, module.type_decls);
+    for (module.functions) |func| {
+        try emitFunction(&out, allocator, func, module.type_decls, module.record_type_decls);
+        try append(&out, allocator, "\n");
+    }
+    try emitFunction(&out, allocator, module.entrypoint, module.type_decls, module.record_type_decls);
 
     return out.toOwnedSlice(allocator);
 }
@@ -99,6 +103,21 @@ fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_d
     }
 }
 
+fn emitRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: lir.LRecordType) EmitError!void {
+    const type_name = try userTypeName(allocator, type_decl.name);
+    defer allocator.free(type_name);
+    try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+    for (type_decl.fields) |field| {
+        try append(out, allocator, "    ");
+        try emitIdentifier(out, allocator, field.name);
+        try append(out, allocator, ": ");
+        const ty_name = try zigTypeExprName(allocator, field.ty, type_decl.params);
+        defer allocator.free(ty_name);
+        try appendPrint(out, allocator, "{s},\n", .{ty_name});
+    }
+    try append(out, allocator, "};\n");
+}
+
 fn emitVariantConstructorHelper(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -127,7 +146,7 @@ fn emitVariantConstructorHelper(
     try append(out, allocator, "    }\n");
 }
 
-fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir.LFunc, type_decls: []const lir.LVariantType) EmitError!void {
+fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir.LFunc, type_decls: []const lir.LVariantType, record_type_decls: []const lir.LRecordType) EmitError!void {
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
     const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
     try append(out, allocator, if (is_entrypoint) "pub fn " else "fn ");
@@ -162,7 +181,7 @@ fn emitFunction(out: *std.ArrayList(u8), allocator: std.mem.Allocator, func: lir
         try emitClosureCaptureBindings(out, allocator, func.captures);
     }
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
-    var ctx: EmitContext = .{ .type_decls = type_decls };
+    var ctx: EmitContext = .{ .type_decls = type_decls, .record_type_decls = record_type_decls };
     try emitExpr(out, allocator, func.body, 1, &ctx);
     try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
@@ -210,6 +229,7 @@ fn emitClosureCaptureBindings(out: *std.ArrayList(u8), allocator: std.mem.Alloca
 const EmitContext = struct {
     next_block_id: usize = 0,
     type_decls: []const lir.LVariantType = &.{},
+    record_type_decls: []const lir.LRecordType = &.{},
 };
 
 fn emitExpr(
@@ -241,7 +261,114 @@ fn emitExpr(
         .Ctor => |ctor_expr| try emitCtorExpr(out, allocator, ctor_expr, indent_level, ctx),
         .Match => |match_expr| try emitMatchExpr(out, allocator, match_expr, indent_level, ctx),
         .Closure => |closure| try emitClosureExpr(out, allocator, closure, indent_level, ctx),
+        .Tuple => |tuple_expr| try emitTupleExpr(out, allocator, tuple_expr, indent_level, ctx),
+        .TupleProj => |tuple_proj| try emitTupleProjExpr(out, allocator, tuple_proj, indent_level, ctx),
+        .Record => |record_expr| try emitRecordExpr(out, allocator, record_expr, indent_level, ctx),
+        .RecordField => |record_field| try emitRecordFieldExpr(out, allocator, record_field, indent_level, ctx),
+        .RecordUpdate => |record_update| try emitRecordUpdateExpr(out, allocator, record_update, indent_level, ctx),
     }
+}
+
+fn emitTupleExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    tuple_expr: lir.LTuple,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    _ = tuple_expr.ty;
+    try append(out, allocator, ".{ ");
+    for (tuple_expr.items, 0..) |item, index| {
+        if (index != 0) try append(out, allocator, ", ");
+        try appendPrint(out, allocator, ".@\"{d}\" = ", .{index});
+        try emitExpr(out, allocator, item.*, indent_level, ctx);
+    }
+    try append(out, allocator, " }");
+}
+
+fn emitTupleProjExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    tuple_proj: lir.LTupleProj,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "(");
+    try emitExpr(out, allocator, tuple_proj.tuple_expr.*, indent_level, ctx);
+    try appendPrint(out, allocator, ").@\"{d}\"", .{tuple_proj.index});
+}
+
+fn emitRecordExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    record_expr: lir.LRecord,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const ty_name = try zigTypeName(allocator, record_expr.ty);
+    defer allocator.free(ty_name);
+    try appendPrint(out, allocator, "{s}{{ ", .{ty_name});
+    for (record_expr.fields, 0..) |field, index| {
+        if (index != 0) try append(out, allocator, ", ");
+        try append(out, allocator, ".");
+        try emitIdentifier(out, allocator, field.name);
+        try append(out, allocator, " = ");
+        try emitExpr(out, allocator, field.value.*, indent_level, ctx);
+    }
+    try append(out, allocator, " }");
+}
+
+fn emitRecordFieldExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    record_field: lir.LRecordField,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "(");
+    try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
+    try append(out, allocator, ").");
+    try emitIdentifier(out, allocator, record_field.field_name);
+}
+
+fn emitRecordUpdateExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    record_update: lir.LRecordUpdate,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const record_ty = switch (record_update.ty) {
+        .Record => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    const record_decl = findRecordTypeDecl(ctx.record_type_decls, record_ty.name) orelse return error.UnsupportedExpr;
+    const ty_name = try zigTypeName(allocator, record_update.ty);
+    defer allocator.free(ty_name);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_record_base_{d} = ", .{block_id});
+    try emitExpr(out, allocator, record_update.base_expr.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ ", .{ block_id, ty_name });
+    for (record_decl.fields, 0..) |field, index| {
+        if (index != 0) try append(out, allocator, ", ");
+        try append(out, allocator, ".");
+        try emitIdentifier(out, allocator, field.name);
+        try append(out, allocator, " = ");
+        if (findRecordUpdateField(record_update.fields, field.name)) |updated| {
+            try emitExpr(out, allocator, updated.value.*, indent_level + 1, ctx);
+        } else {
+            try appendPrint(out, allocator, "omlz_record_base_{d}.", .{block_id});
+            try emitIdentifier(out, allocator, field.name);
+        }
+    }
+    try append(out, allocator, " };\n");
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitAppExpr(
@@ -472,7 +599,7 @@ fn findTopLevelCtorPattern(match_expr: lir.LMatch, constructor: []const u8) ?lir
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (std.mem.eql(u8, ctor.name, constructor)) return ctor,
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return null;
@@ -518,7 +645,7 @@ fn emitDecisionCase(
                 try emitSpecializedCtorRow(out, allocator, ctor_pattern, arm.body.*, arm.guard, scrutinee_name, payload_name, block_id, indent_level + 1, ctx);
                 if (arm.guard == null and ctorPayloadsIrrefutable(ctor_pattern.args)) case_covered = true;
             },
-            .Wildcard, .Var => {
+            .Wildcard, .Var, .Tuple, .Record => {
                 const patterns = [_]lir.LPattern{arm.pattern};
                 const sources = [_][]const u8{scrutinee_name};
                 try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level + 1, ctx);
@@ -618,7 +745,7 @@ fn emitDefaultRows(
 ) EmitError!void {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
-            .Wildcard, .Var => {
+            .Wildcard, .Var, .Tuple, .Record => {
                 const patterns = [_]lir.LPattern{arm.pattern};
                 const sources = [_][]const u8{scrutinee_name};
                 try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level, ctx);
@@ -670,6 +797,32 @@ fn emitPatternSequence(
             try append(out, allocator, "}\n");
         },
         .Ctor => |ctor_pattern| try emitCtorPatternSequence(out, allocator, ctor_pattern, source, patterns[1..], sources[1..], body, guard, block_id, indent_level, ctx),
+        .Tuple => |items| {
+            var item_sources = std.ArrayList([]const u8).empty;
+            defer {
+                for (item_sources.items) |item_source| allocator.free(item_source);
+                item_sources.deinit(allocator);
+            }
+            for (items, 0..) |_, index| {
+                try item_sources.append(allocator, try std.fmt.allocPrint(allocator, "{s}.@\"{d}\"", .{ source, index }));
+            }
+            try emitCombinedPatternSequence(out, allocator, items, item_sources.items, patterns[1..], sources[1..], body, guard, block_id, indent_level, ctx);
+        },
+        .Record => |fields| {
+            var field_sources = std.ArrayList([]const u8).empty;
+            var field_patterns = std.ArrayList(lir.LPattern).empty;
+            defer {
+                for (field_sources.items) |field_source| allocator.free(field_source);
+                field_sources.deinit(allocator);
+                field_patterns.deinit(allocator);
+            }
+            for (fields) |field| {
+                const field_source = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ source, field.name });
+                try field_sources.append(allocator, field_source);
+                try field_patterns.append(allocator, field.pattern);
+            }
+            try emitCombinedPatternSequence(out, allocator, field_patterns.items, field_sources.items, patterns[1..], sources[1..], body, guard, block_id, indent_level, ctx);
+        },
     }
 }
 
@@ -905,6 +1058,10 @@ fn emitCtorExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (std.mem.eql(u8, ctor_expr.name, "true") or std.mem.eql(u8, ctor_expr.name, "false")) {
+        try appendPrint(out, allocator, "prelude.Bool.fromNative({s})", .{ctor_expr.name});
+        return;
+    }
     const ty_name = if (ctor_expr.type_name) |type_name|
         try zigUserAdtTypeName(allocator, ctor_expr.ty, type_name)
     else
@@ -1181,6 +1338,27 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
             }
             return false;
         },
+        .Tuple => |tuple_expr| {
+            for (tuple_expr.items) |item| {
+                if (exprUsesName(item.*, name)) return true;
+            }
+            return false;
+        },
+        .TupleProj => |tuple_proj| exprUsesName(tuple_proj.tuple_expr.*, name),
+        .Record => |record_expr| {
+            for (record_expr.fields) |field| {
+                if (exprUsesName(field.value.*, name)) return true;
+            }
+            return false;
+        },
+        .RecordField => |record_field| exprUsesName(record_field.record_expr.*, name),
+        .RecordUpdate => |record_update| {
+            if (exprUsesName(record_update.base_expr.*, name)) return true;
+            for (record_update.fields) |field| {
+                if (exprUsesName(field.value.*, name)) return true;
+            }
+            return false;
+        },
         .Match => |match_expr| {
             if (exprUsesName(match_expr.scrutinee.*, name)) return true;
             for (match_expr.arms) |arm| {
@@ -1240,6 +1418,27 @@ fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
             }
             break :blk false;
         },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (exprNeedsArena(item.*, type_decls)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| exprNeedsArena(tuple_proj.tuple_expr.*, type_decls),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (exprNeedsArena(field.value.*, type_decls)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |record_field| exprNeedsArena(record_field.record_expr.*, type_decls),
+        .RecordUpdate => |record_update| blk: {
+            if (exprNeedsArena(record_update.base_expr.*, type_decls)) break :blk true;
+            for (record_update.fields) |field| {
+                if (exprNeedsArena(field.value.*, type_decls)) break :blk true;
+            }
+            break :blk false;
+        },
         .Closure => true,
     };
 }
@@ -1251,6 +1450,18 @@ fn patternBindsName(pattern: lir.LPattern, name: []const u8) bool {
         .Ctor => |ctor_pattern| {
             for (ctor_pattern.args) |arg| {
                 if (patternBindsName(arg, name)) return true;
+            }
+            return false;
+        },
+        .Tuple => |items| {
+            for (items) |item| {
+                if (patternBindsName(item, name)) return true;
+            }
+            return false;
+        },
+        .Record => |fields| {
+            for (fields) |field| {
+                if (patternBindsName(field.pattern, name)) return true;
             }
             return false;
         },
@@ -1275,7 +1486,7 @@ fn patternNeedsSource(pattern: lir.LPattern, body: lir.LExpr, guard: ?*const lir
     return switch (pattern) {
         .Wildcard => false,
         .Var => |name| !std.mem.eql(u8, name, "_") and armUsesName(body, guard, name),
-        .Ctor => true,
+        .Ctor, .Tuple, .Record => true,
     };
 }
 
@@ -1283,7 +1494,7 @@ fn matchHasCtorArm(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => return true,
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return false;
@@ -1293,7 +1504,7 @@ fn matchHasUserCtorArm(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (ctor.type_name != null) return true,
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return false;
@@ -1320,7 +1531,7 @@ fn matchHasDefaultRows(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
-            .Ctor => {},
+            .Ctor, .Tuple, .Record => {},
         }
     }
     return false;
@@ -1393,7 +1604,7 @@ fn builtinMatchFamily(match_expr: lir.LMatch) ?BuiltinFamily {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (builtinFamilyForCtor(ctor.name)) |family| return family,
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return null;
@@ -1417,7 +1628,7 @@ fn matchHasUnguardedCatchAll(match_expr: lir.LMatch) bool {
         if (arm.guard != null) continue;
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
-            .Ctor => {},
+            .Ctor, .Tuple, .Record => {},
         }
     }
     return false;
@@ -1437,6 +1648,7 @@ fn constructorUnconditionallyCovered(match_expr: lir.LMatch, type_name: ?[]const
                     false;
                 if (same_type and std.mem.eql(u8, ctor.name, constructor) and ctorPayloadsIrrefutable(ctor.args)) return true;
             },
+            .Tuple, .Record => {},
         }
     }
     return false;
@@ -1462,7 +1674,7 @@ fn constructorExhaustivelyCoveredByName(
                 if (ctor.args.len != 1) continue;
                 try payload_patterns.append(allocator, ctor.args[0]);
             },
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
 
@@ -1476,6 +1688,7 @@ fn caseUnconditionallyCovered(match_expr: lir.LMatch, selected_ctor: lir.LCtorPa
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
             .Ctor => |ctor| if (sameConstructor(ctor, selected_ctor) and ctorPayloadsIrrefutable(ctor.args)) return true,
+            .Tuple, .Record => {},
         }
     }
     return false;
@@ -1500,7 +1713,7 @@ fn caseExhaustivelyCovered(
                 if (ctor.args.len != 1) continue;
                 try payload_patterns.append(allocator, ctor.args[0]);
             },
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
 
@@ -1516,7 +1729,7 @@ fn patternsCoverFamily(
     for (patterns) |pattern| {
         switch (pattern) {
             .Wildcard, .Var => return true,
-            .Ctor => {},
+            .Ctor, .Tuple, .Record => {},
         }
     }
 
@@ -1555,6 +1768,7 @@ fn constructorCoveredByPatterns(
                 if (ctorPayloadsIrrefutable(ctor.args)) return true;
                 if (ctor.args.len == 1) try nested_patterns.append(allocator, ctor.args[0]);
             },
+            .Tuple, .Record => {},
         }
     }
 
@@ -1566,7 +1780,7 @@ fn firstCtorPattern(patterns: []const lir.LPattern) ?lir.LCtorPattern {
     for (patterns) |pattern| {
         switch (pattern) {
             .Ctor => |ctor| return ctor,
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return null;
@@ -1589,7 +1803,7 @@ fn caseNeedsBuiltinPayload(match_expr: lir.LMatch, selected_ctor: lir.LCtorPatte
             .Ctor => |ctor| {
                 if (sameConstructor(ctor, selected_ctor) and patternsNeedSource(ctor.args, arm.body.*, arm.guard)) return true;
             },
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return false;
@@ -1598,7 +1812,7 @@ fn caseNeedsBuiltinPayload(match_expr: lir.LMatch, selected_ctor: lir.LCtorPatte
 fn ctorPayloadsIrrefutable(patterns: []const lir.LPattern) bool {
     for (patterns) |pattern| {
         switch (pattern) {
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
             .Ctor => return false,
         }
     }
@@ -1609,7 +1823,7 @@ fn userMatchTypeName(match_expr: lir.LMatch) ?[]const u8 {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (ctor.type_name) |type_name| return type_name,
-            .Wildcard, .Var => {},
+            .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
     return null;
@@ -1623,6 +1837,20 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
         .String => allocator.dupe(u8, "[]const u8"),
         .Var => return error.UnsupportedExpr,
         .Closure => allocator.dupe(u8, "*const prelude.Closure"),
+        .Tuple => |items| blk: {
+            var out = std.ArrayList(u8).empty;
+            errdefer out.deinit(allocator);
+            try append(&out, allocator, "struct { ");
+            for (items, 0..) |item, index| {
+                if (index != 0) try append(&out, allocator, ", ");
+                const item_ty = try zigTypeName(allocator, item);
+                defer allocator.free(item_ty);
+                try appendPrint(&out, allocator, "@\"{d}\": {s}", .{ index, item_ty });
+            }
+            try append(&out, allocator, " }");
+            break :blk try out.toOwnedSlice(allocator);
+        },
+        .Record => |record| try userTypeName(allocator, record.name),
         .Adt => |adt| blk: {
             if (std.mem.eql(u8, adt.name, "option")) {
                 if (adt.params.len != 1) return error.UnsupportedExpr;
@@ -1737,6 +1965,20 @@ fn findUserTypeDecl(type_decls: []const lir.LVariantType, type_name: []const u8)
     return null;
 }
 
+fn findRecordTypeDecl(type_decls: []const lir.LRecordType, type_name: []const u8) ?lir.LRecordType {
+    for (type_decls) |type_decl| {
+        if (std.mem.eql(u8, type_decl.name, type_name)) return type_decl;
+    }
+    return null;
+}
+
+fn findRecordUpdateField(fields: []const lir.LRecordExprField, field_name: []const u8) ?lir.LRecordExprField {
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) return field;
+    }
+    return null;
+}
+
 fn zigInstantiatedTypeRefName(
     allocator: std.mem.Allocator,
     ref: lir.LTypeRef,
@@ -1780,7 +2022,19 @@ fn zigInstantiatedTypeExprName(
             defer allocator.free(type_name);
             break :blk try std.fmt.allocPrint(allocator, "*const {s}", .{type_name});
         },
-        .Tuple => error.UnsupportedExpr,
+        .Tuple => |items| blk: {
+            var out = std.ArrayList(u8).empty;
+            errdefer out.deinit(allocator);
+            try append(&out, allocator, "struct { ");
+            for (items, 0..) |item, index| {
+                if (index != 0) try append(&out, allocator, ", ");
+                const item_name = try zigInstantiatedTypeExprName(allocator, item, type_params, concrete_ty);
+                defer allocator.free(item_name);
+                try appendPrint(&out, allocator, "_{d}: {s}", .{ index, item_name });
+            }
+            try append(&out, allocator, " }");
+            break :blk try out.toOwnedSlice(allocator);
+        },
     };
 }
 
@@ -2505,6 +2759,73 @@ test "ZigBackend emits list constructors and cons pattern bindings" {
     try std.testing.expect(std.mem.indexOf(u8, source, ".cons = .{ .head = omlz_list_head_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".cons => |omlz_match_payload_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".head") != null);
+}
+
+test "ZigBackend emits tuple and record struct operations" {
+    const person_ty = lir.LTy{ .Record = .{ .name = "person", .params = &.{} } };
+    const module: lir.LModule = .{
+        .record_type_decls = &.{.{
+            .name = "person",
+            .fields = &.{
+                .{ .name = "name", .ty = .{ .TypeRef = .{ .name = "string" } } },
+                .{ .name = "age", .ty = .{ .TypeRef = .{ .name = "int" } } },
+            },
+        }},
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .Let = .{
+                .name = "tup",
+                .value = &.{ .Tuple = .{
+                    .items = &.{
+                        &.{ .Constant = .{ .Int = 1 } },
+                        &.{ .Prim = .{
+                            .op = .Eq,
+                            .args = &.{ &.{ .Constant = .{ .Int = 1 } }, &.{ .Constant = .{ .Int = 1 } } },
+                        } },
+                        &.{ .Constant = .{ .Int = 42 } },
+                    },
+                    .ty = .{ .Tuple = &.{ .Int, .Bool, .Int } },
+                } },
+                .body = &.{ .Let = .{
+                    .name = "rec",
+                    .value = &.{ .Record = .{
+                        .ty = person_ty,
+                        .fields = &.{
+                            .{ .name = "name", .value = &.{ .Constant = .{ .String = "alice" } } },
+                            .{ .name = "age", .value = &.{ .Constant = .{ .Int = 30 } } },
+                        },
+                    } },
+                    .body = &.{ .Let = .{
+                        .name = "rec2",
+                        .value = &.{ .RecordUpdate = .{
+                            .base_expr = &.{ .Var = .{ .name = "rec" } },
+                            .fields = &.{.{ .name = "age", .value = &.{ .Constant = .{ .Int = 31 } } }},
+                            .ty = person_ty,
+                        } },
+                        .body = &.{ .Prim = .{
+                            .op = .Add,
+                            .args = &.{
+                                &.{ .TupleProj = .{ .tuple_expr = &.{ .Var = .{ .name = "tup" } }, .index = 0 } },
+                                &.{ .RecordField = .{ .record_expr = &.{ .Var = .{ .name = "rec2" } }, .field_name = "age" } },
+                            },
+                        } },
+                    } },
+                } },
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_type_person = struct") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".@\"0\" = @as(i64, 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".@\"1\" = prelude.Bool.fromNative") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "tup).@\"0\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_type_person{ .name = \"alice\", .age = @as(i64, 30) }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "rec2).age") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_record_base_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".age = @as(i64, 31)") != null);
 }
 
 test "ZigBackend emits direct recursive helper functions" {

@@ -1,9 +1,10 @@
-//! Core type declarations for user-defined algebraic data types.
+//! Core type declarations for user-defined algebraic data types and product types.
 //!
 //! RESPONSIBILITIES:
 //! - Preserve frontend ADT declaration metadata below the OCaml/Zig boundary.
 //! - Assign deterministic constructor tag values for interpreter and backend use.
-//! - Describe constructor payload types without depending on backend-specific names.
+//! - Describe constructor payload, tuple, and record field types without depending
+//!   on backend-specific names.
 
 /// A user-defined variant type declaration with explicit constructor tags.
 pub const VariantType = struct {
@@ -11,6 +12,29 @@ pub const VariantType = struct {
     params: []const []const u8 = &.{},
     variants: []const VariantCtor,
     is_recursive: bool = false,
+};
+
+/// A tuple type declaration/alias with a fixed ordered element list.
+pub const TupleType = struct {
+    name: []const u8,
+    params: []const []const u8 = &.{},
+    items: []const TypeExpr = &.{},
+    is_recursive: bool = false,
+};
+
+/// A record type declaration with deterministic source-order fields.
+pub const RecordType = struct {
+    name: []const u8,
+    params: []const []const u8 = &.{},
+    fields: []const RecordField = &.{},
+    is_recursive: bool = false,
+};
+
+/// One field in a record type declaration.
+pub const RecordField = struct {
+    name: []const u8,
+    ty: TypeExpr,
+    is_mutable: bool = false,
 };
 
 /// One constructor of a user-defined variant type.

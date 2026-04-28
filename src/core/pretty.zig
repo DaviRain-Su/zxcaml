@@ -19,6 +19,14 @@ pub fn formatModule(allocator: std.mem.Allocator, module: ir.Module) ![]u8 {
         try append(&out, allocator, " ");
         try formatTypeDecl(&out, allocator, type_decl);
     }
+    for (module.tuple_type_decls) |type_decl| {
+        try append(&out, allocator, " ");
+        try formatTupleTypeDecl(&out, allocator, type_decl);
+    }
+    for (module.record_type_decls) |type_decl| {
+        try append(&out, allocator, " ");
+        try formatRecordTypeDecl(&out, allocator, type_decl);
+    }
     for (module.decls) |decl| {
         try append(&out, allocator, " ");
         try formatDecl(&out, allocator, decl);
@@ -26,6 +34,46 @@ pub fn formatModule(allocator: std.mem.Allocator, module: ir.Module) ![]u8 {
     try append(&out, allocator, ")");
 
     return out.toOwnedSlice(allocator);
+}
+
+fn formatTupleTypeDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: @import("types.zig").TupleType) !void {
+    try append(out, allocator, "(tuple-type ");
+    try append(out, allocator, type_decl.name);
+    try formatTypeParams(out, allocator, type_decl.params);
+    if (type_decl.is_recursive) try append(out, allocator, " :recursive true");
+    try append(out, allocator, " (items");
+    for (type_decl.items) |item| {
+        try append(out, allocator, " ");
+        try formatTypeExpr(out, allocator, item);
+    }
+    try append(out, allocator, "))");
+}
+
+fn formatRecordTypeDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: @import("types.zig").RecordType) !void {
+    try append(out, allocator, "(record-type ");
+    try append(out, allocator, type_decl.name);
+    try formatTypeParams(out, allocator, type_decl.params);
+    if (type_decl.is_recursive) try append(out, allocator, " :recursive true");
+    try append(out, allocator, " (fields");
+    for (type_decl.fields) |field| {
+        try append(out, allocator, " (");
+        try append(out, allocator, field.name);
+        try append(out, allocator, " ");
+        try formatTypeExpr(out, allocator, field.ty);
+        if (field.is_mutable) try append(out, allocator, " :mutable true");
+        try append(out, allocator, ")");
+    }
+    try append(out, allocator, "))");
+}
+
+fn formatTypeParams(out: *std.ArrayList(u8), allocator: std.mem.Allocator, params: []const []const u8) !void {
+    if (params.len == 0) return;
+    try append(out, allocator, " (params");
+    for (params) |param| {
+        try append(out, allocator, " ");
+        try append(out, allocator, param);
+    }
+    try append(out, allocator, ")");
 }
 
 fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.Decl) !void {
@@ -218,6 +266,69 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, match_expr.layout);
             try append(out, allocator, ")");
         },
+        .Tuple => |tuple_expr| {
+            try append(out, allocator, "(tuple");
+            for (tuple_expr.items) |item| {
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, item.*);
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, tuple_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, tuple_expr.layout);
+            try append(out, allocator, ")");
+        },
+        .TupleProj => |tuple_proj| {
+            try appendPrint(out, allocator, "(tuple-proj {d} ", .{tuple_proj.index});
+            try formatExpr(out, allocator, tuple_proj.tuple_expr.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, tuple_proj.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, tuple_proj.layout);
+            try append(out, allocator, ")");
+        },
+        .Record => |record_expr| {
+            try append(out, allocator, "(record");
+            for (record_expr.fields) |field| {
+                try append(out, allocator, " (");
+                try append(out, allocator, field.name);
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, field.value.*);
+                try append(out, allocator, ")");
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, record_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, record_expr.layout);
+            try append(out, allocator, ")");
+        },
+        .RecordField => |record_field| {
+            try append(out, allocator, "(record-field ");
+            try formatExpr(out, allocator, record_field.record_expr.*);
+            try append(out, allocator, " ");
+            try append(out, allocator, record_field.field_name);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, record_field.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, record_field.layout);
+            try append(out, allocator, ")");
+        },
+        .RecordUpdate => |record_update| {
+            try append(out, allocator, "(record-update ");
+            try formatExpr(out, allocator, record_update.base_expr.*);
+            for (record_update.fields) |field| {
+                try append(out, allocator, " (");
+                try append(out, allocator, field.name);
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, field.value.*);
+                try append(out, allocator, ")");
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, record_update.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, record_update.layout);
+            try append(out, allocator, ")");
+        },
     }
 }
 
@@ -235,6 +346,25 @@ fn formatPattern(out: *std.ArrayList(u8), allocator: std.mem.Allocator, pattern:
             for (ctor_pattern.args) |arg| {
                 try append(out, allocator, " ");
                 try formatPattern(out, allocator, arg);
+            }
+            try append(out, allocator, ")");
+        },
+        .Tuple => |items| {
+            try append(out, allocator, "(tuple-pattern");
+            for (items) |item| {
+                try append(out, allocator, " ");
+                try formatPattern(out, allocator, item);
+            }
+            try append(out, allocator, ")");
+        },
+        .Record => |fields| {
+            try append(out, allocator, "(record-pattern");
+            for (fields) |field| {
+                try append(out, allocator, " (");
+                try append(out, allocator, field.name);
+                try append(out, allocator, " ");
+                try formatPattern(out, allocator, field.pattern);
+                try append(out, allocator, ")");
             }
             try append(out, allocator, ")");
         },
@@ -265,6 +395,23 @@ fn formatTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) !v
             }
             try append(out, allocator, " ");
             try formatTy(out, allocator, arrow.ret.*);
+            try append(out, allocator, ")");
+        },
+        .Tuple => |items| {
+            try append(out, allocator, "(tuple");
+            for (items) |item| {
+                try append(out, allocator, " ");
+                try formatTy(out, allocator, item);
+            }
+            try append(out, allocator, ")");
+        },
+        .Record => |record| {
+            try append(out, allocator, "(record ");
+            try append(out, allocator, record.name);
+            for (record.params) |param_ty| {
+                try append(out, allocator, " ");
+                try formatTy(out, allocator, param_ty);
+            }
             try append(out, allocator, ")");
         },
     }

@@ -93,6 +93,8 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
         .entrypoint = try lowerEntrypointLet(allocator, module, entrypoint_index),
         .functions = try functions.toOwnedSlice(allocator),
         .type_decls = try lowerTypeDecls(allocator, module.type_decls),
+        .tuple_type_decls = try lowerTupleTypeDecls(allocator, module.tuple_type_decls),
+        .record_type_decls = try lowerRecordTypeDecls(allocator, module.record_type_decls),
     };
 }
 
@@ -111,6 +113,40 @@ fn lowerTypeDecls(allocator: std.mem.Allocator, decls: []const core_types.Varian
             .name = try allocator.dupe(u8, decl.name),
             .params = try dupeStringSlice(allocator, decl.params),
             .variants = variants,
+            .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerTupleTypeDecls(allocator: std.mem.Allocator, decls: []const core_types.TupleType) LowerError![]const lir.LTupleType {
+    const lowered = try allocator.alloc(lir.LTupleType, decls.len);
+    for (decls, 0..) |decl, decl_index| {
+        lowered[decl_index] = .{
+            .name = try allocator.dupe(u8, decl.name),
+            .params = try dupeStringSlice(allocator, decl.params),
+            .items = try lowerTypeExprs(allocator, decl.items),
+            .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerRecordTypeDecls(allocator: std.mem.Allocator, decls: []const core_types.RecordType) LowerError![]const lir.LRecordType {
+    const lowered = try allocator.alloc(lir.LRecordType, decls.len);
+    for (decls, 0..) |decl, decl_index| {
+        const fields = try allocator.alloc(lir.LRecordTypeField, decl.fields.len);
+        for (decl.fields, 0..) |field, field_index| {
+            fields[field_index] = .{
+                .name = try allocator.dupe(u8, field.name),
+                .ty = try lowerTypeExpr(allocator, field.ty),
+                .is_mutable = field.is_mutable,
+            };
+        }
+        lowered[decl_index] = .{
+            .name = try allocator.dupe(u8, decl.name),
+            .params = try dupeStringSlice(allocator, decl.params),
+            .fields = fields,
             .is_recursive = decl.is_recursive,
         };
     }
@@ -314,6 +350,14 @@ fn collectNestedFunctions(allocator: std.mem.Allocator, expr: ir.Expr, functions
             for (app.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, bound);
         },
         .Ctor => |ctor| for (ctor.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, bound),
+        .Tuple => |tuple_expr| for (tuple_expr.items) |item| try collectNestedFunctions(allocator, item.*, functions, bound),
+        .TupleProj => |tuple_proj| try collectNestedFunctions(allocator, tuple_proj.tuple_expr.*, functions, bound),
+        .Record => |record_expr| for (record_expr.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, bound),
+        .RecordField => |record_field| try collectNestedFunctions(allocator, record_field.record_expr.*, functions, bound),
+        .RecordUpdate => |record_update| {
+            try collectNestedFunctions(allocator, record_update.base_expr.*, functions, bound);
+            for (record_update.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, bound);
+        },
         .Match => |match_expr| {
             try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions, bound);
             for (match_expr.arms) |arm| {
@@ -413,8 +457,40 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
             .scrutinee = try lowerExprPtrWithContext(allocator, match_expr.scrutinee.*, ctx),
             .arms = try lowerArms(allocator, match_expr.arms, ctx),
         } },
+        .Tuple => |tuple_expr| .{ .Tuple = .{
+            .items = try lowerExprPtrs(allocator, tuple_expr.items, ctx),
+            .ty = try lowerTy(allocator, tuple_expr.ty),
+        } },
+        .TupleProj => |tuple_proj| .{ .TupleProj = .{
+            .tuple_expr = try lowerExprPtrWithContext(allocator, tuple_proj.tuple_expr.*, ctx),
+            .index = tuple_proj.index,
+        } },
+        .Record => |record_expr| .{ .Record = .{
+            .fields = try lowerRecordExprFields(allocator, record_expr.fields, ctx),
+            .ty = try lowerTy(allocator, record_expr.ty),
+        } },
+        .RecordField => |record_field| .{ .RecordField = .{
+            .record_expr = try lowerExprPtrWithContext(allocator, record_field.record_expr.*, ctx),
+            .field_name = try allocator.dupe(u8, record_field.field_name),
+        } },
+        .RecordUpdate => |record_update| .{ .RecordUpdate = .{
+            .base_expr = try lowerExprPtrWithContext(allocator, record_update.base_expr.*, ctx),
+            .fields = try lowerRecordExprFields(allocator, record_update.fields, ctx),
+            .ty = try lowerTy(allocator, record_update.ty),
+        } },
         .Lambda => error.UnsupportedExpr,
     };
+}
+
+fn lowerRecordExprFields(allocator: std.mem.Allocator, fields: []const ir.RecordExprField, ctx: *LowerContext) LowerError![]const lir.LRecordExprField {
+    const lowered = try allocator.alloc(lir.LRecordExprField, fields.len);
+    for (fields, 0..) |field, index| {
+        lowered[index] = .{
+            .name = try allocator.dupe(u8, field.name),
+            .value = try lowerExprPtrWithContext(allocator, field.value.*, ctx),
+        };
+    }
+    return lowered;
 }
 
 fn lowerApp(allocator: std.mem.Allocator, app: ir.App, ctx: *LowerContext) LowerError!lir.LExpr {
@@ -522,6 +598,14 @@ fn collectCaptures(
         },
         .Prim => |prim| for (prim.args) |arg| try collectCaptures(allocator, arg.*, bound, excluded, captures),
         .Ctor => |ctor| for (ctor.args) |arg| try collectCaptures(allocator, arg.*, bound, excluded, captures),
+        .Tuple => |tuple_expr| for (tuple_expr.items) |item| try collectCaptures(allocator, item.*, bound, excluded, captures),
+        .TupleProj => |tuple_proj| try collectCaptures(allocator, tuple_proj.tuple_expr.*, bound, excluded, captures),
+        .Record => |record_expr| for (record_expr.fields) |field| try collectCaptures(allocator, field.value.*, bound, excluded, captures),
+        .RecordField => |record_field| try collectCaptures(allocator, record_field.record_expr.*, bound, excluded, captures),
+        .RecordUpdate => |record_update| {
+            try collectCaptures(allocator, record_update.base_expr.*, bound, excluded, captures);
+            for (record_update.fields) |field| try collectCaptures(allocator, field.value.*, bound, excluded, captures);
+        },
         .Match => |match_expr| {
             try collectCaptures(allocator, match_expr.scrutinee.*, bound, excluded, captures);
             for (match_expr.arms) |arm| {
@@ -621,6 +705,11 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Var => |var_ref| var_ref.ty,
         .Ctor => |ctor| ctor.ty,
         .Match => |match_expr| match_expr.ty,
+        .Tuple => |tuple_expr| tuple_expr.ty,
+        .TupleProj => |tuple_proj| tuple_proj.ty,
+        .Record => |record_expr| record_expr.ty,
+        .RecordField => |record_field| record_field.ty,
+        .RecordUpdate => |record_update| record_update.ty,
     };
 }
 
@@ -680,7 +769,20 @@ fn lowerPattern(allocator: std.mem.Allocator, pattern: ir.Pattern) LowerError!li
             .tag = ctor_pattern.tag,
             .type_name = if (ctor_pattern.type_name) |name| try allocator.dupe(u8, name) else null,
         } },
+        .Tuple => |items| .{ .Tuple = try lowerPatterns(allocator, items) },
+        .Record => |fields| .{ .Record = try lowerRecordPatternFields(allocator, fields) },
     };
+}
+
+fn lowerRecordPatternFields(allocator: std.mem.Allocator, fields: []const ir.RecordPatternField) LowerError![]const lir.LRecordPatternField {
+    const lowered = try allocator.alloc(lir.LRecordPatternField, fields.len);
+    for (fields, 0..) |field, index| {
+        lowered[index] = .{
+            .name = try allocator.dupe(u8, field.name),
+            .pattern = try lowerPattern(allocator, field.pattern),
+        };
+    }
+    return lowered;
 }
 
 fn lowerPatterns(allocator: std.mem.Allocator, patterns: []const ir.Pattern) LowerError![]const lir.LPattern {
@@ -710,6 +812,11 @@ fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
         .Adt => |adt| .{ .Adt = .{
             .name = try allocator.dupe(u8, adt.name),
             .params = try lowerTySlice(allocator, adt.params),
+        } },
+        .Tuple => |items| .{ .Tuple = try lowerTySlice(allocator, items) },
+        .Record => |record| .{ .Record = .{
+            .name = try allocator.dupe(u8, record.name),
+            .params = try lowerTySlice(allocator, record.params),
         } },
     };
 }
@@ -746,6 +853,27 @@ fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
             }
             break :blk false;
         },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (recBindingEscapes(name, item.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| recBindingEscapes(name, tuple_proj.tuple_expr.*),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (recBindingEscapes(name, field.value.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |record_field| recBindingEscapes(name, record_field.record_expr.*),
+        .RecordUpdate => |record_update| blk: {
+            if (recBindingEscapes(name, record_update.base_expr.*)) break :blk true;
+            for (record_update.fields) |field| {
+                if (recBindingEscapes(name, field.value.*)) break :blk true;
+            }
+            break :blk false;
+        },
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -775,6 +903,18 @@ fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
         .Ctor => |ctor_pattern| blk: {
             for (ctor_pattern.args) |arg| {
                 if (patternBindsName(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |items| blk: {
+            for (items) |item| {
+                if (patternBindsName(item, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Record => |fields| blk: {
+            for (fields) |field| {
+                if (patternBindsName(field.pattern, name)) break :blk true;
             }
             break :blk false;
         },

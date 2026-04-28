@@ -62,7 +62,7 @@ fn compileRows(allocator: std.mem.Allocator, rows: []const Row) !*DecisionTree {
         if (row.patterns.len == 0) continue;
         switch (row.patterns[column]) {
             .Ctor => |ctor| if (!contains(constructors.items, ctor.name)) try constructors.append(allocator, ctor.name),
-            .Wildcard, .Var => {},
+            .Tuple, .Record, .Wildcard, .Var => {},
         }
     }
     if (constructors.items.len == 0) {
@@ -90,7 +90,7 @@ fn compileRows(allocator: std.mem.Allocator, rows: []const Row) !*DecisionTree {
 fn firstRowIrrefutable(patterns: []const lir.LPattern) bool {
     for (patterns) |pattern| {
         switch (pattern) {
-            .Wildcard, .Var => {},
+            .Tuple, .Record, .Wildcard, .Var => {},
             .Ctor => return false,
         }
     }
@@ -111,7 +111,7 @@ fn specializeRows(allocator: std.mem.Allocator, rows: []const Row, column: usize
                     .action = row.action,
                 });
             },
-            .Wildcard, .Var => {
+            .Wildcard, .Var, .Tuple, .Record => {
                 const wildcard_payloads = try wildcardPatterns(allocator, payload_arity);
                 errdefer allocator.free(wildcard_payloads);
                 try out.append(allocator, .{
@@ -131,7 +131,7 @@ fn defaultRows(allocator: std.mem.Allocator, rows: []const Row, column: usize) !
     for (rows) |row| {
         if (row.patterns.len <= column) continue;
         switch (row.patterns[column]) {
-            .Wildcard, .Var => try out.append(allocator, .{
+            .Wildcard, .Var, .Tuple, .Record => try out.append(allocator, .{
                 .patterns = try removeColumn(allocator, row.patterns, column),
                 .action = row.action,
             }),
@@ -170,7 +170,7 @@ fn constructorPayloadArity(rows: []const Row, column: usize, constructor: []cons
             .Ctor => |ctor| {
                 if (std.mem.eql(u8, ctor.name, constructor)) return ctor.args.len;
             },
-            .Wildcard, .Var => {},
+            .Tuple, .Record, .Wildcard, .Var => {},
         }
     }
     return null;

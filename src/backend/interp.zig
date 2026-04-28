@@ -48,6 +48,8 @@ const Value = union(enum) {
     String: []const u8,
     Ctor: CtorValue,
     List: *const ListValue,
+    Tuple: []const Value,
+    Record: RecordValue,
     Lambda: ir.Lambda,
     Closure: *const ClosureValue,
 };
@@ -55,6 +57,15 @@ const Value = union(enum) {
 const CtorValue = struct {
     name: []const u8,
     args: []const Value,
+};
+
+const RecordValue = struct {
+    fields: []const RecordValueField,
+};
+
+const RecordValueField = struct {
+    name: []const u8,
+    value: Value,
 };
 
 const ListValue = union(enum) {
@@ -146,7 +157,7 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .Var, .Ctor, .Match => evalExpr(allocator, expr, env),
+        .Constant, .Let, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate => evalExpr(allocator, expr, env),
         .App, .If, .Prim => evalExpr(allocator, expr, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
@@ -165,6 +176,11 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         .Prim => |prim| evalPrim(allocator, prim, env),
         .Ctor => |ctor_expr| evalCtor(allocator, ctor_expr, env),
         .Match => |match_expr| evalMatch(allocator, match_expr, env),
+        .Tuple => |tuple_expr| evalTuple(allocator, tuple_expr, env),
+        .TupleProj => |tuple_proj| evalTupleProj(allocator, tuple_proj, env),
+        .Record => |record_expr| evalRecord(allocator, record_expr, env),
+        .RecordField => |record_field| evalRecordField(allocator, record_field, env),
+        .RecordUpdate => |record_update| evalRecordUpdate(allocator, record_update, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
 }
@@ -355,6 +371,68 @@ fn evalCtor(allocator: std.mem.Allocator, ctor_expr: ir.Ctor, env: *std.StringHa
     } };
 }
 
+fn evalTuple(allocator: std.mem.Allocator, tuple_expr: ir.Tuple, env: *std.StringHashMap(Value)) EvalError!Value {
+    const items = try allocator.alloc(Value, tuple_expr.items.len);
+    for (tuple_expr.items, 0..) |item, index| {
+        items[index] = try evalExpr(allocator, item.*, env);
+    }
+    return .{ .Tuple = items };
+}
+
+fn evalTupleProj(allocator: std.mem.Allocator, tuple_proj: ir.TupleProj, env: *std.StringHashMap(Value)) EvalError!Value {
+    const tuple = switch (try evalExpr(allocator, tuple_proj.tuple_expr.*, env)) {
+        .Tuple => |items| items,
+        else => return error.UnsupportedExpr,
+    };
+    if (tuple_proj.index >= tuple.len) return error.UnsupportedExpr;
+    return tuple[tuple_proj.index];
+}
+
+fn evalRecord(allocator: std.mem.Allocator, record_expr: ir.Record, env: *std.StringHashMap(Value)) EvalError!Value {
+    const fields = try allocator.alloc(RecordValueField, record_expr.fields.len);
+    for (record_expr.fields, 0..) |field, index| {
+        fields[index] = .{
+            .name = field.name,
+            .value = try evalExpr(allocator, field.value.*, env),
+        };
+    }
+    return .{ .Record = .{ .fields = fields } };
+}
+
+fn evalRecordField(allocator: std.mem.Allocator, record_field: ir.RecordField, env: *std.StringHashMap(Value)) EvalError!Value {
+    const record = switch (try evalExpr(allocator, record_field.record_expr.*, env)) {
+        .Record => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    return findRecordValue(record, record_field.field_name) orelse error.UnsupportedExpr;
+}
+
+fn evalRecordUpdate(allocator: std.mem.Allocator, record_update: ir.RecordUpdate, env: *std.StringHashMap(Value)) EvalError!Value {
+    const base = switch (try evalExpr(allocator, record_update.base_expr.*, env)) {
+        .Record => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    const fields = try allocator.alloc(RecordValueField, base.fields.len);
+    for (base.fields, 0..) |base_field, index| {
+        var value = base_field.value;
+        for (record_update.fields) |update_field| {
+            if (std.mem.eql(u8, update_field.name, base_field.name)) {
+                value = try evalExpr(allocator, update_field.value.*, env);
+                break;
+            }
+        }
+        fields[index] = .{ .name = base_field.name, .value = value };
+    }
+    return .{ .Record = .{ .fields = fields } };
+}
+
+fn findRecordValue(record: RecordValue, field_name: []const u8) ?Value {
+    for (record.fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) return field.value;
+    }
+    return null;
+}
+
 fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value {
     const value = switch (let_expr.value.*) {
         .Lambda => |lambda| Value{ .Closure = try makeClosure(allocator, lambda, env, if (let_expr.is_rec) let_expr.name else null) },
@@ -408,6 +486,28 @@ fn patternMatches(
             }
             break :blk true;
         },
+        .Tuple => |items| blk: {
+            const tuple = switch (value) {
+                .Tuple => |tuple_items| tuple_items,
+                else => break :blk false,
+            };
+            if (items.len != tuple.len) break :blk false;
+            for (items, tuple) |item_pattern, item_value| {
+                if (!try patternMatches(allocator, item_pattern, item_value, env, inserted)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Record => |fields| blk: {
+            const record = switch (value) {
+                .Record => |record_value| record_value,
+                else => break :blk false,
+            };
+            for (fields) |field| {
+                const field_value = findRecordValue(record, field.name) orelse break :blk false;
+                if (!try patternMatches(allocator, field.pattern, field_value, env, inserted)) break :blk false;
+            }
+            break :blk true;
+        },
     };
 }
 
@@ -453,7 +553,7 @@ fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void
 fn valueToU64(value: Value) EvalError!u64 {
     return switch (value) {
         .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
-        .Bool, .String, .Ctor, .List, .Lambda, .Closure => error.UnsupportedExpr,
+        .Bool, .String, .Ctor, .List, .Tuple, .Record, .Lambda, .Closure => error.UnsupportedExpr,
     };
 }
 

@@ -10,6 +10,8 @@ pub const LModule = struct {
     entrypoint: LFunc,
     functions: []const LFunc = &.{},
     type_decls: []const LVariantType = &.{},
+    tuple_type_decls: []const LTupleType = &.{},
+    record_type_decls: []const LRecordType = &.{},
 };
 
 /// A lowered function using the P1 arena-threaded calling convention.
@@ -52,6 +54,11 @@ pub const LExpr = union(enum) {
     Ctor: LCtor,
     Match: LMatch,
     Closure: LClosure,
+    Tuple: LTuple,
+    TupleProj: LTupleProj,
+    Record: LRecord,
+    RecordField: LRecordField,
+    RecordUpdate: LRecordUpdate,
 };
 
 /// Lowered function application.
@@ -136,6 +143,43 @@ pub const LCtor = struct {
     type_name: ?[]const u8 = null,
 };
 
+/// Lowered tuple construction expression.
+pub const LTuple = struct {
+    items: []const *const LExpr,
+    ty: LTy,
+};
+
+/// Lowered tuple projection expression.
+pub const LTupleProj = struct {
+    tuple_expr: *const LExpr,
+    index: usize,
+};
+
+/// Lowered record construction expression.
+pub const LRecord = struct {
+    fields: []const LRecordExprField,
+    ty: LTy,
+};
+
+/// Lowered record expression field.
+pub const LRecordExprField = struct {
+    name: []const u8,
+    value: *const LExpr,
+};
+
+/// Lowered record field access expression.
+pub const LRecordField = struct {
+    record_expr: *const LExpr,
+    field_name: []const u8,
+};
+
+/// Lowered functional record update expression.
+pub const LRecordUpdate = struct {
+    base_expr: *const LExpr,
+    fields: []const LRecordExprField,
+    ty: LTy,
+};
+
 /// Lowered pattern match expression. Arms keep source order; first match wins.
 pub const LMatch = struct {
     scrutinee: *const LExpr,
@@ -154,6 +198,8 @@ pub const LPattern = union(enum) {
     Wildcard,
     Var: []const u8,
     Ctor: LCtorPattern,
+    Tuple: []const LPattern,
+    Record: []const LRecordPatternField,
 };
 
 /// Lowered constructor pattern, including nested constructor payloads.
@@ -162,6 +208,12 @@ pub const LCtorPattern = struct {
     args: []const LPattern,
     tag: u32 = 0,
     type_name: ?[]const u8 = null,
+};
+
+/// Lowered record pattern field.
+pub const LRecordPatternField = struct {
+    name: []const u8,
+    pattern: LPattern,
 };
 
 /// Lowered user-defined ADT declaration.
@@ -177,6 +229,29 @@ pub const LVariantCtor = struct {
     name: []const u8,
     tag: u32,
     payload_types: []const LTypeExpr = &.{},
+};
+
+/// Lowered tuple type declaration.
+pub const LTupleType = struct {
+    name: []const u8,
+    params: []const []const u8 = &.{},
+    items: []const LTypeExpr = &.{},
+    is_recursive: bool = false,
+};
+
+/// Lowered record type declaration.
+pub const LRecordType = struct {
+    name: []const u8,
+    params: []const []const u8 = &.{},
+    fields: []const LRecordTypeField = &.{},
+    is_recursive: bool = false,
+};
+
+/// One lowered record type field.
+pub const LRecordTypeField = struct {
+    name: []const u8,
+    ty: LTypeExpr,
+    is_mutable: bool = false,
 };
 
 /// Lowered type expressions used by user-defined constructor payloads.
@@ -201,11 +276,19 @@ pub const LTy = union(enum) {
     String,
     Var: []const u8,
     Adt: LAdt,
+    Tuple: []const LTy,
+    Record: LRecordTy,
     Closure,
 };
 
 /// Lowered ADT type reference.
 pub const LAdt = struct {
+    name: []const u8,
+    params: []const LTy,
+};
+
+/// Lowered nominal record type reference.
+pub const LRecordTy = struct {
     name: []const u8,
     params: []const LTy,
 };

@@ -45,6 +45,8 @@ const types = @import("types.zig");
 pub const Module = struct {
     decls: []const Decl,
     type_decls: []const types.VariantType = &.{},
+    tuple_type_decls: []const types.TupleType = &.{},
+    record_type_decls: []const types.RecordType = &.{},
 };
 
 /// Top-level Core IR declarations.
@@ -86,6 +88,11 @@ pub const Expr = union(enum) {
     Var: Var,
     Ctor: Ctor,
     Match: Match,
+    Tuple: Tuple,
+    TupleProj: TupleProj,
+    Record: Record,
+    RecordField: RecordField,
+    RecordUpdate: RecordUpdate,
 };
 
 /// Function application expression.
@@ -168,6 +175,50 @@ pub const Ctor = struct {
     type_name: ?[]const u8 = null,
 };
 
+/// Tuple construction expression.
+pub const Tuple = struct {
+    items: []const *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Tuple projection expression.
+pub const TupleProj = struct {
+    tuple_expr: *const Expr,
+    index: usize,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Record construction expression.
+pub const Record = struct {
+    fields: []const RecordExprField,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// One field assignment in a record construction/update expression.
+pub const RecordExprField = struct {
+    name: []const u8,
+    value: *const Expr,
+};
+
+/// Record field access expression.
+pub const RecordField = struct {
+    record_expr: *const Expr,
+    field_name: []const u8,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Functional record update expression.
+pub const RecordUpdate = struct {
+    base_expr: *const Expr,
+    fields: []const RecordExprField,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
 /// Pattern match expression; arms are evaluated top-to-bottom.
 pub const Match = struct {
     scrutinee: *const Expr,
@@ -188,6 +239,8 @@ pub const Pattern = union(enum) {
     Wildcard,
     Var: PatternVar,
     Ctor: PatternCtor,
+    Tuple: []const Pattern,
+    Record: []const RecordPatternField,
 };
 
 /// Variable pattern that binds the matched value into the arm body.
@@ -205,6 +258,12 @@ pub const PatternCtor = struct {
     type_name: ?[]const u8 = null,
 };
 
+/// One field pattern inside a record pattern.
+pub const RecordPatternField = struct {
+    name: []const u8,
+    pattern: Pattern,
+};
+
 /// M1 type language needed to describe current examples.
 pub const Ty = union(enum) {
     Int,
@@ -213,6 +272,8 @@ pub const Ty = union(enum) {
     String,
     Var: []const u8,
     Adt: Adt,
+    Tuple: []const Ty,
+    Record: RecordTy,
     Arrow: Arrow,
 };
 
@@ -226,4 +287,10 @@ pub const Adt = struct {
 pub const Arrow = struct {
     params: []const Ty,
     ret: *const Ty,
+};
+
+/// Nominal record type reference with concrete parameter types.
+pub const RecordTy = struct {
+    name: []const u8,
+    params: []const Ty,
 };

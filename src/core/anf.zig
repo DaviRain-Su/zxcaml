@@ -47,6 +47,8 @@ const TypeBindings = std.StringHashMap(ir.Ty);
 const LowerContext = struct {
     scope: std.StringHashMap(BindingInfo),
     constructors: std.StringHashMap(ConstructorInfo),
+    tuple_type_decls: []const types.TupleType = &.{},
+    record_type_decls: []const types.RecordType = &.{},
     next_temp: usize = 0,
 };
 
@@ -63,6 +65,10 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
     defer ctx.scope.deinit();
 
     const type_decls = try lowerTypeDecls(arena, module.type_decls);
+    const tuple_type_decls = try lowerTupleTypeDecls(arena, module.tuple_type_decls);
+    const record_type_decls = try lowerRecordTypeDecls(arena, module.record_type_decls);
+    ctx.tuple_type_decls = tuple_type_decls;
+    ctx.record_type_decls = record_type_decls;
     try indexConstructors(&ctx, type_decls);
 
     for (module.decls) |decl| {
@@ -92,6 +98,8 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
     return .{
         .decls = try decls.toOwnedSlice(arena.allocator()),
         .type_decls = type_decls,
+        .tuple_type_decls = tuple_type_decls,
+        .record_type_decls = record_type_decls,
     };
 }
 
@@ -110,6 +118,40 @@ fn lowerTypeDecls(arena: *std.heap.ArenaAllocator, decls: []const ttree.TypeDecl
             .name = try arena.allocator().dupe(u8, decl.name),
             .params = try dupeStringSlice(arena, decl.params),
             .variants = variants,
+            .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerTupleTypeDecls(arena: *std.heap.ArenaAllocator, decls: []const ttree.TupleTypeDecl) LowerError![]const types.TupleType {
+    const lowered = try arena.allocator().alloc(types.TupleType, decls.len);
+    for (decls, 0..) |decl, decl_index| {
+        lowered[decl_index] = .{
+            .name = try arena.allocator().dupe(u8, decl.name),
+            .params = try dupeStringSlice(arena, decl.params),
+            .items = try lowerTypeExprs(arena, decl.items),
+            .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerRecordTypeDecls(arena: *std.heap.ArenaAllocator, decls: []const ttree.RecordTypeDecl) LowerError![]const types.RecordType {
+    const lowered = try arena.allocator().alloc(types.RecordType, decls.len);
+    for (decls, 0..) |decl, decl_index| {
+        const fields = try arena.allocator().alloc(types.RecordField, decl.fields.len);
+        for (decl.fields, 0..) |field, field_index| {
+            fields[field_index] = .{
+                .name = try arena.allocator().dupe(u8, field.name),
+                .ty = try lowerTypeExpr(arena, field.ty),
+                .is_mutable = field.is_mutable,
+            };
+        }
+        lowered[decl_index] = .{
+            .name = try arena.allocator().dupe(u8, decl.name),
+            .params = try dupeStringSlice(arena, decl.params),
+            .fields = fields,
             .is_recursive = decl.is_recursive,
         };
     }
@@ -259,7 +301,92 @@ fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: 
         .Var => |var_ref| try lowerVarExpr(arena, ctx, var_ref, expected_ty),
         .Ctor => |ctor_expr| try lowerCtor(arena, ctx, ctor_expr, expected_ty),
         .Match => |match_expr| try lowerMatch(arena, ctx, match_expr),
+        .Tuple => |tuple_expr| try lowerTuple(arena, ctx, tuple_expr),
+        .TupleProj => |tuple_proj| try lowerTupleProj(arena, ctx, tuple_proj),
+        .Record => |record_expr| try lowerRecord(arena, ctx, record_expr),
+        .RecordField => |field_access| try lowerRecordField(arena, ctx, field_access),
+        .RecordUpdate => |record_update| try lowerRecordUpdate(arena, ctx, record_update),
     };
+}
+
+fn lowerTuple(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, tuple_expr: ttree.Tuple) LowerError!ir.Expr {
+    const items = try arena.allocator().alloc(*const ir.Expr, tuple_expr.items.len);
+    const item_tys = try arena.allocator().alloc(ir.Ty, tuple_expr.items.len);
+    for (tuple_expr.items, 0..) |item, index| {
+        const lowered = try lowerExprPtr(arena, ctx, item);
+        items[index] = lowered;
+        item_tys[index] = exprTy(lowered.*);
+    }
+    return .{ .Tuple = .{
+        .items = items,
+        .ty = .{ .Tuple = item_tys },
+        .layout = layout.structPack(),
+    } };
+}
+
+fn lowerTupleProj(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, tuple_proj: ttree.TupleProj) LowerError!ir.Expr {
+    const tuple_expr = try lowerExprPtr(arena, ctx, tuple_proj.tuple_expr.*);
+    const tuple_ty = switch (exprTy(tuple_expr.*)) {
+        .Tuple => |items| items,
+        else => return error.UnsupportedNode,
+    };
+    if (tuple_proj.index >= tuple_ty.len) return error.UnsupportedNode;
+    const ty = tuple_ty[tuple_proj.index];
+    return .{ .TupleProj = .{
+        .tuple_expr = tuple_expr,
+        .index = tuple_proj.index,
+        .ty = ty,
+        .layout = layoutForTy(ty),
+    } };
+}
+
+fn lowerRecord(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, record_expr: ttree.Record) LowerError!ir.Expr {
+    const record_decl = findRecordDeclForFields(ctx.record_type_decls, record_expr.fields) orelse return error.UnsupportedNode;
+    const fields = try arena.allocator().alloc(ir.RecordExprField, record_expr.fields.len);
+    for (record_expr.fields, 0..) |field, index| {
+        fields[index] = .{
+            .name = try arena.allocator().dupe(u8, field.name),
+            .value = try lowerExprPtrExpected(arena, ctx, field.value, try recordFieldTy(arena, record_decl, field.name)),
+        };
+    }
+    return .{ .Record = .{
+        .fields = fields,
+        .ty = try recordTy(arena, record_decl),
+        .layout = layout.structPack(),
+    } };
+}
+
+fn lowerRecordField(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, field_access: ttree.RecordField) LowerError!ir.Expr {
+    const record_expr = try lowerExprPtr(arena, ctx, field_access.record_expr.*);
+    const ty = try recordFieldAccessTy(arena, ctx, exprTy(record_expr.*), field_access.field_name);
+    return .{ .RecordField = .{
+        .record_expr = record_expr,
+        .field_name = try arena.allocator().dupe(u8, field_access.field_name),
+        .ty = ty,
+        .layout = layoutForTy(ty),
+    } };
+}
+
+fn lowerRecordUpdate(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, record_update: ttree.RecordUpdate) LowerError!ir.Expr {
+    const base_expr = try lowerExprPtr(arena, ctx, record_update.base_expr.*);
+    const base_ty = exprTy(base_expr.*);
+    const record_decl = switch (base_ty) {
+        .Record => |record| findRecordDecl(ctx.record_type_decls, record.name) orelse return error.UnsupportedNode,
+        else => return error.UnsupportedNode,
+    };
+    const fields = try arena.allocator().alloc(ir.RecordExprField, record_update.fields.len);
+    for (record_update.fields, 0..) |field, index| {
+        fields[index] = .{
+            .name = try arena.allocator().dupe(u8, field.name),
+            .value = try lowerExprPtrExpected(arena, ctx, field.value, try recordFieldTy(arena, record_decl, field.name)),
+        };
+    }
+    return .{ .RecordUpdate = .{
+        .base_expr = base_expr,
+        .fields = fields,
+        .ty = base_ty,
+        .layout = layout.structPack(),
+    } };
 }
 
 fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: ttree.LetExpr) LowerError!ir.LetExpr {
@@ -586,7 +713,7 @@ fn inferMatchScrutineeExpectedTy(arena: *std.heap.ArenaAllocator, ctx: *LowerCon
     for (match_expr.arms) |arm| {
         const ctor_pattern = switch (arm.pattern) {
             .Ctor => |ctor| ctor,
-            .Wildcard, .Var => continue,
+            .Wildcard, .Var, .Tuple, .Record => continue,
         };
         const info = ctx.constructors.get(ctor_pattern.name) orelse continue;
         if (candidate) |existing| {
@@ -641,7 +768,14 @@ fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBind
         },
         .Var => |var_ref| pattern_var_tys.get(var_ref.name),
         .Let => |let_expr| try inferSimpleExprTy(arena, pattern_var_tys, let_expr.body.*),
-        .Lambda, .App, .Ctor, .Match => null,
+        .Tuple => |tuple_expr| blk: {
+            const tys = try arena.allocator().alloc(ir.Ty, tuple_expr.items.len);
+            for (tuple_expr.items, 0..) |item, index| {
+                tys[index] = (try inferSimpleExprTy(arena, pattern_var_tys, item)) orelse .Int;
+            }
+            break :blk .{ .Tuple = tys };
+        },
+        .Lambda, .App, .Ctor, .Match, .TupleProj, .Record, .RecordField, .RecordUpdate => null,
     };
 }
 
@@ -675,6 +809,18 @@ fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *T
         },
         .Ctor => |ctor| {
             for (ctor.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, null);
+        },
+        .Tuple => |tuple_expr| {
+            for (tuple_expr.items) |item| try inferExprVarExpectations(arena, pattern_var_tys, item, null);
+        },
+        .TupleProj => |tuple_proj| try inferExprVarExpectations(arena, pattern_var_tys, tuple_proj.tuple_expr.*, null),
+        .Record => |record_expr| {
+            for (record_expr.fields) |field| try inferExprVarExpectations(arena, pattern_var_tys, field.value, null);
+        },
+        .RecordField => |field_access| try inferExprVarExpectations(arena, pattern_var_tys, field_access.record_expr.*, null),
+        .RecordUpdate => |record_update| {
+            try inferExprVarExpectations(arena, pattern_var_tys, record_update.base_expr.*, null);
+            for (record_update.fields) |field| try inferExprVarExpectations(arena, pattern_var_tys, field.value, null);
         },
         .Match => |nested_match| {
             try inferExprVarExpectations(arena, pattern_var_tys, nested_match.scrutinee.*, null);
@@ -713,6 +859,15 @@ fn bindTypeParamsFromPattern(
         },
         .Wildcard => {},
         .Ctor => {},
+        .Tuple => |items| switch (expected) {
+            .Tuple => |expected_items| {
+                for (expected_items, items) |expected_item, item_pattern| {
+                    try bindTypeParamsFromPattern(bindings, expected_item, item_pattern, pattern_var_tys);
+                }
+            },
+            else => {},
+        },
+        .Record => {},
     }
 }
 
@@ -740,6 +895,34 @@ fn lowerPattern(
             } };
         },
         .Ctor => |ctor_pattern| try lowerCtorPattern(arena, ctx, ctor_pattern, matched_ty, inserted),
+        .Tuple => |items| blk: {
+            const tuple_tys = switch (matched_ty) {
+                .Tuple => |tys| tys,
+                else => return error.UnsupportedPattern,
+            };
+            if (items.len != tuple_tys.len) return error.UnsupportedPattern;
+            const patterns = try arena.allocator().alloc(ir.Pattern, items.len);
+            for (items, tuple_tys, 0..) |item_pattern, item_ty, index| {
+                patterns[index] = try lowerPattern(arena, ctx, item_pattern, item_ty, layoutForTy(item_ty), inserted);
+            }
+            break :blk .{ .Tuple = patterns };
+        },
+        .Record => |fields| blk: {
+            const record = switch (matched_ty) {
+                .Record => |value| value,
+                else => return error.UnsupportedPattern,
+            };
+            const record_decl = findRecordDecl(ctx.record_type_decls, record.name) orelse return error.UnsupportedPattern;
+            const lowered_fields = try arena.allocator().alloc(ir.RecordPatternField, fields.len);
+            for (fields, 0..) |field, index| {
+                const field_ty = try recordFieldTy(arena, record_decl, field.name);
+                lowered_fields[index] = .{
+                    .name = try arena.allocator().dupe(u8, field.name),
+                    .pattern = try lowerPattern(arena, ctx, field.pattern, field_ty, layoutForTy(field_ty), inserted),
+                };
+            }
+            break :blk .{ .Record = lowered_fields };
+        },
     };
 }
 
@@ -787,6 +970,10 @@ fn validateCtor(ctx: *LowerContext, name: []const u8, arg_count: usize) LowerErr
         if (arg_count != 0) return error.UnsupportedCtorArity;
         return null;
     }
+    if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
+        if (arg_count != 0) return error.UnsupportedCtorArity;
+        return null;
+    }
     if (std.mem.eql(u8, name, "::")) {
         if (arg_count != 2) return error.UnsupportedCtorArity;
         return null;
@@ -801,6 +988,8 @@ fn builtinCtorTag(name: []const u8) u32 {
     if (std.mem.eql(u8, name, "Error")) return 1;
     if (std.mem.eql(u8, name, "[]")) return 0;
     if (std.mem.eql(u8, name, "::")) return 1;
+    if (std.mem.eql(u8, name, "true")) return 1;
+    if (std.mem.eql(u8, name, "false")) return 0;
     return 0;
 }
 
@@ -916,6 +1105,9 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8,
     if (std.mem.eql(u8, name, "::")) {
         return listTy(arena, exprTy(args[0].*));
     }
+    if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
+        return .Bool;
+    }
     const adt_name = if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "None")) "option" else "result";
     const param_count: usize = if (std.mem.eql(u8, adt_name, "option")) 1 else 2;
     const params = try arena.allocator().alloc(ir.Ty, param_count);
@@ -990,7 +1182,15 @@ fn bindTypeParamsFromPayload(
                 try bindTypeParamsFromPayload(bindings, arg_expr, arg_ty);
             }
         },
-        .Tuple => {},
+        .Tuple => |items| {
+            const actual_items = switch (actual) {
+                .Tuple => |value| value,
+                else => return,
+            };
+            for (items, actual_items) |expected_item, actual_item| {
+                try bindTypeParamsFromPayload(bindings, expected_item, actual_item);
+            }
+        },
     }
 }
 
@@ -1023,7 +1223,7 @@ fn typeExprToTyWithBindings(
         .TypeVar => |name| if (bindings) |values| values.get(name) orelse .{ .Var = name } else .{ .Var = name },
         .TypeRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
         .RecursiveRef => |ref| try typeRefToTyWithBindings(arena, ref, bindings),
-        .Tuple => .Unit,
+        .Tuple => |items| .{ .Tuple = try typeExprsToTysWithBindings(arena, items, bindings) },
     };
 }
 
@@ -1055,12 +1255,67 @@ fn listTy(arena: *std.heap.ArenaAllocator, elem_ty: ir.Ty) LowerError!ir.Ty {
     } };
 }
 
+fn recordTy(arena: *std.heap.ArenaAllocator, decl: types.RecordType) LowerError!ir.Ty {
+    const params = try arena.allocator().alloc(ir.Ty, decl.params.len);
+    for (params) |*param| param.* = .Unit;
+    return .{ .Record = .{
+        .name = decl.name,
+        .params = params,
+    } };
+}
+
+fn findRecordDecl(decls: []const types.RecordType, name: []const u8) ?types.RecordType {
+    for (decls) |decl| {
+        if (std.mem.eql(u8, decl.name, name)) return decl;
+    }
+    return null;
+}
+
+fn findRecordDeclForFields(decls: []const types.RecordType, fields: []const ttree.RecordExprField) ?types.RecordType {
+    for (decls) |decl| {
+        if (decl.fields.len != fields.len) continue;
+        var all_present = true;
+        for (decl.fields) |decl_field| {
+            var found = false;
+            for (fields) |field| {
+                if (std.mem.eql(u8, decl_field.name, field.name)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                all_present = false;
+                break;
+            }
+        }
+        if (all_present) return decl;
+    }
+    return null;
+}
+
+fn recordFieldTy(arena: *std.heap.ArenaAllocator, decl: types.RecordType, field_name: []const u8) LowerError!ir.Ty {
+    for (decl.fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) return typeExprToTy(arena, field.ty);
+    }
+    return error.UnsupportedNode;
+}
+
+fn recordFieldAccessTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ty: ir.Ty, field_name: []const u8) LowerError!ir.Ty {
+    const record = switch (ty) {
+        .Record => |value| value,
+        else => return error.UnsupportedNode,
+    };
+    const decl = findRecordDecl(ctx.record_type_decls, record.name) orelse return error.UnsupportedNode;
+    return recordFieldTy(arena, decl, field_name);
+}
+
 fn layoutForTy(ty: ir.Ty) layout.Layout {
     return switch (ty) {
         .Int, .Bool, .Var => layout.intConstant(),
         .Unit => layout.unitValue(),
         .String => layout.defaultFor(.StringLiteral),
         .Adt => layout.ctor(1),
+        .Tuple, .Record => layout.structPack(),
         .Arrow => layout.closure(),
     };
 }
@@ -1100,6 +1355,27 @@ fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
             }
             break :blk false;
         },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (recBindingEscapes(name, item)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| recBindingEscapes(name, tuple_proj.tuple_expr.*),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (recBindingEscapes(name, field.value)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |field_access| recBindingEscapes(name, field_access.record_expr.*),
+        .RecordUpdate => |record_update| blk: {
+            if (recBindingEscapes(name, record_update.base_expr.*)) break :blk true;
+            for (record_update.fields) |field| {
+                if (recBindingEscapes(name, field.value)) break :blk true;
+            }
+            break :blk false;
+        },
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -1129,6 +1405,18 @@ fn patternBindsTtreeName(pattern: ttree.Pattern, name: []const u8) bool {
         .Ctor => |ctor_pattern| blk: {
             for (ctor_pattern.args) |arg| {
                 if (patternBindsTtreeName(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |items| blk: {
+            for (items) |item| {
+                if (patternBindsTtreeName(item, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Record => |fields| blk: {
+            for (fields) |field| {
+                if (patternBindsTtreeName(field.pattern, name)) break :blk true;
             }
             break :blk false;
         },
@@ -1163,6 +1451,27 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
         .Ctor => |ctor| blk: {
             for (ctor.args) |arg| {
                 if (lambdaParamIsFunction(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (lambdaParamIsFunction(item, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| lambdaParamIsFunction(tuple_proj.tuple_expr.*, param_name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (lambdaParamIsFunction(field.value, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |field_access| lambdaParamIsFunction(field_access.record_expr.*, param_name),
+        .RecordUpdate => |record_update| blk: {
+            if (lambdaParamIsFunction(record_update.base_expr.*, param_name)) break :blk true;
+            for (record_update.fields) |field| {
+                if (lambdaParamIsFunction(field.value, param_name)) break :blk true;
             }
             break :blk false;
         },
@@ -1230,6 +1539,27 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
             }
             break :blk false;
         },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (try lambdaParamIsList(arena, item, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| try lambdaParamIsList(arena, tuple_proj.tuple_expr.*, param_name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (try lambdaParamIsList(arena, field.value, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |field_access| try lambdaParamIsList(arena, field_access.record_expr.*, param_name),
+        .RecordUpdate => |record_update| blk: {
+            if (try lambdaParamIsList(arena, record_update.base_expr.*, param_name)) break :blk true;
+            for (record_update.fields) |field| {
+                if (try lambdaParamIsList(arena, field.value, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
         .Constant, .Var => false,
     };
 }
@@ -1237,7 +1567,7 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
 fn patternIsListCtor(pattern: ttree.Pattern) bool {
     return switch (pattern) {
         .Ctor => |ctor_pattern| std.mem.eql(u8, ctor_pattern.name, "[]") or std.mem.eql(u8, ctor_pattern.name, "::"),
-        .Wildcard, .Var => false,
+        .Tuple, .Record, .Wildcard, .Var => false,
     };
 }
 
@@ -1282,6 +1612,11 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Var => |var_ref| var_ref.ty,
         .Ctor => |ctor_expr| ctor_expr.ty,
         .Match => |match_expr| match_expr.ty,
+        .Tuple => |tuple_expr| tuple_expr.ty,
+        .TupleProj => |tuple_proj| tuple_proj.ty,
+        .Record => |record_expr| record_expr.ty,
+        .RecordField => |record_field| record_field.ty,
+        .RecordUpdate => |record_update| record_update.ty,
     };
 }
 
@@ -1305,6 +1640,20 @@ fn tyEql(lhs: ir.Ty, rhs: ir.Ty) bool {
             },
             else => false,
         },
+        .Tuple => |lhs_items| switch (rhs) {
+            .Tuple => |rhs_items| blk: {
+                if (lhs_items.len != rhs_items.len) break :blk false;
+                for (lhs_items, rhs_items) |lhs_item, rhs_item| {
+                    if (!tyEql(lhs_item, rhs_item)) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        .Record => |lhs_record| switch (rhs) {
+            .Record => |rhs_record| std.mem.eql(u8, lhs_record.name, rhs_record.name),
+            else => false,
+        },
         .Arrow => false,
     };
 }
@@ -1320,6 +1669,11 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Var => |var_ref| var_ref.layout,
         .Ctor => |ctor_expr| ctor_expr.layout,
         .Match => |match_expr| match_expr.layout,
+        .Tuple => |tuple_expr| tuple_expr.layout,
+        .TupleProj => |tuple_proj| tuple_proj.layout,
+        .Record => |record_expr| record_expr.layout,
+        .RecordField => |record_field| record_field.layout,
+        .RecordUpdate => |record_update| record_update.layout,
     };
 }
 

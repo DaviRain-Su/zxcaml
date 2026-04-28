@@ -40,6 +40,7 @@ pub const DefaultKind = enum {
     TopLevelLambda,
     Closure,
     Aggregate,
+    StructPack,
     StringLiteral,
 };
 
@@ -51,6 +52,7 @@ pub fn defaultFor(kind: DefaultKind) Layout {
         .TopLevelLambda => .{ .region = .Arena, .repr = .Flat },
         .Closure => .{ .region = .Arena, .repr = .Boxed },
         .Aggregate => .{ .region = .Arena, .repr = .Boxed },
+        .StructPack => .{ .region = .Stack, .repr = .Boxed },
         .StringLiteral => .{ .region = .Static, .repr = .Boxed },
     };
 }
@@ -83,12 +85,18 @@ pub fn ctor(arg_count: usize) Layout {
     return defaultFor(.Aggregate);
 }
 
+/// Returns the M2 stack-only layout for tuple/record struct packs.
+pub fn structPack() Layout {
+    return defaultFor(.StructPack);
+}
+
 test "M0 default layout derivation" {
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Flat }, intConstant());
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Flat }, unitValue());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Flat }, topLevelLambda());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Boxed }, closure());
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Boxed }, defaultFor(.Aggregate));
+    try std.testing.expectEqual(Layout{ .region = .Stack, .repr = .Boxed }, structPack());
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .Boxed }, defaultFor(.StringLiteral));
     try std.testing.expectEqual(Layout{ .region = .Static, .repr = .TaggedImmediate }, ctor(0));
     try std.testing.expectEqual(Layout{ .region = .Arena, .repr = .Boxed }, ctor(1));

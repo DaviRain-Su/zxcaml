@@ -16,6 +16,8 @@ pub const expected_wire_version = sexp_parser.expected_wire_version;
 pub const Module = struct {
     decls: []const Decl,
     type_decls: []const TypeDecl = &.{},
+    tuple_type_decls: []const TupleTypeDecl = &.{},
+    record_type_decls: []const RecordTypeDecl = &.{},
 };
 
 /// Typed mirror of an accepted top-level declaration.
@@ -44,6 +46,29 @@ pub const TypeVariant = struct {
     payload_types: []const TypeExpr,
 };
 
+/// Top-level tuple type alias emitted by sexp v0.7.
+pub const TupleTypeDecl = struct {
+    name: []const u8,
+    params: []const []const u8,
+    items: []const TypeExpr,
+    is_recursive: bool = false,
+};
+
+/// Top-level record type declaration emitted by sexp v0.7.
+pub const RecordTypeDecl = struct {
+    name: []const u8,
+    params: []const []const u8,
+    fields: []const RecordTypeField,
+    is_recursive: bool = false,
+};
+
+/// One record field in a type declaration.
+pub const RecordTypeField = struct {
+    name: []const u8,
+    ty: TypeExpr,
+    is_mutable: bool = false,
+};
+
 /// Type expression language used inside ADT constructor payloads.
 pub const TypeExpr = union(enum) {
     TypeVar: []const u8,
@@ -69,6 +94,11 @@ pub const Expr = union(enum) {
     Var: Var,
     Ctor: Ctor,
     Match: Match,
+    Tuple: Tuple,
+    TupleProj: TupleProj,
+    Record: Record,
+    RecordField: RecordField,
+    RecordUpdate: RecordUpdate,
 };
 
 /// Single lambda form.
@@ -115,6 +145,40 @@ pub const Ctor = struct {
     args: []const Expr,
 };
 
+/// Tuple construction expression.
+pub const Tuple = struct {
+    items: []const Expr,
+};
+
+/// Tuple projection expression, emitted for `fst`/`snd` helpers.
+pub const TupleProj = struct {
+    tuple_expr: *const Expr,
+    index: usize,
+};
+
+/// Record construction expression with source-order fields.
+pub const Record = struct {
+    fields: []const RecordExprField,
+};
+
+/// One field assignment in a record construction/update expression.
+pub const RecordExprField = struct {
+    name: []const u8,
+    value: Expr,
+};
+
+/// Record field access expression.
+pub const RecordField = struct {
+    record_expr: *const Expr,
+    field_name: []const u8,
+};
+
+/// Functional record update expression.
+pub const RecordUpdate = struct {
+    base_expr: *const Expr,
+    fields: []const RecordExprField,
+};
+
 /// Pattern match expression with arms evaluated top-to-bottom.
 pub const Match = struct {
     scrutinee: *const Expr,
@@ -133,12 +197,20 @@ pub const Pattern = union(enum) {
     Wildcard,
     Var: []const u8,
     Ctor: CtorPattern,
+    Tuple: []const Pattern,
+    Record: []const RecordPatternField,
 };
 
 /// Constructor pattern such as `Some x`, `None`, `[]`, `x :: xs`, or nested constructor payloads.
 pub const CtorPattern = struct {
     name: []const u8,
     args: []const Pattern,
+};
+
+/// One field pattern inside a record pattern.
+pub const RecordPatternField = struct {
+    name: []const u8,
+    pattern: Pattern,
 };
 
 /// Typed mirror of constants.
@@ -160,6 +232,8 @@ pub const BridgeError = sexp_parser.ParseError || error{
     MalformedDecl,
     MalformedTypeDecl,
     MalformedTypeExpr,
+    MalformedTuple,
+    MalformedRecord,
     MalformedLambda,
     MalformedApp,
     MalformedLet,
@@ -231,6 +305,10 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
     errdefer decls.deinit(arena.allocator());
     var type_decls = std.ArrayList(TypeDecl).empty;
     errdefer type_decls.deinit(arena.allocator());
+    var tuple_type_decls = std.ArrayList(TupleTypeDecl).empty;
+    errdefer tuple_type_decls.deinit(arena.allocator());
+    var record_type_decls = std.ArrayList(RecordTypeDecl).empty;
+    errdefer record_type_decls.deinit(arena.allocator());
 
     for (items[1..]) |decl_node| {
         const decl_items = try expectList(decl_node);
@@ -238,6 +316,10 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
         const tag = try expectAtom(decl_items[0]);
         if (std.mem.eql(u8, tag, "type_decl")) {
             try type_decls.append(arena.allocator(), try parseTypeDecl(arena, decl_items));
+        } else if (std.mem.eql(u8, tag, "tuple_type_decl")) {
+            try tuple_type_decls.append(arena.allocator(), try parseTupleTypeDecl(arena, decl_items));
+        } else if (std.mem.eql(u8, tag, "record_type_decl")) {
+            try record_type_decls.append(arena.allocator(), try parseRecordTypeDecl(arena, decl_items));
         } else {
             try decls.append(arena.allocator(), try parseDeclItems(arena, decl_items));
         }
@@ -246,6 +328,8 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
     return .{
         .decls = try decls.toOwnedSlice(arena.allocator()),
         .type_decls = try type_decls.toOwnedSlice(arena.allocator()),
+        .tuple_type_decls = try tuple_type_decls.toOwnedSlice(arena.allocator()),
+        .record_type_decls = try record_type_decls.toOwnedSlice(arena.allocator()),
     };
 }
 
@@ -272,14 +356,7 @@ fn parseTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Br
     if (name_items.len != 2) return error.MalformedTypeDecl;
     try expectAtomValue(name_items[0], "name");
 
-    const params_items = try expectList(items[2]);
-    if (params_items.len == 0) return error.MalformedTypeDecl;
-    try expectAtomValue(params_items[0], "params");
-    var params = std.ArrayList([]const u8).empty;
-    errdefer params.deinit(arena.allocator());
-    for (params_items[1..]) |param_node| {
-        try params.append(arena.allocator(), try dupeAtom(arena, param_node));
-    }
+    const params = try parseParams(arena, items[2]);
 
     var variants_index: usize = 3;
     var is_recursive = false;
@@ -294,9 +371,114 @@ fn parseTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Br
 
     return .{
         .name = try dupeAtom(arena, name_items[1]),
-        .params = try params.toOwnedSlice(arena.allocator()),
+        .params = params,
         .variants = try parseTypeVariants(arena, items[variants_index]),
         .is_recursive = is_recursive,
+    };
+}
+
+fn parseTupleTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!TupleTypeDecl {
+    if (items.len != 4 and items.len != 5) return error.MalformedTypeDecl;
+
+    const name_items = try expectList(items[1]);
+    if (name_items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(name_items[0], "name");
+
+    var items_index: usize = 3;
+    var is_recursive = false;
+    if (items.len == 5) {
+        const recursive_items = try expectList(items[3]);
+        if (recursive_items.len != 2) return error.MalformedTypeDecl;
+        try expectAtomValue(recursive_items[0], "recursive");
+        try expectAtomValue(recursive_items[1], "true");
+        is_recursive = true;
+        items_index = 4;
+    }
+
+    const type_items = try expectList(items[items_index]);
+    if (type_items.len == 0) return error.MalformedTypeDecl;
+    try expectAtomValue(type_items[0], "items");
+    var tuple_items = std.ArrayList(TypeExpr).empty;
+    errdefer tuple_items.deinit(arena.allocator());
+    for (type_items[1..]) |item_node| {
+        try tuple_items.append(arena.allocator(), try parseTypeExpr(arena, item_node));
+    }
+
+    return .{
+        .name = try dupeAtom(arena, name_items[1]),
+        .params = try parseParams(arena, items[2]),
+        .items = try tuple_items.toOwnedSlice(arena.allocator()),
+        .is_recursive = is_recursive,
+    };
+}
+
+fn parseRecordTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RecordTypeDecl {
+    if (items.len != 4 and items.len != 5) return error.MalformedTypeDecl;
+
+    const name_items = try expectList(items[1]);
+    if (name_items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(name_items[0], "name");
+
+    var fields_index: usize = 3;
+    var is_recursive = false;
+    if (items.len == 5) {
+        const recursive_items = try expectList(items[3]);
+        if (recursive_items.len != 2) return error.MalformedTypeDecl;
+        try expectAtomValue(recursive_items[0], "recursive");
+        try expectAtomValue(recursive_items[1], "true");
+        is_recursive = true;
+        fields_index = 4;
+    }
+
+    return .{
+        .name = try dupeAtom(arena, name_items[1]),
+        .params = try parseParams(arena, items[2]),
+        .fields = try parseRecordTypeFields(arena, items[fields_index]),
+        .is_recursive = is_recursive,
+    };
+}
+
+fn parseParams(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError![]const []const u8 {
+    const params_items = try expectList(node);
+    if (params_items.len == 0) return error.MalformedTypeDecl;
+    try expectAtomValue(params_items[0], "params");
+    var params = std.ArrayList([]const u8).empty;
+    errdefer params.deinit(arena.allocator());
+    for (params_items[1..]) |param_node| {
+        try params.append(arena.allocator(), try dupeAtom(arena, param_node));
+    }
+    return params.toOwnedSlice(arena.allocator());
+}
+
+fn parseRecordTypeFields(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError![]const RecordTypeField {
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(items[0], "fields");
+    const field_nodes = try expectList(items[1]);
+
+    var fields = std.ArrayList(RecordTypeField).empty;
+    errdefer fields.deinit(arena.allocator());
+    for (field_nodes) |field_node| {
+        try fields.append(arena.allocator(), try parseRecordTypeField(arena, field_node));
+    }
+    return fields.toOwnedSlice(arena.allocator());
+}
+
+fn parseRecordTypeField(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!RecordTypeField {
+    const items = try expectList(node);
+    if (items.len != 2 and items.len != 3) return error.MalformedTypeDecl;
+    var is_mutable = false;
+    if (items.len == 3) {
+        const mutable_items = try expectList(items[2]);
+        if (mutable_items.len != 2) return error.MalformedTypeDecl;
+        try expectAtomValue(mutable_items[0], "mutable");
+        try expectAtomValue(mutable_items[1], "true");
+        is_mutable = true;
+    }
+    return .{
+        .name = try dupeAtom(arena, items[0]),
+        .ty = try parseTypeExpr(arena, items[1]),
+        .is_mutable = is_mutable,
     };
 }
 
@@ -385,7 +567,80 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
     if (std.mem.eql(u8, tag, "ctor")) return .{ .Ctor = try parseCtor(arena, items) };
     if (std.mem.eql(u8, tag, "match")) return .{ .Match = try parseMatch(arena, items) };
+    if (std.mem.eql(u8, tag, "tuple")) return .{ .Tuple = try parseTuple(arena, items) };
+    if (std.mem.eql(u8, tag, "tuple_project")) return .{ .TupleProj = try parseTupleProj(arena, items) };
+    if (std.mem.eql(u8, tag, "record")) return .{ .Record = try parseRecord(arena, items) };
+    if (std.mem.eql(u8, tag, "field_access")) return .{ .RecordField = try parseRecordField(arena, items) };
+    if (std.mem.eql(u8, tag, "record_update")) return .{ .RecordUpdate = try parseRecordUpdate(arena, items) };
     return error.UnsupportedNode;
+}
+
+fn parseTuple(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Tuple {
+    if (items.len != 2) return error.MalformedTuple;
+    const item_nodes = try expectList(items[1]);
+    if (item_nodes.len == 0) return error.MalformedTuple;
+    try expectAtomValue(item_nodes[0], "items");
+    var values = std.ArrayList(Expr).empty;
+    errdefer values.deinit(arena.allocator());
+    for (item_nodes[1..]) |item_node| {
+        try values.append(arena.allocator(), try parseExpr(arena, item_node));
+    }
+    return .{ .items = try values.toOwnedSlice(arena.allocator()) };
+}
+
+fn parseTupleProj(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!TupleProj {
+    if (items.len != 3) return error.MalformedTuple;
+    const tuple_expr = try arena.allocator().create(Expr);
+    tuple_expr.* = try parseExpr(arena, items[1]);
+    const index_items = try expectList(items[2]);
+    if (index_items.len != 2) return error.MalformedTuple;
+    try expectAtomValue(index_items[0], "index");
+    const raw_index = try expectInteger(index_items[1]);
+    if (raw_index < 0) return error.MalformedTuple;
+    return .{ .tuple_expr = tuple_expr, .index = @intCast(raw_index) };
+}
+
+fn parseRecord(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Record {
+    if (items.len != 2) return error.MalformedRecord;
+    return .{ .fields = try parseRecordExprFields(arena, items[1]) };
+}
+
+fn parseRecordField(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RecordField {
+    if (items.len != 3) return error.MalformedRecord;
+    const record_expr = try arena.allocator().create(Expr);
+    record_expr.* = try parseExpr(arena, items[1]);
+    return .{
+        .record_expr = record_expr,
+        .field_name = try dupeAtom(arena, items[2]),
+    };
+}
+
+fn parseRecordUpdate(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RecordUpdate {
+    if (items.len != 3) return error.MalformedRecord;
+    const base_expr = try arena.allocator().create(Expr);
+    base_expr.* = try parseExpr(arena, items[1]);
+    return .{
+        .base_expr = base_expr,
+        .fields = try parseRecordExprFields(arena, items[2]),
+    };
+}
+
+fn parseRecordExprFields(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError![]const RecordExprField {
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedRecord;
+    try expectAtomValue(items[0], "fields");
+    const field_nodes = try expectList(items[1]);
+    var fields = std.ArrayList(RecordExprField).empty;
+    errdefer fields.deinit(arena.allocator());
+    for (field_nodes) |field_node| {
+        const field_items = try expectList(field_node);
+        if (field_items.len != 2) return error.MalformedRecord;
+        try fields.append(arena.allocator(), .{
+            .name = try dupeAtom(arena, field_items[0]),
+            .value = try parseExpr(arena, field_items[1]),
+        });
+    }
+    return fields.toOwnedSlice(arena.allocator());
 }
 
 fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Lambda {
@@ -576,6 +831,32 @@ fn parsePattern(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!
             .name = try dupeAtom(arena, items[1]),
             .args = try args.toOwnedSlice(arena.allocator()),
         } };
+    }
+    if (std.mem.eql(u8, tag, "tuple_pattern")) {
+        var patterns = std.ArrayList(Pattern).empty;
+        errdefer patterns.deinit(arena.allocator());
+        for (items[1..]) |item_node| {
+            try patterns.append(arena.allocator(), try parsePattern(arena, item_node));
+        }
+        return .{ .Tuple = try patterns.toOwnedSlice(arena.allocator()) };
+    }
+    if (std.mem.eql(u8, tag, "record_pattern")) {
+        if (items.len != 2) return error.MalformedPattern;
+        const fields_items = try expectList(items[1]);
+        if (fields_items.len != 2) return error.MalformedPattern;
+        try expectAtomValue(fields_items[0], "fields");
+        const field_nodes = try expectList(fields_items[1]);
+        var fields = std.ArrayList(RecordPatternField).empty;
+        errdefer fields.deinit(arena.allocator());
+        for (field_nodes) |field_node| {
+            const field_items = try expectList(field_node);
+            if (field_items.len != 2) return error.MalformedPattern;
+            try fields.append(arena.allocator(), .{
+                .name = try dupeAtom(arena, field_items[0]),
+                .pattern = try parsePattern(arena, field_items[1]),
+            });
+        }
+        return .{ .Record = try fields.toOwnedSlice(arena.allocator()) };
     }
     return error.MalformedPattern;
 }
@@ -936,4 +1217,37 @@ test "parse nested constructor patterns and when guards" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings(">", prim.op);
+}
+
+test "parse tuple and record v0.7 sexp nodes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.7 (module (record_type_decl (name person) (params) (fields ((name (type-ref string)) (age (type-ref int))))) (tuple_type_decl (name pair) (params) (items (type-ref int) (type-ref bool))) (let t (tuple (items (const-int 1) (ctor true) (const-int 42)))) (let r (record (fields ((name (const-string \"alice\")) (age (const-int 30)))))) (let u (record_update (var r) (fields ((age (tuple_project (var t) (index 0)))))))))",
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), module.record_type_decls.len);
+    try std.testing.expectEqualStrings("person", module.record_type_decls[0].name);
+    try std.testing.expectEqual(@as(usize, 2), module.record_type_decls[0].fields.len);
+    try std.testing.expectEqual(@as(usize, 1), module.tuple_type_decls.len);
+    try std.testing.expectEqual(@as(usize, 3), module.decls.len);
+
+    const tuple_decl = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const tuple = switch (tuple_decl.body) {
+        .Tuple => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 3), tuple.items.len);
+    const update_decl = switch (module.decls[2]) {
+        .Let => |value| value,
+    };
+    const update = switch (update_decl.body) {
+        .RecordUpdate => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("age", update.fields[0].name);
 }
