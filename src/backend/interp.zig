@@ -186,6 +186,10 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
 }
 
 fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Value)) EvalError!Value {
+    if (app.callee.* == .Var) {
+        const callee = app.callee.Var;
+        if (try evalStdlibApp(allocator, callee.name, app.args, env)) |value| return value;
+    }
     const callee = try evalExpr(allocator, app.callee.*, env);
     const closure = switch (callee) {
         .Closure => |value| value,
@@ -215,6 +219,173 @@ fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Va
     }
     defer restoreEnv(env, inserted.items);
     return evalExpr(allocator, lambda.body.*, env);
+}
+
+fn evalStdlibApp(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    args: []const *const ir.Expr,
+    env: *std.StringHashMap(Value),
+) EvalError!?Value {
+    if (std.mem.eql(u8, name, "List.length")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = try listLength(try evalListArg(allocator, args[0].*, env)) };
+    }
+    if (std.mem.eql(u8, name, "List.rev")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .List = try listRev(allocator, try evalListArg(allocator, args[0].*, env)) };
+    }
+    if (std.mem.eql(u8, name, "List.append")) {
+        if (args.len != 2) return error.ArityMismatch;
+        return .{ .List = try listAppend(allocator, try evalListArg(allocator, args[0].*, env), try evalListArg(allocator, args[1].*, env)) };
+    }
+    if (std.mem.eql(u8, name, "List.hd")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const list = try evalListArg(allocator, args[0].*, env);
+        return switch (list.*) {
+            .cons => |cell| cell.head,
+            .nil => error.MatchFailure,
+        };
+    }
+    if (std.mem.eql(u8, name, "List.tl")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const list = try evalListArg(allocator, args[0].*, env);
+        return switch (list.*) {
+            .cons => |cell| .{ .List = cell.tail },
+            .nil => error.MatchFailure,
+        };
+    }
+
+    if (std.mem.eql(u8, name, "Option.is_none")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Bool = ctorIs(try evalExpr(allocator, args[0].*, env), "None") };
+    }
+    if (std.mem.eql(u8, name, "Option.is_some")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Bool = ctorIs(try evalExpr(allocator, args[0].*, env), "Some") };
+    }
+    if (std.mem.eql(u8, name, "Option.value")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const value = try evalExpr(allocator, args[0].*, env);
+        return switch (value) {
+            .Ctor => |ctor| if (std.mem.eql(u8, ctor.name, "Some") and ctor.args.len == 1)
+                ctor.args[0]
+            else if (std.mem.eql(u8, ctor.name, "None") and ctor.args.len == 0)
+                try evalExpr(allocator, args[1].*, env)
+            else
+                error.UnsupportedExpr,
+            else => error.UnsupportedExpr,
+        };
+    }
+    if (std.mem.eql(u8, name, "Option.get")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return try optionGet(try evalExpr(allocator, args[0].*, env));
+    }
+
+    if (std.mem.eql(u8, name, "Result.is_ok")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Bool = ctorIs(try evalExpr(allocator, args[0].*, env), "Ok") };
+    }
+    if (std.mem.eql(u8, name, "Result.is_error")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Bool = ctorIs(try evalExpr(allocator, args[0].*, env), "Error") };
+    }
+    if (std.mem.eql(u8, name, "Result.ok")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Ctor = try resultToOption(allocator, try evalExpr(allocator, args[0].*, env), "Ok") };
+    }
+    if (std.mem.eql(u8, name, "Result.error")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Ctor = try resultToOption(allocator, try evalExpr(allocator, args[0].*, env), "Error") };
+    }
+
+    return null;
+}
+
+fn evalListArg(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!*const ListValue {
+    return switch (try evalExpr(allocator, expr, env)) {
+        .List => |list| list,
+        else => error.UnsupportedExpr,
+    };
+}
+
+fn listLength(list: *const ListValue) EvalError!i64 {
+    var len: i64 = 0;
+    var current = list;
+    while (true) {
+        switch (current.*) {
+            .nil => return len,
+            .cons => |cell| {
+                len += 1;
+                current = cell.tail;
+            },
+        }
+    }
+}
+
+fn listRev(allocator: std.mem.Allocator, list: *const ListValue) EvalError!*const ListValue {
+    var current = list;
+    var acc = try allocator.create(ListValue);
+    acc.* = .nil;
+    while (true) {
+        switch (current.*) {
+            .nil => return acc,
+            .cons => |cell| {
+                const next = try allocator.create(ListValue);
+                next.* = .{ .cons = .{ .head = cell.head, .tail = acc } };
+                acc = next;
+                current = cell.tail;
+            },
+        }
+    }
+}
+
+fn listAppend(allocator: std.mem.Allocator, left: *const ListValue, right: *const ListValue) EvalError!*const ListValue {
+    var current = try listRev(allocator, left);
+    var acc = right;
+    while (true) {
+        switch (current.*) {
+            .nil => return acc,
+            .cons => |cell| {
+                const next = try allocator.create(ListValue);
+                next.* = .{ .cons = .{ .head = cell.head, .tail = acc } };
+                acc = next;
+                current = cell.tail;
+            },
+        }
+    }
+}
+
+fn ctorIs(value: Value, name: []const u8) bool {
+    return switch (value) {
+        .Ctor => |ctor| std.mem.eql(u8, ctor.name, name),
+        else => false,
+    };
+}
+
+fn optionGet(value: Value) EvalError!Value {
+    return switch (value) {
+        .Ctor => |ctor| if (std.mem.eql(u8, ctor.name, "Some") and ctor.args.len == 1)
+            ctor.args[0]
+        else
+            error.MatchFailure,
+        else => error.UnsupportedExpr,
+    };
+}
+
+fn resultToOption(allocator: std.mem.Allocator, value: Value, wanted: []const u8) EvalError!CtorValue {
+    const ctor = switch (value) {
+        .Ctor => |result_ctor| result_ctor,
+        else => return error.UnsupportedExpr,
+    };
+    if (std.mem.eql(u8, ctor.name, wanted)) {
+        if (ctor.args.len != 1) return error.ArityMismatch;
+        const args = try allocator.alloc(Value, 1);
+        args[0] = ctor.args[0];
+        return .{ .name = "Some", .args = args };
+    }
+    if (ctor.args.len != 1) return error.ArityMismatch;
+    return .{ .name = "None", .args = &.{} };
 }
 
 fn makeClosure(

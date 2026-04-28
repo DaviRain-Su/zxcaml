@@ -452,6 +452,9 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
     if (isVarNamed(app.callee.*, "List.fold_left")) {
         return lowerListFoldLeftLiteralApp(arena, ctx, app);
     }
+    if (stdlibCallSignature(arena, app.callee.*, app.args.len)) |signature| {
+        return lowerStdlibCallApp(arena, ctx, app, signature);
+    }
     const callee = try lowerExprPtr(arena, ctx, app.callee.*);
     var args = std.ArrayList(*const ir.Expr).empty;
     errdefer args.deinit(arena.allocator());
@@ -466,6 +469,84 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
         .ty = ty,
         .layout = layoutForTy(ty),
     } };
+}
+
+const StdlibCallSignature = struct {
+    name: []const u8,
+    arg_tys: []const ir.Ty,
+    return_ty: ir.Ty,
+};
+
+fn lowerStdlibCallApp(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    app: ttree.App,
+    signature: StdlibCallSignature,
+) LowerError!ir.Expr {
+    var args = std.ArrayList(*const ir.Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (app.args, 0..) |arg, index| {
+        try args.append(arena.allocator(), try lowerExprPtrExpected(arena, ctx, arg, signature.arg_tys[index]));
+    }
+    const owned_args = try args.toOwnedSlice(arena.allocator());
+    const callee_ty = try arrowTy(arena, signature.arg_tys, signature.return_ty);
+    const callee = try arena.allocator().create(ir.Expr);
+    callee.* = .{ .Var = .{
+        .name = try arena.allocator().dupe(u8, signature.name),
+        .ty = callee_ty,
+        .layout = layout.closure(),
+    } };
+    return .{ .App = .{
+        .callee = callee,
+        .args = owned_args,
+        .ty = signature.return_ty,
+        .layout = layoutForTy(signature.return_ty),
+    } };
+}
+
+fn stdlibCallSignature(arena: *std.heap.ArenaAllocator, callee: ttree.Expr, arg_count: usize) ?StdlibCallSignature {
+    const var_ref = switch (callee) {
+        .Var => |value| value,
+        else => return null,
+    };
+    return makeStdlibCallSignature(arena, var_ref.name, arg_count) catch null;
+}
+
+fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, arg_count: usize) LowerError!?StdlibCallSignature {
+    const int_list = try listTy(arena, .Int);
+    const int_option = try optionTy(arena, .Int);
+    const int_result = try resultTy(arena, .Int, .Int);
+
+    if (std.mem.eql(u8, name, "List.length") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_list}), .return_ty = .Int };
+    if (std.mem.eql(u8, name, "List.rev") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_list}), .return_ty = int_list };
+    if (std.mem.eql(u8, name, "List.append") and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ int_list, int_list }), .return_ty = int_list };
+    if (std.mem.eql(u8, name, "List.hd") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_list}), .return_ty = .Int };
+    if (std.mem.eql(u8, name, "List.tl") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_list}), .return_ty = int_list };
+
+    if (std.mem.eql(u8, name, "Option.is_none") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_option}), .return_ty = .Bool };
+    if (std.mem.eql(u8, name, "Option.is_some") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_option}), .return_ty = .Bool };
+    if (std.mem.eql(u8, name, "Option.value") and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ int_option, .Int }), .return_ty = .Int };
+    if (std.mem.eql(u8, name, "Option.get") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_option}), .return_ty = .Int };
+
+    if (std.mem.eql(u8, name, "Result.is_ok") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = .Bool };
+    if (std.mem.eql(u8, name, "Result.is_error") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = .Bool };
+    if (std.mem.eql(u8, name, "Result.ok") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = int_option };
+    if (std.mem.eql(u8, name, "Result.error") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = int_option };
+
+    return null;
 }
 
 fn lowerListMapLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
@@ -1738,6 +1819,40 @@ fn listTy(arena: *std.heap.ArenaAllocator, elem_ty: ir.Ty) LowerError!ir.Ty {
     return .{ .Adt = .{
         .name = "list",
         .params = params,
+    } };
+}
+
+fn optionTy(arena: *std.heap.ArenaAllocator, elem_ty: ir.Ty) LowerError!ir.Ty {
+    const params = try arena.allocator().alloc(ir.Ty, 1);
+    params[0] = elem_ty;
+    return .{ .Adt = .{
+        .name = "option",
+        .params = params,
+    } };
+}
+
+fn resultTy(arena: *std.heap.ArenaAllocator, ok_ty: ir.Ty, err_ty: ir.Ty) LowerError!ir.Ty {
+    const params = try arena.allocator().alloc(ir.Ty, 2);
+    params[0] = ok_ty;
+    params[1] = err_ty;
+    return .{ .Adt = .{
+        .name = "result",
+        .params = params,
+    } };
+}
+
+fn tySlice(arena: *std.heap.ArenaAllocator, tys: []const ir.Ty) LowerError![]const ir.Ty {
+    const out = try arena.allocator().alloc(ir.Ty, tys.len);
+    for (tys, 0..) |ty, index| out[index] = ty;
+    return out;
+}
+
+fn arrowTy(arena: *std.heap.ArenaAllocator, params: []const ir.Ty, ret: ir.Ty) LowerError!ir.Ty {
+    const owned_ret = try arena.allocator().create(ir.Ty);
+    owned_ret.* = ret;
+    return .{ .Arrow = .{
+        .params = try tySlice(arena, params),
+        .ret = owned_ret,
     } };
 }
 
