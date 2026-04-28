@@ -44,6 +44,33 @@ CASES: list[tuple[str, str, str]] = [
         "(Node (payload_types (recursive-ref tree (type-var 'a)) "
         "(recursive-ref tree (type-var 'a)))))))))\n",
     ),
+    (
+        "user adt constructor expression",
+        "type color = Red | Green | Blue\nlet entrypoint _ = Red\n",
+        "(zxcaml-cir 0.5 (module (type_decl (name color) (params) "
+        "(variants ((Red (payload_types)) (Green (payload_types)) "
+        "(Blue (payload_types))))) (let entrypoint (lambda (_) (ctor Red)))))\n",
+    ),
+    (
+        "user adt constructor pattern",
+        (
+            "type color = Red | Green | Blue\n"
+            "let entrypoint c = match c with Red -> 1 | Green -> 2 | Blue -> 3\n"
+        ),
+        "(zxcaml-cir 0.5 (module (type_decl (name color) (params) "
+        "(variants ((Red (payload_types)) (Green (payload_types)) "
+        "(Blue (payload_types))))) (let entrypoint (lambda (c) "
+        "(match (var c) (case (ctor Red) (const-int 1)) "
+        "(case (ctor Green) (const-int 2)) "
+        "(case (ctor Blue) (const-int 3)))))))\n",
+    ),
+    (
+        "nested builtin and user adt constructor expression",
+        "type tree = Leaf of int\nlet entrypoint _ = Some (Leaf 42)\n",
+        "(zxcaml-cir 0.5 (module (type_decl (name tree) (params) "
+        "(variants ((Leaf (payload_types (type-ref int)))))) "
+        "(let entrypoint (lambda (_) (ctor Some (ctor Leaf (const-int 42)))))))\n",
+    ),
 ]
 
 

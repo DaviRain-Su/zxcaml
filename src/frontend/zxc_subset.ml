@@ -7,6 +7,8 @@
 open Asttypes
 open Typedtree
 
+module StringSet = Set.Make (String)
+
 type loc = {
   file : string;
   line : int;
@@ -127,6 +129,29 @@ type decl =
 type modul = Module of decl list
 
 exception Unsupported of diagnostic
+
+type type_env = { constructors : StringSet.t }
+
+let builtin_constructor_names = [ "None"; "Some"; "Ok"; "Error"; "[]"; "::" ]
+
+let initial_type_env =
+  {
+    constructors =
+      List.fold_left
+        (fun constructors name -> StringSet.add name constructors)
+        StringSet.empty builtin_constructor_names;
+  }
+
+let type_env_has_constructor env name = StringSet.mem name env.constructors
+
+let type_env_add_variant env variant =
+  { constructors = StringSet.add variant.constr_name env.constructors }
+
+let type_env_add_type_decl env type_decl =
+  List.fold_left type_env_add_variant env type_decl.variants
+
+let type_env_add_type_decls env type_decls =
+  List.fold_left type_env_add_type_decl env type_decls
 
 let loc_of_location (location : Location.t) =
   let start = location.loc_start in
@@ -256,10 +281,6 @@ let ident_name ident = Ident.name ident
 
 let longident_name (lid : Longident.t Location.loc) = Longident.last lid.txt
 
-let is_whitelisted_constructor = function
-  | "None" | "Some" | "Ok" | "Error" | "[]" | "::" -> true
-  | _ -> false
-
 let is_whitelisted_prim = function
   | "+" | "-" | "*" | "/" | "mod" | "=" | "<>" | "<" | "<=" | ">" | ">=" -> true
   | _ -> false
@@ -286,14 +307,14 @@ let parse_param (param : function_param) =
   | _, Tparam_optional_default (pat, _) ->
       unsupported ~node_kind:"optional-parameter" ~loc:pat.pat_loc ()
 
-let rec parse_match_scrutinee (expr : expression) =
+let rec parse_match_scrutinee env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
   | Texp_ident (_, lid, _) -> Var (longident_name lid)
   | Texp_construct (_lid, constructor, args) ->
       let name = constructor.Types.cstr_name in
-      if is_whitelisted_constructor name then
-        Ctor { name; args = List.map parse_match_scrutinee args }
+      if type_env_has_constructor env name then
+        Ctor { name; args = List.map (parse_match_scrutinee env) args }
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
@@ -303,47 +324,47 @@ let parse_simple_pattern (pat : pattern) =
   | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
-let rec parse_match_pattern (pat : pattern) =
+let rec parse_match_pattern env (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> Pat_any
   | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
   | Tpat_construct (_lid, constructor, args, _) ->
       let name = constructor.Types.cstr_name in
-      if is_whitelisted_constructor name then
+      if type_env_has_constructor env name then
         Pat_ctor { name; args = List.map parse_simple_pattern args }
       else unsupported ~node_kind:("Tpat_construct(" ^ name ^ ")") ~loc:pat.pat_loc ()
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
-let parse_computation_pattern (pat : computation general_pattern) =
+let parse_computation_pattern env (pat : computation general_pattern) =
   match pat.pat_desc with
-  | Tpat_value value_pat -> parse_match_pattern (value_pat :> pattern)
+  | Tpat_value value_pat -> parse_match_pattern env (value_pat :> pattern)
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
-let rec parse_match_case (case : computation case) =
+let rec parse_match_case env (case : computation case) =
   (match case.c_guard with
   | None -> ()
   | Some guard ->
       unsupported ~node_kind:"Texp_match(guard)" ~loc:guard.exp_loc ());
-  let pattern = parse_computation_pattern case.c_lhs in
-  let body = parse_expr case.c_rhs in
+  let pattern = parse_computation_pattern env case.c_lhs in
+  let body = parse_expr env case.c_rhs in
   { pattern; body }
 
-and parse_apply_args args =
+and parse_apply_args env args =
   let parse_one = function
-    | Nolabel, Some arg -> parse_expr arg
+    | Nolabel, Some arg -> parse_expr env arg
     | _, Some arg -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc ()
     | _, None -> unsupported ~node_kind:"partial-application" ~loc:Location.none ()
   in
   List.map parse_one args
 
-and parse_expr (expr : expression) =
+and parse_expr env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
   | Texp_constant (Const_string (value, _, _)) -> Const_string value
   | Texp_ident (_, lid, _) -> Var (longident_name lid)
   | Texp_function ([ param ], Tfunction_body body) ->
       let param = parse_param param in
-      let body = parse_expr body in
+      let body = parse_expr env body in
       Lambda { params = [ param ]; body }
   | Texp_function (_params, Tfunction_body _) ->
       unsupported ~node_kind:"Texp_function" ~loc:expr.exp_loc ()
@@ -351,13 +372,13 @@ and parse_expr (expr : expression) =
       unsupported ~node_kind:"Tfunction_cases" ~loc:expr.exp_loc ()
   | Texp_let (Nonrecursive, [ binding ], body) ->
       let name = parse_binding_name binding.vb_pat in
-      let value = parse_expr binding.vb_expr in
-      let body = parse_expr body in
+      let value = parse_expr env binding.vb_expr in
+      let body = parse_expr env body in
       Let { name; value; body; is_rec = false }
   | Texp_let (Recursive, [ binding ], body) ->
       let name = parse_binding_name binding.vb_pat in
-      let value = parse_expr binding.vb_expr in
-      let body = parse_expr body in
+      let value = parse_expr env binding.vb_expr in
+      let body = parse_expr env body in
       Let { name; value; body; is_rec = true }
   | Texp_let (_, [], _) ->
       unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc ()
@@ -366,29 +387,30 @@ and parse_expr (expr : expression) =
   | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc ()
   | Texp_construct (_lid, constructor, args) ->
       let name = constructor.Types.cstr_name in
-      if is_whitelisted_constructor name then
-        Ctor { name; args = List.map parse_expr args }
+      if type_env_has_constructor env name then
+        Ctor { name; args = List.map (parse_expr env) args }
       else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when is_whitelisted_prim (longident_name lid) ->
-      Prim { op = longident_name lid; args = parse_apply_args args }
+      Prim { op = longident_name lid; args = parse_apply_args env args }
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, _args)
     when is_mutation_primitive (longident_name lid) ->
       unsupported_mutation ~feature:(longident_name lid) ~node_kind:"Texp_apply"
         ~loc:expr.exp_loc
-  | Texp_apply (callee, args) -> App { callee = parse_expr callee; args = parse_apply_args args }
+  | Texp_apply (callee, args) ->
+      App { callee = parse_expr env callee; args = parse_apply_args env args }
   | Texp_ifthenelse (cond, then_branch, Some else_branch) ->
       If
         {
-          cond = parse_expr cond;
-          then_branch = parse_expr then_branch;
-          else_branch = parse_expr else_branch;
+          cond = parse_expr env cond;
+          then_branch = parse_expr env then_branch;
+          else_branch = parse_expr env else_branch;
         }
   | Texp_ifthenelse (_, _, None) ->
       unsupported ~node_kind:"Texp_ifthenelse(no-else)" ~loc:expr.exp_loc ()
   | Texp_match (scrutinee, cases, _) ->
-      let scrutinee = parse_match_scrutinee scrutinee in
-      let arms = List.map parse_match_case cases in
+      let scrutinee = parse_match_scrutinee env scrutinee in
+      let arms = List.map (parse_match_case env) cases in
       Match { scrutinee; arms }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
@@ -501,22 +523,30 @@ let parse_type_declaration (type_decl : type_declaration) =
         ()
 
 
-let parse_value_binding (binding : value_binding) =
+let parse_value_binding env (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
-  let body = parse_expr binding.vb_expr in
+  let body = parse_expr env binding.vb_expr in
   Let_decl { name; body; is_rec = false }
 
-let parse_structure_item (item : structure_item) =
+let parse_structure_item env (item : structure_item) =
   match item.str_desc with
-  | Tstr_value (Nonrecursive, [ binding ]) -> [ parse_value_binding binding ]
+  | Tstr_value (Nonrecursive, [ binding ]) ->
+      (env, [ parse_value_binding env binding ])
   | Tstr_value (Recursive, [ binding ]) ->
       let decl =
-        match parse_value_binding binding with
+        match parse_value_binding env binding with
         | Let_decl decl -> Let_decl { decl with is_rec = true }
         | Type_decl _ -> assert false
       in
-      [ decl ]
-  | Tstr_type (_, declarations) -> List.map parse_type_declaration declarations
+      (env, [ decl ])
+  | Tstr_type (_, declarations) ->
+      let decls = List.map parse_type_declaration declarations in
+      let type_decls =
+        List.map
+          (function Type_decl type_decl -> type_decl | Let_decl _ -> assert false)
+          decls
+      in
+      (type_env_add_type_decls env type_decls, decls)
   | Tstr_value (_, []) ->
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()
   | Tstr_value (_, _ :: _ :: _) ->
@@ -525,4 +555,11 @@ let parse_structure_item (item : structure_item) =
       unsupported ~node_kind:(structure_item_kind other) ~loc:item.str_loc ()
 
 let of_structure (structure : structure) =
-  Module (List.concat_map parse_structure_item structure.str_items)
+  let _env, decls =
+    List.fold_left
+      (fun (env, acc) item ->
+        let env, item_decls = parse_structure_item env item in
+        (env, List.rev_append item_decls acc))
+      (initial_type_env, []) structure.str_items
+  in
+  Module (List.rev decls)
