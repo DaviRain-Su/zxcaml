@@ -6,7 +6,7 @@
 
 | 阶段 | 主题 | 完成标志 |
 |---|---|---|
-| **P1** | MVP：OCaml 子集 → BPF `.o` | `examples/solana_hello.ml` 部署成功并返回 0 |
+| **P1** | MVP：OCaml 子集 → BPF `.so` | `examples/solana_hello.ml` 部署成功并返回 0 |
 | P2 | ADT 完整化 | 嵌套模式、记录更新、基础的 result-as-exception |
 | P3 | Solana 形态子集 | `account` 类型、no-alloc 分析、syscall 绑定、真实 Anchor 风格程序 |
 | P4 | 区域推断 | 逃逸分析、`Region::Region(id)`、可选栈分配 |
@@ -78,9 +78,9 @@ P1.7  解释器             `omlz run hello.ml` 输出 Some 1。
 P1.8  ArenaStrategy      Lowered IR。
 P1.9  ZigBackend         生成 native 下 `zig build-exe` 能接受的 `.zig`。
 P1.10 Runtime + 入口     BPF shim、arena、panic。
-P1.11 BPF driver         `omlz build --target=bpf` 产出 .o。
+P1.11 BPF driver         `omlz build --target=bpf` 产出 Solana 可加载的 .so。
 P1.12 Solana 骨架        在 solana-test-validator 上部署 + 调用。
-P1.13 确定性套件         解释器 ≡ Zig native ≡ Zig BPF（在适用范围内）。
+P1.13 确定性套件         解释器 ≡ Zig native；BPF acceptance 单独验证。
 ```
 
 形态相比上一稿有变：原本的 P1.1–P1.4 是"Lexer / Parser / Name resolution /
@@ -97,6 +97,41 @@ examples/solana_hello.ml      - BPF entrypoint 返回 0
 ```
 
 前四个走解释器和 Zig 后端（native）。最后一个走 Zig BPF 和 `solana-test-validator`。
+
+### 2.6 P1 release notes（2026-04-28）
+
+P1 交付了 ADR 集合（[ADR 列表](./09-decisions.md)）描述的 walking skeleton：
+上游 OCaml `compiler-libs` 产出版本化 sexp（`0.4`），Zig 将其解析成 Core IR，
+解释器和 native Zig 后端执行 acceptance corpus，BPF 路径通过
+`zig build-lib -femit-llvm-bc` 加 `sbpf-linker --cpu v2` 把
+`examples/solana_hello.ml` 构建成 Solana 可加载的 `.so`。
+
+| 领域 | Worker commits |
+|---|---|
+| Skeleton、frontend subprocess、sexp bridge、Core IR、interpreter、native 与 BPF build path | [39fabc0](https://github.com/DaviRain-Su/zxcaml/commit/39fabc0), [eb5ca12](https://github.com/DaviRain-Su/zxcaml/commit/eb5ca12), [a1f139e](https://github.com/DaviRain-Su/zxcaml/commit/a1f139e), [b29f437](https://github.com/DaviRain-Su/zxcaml/commit/b29f437), [f1725e5](https://github.com/DaviRain-Su/zxcaml/commit/f1725e5), [e3f781f](https://github.com/DaviRain-Su/zxcaml/commit/e3f781f), [010289b](https://github.com/DaviRain-Su/zxcaml/commit/010289b), [c1014bb](https://github.com/DaviRain-Su/zxcaml/commit/c1014bb), [2fad318](https://github.com/DaviRain-Su/zxcaml/commit/2fad318) |
+| Let、option/result constructor、match、recursion/closure、list、arithmetic、conditional | [451ecca](https://github.com/DaviRain-Su/zxcaml/commit/451ecca), [e3dd63a](https://github.com/DaviRain-Su/zxcaml/commit/e3dd63a), [86f995d](https://github.com/DaviRain-Su/zxcaml/commit/86f995d), [287c093](https://github.com/DaviRain-Su/zxcaml/commit/287c093), [d9875be](https://github.com/DaviRain-Su/zxcaml/commit/d9875be), [9bb39ab](https://github.com/DaviRain-Su/zxcaml/commit/9bb39ab), [a52574c](https://github.com/DaviRain-Su/zxcaml/commit/a52574c), [bce8251](https://github.com/DaviRain-Su/zxcaml/commit/bce8251), [65cbce5](https://github.com/DaviRain-Su/zxcaml/commit/65cbce5), [4c715c2](https://github.com/DaviRain-Su/zxcaml/commit/4c715c2), [792c152](https://github.com/DaviRain-Su/zxcaml/commit/792c152), [382969c](https://github.com/DaviRain-Su/zxcaml/commit/382969c), [6b706de](https://github.com/DaviRain-Su/zxcaml/commit/6b706de), [31c044e](https://github.com/DaviRain-Su/zxcaml/commit/31c044e) |
+| Determinism、golden tests、UI tests、Solana harness、diagnostics | [3e40be5](https://github.com/DaviRain-Su/zxcaml/commit/3e40be5), [cb817dc](https://github.com/DaviRain-Su/zxcaml/commit/cb817dc), [187f67b](https://github.com/DaviRain-Su/zxcaml/commit/187f67b), [afaa896](https://github.com/DaviRain-Su/zxcaml/commit/afaa896), [fca5bb5](https://github.com/DaviRain-Su/zxcaml/commit/fca5bb5), [2e61aa8](https://github.com/DaviRain-Su/zxcaml/commit/2e61aa8) |
+| Acceptance corpus、CI、安装文档、最终 docs sweep | [4ae4153](https://github.com/DaviRain-Su/zxcaml/commit/4ae4153), [533ef81](https://github.com/DaviRain-Su/zxcaml/commit/533ef81), [18c065e](https://github.com/DaviRain-Su/zxcaml/commit/18c065e), [e8b1124](https://github.com/DaviRain-Su/zxcaml/commit/e8b1124) |
+
+P1 已实现：
+
+- CLI：`omlz check`、`omlz run`、`omlz build --target=native|bpf`。
+- 用户子集：single-binding `let` / `let rec`、单参数 lambda、应用、`if`、
+  `match`、整数/字符串常量、算术/比较原语，以及内置 option/result/list 构造器。
+- Runtime：static-buffer bump arena、panic/prelude helpers、native 与 BPF entry shim。
+- 质量门槛：corpus 上 interpreter ≡ native determinism、Core IR golden tests、UI tests、
+  Solana deploy/invoke harness、CI，以及 `06-bpf-target.md` §7 中记录为 PASS 的
+  G13 BPF 字节可复现性。
+
+延期到 P2+：
+
+- 用户自定义 ADT、records、tuples、嵌套构造器模式、guarded match arms、
+  exceptions-as-result helpers、mutation/ref、modules/functors；
+- 把一等 closure 作为受支持的 BPF acceptance 形状（native 和 interpreter 路径已存在，
+  但 BPF code-pointer relocation 需要 P2/P3 设计选择）；
+- entrypoint 之外的 Solana-shaped API：account decoding、syscalls、CPI、IDL generation、
+  no-allocation analysis；
+- region inference / multi-arena ownership 工作，以及任何非 BPF 交付目标。
 
 ## 3. Phase 2 — ADT 完整化
 

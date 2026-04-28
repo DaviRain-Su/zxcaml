@@ -26,29 +26,39 @@ Core IR 上的 `Layout` 字段是一个 **向前兼容的描述符**，
 bump arena 完美符合：O(1) 分配、零 per-object 开销，
 "程序结束 = 整体丢弃 arena"。
 
+
 ## 3. 单 arena 规则
 
-```text
-fn entrypoint(input: *const u8, len: usize) -> u64 {
-    var arena: Arena = Arena.init_from_static_buffer(...);
-    defer arena.reset();
-    return user_main(&arena, input, len);
-}
+As built，`runtime/zig/arena.zig` 暴露的是一个很小的 caller-owned bump arena：
+
+```zig
+pub const Arena = struct {
+    buffer: []u8,
+    offset: usize,
+
+    pub fn fromStaticBuffer(buf: []u8) Arena
+    pub fn alloc(self: *Arena, comptime T: type, count: usize) ![]T
+    pub fn reset(self: *Arena) void
+};
 ```
 
-每个被编译出来的函数都把 arena 作为 **隐式首参数** 接收。
-前端用户从来不写它；后端始终把它穿进去。
+arena **不拥有**内存。BPF entry shim 提供静态 byte buffer，构造
+`Arena.fromStaticBuffer(&buf)`，编译后的函数把 `arena: *Arena` 作为隐式第一个参数。
+`alloc` 会做 checked size arithmetic、通过 `std.mem.alignForward` 对齐，并在静态
+buffer 耗尽时返回 `error.OutOfMemory`。`reset` 在程序退出时把 bump cursor 归零。
 
 ## 4. 哪些值住哪里
 
 | 值类别 | Region | Repr |
 |---|---|---|
-| `int`、`bool`、`unit` | Static（即时值） | TaggedImmediate |
-| 零参构造子 | Static | TaggedImmediate |
+| 整数常量 | Static | Flat |
+| unit 值 / unit 参数 | Static | Flat |
+| 无 payload 构造器（`None`、`[]`） | Static | TaggedImmediate |
 | 字符串字面量 | Static | Boxed（指向只读数据） |
-| 元组、记录、ADT payload | Arena | Boxed |
-| 闭包 | Arena | Boxed |
-| （P1.5 可选）逃逸分析能证明不逃逸的值 | Stack | Boxed |
+| 带 payload 构造器 / list cons cell | Arena | Boxed |
+| 顶层 lambda | Arena | Flat |
+| 一等 closure record | Arena | Boxed |
+| 保留给未来的不逃逸值 | Stack | Boxed |
 
 这些规则住在 `Typed AST → Core IR` lowering 中（见 `03-core-ir.md` §4）。
 这是前端控制的 **唯一** 旋钮。
@@ -70,21 +80,19 @@ fn entrypoint(input: *const u8, len: usize) -> u64 {
 判别符宽度由后端选。解释器允许用宿主语言原生的 tagged-union 表示，
 不受这个编码约束。
 
-## 6. 闭包表示（P1）
 
-```
-struct Closure {
-  code: *const fn(*Arena, /* captures */, /* args */) -> Ret,
-  captures: { ... 字段，按值或 boxed ... },
-}
-```
+## 6. Closure 与 recursion 表示（P1）
 
-分配在 arena 上，`Boxed`。
-自由变量由 ANF lowering 计算并写到 `RLam.free_vars`。
-`ArenaStrategy` 直接发出 capture struct。
+P1 有三种 as-built 情况：
 
-P1 **不** 对已知 callee 做特化；调闭包就是走间接函数指针。
-具体优化交给 `zig`。
+1. **顶层函数** lower 成使用 arena-threaded 调用约定的直接 Zig helper function。
+2. **不逃逸的嵌套递归函数** lower 成直接 helper function，捕获值作为额外参数传递。
+3. **逃逸的一等 closure** 在 Lowered IR 中表示为 arena 分配的 closure record，包含 code pointer
+   和 capture array（`prelude.Closure`）。该路径通过了 interpreter/native 验证；BPF 一等 closure
+   code pointer 不属于 P1 Solana acceptance example，仍是 P2/P3 hardening 项，因为本 mission
+   在该形状上观察到 `Relocations found but no .rodata section` linker 失败。
+
+用户仍然看不到这些机制；他们只写普通的 `let` / `let rec` OCaml 子集代码。
 
 ## 7. 字符串（P1）
 

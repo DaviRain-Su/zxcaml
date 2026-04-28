@@ -2,237 +2,151 @@
 
 > **Languages / 语言**: [English](../03-core-ir.md) · **简体中文**
 
-Core IR 是这个编译器里 **唯一稳定的契约**。
-其它一切（Surface AST、Typed AST、Lowered IR、各后端）都是内部细节，可以自由重写。
-**改 Core IR 就是在改这个项目本身。**
+Core IR 是本编译器的 **唯一稳定契约**。P1 as-built 契约就是
+`src/core/ir.zig` 中的数据模型，以及 `src/core/layout.zig` 中的 layout 选择。
+本文描述的是这个具体模型，而不是更大的 P2+ 形状。
 
-## 1. 性质
+## 1. 属性
 
-| 性质 | 取值 |
+| 属性 | P1 as-built 值 |
 |---|---|
-| 形态 | A-Normal Form（ANF） |
-| 类型 | 每个节点都带完整解析过的 `Ty` |
-| Layout | 每个会引发分配的节点都带 `Layout` |
-| 纯度 | P1 没有副作用（不可变、无异常） |
-| 名字 | 每个 binder 都 alpha 重命名为唯一 `Symbol` |
-| 源位置 | 每个节点都带 `Span`，用于诊断 |
+| 形式 | 面向 ANF 的表达式树；lowering pass 会在当前子集需要的位置保持复杂计算 let-bound |
+| 类型 | 每个表达式节点都带已解析的 `Ty` |
+| Layout | codegen 需要的每个产值节点都带 `Layout` |
+| 纯度 | P1 无 mutation、无 exception、无 effect |
+| 名字 | 来自前端的 byte-string 名字；codegen 会为 Zig 做 sanitize |
+| 源位置 | 前端诊断带位置；P1 Core IR 节点没有填充 source span |
 
-ANF 纪律：
+当前 Zig 模型 **没有** 把 atom 与 RHS value 拆成单独的 `Atom` / `RhsValue` 变体。
+表达式变体直接持有子 `Expr` 指针，ANF/lowering pass 负责维护该子集的求值纪律。
 
-- 任何真正的计算都通过 `let` 命名。
-- 应用、原始操作、构造子的每个操作数都是 **atom**（变量或字面量）。
-- 控制流构造（`match`、`if`）的 scrutinee 也是 atom。
-
-## 2. 数据模型（与具体语言无关的伪代码）
+## 2. 数据模型（`src/core/ir.zig`）
 
 ```text
-Symbol  : interned 标识符 + 唯一 id
-Span    : { file_id : u32, lo : u32, hi : u32 }
+Module := { decls : Decl list }
 
-Ty :=
-  | TyVar    of TyVarId
-  | TyInt
-  | TyBool
-  | TyUnit
-  | TyString
-  | TyTuple  of Ty list
-  | TyArrow  of Ty list * Ty       -- 多参 arrow，前端柯里化处理
-  | TyAdt    of AdtId * Ty list    -- 'a list, ('a,'e) result, ...
-  | TyRecord of RecordId * Ty list
+Decl :=
+  | Let of Let
 
-Region :=
-  | Arena                          -- P1：唯一合法值
-  | Static                         -- 编译期常量
-  | Stack                          -- 不逃逸的局部（P1 可选）
-  -- 未来：Rc | Gc | Region(id)
+Let := {
+  name   : string,
+  value  : Expr,
+  ty     : Ty,
+  layout : Layout,
+  is_rec : bool,
+}
 
-Repr :=
-  | Flat                           -- 内联值
-  | Boxed                          -- 指向 region 的指针
-  | TaggedImmediate                -- 小整数、bool、unit、零参 ctor
-
-Layout := { region : Region, repr : Repr }
-
-Atom :=
-  | AVar of Symbol * Ty
-  | ALit of Literal * Ty
-
-Literal :=
-  | LInt    of i64
-  | LBool   of bool
-  | LUnit
-  | LString of string_id           -- interned，住在 `Static`
-
-Param := { name : Symbol, ty : Ty }
-
-Pattern :=
-  | PWild
-  | PVar     of Symbol * Ty
-  | PInt     of i64
-  | PBool    of bool
-  | PUnit
-  | PTuple   of Pattern list
-  | PCtor    of AdtId * VariantId * Pattern list
-  | PRecord  of RecordId * (FieldId * Pattern) list
-
-Arm := { pattern : Pattern, body : Expr, span : Span }
-
-PrimOp :=
-  | IAdd | ISub | IMul | IDiv | IMod
-  | IEq  | INe  | ILt  | ILe  | IGt | IGe
-  | BAnd | BOr  | BNot
-  | StrEq                          -- 仅 stdlib 内部，P1 内部用
-  -- 未来：位运算、syscall
+Lambda := { params : Param list, body : Expr, ty : Ty, layout : Layout }
+Param  := { name : string, ty : Ty }
 
 Expr :=
-  | EAtom    of Atom
-  | ELet     of { name : Symbol, ty : Ty, value : RhsValue,
-                  body : Expr, span : Span }
-  | EMatch   of { scrut : Atom, arms : Arm list, ty : Ty, span : Span }
-  | EIf      of { cond  : Atom, then_ : Expr, else_ : Expr,
-                  ty : Ty, span : Span }
+  | Lambda   of Lambda
+  | Constant of Constant
+  | App      of { callee : Expr, args : Expr list, ty : Ty, layout : Layout }
+  | Let      of { name : string, value : Expr, body : Expr,
+                  ty : Ty, layout : Layout, is_rec : bool }
+  | If       of { cond : Expr, then_branch : Expr, else_branch : Expr,
+                  ty : Ty, layout : Layout }
+  | Prim     of { op : PrimOp, args : Expr list, ty : Ty, layout : Layout }
+  | Var      of { name : string, ty : Ty, layout : Layout }
+  | Ctor     of { name : string, args : Expr list, ty : Ty, layout : Layout }
+  | Match    of { scrutinee : Expr, arms : Arm list, ty : Ty, layout : Layout }
 
-RhsValue :=
-  | RAtom   of Atom
-  | RApp    of { fun_ : Atom, args : Atom list, ret_ty : Ty }
-  | RPrim   of { op : PrimOp, args : Atom list, ret_ty : Ty }
-  | RLam    of { params : Param list, body : Expr,
-                 ret_ty : Ty, layout : Layout, free_vars : Symbol list }
-  | RCtor   of { adt : AdtId, variant : VariantId,
-                 args : Atom list, ty : Ty, layout : Layout }
-  | RRecord of { record : RecordId, fields : (FieldId * Atom) list,
-                 ty : Ty, layout : Layout }
-  | RProj   of { record : RecordId, field : FieldId, of_ : Atom, ty : Ty }
-  | RTuple  of { elems : Atom list, ty : Ty, layout : Layout }
+Constant :=
+  | Int    of i64
+  | String of string
 
-TopDecl :=
-  | TLet  of { name : Symbol, ty : Ty, value : Expr,
-               is_rec : bool, span : Span }
-  | TType of AdtDecl | RecordDecl
+PrimOp := Add | Sub | Mul | Div | Mod | Eq | Ne | Lt | Le | Gt | Ge
 
-Module := { decls : TopDecl list, type_env : TypeEnv, source : SourceMap }
+Arm := { pattern : Pattern, body : Expr }
+
+Pattern :=
+  | Wildcard
+  | Var  of { name : string, ty : Ty, layout : Layout }
+  | Ctor of { name : string, args : Pattern list }
+
+Ty :=
+  | Int | Bool | Unit | String
+  | Adt   of { name : string, params : Ty list }
+  | Arrow of { params : Ty list, ret : Ty }
 ```
 
-要点：
+P1 有意没有用户自定义 type declaration、record、tuple、array、source span、
+module-level `TypeEnv` 的 Core IR 变体。这些都是 P2+ 扩展；落地时必须在同一个 commit
+更新所有 consumer。
 
-- `RApp.fun_` 是 atom，所以当 *callee* 本身是个复杂表达式时，
-  ANF pass 会先 let-bind 它再用。
-- `RLam.free_vars` 是闭包的 capture 列表，由 ANF 计算，
-  由 `LoweringStrategy` 消费。
-- `RProj` / `RRecord` 带 `RecordId`，让后端能直接算字段偏移而不必重新 typecheck。
+## 3. 构造器和模式子集
 
-## 3. ANF 转换规则
-
-给定 `ttree`（OCaml `Typedtree` 的 Zig 镜像，见 `10-frontend-bridge.md`）
-里的表达式 `e`，到 Core IR 的 lowering 遵循标准 ANF 规则：
-
-```
-[[ x ]]            = EAtom (AVar x)
-[[ k ]]            = EAtom (ALit k)
-[[ e1 e2 ]]        = let x1 = [[e1]] in
-                     let x2 = [[e2]] in
-                     let r  = RApp(x1, [x2]) in
-                     EAtom r
-[[ if c then a else b ]]
-                   = let xc = [[c]] in
-                     EIf(xc, [[a]], [[b]])
-[[ match e with arms ]]
-                   = let xs = [[e]] in
-                     EMatch(xs, arms_lowered)
-[[ fun p -> body ]]= let f = RLam([p], [[body]], ...) in EAtom f
-[[ let x = e1 in e2 ]]
-                   = ELet(x, [[e1 as RhsValue]], [[e2]])
-[[ Ctor(args) ]]   = let xs = [[args]] in
-                     let c  = RCtor(... xs ...) in EAtom c
-```
-
-多参构造子和 primop 会被展平 —— 参数变成一连串 `let` 绑定，
-然后操作把所有 atom 一次性消费掉。
-
-## 4. Layout 赋值（P1 规则）
-
-ANF lowering pass 给每个 `RLam`、`RCtor`、`RRecord`、`RTuple` 分配 `Layout`。
-P1 规则：
-
-1. `LInt`、`LBool`、`LUnit` 和零参构造子拿
-   `{ region = Static, repr = TaggedImmediate }`。
-2. `LString` 拿 `{ region = Static, repr = Boxed }`。
-3. 其它一切拿 `{ region = Arena, repr = Boxed }`。
-4. （可选，P1.5）如果逃逸分析能证明某个值不离开词法作用域，
-   可以把它改写成 `{ region = Stack, repr = Boxed }`。
-   P1 默认禁用。
-
-用户从来看不到这些标注。它们存在的意义，
-是让 P4 区域推断能直接替换规则 3，不影响其它任何地方。
-
-## 5. 类型环境
-
-类型信息随 Core IR 模块一起携带，避免后端重做推断：
+前端只会发出内置构造器名：
 
 ```text
-TypeEnv := {
-  adts    : map<AdtId, AdtDecl>            -- 变体、布局 hint
-  records : map<RecordId, RecordDecl>      -- 字段、偏移留到后端算
-  globals : map<Symbol, Ty>                -- 顶层值的类型
-}
-
-AdtDecl := {
-  name     : string,
-  params   : TyVarId list,
-  variants : VariantDecl list,
-  source   : Span,
-}
-
-VariantDecl := {
-  id       : VariantId,
-  name     : string,
-  payload  : Ty list,                      -- 空 = 零参
-}
+None | Some | Ok | Error | [] | ::
 ```
 
-字段偏移和判别符编码由后端计算，不存进 `TypeEnv`。
-这是有意为之：不同后端可能选择不同编码
-（比如 BPF 后端用扁平结构体偏移，解释器用宿主语言原生 tagged union）。
+`None`、`[]` 这样的无 payload 构造器使用 `Static/TaggedImmediate`。
+`Some x`、`Ok x`、`Error e`、`x :: xs` 这样的带 payload 构造器使用 `Arena/Boxed`。
 
-## 6. Pretty-print 与 IR 快照
+Zig 类型中的 `Pattern` 是递归的，但 P1 前端只会发出通配、变量，以及白名单构造器上的构造器模式；嵌套构造器模式是 P2 功能。
 
-Core IR pretty-printer 是必需品，要求：
+## 4. Layout 分配（`src/core/layout.zig`）
 
-- 确定性（字段顺序固定，不打印地址）。
-- 非正式 round-trip：打印结果给人看，不用 parse 回来。
-  测试通过 golden 文件比对。
-
-推荐入口：
-
-```
-omlz check --emit=core-ir foo.ml > foo.core.txt
+```text
+Region := Arena | Static | Stack
+Repr   := Flat | Boxed | TaggedImmediate
+Layout := { region : Region, repr : Repr }
 ```
 
-快照格式（示意）：
+P1 默认规则：
 
+| 值类别 | Layout |
+|---|---|
+| 整数常量 | `Static / Flat` |
+| unit 值和 unit-typed lambda 参数 | `Static / Flat` |
+| 顶层 lambda | `Arena / Flat` |
+| 一等 closure record | `Arena / Boxed` |
+| 字符串 | `Static / Boxed` |
+| 无 payload 构造器 | `Static / TaggedImmediate` |
+| 带 payload 构造器 / aggregate | `Arena / Boxed` |
+
+`Stack` 作为保留扩展点存在，但 P1 没有真实 escape-analysis pass 会选择它。
+
+## 5. ANF 与 lowering 规则
+
+ANF pass 把 `ttree` mirror 转成 Core IR，并保留 `let` 与 `match` 的源码求值顺序。
+当前子集依赖这些规则：
+
+- 顶层声明变成 `Decl.Let`；
+- 嵌套 `let` 和 `let rec` 变成设置了 `is_rec` 的 `Expr.Let`；
+- 函数变成 `Expr.Lambda`，应用变成 `Expr.App`；
+- 算术/比较运算符变成 `Expr.Prim`；
+- `if` 条件消费由比较产生的 bool ADT；
+- 构造器和 match 保留 option/result/list 的源码顺序；
+- match arm 从上到下测试，第一个匹配胜出。
+
+Lowered IR（`src/lower/lir.zig`）随后显式化 arena-threaded 调用约定，并为 codegen
+添加 closure-call/direct-call 信息。
+
+## 6. Pretty-printing 与 IR snapshot
+
+Core IR pretty-printer 必须保持确定性，因为 golden tests 会 snapshot 它的输出。使用：
+
+```sh
+zig-out/bin/omlz check --emit=core-ir foo.ml
 ```
-module foo
-  type 'a option = | None | Some of 'a
-  let head : list<'a> -> option<'a> =
-    fun (xs : list<'a>) ->
-      match xs with
-      | [] -> let r = Ctor(option,None) [@layout Static/TaggedImm]
-              in r
-      | (::)(x, _) -> let r = Ctor(option,Some, x) [@layout Arena/Boxed]
-                      in r
-```
+
+打印格式只给人阅读，不作为 parser 输入。
 
 ## 7. 稳定性承诺
 
-- 给 `Expr`、`RhsValue`、`Pattern`、`PrimOp`、`Region`、`Repr` 加 **新变体** 是
-  **小** 改动。后端遇到未知变体时必须返回结构化错误，**不能** panic。
-- 改变现有变体的语义是 **破坏性** 改动，必须在同一个 commit 里更新所有后端。
-- ANF 纪律（"每个操作数都是 atom"）**永不** 放松。
-  如果你想把复杂表达式直接放在参数位置，先加一个 `let` 绑定。
+- 给 `Expr`、`Pattern`、`PrimOp`、`Ty`、`Region`、`Repr` 增加变体属于契约变更。
+  必须同时更新 `anf`、`lower`、`interp`、`zig_codegen`、`pretty`、golden tests 和本文。
+- 改变已有变体语义是 breaking，需要 ADR 或 ADR addendum。
+- 当前没有 records、tuples、source spans、type-env declarations 是 P1 as-built 范围，不是遗漏。
 
-## 8. Core IR **不携带** 的内容
+## 8. P1 Core IR **不**携带什么
 
-- 不带源码注释或 trivia。诊断通过 `Span` 回查 Surface AST。
-- ANF 临时变量上不再带超出 atom 自身 `Ty` 之外的类型。
-  Core IR 不是类型检查器的草稿纸。
-- 不带优化提示。P1 信任 Zig 后端的优化器。
+- 源码注释或格式 trivia；
+- 每个节点上的前端 source span；
+- 用户 type declaration 或通用 type environment；
+- 除 `Layout` 外的优化 hint；
+- Zig 标识符 sanitize 后的后端专用名字。

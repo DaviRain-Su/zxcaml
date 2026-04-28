@@ -63,10 +63,8 @@ out/
 | `TyBool` | `bool` |
 | `TyUnit` | `void`（或 `u0`，内部选择） |
 | `TyString` | `[]const u8`（只读切片） |
-| `TyTuple` | 匿名 `struct` |
-| `TyAdt`（全零参） | `enum(uN)` |
-| `TyAdt`（带 payload） | `struct { tag: uN, payload: union(enum) {...} }` |
-| `TyRecord` | `struct { ... }` |
+| `TyAdt`（全零参） | `enum(uN)` / tagged-immediate helper |
+| `TyAdt`（带 payload） | `runtime/zig/prelude.zig` 中的 `union(enum)` helper |
 | `RLam` | 顶层 `fn` + arena 上的 capture 结构体 |
 | `RApp` | 直接 `fn` 调用（已知 callee）或经闭包间接调用 |
 | `RCtor` | arena 上放置的 struct 字面量 |
@@ -90,7 +88,7 @@ P1 发 `i64`，算术用 Zig 的 `+%`、`-%`、`*%`（绕回）。
 ### 2.6 命名
 
 生成的标识符前缀加 `omlz_` 防止和 runtime 冲突。
-源级标识符用 `Symbol` id 修饰，处理 shadowing。
+源码级标识符会 sanitize 成 Zig-safe 名字。P1 Core IR 尚未携带独立的 `Symbol` id，因此 examples 会避免产生有歧义的 emitted name collision。
 
 ### 2.7 它 **不做** 的事
 

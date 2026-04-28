@@ -4,247 +4,126 @@
 
 ## 1. Position
 
-ZxCaml accepts a **strict subset of OCaml**. Anything written in
-ZxCaml is valid OCaml; the converse does not hold.
+ZxCaml accepts a **strict subset of OCaml**. Anything accepted by
+ZxCaml is parsed and type-checked by upstream OCaml first; ZxCaml
+then rejects unsupported `Typedtree` nodes.
 
-**We do not define our own grammar.** Per ADR-010, the grammar is
-whatever the upstream OCaml compiler accepts; ZxCaml restricts the
-*Typedtree* (post type-checking), not the surface syntax. The
-authoritative subset list is in
-[`10-frontend-bridge.md` §4](./10-frontend-bridge.md), expressed in
-terms of `Typedtree` constructors.
+As built in P1, the user-program subset is intentionally small:
+**top-level `let` declarations plus expressions over integers,
+strings, functions, `let`, `if`, `match`, applications, primitive
+integer/comparison operators, and the bundled `option` / `result` /
+`list` constructors.** User-defined `type` declarations, records, tuples,
+modules, exceptions, mutation, arrays, objects, and labels are rejected.
 
-This document remains as a **human-readable** description of what
-"the subset" looks like at the surface level, and to enumerate
-which keywords are reserved-but-rejected for friendlier error
-messages. It is **not** the source of truth; the source of truth is
-`10-frontend-bridge.md` §4.
+The authoritative implementation is `src/frontend/zxc_subset.ml`; the
+wire contract emitted by the accepted subset is
+`src/frontend/zxc_sexp_format.md` (currently `0.4`). This document is
+only the human-readable surface summary.
 
-File extension is `.ml`. There is **no** `.mli` in P1; signatures may
-appear inline as type annotations.
+File extension is `.ml`. There is no `.mli` support in P1.
 
 ## 2. Lexical rules
 
-Identical to OCaml's lexical specification, restricted to:
+Lexing is OCaml's lexer. The P1 subset consumes only:
 
-- ASCII source only (UTF-8 string literals are allowed but not
-  identifier characters).
-- Comments: `(* ... *)`, nestable.
-- Numeric literals: decimal `int` (`0`, `42`, `-1`), no `Int64.t`,
-  no float in P1.
-- Boolean literals: `true`, `false`.
-- String literals: standard double-quoted, with `\n \r \t \\ \"`
-  escapes only. **Used for diagnostics / stdlib only in P1; runtime
-  string ops are not exposed.**
-- Char literals: not in P1.
-- Identifiers: lowercase-leading (values), uppercase-leading
-  (constructors and module names — module names are reserved but
-  module syntax is P3).
+- decimal `int` literals (`0`, `42`, `-1`), represented as signed
+  64-bit integers below the frontend;
+- string literals, mainly for diagnostics and small examples;
+- identifiers accepted by OCaml;
+- constructor names from the bundled stdlib: `None`, `Some`, `Ok`,
+  `Error`, `[]`, and `::`.
 
-## 3. Reserved keywords accepted in P1
+Direct boolean literals are not a separate frontend special case in P1;
+comparisons produce the internal bool ADT consumed by `if`.
 
+## 3. Surface forms accepted in P1
+
+```ocaml
+(* top-level declarations: one binding per let group *)
+let x = 1
+let rec fact n = if n <= 1 then 1 else n * fact (n - 1)
+
+(* expressions *)
+let entrypoint _input =
+  let xs = [1; 2; 3] in
+  match xs with
+  | [] -> 0
+  | x :: _ -> x
 ```
-let  rec  and  in  fun  function
-match  with  if  then  else
-type  of
-true  false
-```
 
-Reserved but **rejected** in P1 (parser must produce a clear "not
-yet supported" diagnostic, not a syntax error):
+Accepted expression classes:
 
-```
-module  sig  struct  functor  open  include
+| Surface form | Notes |
+|---|---|
+| `let x = e` / `let rec f x = e` | top-level and nested; no `and` groups |
+| `fun x -> e` / function-sugar lets | exactly one parameter per lambda after desugaring |
+| variable reference | identifiers resolved by OCaml before serialisation |
+| integer and string constants | other constants rejected |
+| function application | unlabeled, fully-applied arguments only |
+| `if c then a else b` | `else` is required |
+| `match e with ...` | no guards; arms evaluated top-to-bottom |
+| constructors | `None`, `Some`, `Ok`, `Error`, `[]`, `::` only |
+| primitive ops | `+`, `-`, `*`, `/`, `mod`, `=`, `<>`, `<`, `<=`, `>`, `>=` |
+
+Accepted patterns:
+
+| Pattern | Notes |
+|---|---|
+| `_` | wildcard |
+| `x` | variable binder |
+| `None`, `Some x`, `Ok x`, `Error e`, `[]`, `x :: xs` | constructor patterns with simple wildcard/variable payloads in P1 |
+
+Nested constructor patterns such as `Some (Some x)` and guarded arms
+(`when`) are P2+.
+
+## 4. Reserved but rejected in P1
+
+The OCaml parser may accept the syntax, but the subset walker rejects
+these forms with location-aware diagnostics:
+
+```text
+type  module  sig  struct  functor  open  include
 exception  try  raise
 mutable  ref  while  for  do  done
 class  object  method  inherit  initializer
-lazy  assert
-external
-when
+lazy  assert  external  when
+records  tuples  arrays  labelled arguments  optional arguments
 ```
 
-## 4. Grammar (EBNF, illustrative — non-authoritative)
+## 5. Standard library types visible to P1 programs
 
-The grammar below is a **descriptive** sketch of the subset; it is
-useful for orientation but is not what the compiler enforces.
-Enforcement happens at the `Typedtree` level (see
-`10-frontend-bridge.md` §4). The OCaml compiler itself implements
-the actual parser.
-
-```ebnf
-program        ::= { top_item } EOF
-
-top_item       ::= type_decl
-                 | let_binding
-
-(* ───── type declarations ───── *)
-
-type_decl      ::= "type" [ type_params ] LIDENT "=" type_rhs
-
-type_params    ::= "'" LIDENT
-                 | "(" "'" LIDENT { "," "'" LIDENT } ")"
-
-type_rhs       ::= variant_rhs
-                 | record_rhs
-                 | type_expr                      (* alias *)
-
-variant_rhs    ::= [ "|" ] variant_case { "|" variant_case }
-variant_case   ::= UIDENT [ "of" type_expr_tuple ]
-
-record_rhs     ::= "{" field_decl { ";" field_decl } [ ";" ] "}"
-field_decl     ::= LIDENT ":" type_expr
-
-(* ───── type expressions ───── *)
-
-type_expr      ::= type_expr_tuple
-
-type_expr_tuple::= type_expr_arrow { "*" type_expr_arrow }
-
-type_expr_arrow::= type_expr_app { "->" type_expr_app }   (* right-assoc *)
-
-type_expr_app  ::= type_atom { type_atom }                (* postfix application: 'a list *)
-
-type_atom      ::= "'" LIDENT
-                 | LIDENT                                 (* type constructor *)
-                 | "(" type_expr ")"
-
-(* ───── value declarations ───── *)
-
-let_binding    ::= "let" [ "rec" ] binding_chain
-binding_chain  ::= binding { "and" binding }
-binding        ::= pattern { param } [ ":" type_expr ] "=" expr
-                                                          (* function sugar:
-                                                             let f x y = e
-                                                             ≡ let f = fun x -> fun y -> e *)
-
-param          ::= simple_pattern
-
-(* ───── expressions ───── *)
-
-expr           ::= "let" [ "rec" ] binding_chain "in" expr
-                 | "fun" param { param } "->" expr
-                 | "function" match_arms
-                 | "if" expr "then" expr [ "else" expr ]
-                 | "match" expr "with" match_arms
-                 | infix_expr
-
-match_arms     ::= [ "|" ] match_arm { "|" match_arm }
-match_arm      ::= pattern [ "when" expr ]   (* P1: rejects "when" with diagnostic *)
-                   "->" expr
-
-infix_expr     ::= app_expr { binop app_expr }
-
-binop          ::= "+" | "-" | "*" | "/" | "mod"
-                 | "=" | "<>" | "<" | "<=" | ">" | ">="
-                 | "&&" | "||"
-                 | "::"                                   (* list cons *)
-
-app_expr       ::= simple_expr { simple_expr }            (* left-assoc juxtaposition *)
-
-simple_expr    ::= LIDENT
-                 | UIDENT [ simple_expr ]                 (* constructor application *)
-                 | INT_LIT
-                 | "true" | "false"
-                 | STRING_LIT
-                 | "(" ")"                                (* unit *)
-                 | "(" expr { "," expr } ")"              (* parenthesised / tuple *)
-                 | "[" [ expr { ";" expr } [ ";" ] ] "]"  (* list literal *)
-                 | "{" record_field_init { ";" record_field_init } [ ";" ] "}"
-                 | simple_expr "." LIDENT                 (* record projection *)
-
-record_field_init ::= LIDENT "=" expr
-
-(* ───── patterns ───── *)
-
-pattern        ::= or_pattern
-or_pattern     ::= cons_pattern { "|" cons_pattern }
-cons_pattern   ::= app_pattern { "::" app_pattern }       (* right-assoc *)
-app_pattern    ::= UIDENT [ simple_pattern ]
-                 | simple_pattern
-
-simple_pattern ::= "_"
-                 | LIDENT                                 (* binder *)
-                 | UIDENT                                 (* nullary ctor *)
-                 | INT_LIT
-                 | "true" | "false"
-                 | "(" ")"
-                 | "(" pattern { "," pattern } ")"
-                 | "[" [ pattern { ";" pattern } [ ";" ] ] "]"
-                 | "{" field_pattern { ";" field_pattern } [ ";" ] "}"
-
-field_pattern  ::= LIDENT [ "=" pattern ]
-```
-
-## 5. Operator precedence (P1)
-
-From lowest to highest:
-
-| Level | Operators | Associativity |
-|---|---|---|
-| 1 | `||` | right |
-| 2 | `&&` | right |
-| 3 | `=`, `<>`, `<`, `<=`, `>`, `>=` | left |
-| 4 | `::` | right |
-| 5 | `+`, `-` | left |
-| 6 | `*`, `/`, `mod` | left |
-| 7 | function application | left |
-| 8 | `.field` | postfix |
-
-Implementation: Pratt parser with the table above.
-
-## 6. Standard library types visible to P1 user programs
-
-Defined in `stdlib/core.ml` (written in this very subset, see
-`07-repo-layout.md`):
+The bundled stdlib (`stdlib/core.ml`) defines:
 
 ```ocaml
 type 'a option = None | Some of 'a
 type ('a, 'e) result = Ok of 'a | Error of 'e
-type 'a list = []  | (::) of 'a * 'a list
+type 'a list = [] | (::) of 'a * 'a list
 ```
 
-`list` uses the OCaml built-in syntax sugar `[1; 2; 3]` and `x :: xs`,
-which the parser desugars to constructor applications during AST
-construction.
+User programs may construct and match these values. They may not yet
+introduce their own ADTs; that is P2+ roadmap work.
 
-## 7. Diagnostics for rejected OCaml constructs
+## 6. Diagnostics for rejected OCaml constructs
 
 Two layers exist:
 
-1. **Pure syntax errors** are reported by the upstream OCaml
-   compiler (via `zxc-frontend`). `omlz` re-renders them in its
-   own diagnostic style but does not re-author them.
-   ```
-   error: Syntax error
-     --> foo.ml:5:14
-   ```
-2. **Subset violations** are detected by `zxc-frontend` walking
-   the `Typedtree`. They look like:
-   ```
-   error[P1-UNSUPPORTED]: `try ... with` is not supported in P1
-     --> foo.ml:12:3
-     note: ZxCaml accepts a subset of OCaml; this construct is
-           planned for a later phase, see docs/08-roadmap.md
-   ```
+1. **Syntax/type errors** are reported by upstream `ocamlc`, captured
+   by `zxc-frontend`, and emitted as the same flat JSON diagnostic
+   shape used for subset errors.
+2. **Subset violations** are detected by `zxc-frontend` walking the
+   `Typedtree` and include the unsupported node kind plus a hint when
+   one is known.
 
-Both classes are emitted as JSON by `zxc-frontend` (`--json-diag`)
-and rendered uniformly by `omlz`.
+Rendered by `omlz`, a subset violation looks like:
 
-## 8. Compatibility check
-
-Subset drift is **structurally impossible** under ADR-010: the
-upstream OCaml compiler is the parser/type-checker, so anything
-`omlz` accepts is by construction valid OCaml. No separate sanity
-oracle is required.
-
-What CI still does verify:
-
-```sh
-# Every example and stdlib file must type-check against the
-# pinned OCaml version (already implied by the omlz build).
-for f in stdlib/*.ml examples/*.ml; do
-    omlz check "$f"
-done
+```text
+foo.ml:1:0: error: Tstr_type is not supported in the current ZxCaml subset; expected top-level `let` declarations ...
 ```
 
-If `omlz check` succeeds, the input is by definition valid OCaml.
+## 7. Compatibility check
+
+Because `omlz` obtains its input from upstream OCaml `compiler-libs`,
+accepted programs are valid OCaml by construction. CI still checks the
+examples corpus through `omlz check`; the diagnostic fixture
+`examples/m0_unsupported.ml` is intentionally skipped by that corpus
+loop because it is expected to fail.

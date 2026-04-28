@@ -185,7 +185,7 @@ flowchart TD
 | `ttree` → Core IR (ANF + `Layout` fields) | `core/anf.zig` | Our first owned IR transformation |
 | Core IR → Lowered IR | `LoweringStrategy` | P1 single impl |
 | Lowered IR → bytes | `Backend` | P1: Zig source |
-| `.zig` → `.o` | Driver, calls `zig` CLI | Not the compiler's job |
+| `.zig` → `.bc` → `.so` | Driver, calls `zig build-lib` and `sbpf-linker` | Not the compiler's job |
 | Runtime helpers (arena, panic, BPF entry shim) | `runtime/zig` | Linked into user programs |
 | Diagnostics rendering | `omlz` (Zig), formatted from JSON emitted by `zxc-frontend` | Single user-facing diagnostic style |
 

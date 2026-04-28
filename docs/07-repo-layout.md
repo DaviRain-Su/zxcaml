@@ -31,14 +31,17 @@ ZxCaml/
 │   └── zig/                    -- runtime helpers linked into user programs
 ├── stdlib/
 │   └── core.ml                 -- option / result / list (real OCaml; subset)
-├── examples/
-│   ├── hello.ml                -- interpreter + Zig backend smoke test
+├── examples/                   -- acceptance corpus + smoke fixtures
+│   ├── hello.ml
+│   ├── option_chain.ml
+│   ├── result_basic.ml
+│   ├── list_sum.ml
 │   └── solana_hello.ml         -- BPF acceptance program
 ├── tests/
 │   ├── ui/                     -- end-to-end .ml → expected output
 │   ├── golden/                 -- Core IR + sexp snapshot tests
 │   └── solana/                 -- solana-test-validator integration
-└── .github/workflows/          -- CI (post-P1)
+└── .github/workflows/          -- CI
 ```
 
 ### 1.1 Two-language boundary
@@ -148,16 +151,24 @@ Rules for `stdlib/`:
 - May not import anything from `runtime/zig/`. The compiler injects
   the runtime; stdlib is pure surface code.
 
+
 ## 5. `examples/`
 
 ```text
 examples/
 ├── hello.ml                    -- list head + Some/None demo
-└── solana_hello.ml             -- minimal BPF entrypoint
+├── option_chain.ml             -- Option.map / Option.bind acceptance
+├── result_basic.ml             -- Result construction and pattern matching
+├── list_sum.ml                 -- recursive sum over a list
+├── solana_hello.ml             -- canonical BPF acceptance program
+├── factorial.ml                -- recursion smoke test
+├── arith_wrap.ml               -- i64 wrap semantics smoke test
+├── div_zero.ml                 -- stable division-by-zero panic marker
+└── m0_unsupported.ml           -- intentional negative diagnostic fixture
 ```
 
-`examples/` is also a regression suite: if any example fails to
-compile, P1 is broken.
+`examples/` is also a regression suite. Corpus loops must skip
+`m0_unsupported.ml`, which is expected to fail.
 
 ## 6. `tests/`
 
@@ -182,19 +193,23 @@ toolchain) and not run on every commit. Run it only with
 variable the script prints a skip message and exits successfully. P1
 acceptance is gated on it.
 
-## 7. `.github/workflows/` (post-P1, illustrative)
+
+## 7. `.github/workflows/`
+
+P1 ships `.github/workflows/ci.yml` on `push` to `main` and on pull
+requests. The workflow runs on `macos-latest` and `ubuntu-latest`, calls
+the same root `./init.sh` used locally, then runs:
 
 ```text
-ci.yml:
-  - matrix: zig 0.16.x
-  - steps:
-      - zig build
-      - zig build test
-      - omlz check examples/*.ml
-      - tests/ui/run.sh
-      - tests/golden/run.sh
-      - (optional) tests/solana/hello/invoke.sh
+zig build
+zig build test
+zig-out/bin/omlz check examples/*.ml   # skipping m0_unsupported.ml
+tests/solana/hello/invoke.sh          # when SOLANA_BPF=1
 ```
+
+The Solana BPF harness is opt-in by environment variable. macOS is enabled
+by default in the workflow because it is the primary development platform;
+Ubuntu can opt in through the repository variable.
 
 ## 8. Conventions
 

@@ -118,6 +118,20 @@ To keep this tractable, P1 covers **only**:
 
 Everything else Solana-shaped is P3.
 
+
+### Revised 2026-04-28 — P1 outcome and reproducibility
+
+P1 completed the endpoint described above using the revised `.so` chain:
+`examples/solana_hello.ml` builds with `omlz build --target=bpf`, deploys
+through the Solana acceptance harness, and invokes successfully with the
+minimal return-0 entrypoint. The G13 reproducibility check also passed for
+that artifact: two consecutive BPF builds of `examples/solana_hello.ml`
+were byte-identical (`diff_exit=0`).
+
+This does **not** expand the BPF acceptance surface beyond the minimal
+entrypoint. First-class closure code pointers, syscall bindings, account
+input decoding, and richer Solana APIs remain outside P1.
+
 ---
 
 ## ADR-004 — Core IR is ANF, typed, layout-tagged
@@ -261,6 +275,22 @@ this arena.
 - Multi-arena schemes (per region, per call) are a P4 refinement
   and do not require Core IR changes.
 
+
+### Revised 2026-04-28 — as-built arena and closure boundary
+
+The P1 runtime arena is the caller-owned static-buffer bump allocator in
+`runtime/zig/arena.zig`: `fromStaticBuffer`, aligned checked `alloc`, and
+`reset`. It does not own memory and has no free list or per-object lifetime.
+
+Recursion lowered into two practical shapes during P1: top-level and
+non-escaping recursive helpers use direct arena-threaded functions, while
+escaping first-class closures use arena-allocated closure records for the
+interpreter/native path. BPF support for escaping closure code pointers is
+not a P1 acceptance guarantee; the mission observed a
+`Relocations found but no .rodata section` linker failure for that shape,
+so P2/P3 must either lower those calls directly, provide a linker-supported
+rodata anchor, or restrict the BPF subset by ADR.
+
 ---
 
 ## ADR-008 — Determinism between interpreter and Zig backend is a hard invariant
@@ -292,6 +322,20 @@ result. Any divergence is a P0 bug.
   pinned in `05-backends.md`.
 - BPF outputs cannot be diff-checked at the value level, but their
   return code can; this is the BPF acceptance test.
+
+
+### Revised 2026-04-28 — enforced P1 harness and BPF byte check
+
+P1 made the invariant executable: `zig build test` runs a determinism
+property over the examples/UI corpus, comparing interpreter output with the
+hosted Zig native backend. Arithmetic semantics were pinned to signed 64-bit
+wrap for `+`, `-`, `*`, truncating division/remainder, and the stable
+`ZXCAML_PANIC:division_by_zero` marker for zero divisors.
+
+BPF is checked separately: semantic acceptance goes through the Solana
+harness, and G13 byte reproducibility was recorded as PASS for
+`examples/solana_hello.ml` on 2026-04-28. Full value-level BPF equivalence
+for richer programs remains future work.
 
 ---
 
@@ -641,6 +685,19 @@ documented prerequisites grow. `06-bpf-target.md` §6 now carries
 the macOS prerequisite block, and §8 carries a corresponding
 troubleshooting row.
 
+
+### Revised 2026-04-28 — operational warning noise and objdump path
+
+P1 workers repeatedly observed `sbpf-linker 0.1.8` on macOS printing many
+lines of the form `unable to open LLVM shared lib ... .a: dlopen failed`
+while still linking successfully. These are benign archive-probe warnings
+from the LLVM proxy when the final process exit code is 0 and the `.so` is
+valid; they should not be treated as failure by CI.
+
+Manual inspection on Homebrew macOS may also require the full LLVM tool path,
+for example `/opt/homebrew/opt/llvm@20/bin/llvm-objdump`, because
+`llvm-objdump` is not necessarily on `PATH`.
+
 ---
 
 ## ADR-013 — Solana SBF version is pinned at `v3` for P1
@@ -723,6 +780,16 @@ Cascade applied in the same change-set: `06-bpf-target.md`,
 and the Chinese mirrors of all of the above were updated from
 `--cpu v3` / `SBPFv3` to `--cpu v2` / `SBPFv2` (with `v3` noted
 as the opt-in alternative where the doc context warrants).
+
+
+### Revised 2026-04-28 — P1 acceptance validated on v2
+
+The ADR title and original body remain historical. The authoritative P1
+state is the 2026-04-27 revision plus the completed acceptance evidence:
+`omlz build --target=bpf` used `sbpf-linker --cpu v2 --export entrypoint`,
+and the Solana harness validated that v2 artifact. `--cpu v3` remains an
+opt-in, unvalidated path in P1 and must not become the default without a new
+ADR addendum and acceptance run.
 
 ---
 

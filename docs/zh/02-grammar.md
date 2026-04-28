@@ -1,228 +1,112 @@
-# 02 — 语法（P1 阶段的 OCaml 子集）
+# 02 — 语法（P1 的 OCaml 子集）
 
 > **Languages / 语言**: [English](../02-grammar.md) · **简体中文**
 
 ## 1. 定位
 
-ZxCaml 接受 **OCaml 的严格子集**。
-ZxCaml 写出来的程序一定是合法 OCaml 程序；反之不成立。
+ZxCaml 接受 **OCaml 的严格子集**。任何被 ZxCaml 接受的程序，都会先由上游
+OCaml 解析并完成类型检查；随后 ZxCaml 在 `Typedtree` 层拒绝尚未支持的节点。
 
-**我们不定义自己的语法。** 根据 ADR-010，语法就是上游 OCaml 编译器接受的语法；
-ZxCaml 限制的是 **类型检查后的 Typedtree**，不是表层语法。
-权威的子集列表在
-[`10-frontend-bridge.md` §4](./10-frontend-bridge.md)，用 `Typedtree` 构造子表达。
+P1 的 as-built 用户程序子集刻意很小：**顶层 `let` 声明，以及整数、字符串、
+函数、`let`、`if`、`match`、函数应用、整数/比较原语、内置 `option` /
+`result` / `list` 构造器上的表达式。** 用户自定义 `type` 声明、record、tuple、
+module、exception、mutation、array、object、labelled argument 都会被拒绝。
 
-本文档仍然存在，是为了从 **人读** 的角度描述这个子集大致是什么样，
-并枚举出"保留但拒绝"的关键字以便给出友好的错误信息。
-**它不是真理来源；真理来源是 `10-frontend-bridge.md` §4。**
+权威实现是 `src/frontend/zxc_subset.ml`；已接受子集的 wire contract 是
+`src/frontend/zxc_sexp_format.md`（当前为 `0.4`）。本文只是便于阅读的表层摘要。
 
-文件后缀是 `.ml`。P1 **没有** `.mli`；签名以行内类型标注的形式出现。
+文件扩展名是 `.ml`。P1 不支持 `.mli`。
 
 ## 2. 词法规则
 
-完全等同于 OCaml 的词法规范，限制如下：
+词法由 OCaml 自己处理。P1 子集实际消费的只有：
 
-- 仅 ASCII 源码（UTF-8 字符串字面量允许，但不能用作标识符字符）。
-- 注释：`(* ... *)`，可嵌套。
-- 数字字面量：十进制 `int`（`0`、`42`、`-1`），P1 不支持 `Int64.t`、不支持浮点。
-- 布尔字面量：`true`、`false`。
-- 字符串字面量：标准双引号，仅支持 `\n \r \t \\ \"` 转义。
-  **P1 仅用于诊断 / stdlib 内部；不向用户暴露 runtime 字符串运算。**
-- 字符字面量：P1 不支持。
-- 标识符：小写字母开头（值），大写字母开头（构造子和模块名 ——
-  模块名保留但模块语法是 P3 的事）。
+- 十进制 `int` 字面量（`0`、`42`、`-1`），进入后端后表示为有符号 64 位整数；
+- 字符串字面量，主要用于诊断和小例子；
+- OCaml 接受的标识符；
+- 内置 stdlib 的构造器名：`None`、`Some`、`Ok`、`Error`、`[]`、`::`。
 
-## 3. P1 接受的保留关键字
+P1 没有单独把直接写出的布尔字面量当成前端特例；比较表达式会产生供 `if` 消费的内部 bool ADT。
 
+## 3. P1 接受的表层形式
+
+```ocaml
+(* 顶层声明：每个 let group 只能有一个 binding *)
+let x = 1
+let rec fact n = if n <= 1 then 1 else n * fact (n - 1)
+
+(* 表达式 *)
+let entrypoint _input =
+  let xs = [1; 2; 3] in
+  match xs with
+  | [] -> 0
+  | x :: _ -> x
 ```
-let  rec  and  in  fun  function
-match  with  if  then  else
-type  of
-true  false
-```
 
-保留但 **拒绝** 的（parser 必须给出清晰的"暂不支持"诊断，而不是普通语法错误）：
+接受的表达式类别：
 
-```
-module  sig  struct  functor  open  include
+| 表层形式 | 说明 |
+|---|---|
+| `let x = e` / `let rec f x = e` | 顶层和嵌套均可；不支持 `and` group |
+| `fun x -> e` / 函数语法糖 let | desugar 后每个 lambda 只带一个参数 |
+| 变量引用 | 由 OCaml 在序列化前完成解析 |
+| 整数和字符串常量 | 其他常量拒绝 |
+| 函数应用 | 只支持无 label、完整应用的参数 |
+| `if c then a else b` | `else` 必须存在 |
+| `match e with ...` | 不支持 guard；arm 按源码顺序从上到下测试 |
+| 构造器 | 仅 `None`、`Some`、`Ok`、`Error`、`[]`、`::` |
+| 原语运算 | `+`、`-`、`*`、`/`、`mod`、`=`、`<>`、`<`、`<=`、`>`、`>=` |
+
+接受的模式：
+
+| 模式 | 说明 |
+|---|---|
+| `_` | 通配 |
+| `x` | 变量绑定 |
+| `None`、`Some x`、`Ok x`、`Error e`、`[]`、`x :: xs` | P1 中构造器 payload 只支持简单通配/变量模式 |
+
+`Some (Some x)` 这类嵌套构造器模式以及 `when` guard 属于 P2+。
+
+## 4. P1 保留但拒绝的形式
+
+OCaml parser 可能接受这些语法，但子集 walker 会用带位置的诊断拒绝：
+
+```text
+type  module  sig  struct  functor  open  include
 exception  try  raise
 mutable  ref  while  for  do  done
 class  object  method  inherit  initializer
-lazy  assert
-external
-when
+lazy  assert  external  when
+records  tuples  arrays  labelled arguments  optional arguments
 ```
 
-## 4. 语法（EBNF，描述性 —— 非权威）
+## 5. P1 程序可见的标准库类型
 
-下面这份 EBNF 是这个子集的 **描述性** 草图；它便于上下文理解，
-但**不是**编译器实际强制的内容。强制发生在 `Typedtree` 这一层
-（见 `10-frontend-bridge.md` §4）。OCaml 编译器自身实现了真正的 parser。
-
-```ebnf
-program        ::= { top_item } EOF
-
-top_item       ::= type_decl
-                 | let_binding
-
-(* ───── 类型声明 ───── *)
-
-type_decl      ::= "type" [ type_params ] LIDENT "=" type_rhs
-
-type_params    ::= "'" LIDENT
-                 | "(" "'" LIDENT { "," "'" LIDENT } ")"
-
-type_rhs       ::= variant_rhs
-                 | record_rhs
-                 | type_expr                      (* 类型别名 *)
-
-variant_rhs    ::= [ "|" ] variant_case { "|" variant_case }
-variant_case   ::= UIDENT [ "of" type_expr_tuple ]
-
-record_rhs     ::= "{" field_decl { ";" field_decl } [ ";" ] "}"
-field_decl     ::= LIDENT ":" type_expr
-
-(* ───── 类型表达式 ───── *)
-
-type_expr      ::= type_expr_tuple
-type_expr_tuple::= type_expr_arrow { "*" type_expr_arrow }
-type_expr_arrow::= type_expr_app { "->" type_expr_app }   (* 右结合 *)
-type_expr_app  ::= type_atom { type_atom }                (* 后缀应用：'a list *)
-type_atom      ::= "'" LIDENT
-                 | LIDENT
-                 | "(" type_expr ")"
-
-(* ───── 值声明 ───── *)
-
-let_binding    ::= "let" [ "rec" ] binding_chain
-binding_chain  ::= binding { "and" binding }
-binding        ::= pattern { param } [ ":" type_expr ] "=" expr
-                                                          (* 函数糖：
-                                                             let f x y = e
-                                                             ≡ let f = fun x -> fun y -> e *)
-param          ::= simple_pattern
-
-(* ───── 表达式 ───── *)
-
-expr           ::= "let" [ "rec" ] binding_chain "in" expr
-                 | "fun" param { param } "->" expr
-                 | "function" match_arms
-                 | "if" expr "then" expr [ "else" expr ]
-                 | "match" expr "with" match_arms
-                 | infix_expr
-
-match_arms     ::= [ "|" ] match_arm { "|" match_arm }
-match_arm      ::= pattern [ "when" expr ]   (* P1：碰到 "when" 给出诊断并拒绝 *)
-                   "->" expr
-
-infix_expr     ::= app_expr { binop app_expr }
-
-binop          ::= "+" | "-" | "*" | "/" | "mod"
-                 | "=" | "<>" | "<" | "<=" | ">" | ">="
-                 | "&&" | "||"
-                 | "::"                                   (* 列表 cons *)
-
-app_expr       ::= simple_expr { simple_expr }            (* 左结合并置 *)
-
-simple_expr    ::= LIDENT
-                 | UIDENT [ simple_expr ]
-                 | INT_LIT
-                 | "true" | "false"
-                 | STRING_LIT
-                 | "(" ")"
-                 | "(" expr { "," expr } ")"
-                 | "[" [ expr { ";" expr } [ ";" ] ] "]"
-                 | "{" record_field_init { ";" record_field_init } [ ";" ] "}"
-                 | simple_expr "." LIDENT
-
-record_field_init ::= LIDENT "=" expr
-
-(* ───── 模式 ───── *)
-
-pattern        ::= or_pattern
-or_pattern     ::= cons_pattern { "|" cons_pattern }
-cons_pattern   ::= app_pattern { "::" app_pattern }       (* 右结合 *)
-app_pattern    ::= UIDENT [ simple_pattern ]
-                 | simple_pattern
-
-simple_pattern ::= "_"
-                 | LIDENT
-                 | UIDENT
-                 | INT_LIT
-                 | "true" | "false"
-                 | "(" ")"
-                 | "(" pattern { "," pattern } ")"
-                 | "[" [ pattern { ";" pattern } [ ";" ] ] "]"
-                 | "{" field_pattern { ";" field_pattern } [ ";" ] "}"
-
-field_pattern  ::= LIDENT [ "=" pattern ]
-```
-
-## 5. 运算符优先级（P1）
-
-从低到高：
-
-| 级别 | 运算符 | 结合性 |
-|---|---|---|
-| 1 | `||` | 右 |
-| 2 | `&&` | 右 |
-| 3 | `=`, `<>`, `<`, `<=`, `>`, `>=` | 左 |
-| 4 | `::` | 右 |
-| 5 | `+`, `-` | 左 |
-| 6 | `*`, `/`, `mod` | 左 |
-| 7 | 函数应用 | 左 |
-| 8 | `.field` | 后缀 |
-
-实现：用 Pratt parser，按上表配置。
-
-## 6. P1 用户程序可见的标准库类型
-
-定义在 `stdlib/core.ml` 中（用这个子集本身写，详见 `07-repo-layout.md`）：
+内置 stdlib（`stdlib/core.ml`）定义：
 
 ```ocaml
 type 'a option = None | Some of 'a
 type ('a, 'e) result = Ok of 'a | Error of 'e
-type 'a list = []  | (::) of 'a * 'a list
+type 'a list = [] | (::) of 'a * 'a list
 ```
 
-`list` 用 OCaml 内置的语法糖 `[1; 2; 3]` 和 `x :: xs`，
-parser 在构造 AST 时把它们脱糖成构造子应用。
+用户程序可以构造和匹配这些值，但尚不能引入自己的 ADT；那是 P2+ roadmap 工作。
 
-## 7. 对被拒绝 OCaml 构造的诊断
+## 6. 对被拒绝 OCaml 构造的诊断
 
-分两层：
+有两层诊断：
 
-1. **纯语法错误** 由上游 OCaml 编译器报告（通过 `zxc-frontend`）。
-   `omlz` 用自己的诊断风格重新渲染，但不重新编写：
-   ```
-   error: Syntax error
-     --> foo.ml:5:14
-   ```
-2. **子集违规** 由 `zxc-frontend` 在遍历 `Typedtree` 时发现。形如：
-   ```
-   error[P1-UNSUPPORTED]: `try ... with` is not supported in P1
-     --> foo.ml:12:3
-     note: ZxCaml accepts a subset of OCaml; this construct is
-           planned for a later phase, see docs/08-roadmap.md
-   ```
+1. **语法/类型错误** 由上游 `ocamlc` 报告，`zxc-frontend` 捕获后转换成与子集错误相同的扁平 JSON 形状。
+2. **子集违规** 由 `zxc-frontend` 遍历 `Typedtree` 时发现，会包含不支持的节点类型，以及已知时的 hint。
 
-两类都由 `zxc-frontend` 以 JSON（`--json-diag`）形式产出，
-由 `omlz` 统一渲染。
+经 `omlz` 渲染后，子集违规看起来像：
 
-## 8. 兼容性检查
-
-在 ADR-010 下，子集漂移在结构上不可能：上游 OCaml 编译器就是 parser /
-类型检查器，因此 `omlz` 接受的程序按定义就是合法 OCaml。
-**不需要**额外的正确性参考工具。
-
-CI 仍然会做的：
-
-```sh
-# 每个 example 和 stdlib 文件都必须能在锁定的 OCaml 版本上类型检查通过
-# （这已经被 omlz 自身的构建间接保证了）。
-for f in stdlib/*.ml examples/*.ml; do
-    omlz check "$f"
-done
+```text
+foo.ml:1:0: error: Tstr_type is not supported in the current ZxCaml subset; expected top-level `let` declarations ...
 ```
 
-只要 `omlz check` 成功，输入按定义就是合法 OCaml。
+## 7. 兼容性检查
+
+因为 `omlz` 的输入来自上游 OCaml `compiler-libs`，被接受的程序天然是合法 OCaml。
+CI 仍然会对 examples corpus 运行 `omlz check`；诊断 fixture
+`examples/m0_unsupported.ml` 会被该 corpus 循环刻意跳过，因为它预期失败。

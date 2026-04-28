@@ -172,7 +172,7 @@ flowchart TD
 | `ttree` → Core IR（ANF + `Layout` 字段） | `core/anf.zig` | 我们拥有的第一道 IR 转换 |
 | Core IR → Lowered IR | `LoweringStrategy` | P1 单实现 |
 | Lowered IR → 字节 | `Backend` | P1：Zig 源码 |
-| `.zig` → `.o` | Driver 调 `zig` CLI | 编译器自身不做这件事 |
+| `.zig` → `.bc` → `.so` | Driver 调 `zig build-lib` 和 `sbpf-linker` | 编译器自身不做这件事 |
 | Runtime helper（arena、panic、BPF entry shim） | `runtime/zig` | 链接进用户程序 |
 | 诊断渲染 | `omlz`（Zig），按 `zxc-frontend` 输出的 JSON 格式渲染 | 用户面前只有一种诊断风格 |
 

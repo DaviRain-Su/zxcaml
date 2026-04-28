@@ -29,30 +29,42 @@ For a Solana BPF program:
 A bump arena fits perfectly: O(1) allocation, zero per-object
 overhead, and reclamation is "drop the arena" at program end.
 
+
 ## 3. The single-arena rule
 
-```text
-fn entrypoint(input: *const u8, len: usize) -> u64 {
-    var arena: Arena = Arena.init_from_static_buffer(...);
-    defer arena.reset();
-    return user_main(&arena, input, len);
-}
+As built, `runtime/zig/arena.zig` exposes a small caller-owned bump
+arena:
+
+```zig
+pub const Arena = struct {
+    buffer: []u8,
+    offset: usize,
+
+    pub fn fromStaticBuffer(buf: []u8) Arena
+    pub fn alloc(self: *Arena, comptime T: type, count: usize) ![]T
+    pub fn reset(self: *Arena) void
+};
 ```
 
-Every compiled function takes the arena as an **implicit first
-parameter**. The frontend user never writes it; the backend always
-threads it.
+The arena does **not** own memory. The BPF entry shim provides a static
+byte buffer, constructs `Arena.fromStaticBuffer(&buf)`, and compiled
+functions receive `arena: *Arena` as an implicit first parameter. `alloc`
+performs checked size arithmetic, alignment via `std.mem.alignForward`,
+and returns `error.OutOfMemory` when the static buffer is exhausted.
+`reset` rewinds the bump cursor at program exit.
 
 ## 4. What goes where
 
 | Value class | Region | Repr |
 |---|---|---|
-| `int`, `bool`, `unit` | Static (immediate) | TaggedImmediate |
-| nullary constructors | Static | TaggedImmediate |
+| integer constants | Static | Flat |
+| unit values / unit parameters | Static | Flat |
+| nullary constructors (`None`, `[]`) | Static | TaggedImmediate |
 | string literals | Static | Boxed (pointer to read-only data) |
-| tuples, records, ADT payloads | Arena | Boxed |
-| closures | Arena | Boxed |
-| (P1.5 optional) values proven non-escaping | Stack | Boxed |
+| payload constructors / list cons cells | Arena | Boxed |
+| top-level lambdas | Arena | Flat |
+| first-class closure records | Arena | Boxed |
+| reserved future non-escaping values | Stack | Boxed |
 
 These rules live in `Typed AST → Core IR` lowering (see
 `03-core-ir.md` §4). They are the **only** knob the frontend
@@ -77,22 +89,25 @@ The backend chooses the discriminator width. The interpreter is
 allowed to use a tagged-union representation native to the host
 language and is not bound by these encodings.
 
-## 6. Closure representation (P1)
 
-```
-struct Closure {
-  code: *const fn(*Arena, /* captures */, /* args */) -> Ret,
-  captures: { ... fields, by value or boxed ... },
-}
-```
+## 6. Closure and recursion representation (P1)
 
-Allocated in the arena, `Boxed`. Free variables are computed by ANF
-lowering and recorded on `RLam.free_vars`. The `ArenaStrategy`
-emits the capture struct verbatim.
+P1 has three as-built cases:
 
-P1 does **not** specialise calls to known closures; calling a
-closure goes through an indirect function pointer. Optimisation is
-left to `zig`.
+1. **Top-level functions** lower to direct Zig helper functions using the
+   arena-threaded calling convention.
+2. **Nested recursive functions that do not escape** are lowered as direct
+   helper functions with captured values threaded as extra parameters.
+3. **Escaping first-class closures** are represented in Lowered IR as an
+   arena-allocated closure record with a code pointer and capture array
+   (`prelude.Closure`). This path works for interpreter/native validation;
+   BPF first-class closure code pointers are not part of the P1 Solana
+   acceptance example and remain a P2/P3 hardening item because the mission
+   observed a `Relocations found but no .rodata section` linker failure on
+   that shape.
+
+The user still sees none of this machinery; they write ordinary `let` /
+`let rec` OCaml subset code.
 
 ## 7. Strings (P1)
 

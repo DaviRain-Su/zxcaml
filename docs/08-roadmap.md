@@ -6,7 +6,7 @@
 
 | Phase | Theme | Done when… |
 |---|---|---|
-| **P1** | MVP: OCaml subset → BPF `.o` | `examples/solana_hello.ml` deploys and returns 0 |
+| **P1** | MVP: OCaml subset → BPF `.so` | `examples/solana_hello.ml` deploys and returns 0 |
 | P2 | ADT completeness | nested patterns, record update, basic exceptions-as-result |
 | P3 | Solana-shaped subset | `account` type, no-alloc analysis, syscall bindings, real Anchor-style program |
 | P4 | Region inference | escape analysis, `Region::Region(id)`, optional stack allocation |
@@ -83,9 +83,9 @@ P1.7  Interpreter           `omlz run hello.ml` returns Some 1.
 P1.8  ArenaStrategy         Lowered IR.
 P1.9  ZigBackend            Generates `.zig` that `zig build-exe` accepts natively.
 P1.10 Runtime + entrypoint  BPF shim, arena, panic.
-P1.11 BPF driver            `omlz build --target=bpf` produces a .o.
+P1.11 BPF driver            `omlz build --target=bpf` produces a Solana-loadable .so.
 P1.12 Solana harness        Deploy + invoke on solana-test-validator.
-P1.13 Determinism suite     interpreter ≡ Zig native ≡ Zig BPF (where applicable).
+P1.13 Determinism suite     interpreter ≡ Zig native; BPF acceptance is separate.
 ```
 
 The shape changed from the previous draft: P1.1–P1.4 used to be
@@ -106,6 +106,49 @@ examples/solana_hello.ml      - BPF entrypoint returning 0
 
 The first four run through the interpreter and the Zig backend
 (native). The fifth runs through Zig BPF and `solana-test-validator`.
+
+### 2.6 P1 release notes (2026-04-28)
+
+P1 shipped the walking skeleton described by the ADR set
+([ADR list](./09-decisions.md)): upstream OCaml `compiler-libs` produce
+a versioned sexp (`0.4`), Zig parses that into Core IR, the interpreter
+and native Zig backend execute the acceptance corpus, and the BPF path
+builds `examples/solana_hello.ml` into a Solana-loadable `.so` via
+`zig build-lib -femit-llvm-bc` plus `sbpf-linker --cpu v2`.
+
+| Area | Worker commits |
+|---|---|
+| Skeleton, frontend subprocess, sexp bridge, Core IR, interpreter, native and BPF build path | [39fabc0](https://github.com/DaviRain-Su/zxcaml/commit/39fabc0), [eb5ca12](https://github.com/DaviRain-Su/zxcaml/commit/eb5ca12), [a1f139e](https://github.com/DaviRain-Su/zxcaml/commit/a1f139e), [b29f437](https://github.com/DaviRain-Su/zxcaml/commit/b29f437), [f1725e5](https://github.com/DaviRain-Su/zxcaml/commit/f1725e5), [e3f781f](https://github.com/DaviRain-Su/zxcaml/commit/e3f781f), [010289b](https://github.com/DaviRain-Su/zxcaml/commit/010289b), [c1014bb](https://github.com/DaviRain-Su/zxcaml/commit/c1014bb), [2fad318](https://github.com/DaviRain-Su/zxcaml/commit/2fad318) |
+| Let bindings, option/result constructors, match, recursion/closures, lists, arithmetic, conditionals | [451ecca](https://github.com/DaviRain-Su/zxcaml/commit/451ecca), [e3dd63a](https://github.com/DaviRain-Su/zxcaml/commit/e3dd63a), [86f995d](https://github.com/DaviRain-Su/zxcaml/commit/86f995d), [287c093](https://github.com/DaviRain-Su/zxcaml/commit/287c093), [d9875be](https://github.com/DaviRain-Su/zxcaml/commit/d9875be), [9bb39ab](https://github.com/DaviRain-Su/zxcaml/commit/9bb39ab), [a52574c](https://github.com/DaviRain-Su/zxcaml/commit/a52574c), [bce8251](https://github.com/DaviRain-Su/zxcaml/commit/bce8251), [65cbce5](https://github.com/DaviRain-Su/zxcaml/commit/65cbce5), [4c715c2](https://github.com/DaviRain-Su/zxcaml/commit/4c715c2), [792c152](https://github.com/DaviRain-Su/zxcaml/commit/792c152), [382969c](https://github.com/DaviRain-Su/zxcaml/commit/382969c), [6b706de](https://github.com/DaviRain-Su/zxcaml/commit/6b706de), [31c044e](https://github.com/DaviRain-Su/zxcaml/commit/31c044e) |
+| Determinism, golden tests, UI tests, Solana harness, diagnostics | [3e40be5](https://github.com/DaviRain-Su/zxcaml/commit/3e40be5), [cb817dc](https://github.com/DaviRain-Su/zxcaml/commit/cb817dc), [187f67b](https://github.com/DaviRain-Su/zxcaml/commit/187f67b), [afaa896](https://github.com/DaviRain-Su/zxcaml/commit/afaa896), [fca5bb5](https://github.com/DaviRain-Su/zxcaml/commit/fca5bb5), [2e61aa8](https://github.com/DaviRain-Su/zxcaml/commit/2e61aa8) |
+| Acceptance corpus, CI, install docs, final docs sweep | [4ae4153](https://github.com/DaviRain-Su/zxcaml/commit/4ae4153), [533ef81](https://github.com/DaviRain-Su/zxcaml/commit/533ef81), [18c065e](https://github.com/DaviRain-Su/zxcaml/commit/18c065e), [e8b1124](https://github.com/DaviRain-Su/zxcaml/commit/e8b1124) |
+
+Implemented in P1:
+
+- CLI: `omlz check`, `omlz run`, and `omlz build --target=native|bpf`.
+- Accepted user subset: single-binding `let` / `let rec`, one-argument
+  lambdas, applications, `if`, `match`, integer/string constants,
+  arithmetic/comparison primops, and the bundled option/result/list
+  constructors.
+- Runtime: static-buffer bump arena, panic/prelude helpers, native and
+  BPF entry shims.
+- Quality gates: interpreter ≡ native determinism over the corpus,
+  Core IR golden tests, UI tests, Solana deploy/invoke harness, CI,
+  and G13 BPF byte reproducibility documented as PASS in
+  `06-bpf-target.md` §7.
+
+Deferred to P2+:
+
+- user-defined ADTs, records, tuples, nested constructor patterns,
+  guarded match arms, exceptions-as-result helpers, mutation/ref, and
+  modules/functors;
+- first-class closures as a supported BPF acceptance shape (native and
+  interpreter paths exist, but BPF code-pointer relocations need a P2/P3
+  design choice);
+- Solana-shaped APIs beyond the entrypoint: account decoding, syscalls,
+  CPI, IDL generation, and no-allocation analysis;
+- region inference / multi-arena ownership work and any non-BPF
+  deliverable target.
 
 ## 3. Phase 2 — ADT completeness
 

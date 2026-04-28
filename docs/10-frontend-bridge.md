@@ -70,13 +70,12 @@ compiler-libs.common -linkpkg ...` (see ADR-011). Output binary:
 ### 2.4 CLI of `zxc-frontend`
 
 ```text
-zxc-frontend <input.ml> [--out <path>] [--json-diag]
+zxc-frontend --emit=sexp <input.ml>
 
   Exit codes:
-    0   success, sexp written to stdout (or --out)
-    1   subset violation (diagnostic on stderr)
-    2   OCaml type error (diagnostic on stderr)
-    3   I/O or internal error
+    0   success, sexp written to stdout
+    1   subset violation or OCaml syntax/type error (flat JSON diagnostic on stderr)
+    3   argument, I/O, or internal error
 ```
 
 `omlz` always passes `--json-diag` so it can render diagnostics
@@ -91,31 +90,27 @@ The serialised form is an S-expression because:
 - It maps cleanly to the algebraic shape of the `Typedtree`
   subset.
 
+
 ### 3.1 Top-level shape
 
+As built in P1, the formal wire grammar lives in
+`src/frontend/zxc_sexp_format.md` and is version `0.4`. The top-level
+shape is deliberately compact:
+
 ```text
-(module
-  (source "examples/hello.ml")
-  (ocaml-version "5.2.0")
-  (zxc-frontend-version "0.1")
-  (types
-    (adt option (params 'a)
-      (variants
-        (None)
-        (Some 'a)))
-    ...
-    )
-  (decls
-    (let head
-      (ty (arrow (list 'a) (option 'a)))
-      (rec false)
-      (body
-        (fun (param xs (ty (list 'a)))
-          (match (var xs)
-            (case (pat (ctor [])) (body (ctor None)))
-            (case (pat (ctor :: x _))
-                  (body (ctor Some (var x))))))))))
+(zxcaml-cir 0.4
+  (module
+    (let entrypoint
+      (lambda (_)
+        (match (ctor Some (const-int 1))
+          (case (ctor Some (var x)) (var x))
+          (case (ctor None) (const-int 0)))))))
 ```
+
+The sexp does **not** carry type declarations, a source map, or spans in
+P1. Diagnostics carry locations separately on stderr. The accepted node
+families are `let`, `lambda`, `var`, `const-int`, `const-string`, `ctor`,
+`app`, `prim`, `if`, `match`, and `case`.
 
 ### 3.2 Stability commitment
 
@@ -149,63 +144,66 @@ Out:
 - Any node from a feature outside the subset (those are rejected
   upstream of serialisation).
 
+
 ## 4. The accepted subset (P1)
 
-The **definitive** list of `Typedtree` constructors accepted by
-`zxc-frontend` in P1. Anything not on this list produces a
-"feature not supported in P1" diagnostic.
+The **definitive** list of `Typedtree` constructors accepted by the
+as-built P1 `zxc-frontend` is intentionally smaller than the future
+surface sketched in early planning docs.
 
 ### 4.1 Top-level
 
-- `Tstr_value` (a `let` group, recursive or not)
-- `Tstr_type Trec_not | Trec_first | Trec_next` (type
-  declarations)
+Accepted:
 
-Rejected: `Tstr_module`, `Tstr_modtype`, `Tstr_class`, `Tstr_open`,
-`Tstr_include`, `Tstr_exception`, `Tstr_primitive` (`external`),
-`Tstr_attribute`, `Tstr_recmodule`.
+- `Tstr_value` with exactly one binding, recursive or non-recursive.
+
+Rejected: `Tstr_type`, `Tstr_module`, `Tstr_modtype`, `Tstr_class`,
+`Tstr_open`, `Tstr_include`, `Tstr_exception`, `Tstr_primitive`
+(`external`), attributes, recursive modules, and multi-binding `and`
+groups.
 
 ### 4.2 Expressions
 
-- `Texp_ident`
-- `Texp_constant` (only `Const_int`, `Const_string`)
-- `Texp_let` (recursive or not)
-- `Texp_function` / `Texp_apply`
-- `Texp_match` (no exception cases; no `when` guards in P1)
-- `Texp_tuple`
-- `Texp_construct`
-- `Texp_record` (no `with` update in P1; a P2 feature)
-- `Texp_field`
-- `Texp_ifthenelse`
-- `Texp_sequence` rejected → users should use `let _ =`
+Accepted:
 
-Rejected (with diagnostics): `Texp_try`, `Texp_assert`,
-`Texp_lazy`, `Texp_object`, `Texp_pack`, `Texp_letmodule`,
-`Texp_open`, `Texp_extension_constructor`, `Texp_setfield`,
-`Texp_array`, `Texp_while`, `Texp_for`, `Texp_send`, `Texp_new`,
-`Texp_override`, `Texp_letop` (`let*`).
+- `Texp_ident`
+- `Texp_constant` for `Const_int` and `Const_string`
+- `Texp_function` with one parameter and an expression body
+- `Texp_let` with exactly one binding, recursive or non-recursive
+- `Texp_apply` for unlabeled/full applications and whitelisted primops
+- `Texp_ifthenelse` with an `else` branch
+- `Texp_match` with no guards
+- `Texp_construct` for `None`, `Some`, `Ok`, `Error`, `[]`, and `::`
+
+Rejected: records, tuples, arrays, sequences, loops, objects, variants,
+field access/update, `letop`, local opens/modules, `try`, `assert`, `lazy`,
+partial applications, labels, and mutation primitives (`ref`, `:=`, `!`) with
+the dedicated mutation diagnostic.
+
+Whitelisted primops:
+
+```text
++  -  *  /  mod  =  <>  <  <=  >  >=
+```
 
 ### 4.3 Patterns
 
+Accepted:
+
 - `Tpat_any` (`_`)
 - `Tpat_var`
-- `Tpat_constant` (int, bool via construct)
-- `Tpat_tuple`
-- `Tpat_construct`
-- `Tpat_record`
-- `Tpat_or`
+- `Tpat_construct` for `None`, `Some`, `Ok`, `Error`, `[]`, and `::`,
+  with simple wildcard/variable payload patterns in P1.
 
-Rejected: `Tpat_alias` (P2 candidate), `Tpat_array`, `Tpat_lazy`,
-`Tpat_variant` (polymorphic variants), `Tpat_exception`.
+Rejected: aliases, constants beyond the supported constructor forms,
+tuples, records, arrays, lazy patterns, polymorphic variants, exception
+patterns, and guarded match arms.
 
 ### 4.4 Types
 
-- `Ttyp_var`, `Ttyp_arrow`, `Ttyp_tuple`, `Ttyp_constr`
-- ADT declarations with named variants, optionally with payloads
-- Record declarations
-
-Rejected: `Ttyp_object`, `Ttyp_class`, `Ttyp_alias` with effects,
-`Ttyp_poly` beyond rank-1, polymorphic variants, GADTs.
+User-authored type declarations are rejected in P1 (`Tstr_type`). The
+bundled stdlib supplies `option`, `result`, and `list`; user programs may
+construct and match those values but may not define new ADTs yet.
 
 ## 5. Diagnostics
 

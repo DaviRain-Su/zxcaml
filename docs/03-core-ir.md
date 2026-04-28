@@ -2,253 +2,165 @@
 
 > **Languages / 语言**: **English** · [简体中文](./zh/03-core-ir.md)
 
-The Core IR is the **only stable contract** in this compiler.
-Everything else (Surface AST, Typed AST, Lowered IR, backends) is
-internal and may be rewritten freely. If you change Core IR, you are
-changing the project.
+The Core IR is the **only stable contract** in this compiler. The
+as-built P1 contract is the data model in `src/core/ir.zig`, with layout
+choices in `src/core/layout.zig`. This document describes that concrete
+model, not the larger P2+ shape.
 
 ## 1. Properties
 
-| Property | Value |
+| Property | P1 as-built value |
 |---|---|
-| Form | A-Normal Form (ANF) |
-| Typing | every node carries a fully resolved `Ty` |
-| Layout | every allocation-bearing node carries a `Layout` |
-| Purity | no side effects in P1 (no mutation, no exceptions) |
-| Names | every binder is alpha-renamed to a unique `Symbol` |
-| Source positions | every node carries a `Span` for diagnostics |
+| Form | ANF-oriented expression tree; the lowering pass keeps complex work let-bound where the current subset needs it |
+| Typing | every expression node carries a resolved `Ty` |
+| Layout | every value-producing node that codegen needs carries a `Layout` |
+| Purity | no mutation, no exceptions, no effects in P1 |
+| Names | byte-string names from the frontend; codegen sanitizes them for Zig |
+| Source positions | frontend diagnostics carry locations; Core IR source spans are not populated in P1 |
 
-ANF discipline:
+The current Zig model does **not** split atoms and RHS values into
+separate `Atom` / `RhsValue` variants. Instead, expression variants hold
+pointers to child `Expr` values and the ANF/lowering passes enforce the
+subset's evaluation discipline.
 
-- Every actual computation is named via `let`.
-- Every operand of an application, primitive op, or constructor is
-  an **atom** (variable or literal).
-- Control flow constructs (`match`, `if`) take an atom as scrutinee.
-
-## 2. Data model (language-neutral pseudocode)
+## 2. Data model (`src/core/ir.zig`)
 
 ```text
-Symbol  : interned identifier with unique id
-Span    : { file_id : u32, lo : u32, hi : u32 }
+Module := { decls : Decl list }
 
-Ty :=
-  | TyVar    of TyVarId
-  | TyInt
-  | TyBool
-  | TyUnit
-  | TyString
-  | TyTuple  of Ty list
-  | TyArrow  of Ty list * Ty       -- multi-arg arrow, curried at frontend
-  | TyAdt    of AdtId * Ty list    -- 'a list, ('a,'e) result, ...
-  | TyRecord of RecordId * Ty list
+Decl :=
+  | Let of Let
 
-Region :=
-  | Arena                          -- P1: the only legal value
-  | Static                         -- compile-time constants
-  | Stack                          -- non-escaping locals (optional in P1)
-  -- future: Rc | Gc | Region(id)
+Let := {
+  name   : string,
+  value  : Expr,
+  ty     : Ty,
+  layout : Layout,
+  is_rec : bool,
+}
 
-Repr :=
-  | Flat                           -- inline by value
-  | Boxed                          -- pointer to region
-  | TaggedImmediate                -- small int, bool, unit, nullary ctor
-
-Layout := { region : Region, repr : Repr }
-
-Atom :=
-  | AVar of Symbol * Ty
-  | ALit of Literal * Ty
-
-Literal :=
-  | LInt    of i64
-  | LBool   of bool
-  | LUnit
-  | LString of string_id           -- interned, lives in `Static`
-
-Param := { name : Symbol, ty : Ty }
-
-Pattern :=
-  | PWild
-  | PVar     of Symbol * Ty
-  | PInt     of i64
-  | PBool    of bool
-  | PUnit
-  | PTuple   of Pattern list
-  | PCtor    of AdtId * VariantId * Pattern list
-  | PRecord  of RecordId * (FieldId * Pattern) list
-
-Arm := { pattern : Pattern, body : Expr, span : Span }
-
-PrimOp :=
-  | IAdd | ISub | IMul | IDiv | IMod
-  | IEq  | INe  | ILt  | ILe  | IGt | IGe
-  | BAnd | BOr  | BNot
-  | StrEq                          -- stdlib-only, P1 internal
-  -- future: bitwise ops, syscalls
+Lambda := { params : Param list, body : Expr, ty : Ty, layout : Layout }
+Param  := { name : string, ty : Ty }
 
 Expr :=
-  | EAtom    of Atom
-  | ELet     of { name : Symbol, ty : Ty, value : RhsValue,
-                  body : Expr, span : Span }
-  | EMatch   of { scrut : Atom, arms : Arm list, ty : Ty, span : Span }
-  | EIf      of { cond  : Atom, then_ : Expr, else_ : Expr,
-                  ty : Ty, span : Span }
+  | Lambda   of Lambda
+  | Constant of Constant
+  | App      of { callee : Expr, args : Expr list, ty : Ty, layout : Layout }
+  | Let      of { name : string, value : Expr, body : Expr,
+                  ty : Ty, layout : Layout, is_rec : bool }
+  | If       of { cond : Expr, then_branch : Expr, else_branch : Expr,
+                  ty : Ty, layout : Layout }
+  | Prim     of { op : PrimOp, args : Expr list, ty : Ty, layout : Layout }
+  | Var      of { name : string, ty : Ty, layout : Layout }
+  | Ctor     of { name : string, args : Expr list, ty : Ty, layout : Layout }
+  | Match    of { scrutinee : Expr, arms : Arm list, ty : Ty, layout : Layout }
 
-RhsValue :=
-  | RAtom   of Atom
-  | RApp    of { fun_ : Atom, args : Atom list, ret_ty : Ty }
-  | RPrim   of { op : PrimOp, args : Atom list, ret_ty : Ty }
-  | RLam    of { params : Param list, body : Expr,
-                 ret_ty : Ty, layout : Layout, free_vars : Symbol list }
-  | RCtor   of { adt : AdtId, variant : VariantId,
-                 args : Atom list, ty : Ty, layout : Layout }
-  | RRecord of { record : RecordId, fields : (FieldId * Atom) list,
-                 ty : Ty, layout : Layout }
-  | RProj   of { record : RecordId, field : FieldId, of_ : Atom, ty : Ty }
-  | RTuple  of { elems : Atom list, ty : Ty, layout : Layout }
+Constant :=
+  | Int    of i64
+  | String of string
 
-TopDecl :=
-  | TLet  of { name : Symbol, ty : Ty, value : Expr,
-               is_rec : bool, span : Span }
-  | TType of AdtDecl | RecordDecl
+PrimOp := Add | Sub | Mul | Div | Mod | Eq | Ne | Lt | Le | Gt | Ge
 
-Module := { decls : TopDecl list, type_env : TypeEnv, source : SourceMap }
+Arm := { pattern : Pattern, body : Expr }
+
+Pattern :=
+  | Wildcard
+  | Var  of { name : string, ty : Ty, layout : Layout }
+  | Ctor of { name : string, args : Pattern list }
+
+Ty :=
+  | Int | Bool | Unit | String
+  | Adt   of { name : string, params : Ty list }
+  | Arrow of { params : Ty list, ret : Ty }
 ```
 
-Notes:
+P1 deliberately has no Core IR variants for user-defined type
+declarations, records, tuples, arrays, source spans, or a module-level
+`TypeEnv`. Those are P2+ expansions and must be added to all consumers
+in the same commit when they land.
 
-- `RApp.fun_` is an atom, so the *callee* itself is named-and-let-bound
-  by the ANF pass when it is a complex expression.
-- `RLam.free_vars` is the closure's capture list, computed during ANF
-  and consumed by the `LoweringStrategy`.
-- `RProj` / `RRecord` carry `RecordId` so the backend can compute
-  field offsets without re-typing.
+## 3. Constructor and pattern subset
 
-## 3. ANF transformation rules
-
-Given a `ttree` expression `e` (the Zig mirror of OCaml's
-`Typedtree`, see `10-frontend-bridge.md`), lowering to Core IR
-follows the standard ANF rules:
-
-```
-[[ x ]]            = EAtom (AVar x)
-[[ k ]]            = EAtom (ALit k)
-[[ e1 e2 ]]        = let x1 = [[e1]] in
-                     let x2 = [[e2]] in
-                     let r  = RApp(x1, [x2]) in
-                     EAtom r
-[[ if c then a else b ]]
-                   = let xc = [[c]] in
-                     EIf(xc, [[a]], [[b]])
-[[ match e with arms ]]
-                   = let xs = [[e]] in
-                     EMatch(xs, arms_lowered)
-[[ fun p -> body ]]= let f = RLam([p], [[body]], ...) in EAtom f
-[[ let x = e1 in e2 ]]
-                   = ELet(x, [[e1 as RhsValue]], [[e2]])
-[[ Ctor(args) ]]   = let xs = [[args]] in
-                     let c  = RCtor(... xs ...) in EAtom c
-```
-
-Multi-argument constructors and primops are flattened — arguments are
-emitted as a sequence of `let`-binders, then the operation consumes
-all of them as atoms.
-
-Pattern-match arms are semantically tested in source order,
-top-to-bottom. The first arm whose pattern matches the scrutinee wins;
-later arms are not evaluated. This order is part of the determinism
-contract and must be preserved by both the interpreter and Zig codegen.
-
-## 4. Layout assignment (P1 rules)
-
-The ANF lowering pass assigns a `Layout` to every `RLam`, `RCtor`,
-`RRecord`, and `RTuple`. P1 rules:
-
-1. `LInt`, `LBool`, `LUnit`, and nullary constructors get
-   `{ region = Static, repr = TaggedImmediate }`.
-2. `LString` gets `{ region = Static, repr = Boxed }`.
-3. Everything else gets `{ region = Arena, repr = Boxed }`.
-4. (Optional, P1.5) If escape analysis can prove a value does not
-   leave its lexical scope, it may be re-tagged to
-   `{ region = Stack, repr = Boxed }`. Disabled by default in P1.
-
-The user never sees these annotations. The annotation exists so that
-P4 region inference can replace rule 3 without touching anything else.
-
-## 5. Type environment
-
-Type information accompanies the Core IR module so backends do not
-re-do inference:
+The frontend emits only the bundled constructor names:
 
 ```text
-TypeEnv := {
-  adts    : map<AdtId, AdtDecl>            -- variants, layout hints
-  records : map<RecordId, RecordDecl>      -- fields, offsets resolved later
-  globals : map<Symbol, Ty>                -- top-level value types
-}
-
-AdtDecl := {
-  name     : string,
-  params   : TyVarId list,
-  variants : VariantDecl list,
-  source   : Span,
-}
-
-VariantDecl := {
-  id       : VariantId,
-  name     : string,
-  payload  : Ty list,                      -- empty = nullary
-}
+None | Some | Ok | Error | [] | ::
 ```
 
-Field offsets and discriminator encodings are computed by the
-backend, not stored in `TypeEnv`. This is intentional: different
-backends may pick different encodings (e.g., the BPF backend uses
-flat struct offsets, the interpreter uses boxed enums).
+Nullary constructors such as `None` and `[]` use
+`Static/TaggedImmediate`. Payload constructors such as `Some x`, `Ok x`,
+`Error e`, and `x :: xs` use `Arena/Boxed`.
+
+`Pattern` is recursive in the Zig type, but the P1 frontend only emits
+wildcards, variables, and constructor patterns over the whitelisted
+constructors; nested constructor patterns are a P2 feature.
+
+## 4. Layout assignment (`src/core/layout.zig`)
+
+```text
+Region := Arena | Static | Stack
+Repr   := Flat | Boxed | TaggedImmediate
+Layout := { region : Region, repr : Repr }
+```
+
+Default P1 rules:
+
+| Value class | Layout |
+|---|---|
+| integer constants | `Static / Flat` |
+| unit values and unit-typed lambda params | `Static / Flat` |
+| top-level lambdas | `Arena / Flat` |
+| first-class closure records | `Arena / Boxed` |
+| strings | `Static / Boxed` |
+| nullary constructors | `Static / TaggedImmediate` |
+| payload constructors / aggregates | `Arena / Boxed` |
+
+`Stack` exists as a reserved extension point but is not selected by a
+real P1 escape-analysis pass.
+
+## 5. ANF and lowering rules
+
+The ANF pass maps the `ttree` mirror into this Core IR, preserving the
+source order of `let` and `match` evaluation. The current subset relies
+on these rules:
+
+- top-level declarations become `Decl.Let`;
+- nested `let` and `let rec` become `Expr.Let` with `is_rec` set;
+- functions become `Expr.Lambda` and applications become `Expr.App`;
+- arithmetic/comparison operators become `Expr.Prim`;
+- `if` conditions consume bool ADT values produced by comparisons;
+- constructors and matches preserve option/result/list source order;
+- match arms are tested top-to-bottom, first match wins.
+
+The Lowered IR (`src/lower/lir.zig`) then makes the arena-threaded
+calling convention explicit and adds closure-call/direct-call
+information for codegen.
 
 ## 6. Pretty-printing and IR snapshots
 
-A Core IR pretty-printer is mandatory. It must:
+The Core IR pretty-printer must remain deterministic because golden
+tests snapshot its output. Use:
 
-- Be deterministic (stable order of fields, no addresses).
-- Round-trip *informally*: the printed form is human-readable but is
-  not parsed back. Tests use it for golden-file comparisons.
-
-Recommended surface:
-
-```
-omlz check --emit=core-ir foo.ml > foo.core.txt
+```sh
+zig-out/bin/omlz check --emit=core-ir foo.ml
 ```
 
-Snapshot format (illustrative):
-
-```
-module foo
-  type 'a option = | None | Some of 'a
-  let head : list<'a> -> option<'a> =
-    fun (xs : list<'a>) ->
-      match xs with
-      | [] -> let r = Ctor(option,None) [@layout Static/TaggedImm]
-              in r
-      | (::)(x, _) -> let r = Ctor(option,Some, x) [@layout Arena/Boxed]
-                      in r
-```
+The printed form is intentionally human-readable and not a parser input.
 
 ## 7. Stability commitment
 
-- Adding a new variant to `Expr`, `RhsValue`, `Pattern`, `PrimOp`,
-  `Region`, or `Repr` is a **minor** change. Backends must handle
-  unknown variants by returning a structured error, not by panicking.
-- Changing the meaning of an existing variant is a **breaking**
-  change and must update all backends in the same commit.
-- The ANF discipline (rule: every operand is an atom) is **never**
-  relaxed. If you find yourself wanting to put a complex expression
-  in argument position, add a let-binding instead.
+- Adding a variant to `Expr`, `Pattern`, `PrimOp`, `Ty`, `Region`, or
+  `Repr` is a contract change. Update `anf`, `lower`, `interp`,
+  `zig_codegen`, `pretty`, golden tests, and this document together.
+- Changing the meaning of an existing variant is breaking and requires
+  an ADR or ADR addendum.
+- The current absence of records, tuples, source spans, and type-env
+  declarations is intentional as-built P1 scope, not an omission.
 
-## 8. What Core IR does **not** carry
+## 8. What Core IR does **not** carry in P1
 
-- No source-level comments or trivia. Diagnostics use `Span` to fetch
-  them from the Surface AST.
-- No types of intermediate ANF temporaries beyond the `Ty` field on
-  the atom itself. The Core IR is not a typechecker scratchpad.
-- No optimisation hints. P1 trusts the Zig backend's optimiser.
+- source-level comments or formatting trivia;
+- frontend source spans on every node;
+- user type declarations or a general type environment;
+- optimisation hints beyond `Layout`;
+- backend-specific names after Zig identifier sanitisation.

@@ -66,10 +66,8 @@ out/
 | `TyBool` | `bool` |
 | `TyUnit` | `void` (or `u0`, internal choice) |
 | `TyString` | `[]const u8` (read-only slice) |
-| `TyTuple` | anonymous `struct` |
-| `TyAdt` (all-nullary) | `enum(uN)` |
-| `TyAdt` (with payload) | `struct { tag: uN, payload: union(enum) {...} }` |
-| `TyRecord` | `struct { ... }` |
+| `TyAdt` (all-nullary) | `enum(uN)` / tagged-immediate helper |
+| `TyAdt` (with payload) | `union(enum)` helper in `runtime/zig/prelude.zig` |
 | `RLam` | top-level `fn` + heap-allocated capture struct |
 | `RApp` | direct `fn` call (known callee) or indirect through closure |
 | `RCtor` | struct literal placed in arena |
@@ -95,8 +93,9 @@ semantics are part of the determinism contract in §6.
 ### 2.6 Naming
 
 Generated identifiers are prefixed `omlz_` to avoid collisions with
-the runtime. Source-level identifiers are mangled with their
-`Symbol` id to handle shadowing.
+the runtime. Source-level identifiers are sanitized into Zig-safe names. P1 does not yet
+carry a separate `Symbol` id in Core IR, so examples avoid ambiguous emitted
+name collisions.
 
 ### 2.7 What it does **not** do
 

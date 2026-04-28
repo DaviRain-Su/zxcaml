@@ -187,25 +187,39 @@ P1 产出的 BPF `.so` 必须满足：
    ```
    成功。
 3. 一次 no-op 调用返回 `0`。
-4. 目标文件可重现：相同输入 → 相同字节（除了时间戳元数据）。
+4. **G13 可复现性结果（2026-04-28）：PASS。** 运行
+   `zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/a.so && zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/b.so && diff /tmp/a.so /tmp/b.so; echo "diff_exit=$?"`
+   得到 `diff_exit=0`。两个 `.so` 字节完全相同。macOS 上 `sbpf-linker` 会打印良性的 LLVM archive probe warning，但两次链接都成功退出。
 5. （新加）通过 `sbpf-linker` 链接后的 section 布局检查 ——
    没有 `.rodata` 符号解析到 < 0x100 的地址（Zig 0.16 的低地址怪癖；
    见 §4 的注）。
 
 1–3、5 是 CI 门槛。4 在 P1 是尽力而为，到 P3 强制要求。
 
+
 ## 8. 可能出错的点（以及怎么应对）
 
-| 现象 | 可能原因 | 应对 |
+这张表把 P1 mission 中遇到的 bug / landmine 汇总成给 P2+ worker 的 BPF 与发布工程指南。
+
+| 症状 | 可能原因 / 观察来源 | 处理 |
 |---|---|---|
-| `zig` 拒绝 target triple | Zig 版本漂移 | 在 CI 里 pin `zig 0.16.x`；升级流程写进 ADR |
-| `sbpf-linker` 没装 | 新增的 build-time 依赖 | 按 ADR-012 pin 的版本 `cargo install`；CI 装 |
-| `sbpf-linker` 拒绝 bitcode | LLVM IR 形态它不认 | 把 `ZigBackend` 生成的代码降复杂度；扩 `--cpu` 必须走 ADR |
-| loader 报 "Access violation" 在低地址 | Zig 0.16 const-array 放置怪癖（§4 注） | codegen 规则：对 const 数组先复制到栈再取地址 |
-| `sbpf-linker: unable to find LLVM shared lib` | macOS 上 `DYLD_FALLBACK_LIBRARY_PATH` 找不到 `libLLVM*` | `brew install llvm@20`；`export DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib`（详见 §6、ADR-012 Revised 2026-04-27） |
-| BPF verifier 拒绝程序 | 栈帧太深、循环无界、非法 helper | 前端 / ANF 阶段加逃逸分析（P3） |
-| Solana loader 因别的原因失败 | ELF section 布局不对 | 拿 zignocchio 的参考 `program.so` 做 diff；上报 sbpf-linker |
-| 返回值不对 | 后端和解释器不一致 | 由确定性套件捕获（`05-backends.md` §6） |
+| `zig` 拒绝 target triple | Zig 版本漂移 | CI 固定 `zig 0.16.x`；任何升级都要更新 ADR-002 并重跑 BPF acceptance |
+| 找不到 `sbpf-linker` | 新的 build-time dependency 未安装 | 按 ADR-012 执行 `cargo install sbpf-linker --version 0.1.8`；CI 和 `init.sh` 负责安装/检查 |
+| `sbpf-linker: unable to find LLVM shared lib` | macOS dynamic loader 路径上没有 LLVM 20 dylib | `brew install llvm@20`；确保 driver/CI 设置 `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` |
+| 出现大量 `unable to open LLVM shared lib ... .a: dlopen failed`，但 link exit 0 | `aya-rustc-llvm-proxy` 在找到可用 dylib 前会探测 Homebrew LLVM archive | 视为嘈杂但良性的 archive-probe 输出；除非 `sbpf-linker` 非零退出，否则不要失败或过滤 |
+| macOS 上 `llvm-objdump` 不在 `PATH` | Homebrew 把 LLVM 工具放在 `llvm@20/bin` 下 | 手动检查时使用 `/opt/homebrew/opt/llvm@20/bin/llvm-objdump`，或把该目录加到 `PATH` |
+| `sbpf-linker` 拒绝 bitcode | LLVM IR 形状它不理解 | 降低 `ZigBackend` codegen 复杂度；只有在有 ADR addendum 和 acceptance 证据时才放宽到 `--cpu v3` |
+| Loader 因低地址 `Access violation` 拒绝 | Zig 0.16 module-scope const-array placement quirk（§4） | Codegen 规则：对 module-scope const array 取地址前先复制到栈上 |
+| BPF build 拒绝 Zig `@trap` / abort builtin | freestanding BPF 不能使用 hosted panic path | `runtime/zig/panic.zig` 保持 BPF-safe no-return path；Solana-friendly logging 留到 P3 |
+| 一等 closure BPF build 报 `Relocations found but no .rodata section` | 逃逸 closure record 带 code pointer / relocation，当前 BPF link 形状不接受 | P1 acceptance 不要求 BPF 一等 closure。P2/P3 需选择 direct-call lowering、linker 支持的 rodata anchor，或 ADR 支持的 closure 限制 |
+| BPF verifier 拒绝程序 | 栈帧过深、无界循环、非法 helper、或不支持的 relocation | 简化生成代码，对照 Solana harness 输出；P3 增加 no-alloc / stack analysis |
+| Solana loader 因 ELF layout 失败 | section layout 或 exported symbol 错误 | 与 P1 已知可用的 `solana_hello.so` flow 对比；疑似 linker 问题上报上游，并固定最后可用版本 |
+| 程序可部署但返回值错误 | 后端语义与解释器分叉 | Determinism suite（`05-backends.md` §6）必须捕获 native 分叉；BPF-only 分叉需增加 Solana harness case |
+| validation 说缺少 `examples/solana_hello.ml` | 历史 M0 使用 `examples/m0_zero.ml`；M3 才加入 canonical Solana example | P1 之后 G06/G13 使用 `examples/solana_hello.ml` |
+| CI corpus loop 因 `examples/m0_unsupported.ml` 失败 | 该文件是刻意失败的诊断 fixture | corpus loop 跳过它，或将未来 negative example 放到 `tests/ui/` |
+| 文档/命令提到 `zig build test -Dtest-filter=...` 但实际不支持 | build option 尚未实现 | 在 scoped test filtering 落地前使用普通 `zig build test` |
+| `zig build test` 打印 `zxc-frontend not found ...` | negative subprocess-path test 刻意测试该诊断 | 只要测试命令 exit 0，就视为预期输出 |
+| macOS 上 `ocamlc -c ... -o /dev/null` 失败 | OCaml 会尝试创建 `/dev/null.cmi.tmp` | 使用 `ocamlfind ocamlc -i stdlib/core.ml > /dev/null`，或把 artifact 写到 `/tmp` |
 
 ## 9. 范围之外（P1）
 

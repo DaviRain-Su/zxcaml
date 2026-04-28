@@ -199,8 +199,11 @@ A BPF `.so` produced by P1 must satisfy:
    ```
    succeeds.
 3. A no-op invocation returns `0`.
-4. The object file is reproducible: identical input → identical
-   bytes (modulo timestamp metadata).
+4. **G13 reproducibility result (2026-04-28): PASS.** Running
+   `zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/a.so && zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/b.so && diff /tmp/a.so /tmp/b.so; echo "diff_exit=$?"`
+   produced `diff_exit=0`. The two `.so` files were byte-identical.
+   `sbpf-linker` printed benign LLVM archive-probe warnings on macOS,
+   but both link steps exited successfully.
 5. (New) Section layout passes the `sbpf-linker` post-link check —
    no `.rodata` symbol resolves to address < 0x100 (the Zig 0.16
    low-address quirk; see §4 note).
@@ -208,18 +211,31 @@ A BPF `.so` produced by P1 must satisfy:
 Items 1–3, 5 are CI gates. Item 4 is best-effort in P1, mandatory
 in P3.
 
+
 ## 8. What can go wrong (and how we respond)
 
-| Symptom | Likely cause | Response |
+This table is the P1 mission bug/landmine log distilled into BPF and
+release-engineering guidance for P2+ workers.
+
+| Symptom | Likely cause / observed source | Response |
 |---|---|---|
-| `zig` rejects the target triple | Zig version drift | Pin `zig 0.16.x` in CI; document upgrade in ADR |
-| `sbpf-linker` not found | New build-time dep, not installed | `cargo install` from pinned commit (ADR-012); CI installs it |
-| `sbpf-linker` rejects bitcode | LLVM IR shape it doesn't understand | Lower codegen complexity in `ZigBackend`; widen `--cpu` only with ADR |
-| Loader rejects with "Access violation" at low address | Zig 0.16 const-array placement quirk (§4 note) | Codegen rule: copy const arrays to stack before address-of |
-| `sbpf-linker: unable to find LLVM shared lib` | macOS missing `libLLVM*` on `DYLD_FALLBACK_LIBRARY_PATH` | `brew install llvm@20`; `export DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` (see §6, ADR-012 Revised 2026-04-27) |
-| BPF verifier rejects the program | Stack frames too deep, unbounded loops, illegal helper | Frontend / ANF lowering escape analysis (P3) |
-| Solana loader fails for other reasons | ELF section layout off | Diff against zignocchio's reference `program.so`; report to sbpf-linker |
-| Returns wrong value | Backend mismatches interpreter | Determinism suite (`05-backends.md` §6) catches this |
+| `zig` rejects the target triple | Zig version drift | Pin `zig 0.16.x` in CI; document any upgrade in ADR-002 and rerun BPF acceptance |
+| `sbpf-linker` not found | New build-time dependency not installed | `cargo install sbpf-linker --version 0.1.8` per ADR-012; CI and `init.sh` install/check it |
+| `sbpf-linker: unable to find LLVM shared lib` | macOS missing LLVM 20 dylib on the dynamic loader path | `brew install llvm@20`; ensure `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` is set by the driver/CI |
+| Many `unable to open LLVM shared lib ... .a: dlopen failed` lines, but link exits 0 | `aya-rustc-llvm-proxy` probes Homebrew LLVM archives before finding the usable dylib | Treat as noisy but benign archive-probe output; do not fail or filter unless `sbpf-linker` exits non-zero |
+| `llvm-objdump` is not on `PATH` on macOS | Homebrew keeps LLVM tools under `llvm@20/bin` | Use `/opt/homebrew/opt/llvm@20/bin/llvm-objdump` or add that directory to `PATH` for manual inspection |
+| `sbpf-linker` rejects bitcode | LLVM IR shape it does not understand | Lower codegen complexity in `ZigBackend`; widen to `--cpu v3` only with an ADR addendum and acceptance evidence |
+| Loader rejects with low-address `Access violation` | Zig 0.16 module-scope const-array placement quirk (§4) | Codegen rule: copy module-scope const arrays to stack before taking their address |
+| BPF build rejects Zig `@trap` / abort builtin | Freestanding BPF cannot use the hosted panic path | Keep `runtime/zig/panic.zig` on the BPF-safe no-return path; add Solana-friendly logging only in P3 |
+| First-class closure BPF build fails with `Relocations found but no .rodata section` | Escaping closure records carry code pointers/relocations not accepted by the current BPF link shape | P1 acceptance does not require first-class closures on BPF. For P2/P3, choose direct-call lowering, a linker-supported rodata anchor, or an ADR-backed closure restriction |
+| BPF verifier rejects the program | Stack frames too deep, unbounded loops, illegal helper, or unsupported relocation | Minimize generated code, compare against the Solana harness output, and add no-alloc/stack analysis in P3 |
+| Solana loader fails for ELF-layout reasons | Section layout or exported symbol wrong | Diff against the known-good P1 `solana_hello.so` flow; report suspected linker issues upstream and pin the last known-good tool |
+| Program deploys but returns the wrong value | Backend semantics diverged from interpreter | Determinism suite (`05-backends.md` §6) must catch native divergence; add a Solana harness case for BPF-only divergence |
+| Validation says `examples/solana_hello.ml` is missing | Historical M0 used `examples/m0_zero.ml`; M3 added the canonical Solana example | Use `examples/solana_hello.ml` for G06/G13 from P1 onward |
+| CI corpus loop fails on `examples/m0_unsupported.ml` | That file is an intentional diagnostic fixture | Skip it in corpus loops or move future negative examples under `tests/ui/` |
+| `zig build test -Dtest-filter=...` is advertised but unsupported | The build option has not been implemented | Use plain `zig build test` until scoped test filtering lands |
+| `zig build test` prints `zxc-frontend not found ...` | Negative subprocess-path test intentionally exercises the diagnostic | Treat as expected if the test command exits 0 |
+| `ocamlc -c ... -o /dev/null` fails on macOS | OCaml tries to create `/dev/null.cmi.tmp` | Use `ocamlfind ocamlc -i stdlib/core.ml > /dev/null` or write artifacts to `/tmp` |
 
 ## 9. Out of scope (P1)
 

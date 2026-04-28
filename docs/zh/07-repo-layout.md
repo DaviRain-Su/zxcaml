@@ -31,14 +31,17 @@ ZxCaml/
 │   └── zig/                    -- 链接进用户程序的 runtime helper
 ├── stdlib/
 │   └── core.ml                 -- option / result / list（真 OCaml；子集内）
-├── examples/
-│   ├── hello.ml                -- 解释器 + Zig 后端 smoke test
+├── examples/                   -- acceptance corpus + smoke fixtures
+│   ├── hello.ml
+│   ├── option_chain.ml
+│   ├── result_basic.ml
+│   ├── list_sum.ml
 │   └── solana_hello.ml         -- BPF 验收程序
 ├── tests/
 │   ├── ui/                     -- 端到端 .ml → 期望输出
 │   ├── golden/                 -- Core IR + sexp snapshot 测试
 │   └── solana/                 -- solana-test-validator 集成
-└── .github/workflows/          -- CI（P1 之后）
+└── .github/workflows/          -- CI
 ```
 
 ### 1.1 双语言边界
@@ -144,15 +147,23 @@ stdlib/
 - 不许 import `runtime/zig/` 的任何东西。
   编译器会注入 runtime；stdlib 是纯表层代码。
 
+
 ## 5. `examples/`
 
 ```text
 examples/
-├── hello.ml                    -- 列表 head + Some/None 演示
-└── solana_hello.ml             -- 最小 BPF entrypoint
+├── hello.ml                    -- list head + Some/None demo
+├── option_chain.ml             -- Option.map / Option.bind acceptance
+├── result_basic.ml             -- Result 构造与模式匹配
+├── list_sum.ml                 -- 列表递归求和
+├── solana_hello.ml             -- canonical BPF acceptance program
+├── factorial.ml                -- 递归 smoke test
+├── arith_wrap.ml               -- i64 wrap semantics smoke test
+├── div_zero.ml                 -- 稳定 division-by-zero panic marker
+└── m0_unsupported.ml           -- 刻意失败的诊断 fixture
 ```
 
-`examples/` 同时是回归套件：任何 example 编不过，P1 就是坏了。
+`examples/` 也是 regression suite。Corpus loop 必须跳过预期失败的 `m0_unsupported.ml`。
 
 ## 6. `tests/`
 
@@ -173,19 +184,21 @@ tests/
 `tests/solana/` 骨架是可选的（慢，需要 Solana 工具链），不是每次 commit 都跑。
 P1 验收门槛挂在这里。
 
-## 7. `.github/workflows/`（P1 之后，示意）
+
+## 7. `.github/workflows/`
+
+P1 已交付 `.github/workflows/ci.yml`，在 push 到 `main` 和 pull request 时运行。
+workflow 覆盖 `macos-latest` 与 `ubuntu-latest`，调用本地同一个 root `./init.sh`，随后运行：
 
 ```text
-ci.yml:
-  - matrix: zig 0.16.x
-  - 步骤：
-      - zig build
-      - zig build test
-      - omlz check examples/*.ml
-      - tests/ui/run.sh
-      - tests/golden/run.sh
-      - （可选）tests/solana/hello/invoke.sh
+zig build
+zig build test
+zig-out/bin/omlz check examples/*.ml   # 跳过 m0_unsupported.ml
+tests/solana/hello/invoke.sh          # SOLANA_BPF=1 时
 ```
+
+Solana BPF harness 由环境变量 opt-in。workflow 中 macOS 默认启用，因为它是主要开发平台；
+Ubuntu 可通过 repository variable opt in。
 
 ## 8. 约定
 
