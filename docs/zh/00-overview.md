@@ -4,7 +4,7 @@
 
 ## 1. ZxCaml 是什么
 
-ZxCaml 是一个 **OCaml 方言的编译器**，后端通过 **Zig** 产出 Solana **BPF** 目标文件。
+ZxCaml 是一个 **OCaml 方言的编译器**，后端通过 **Zig** 产出 Solana **BPF** shared object（`.so`）。
 
 具体来说：
 
@@ -26,8 +26,8 @@ ZxCaml 是一个 **OCaml 方言的编译器**，后端通过 **Zig** 产出 Sola
   生态复用通过：
   1. 用我们的子集写一个小型原生标准库；
   2. 通过 **Zig FFI** 调系统 / 加密原语。
-- **P1 阶段不是通用编译器。** P1 唯一的验证目标是 Solana BPF。
-  原生二进制可能顺带能产出，但不是目标。
+- **不是通用编译器。** 唯一被验证的部署目标仍是 Solana BPF。
+  原生二进制可能为了开发便利顺带产出，但不是受支持的交付物。
 
 ## 3. 项目命名
 
@@ -108,7 +108,7 @@ OCaml `ocaml` / `dune` 工具链仍可在 **离线** 阶段用作正确性参考
 | 内存模型对用户的可见性 | **隐藏**，完全推断，仅 arena |
 | 主要目标平台 | **Solana BPF**（通过 Zig，`bpfel-freestanding`） |
 | 构建驱动 | **单一 `build.zig`**（同时驱动 OCaml 和 Zig 步骤） |
-| P1 终点 | 一个 `.ml` 程序产出的 `.o` 能在 `solana-test-validator` 上加载并返回 0 |
+| P1 终点 | 一个 `.ml` 程序产出的 Solana 可加载 `.so` 能在 `solana-test-validator` 上加载并返回 0 |
 
 ## 6. 范围之外（永远，或直到显式重新讨论）
 

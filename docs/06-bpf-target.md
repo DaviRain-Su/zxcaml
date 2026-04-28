@@ -186,9 +186,9 @@ For native (developer convenience only, **not** a P1 deliverable):
 zig build-exe -O Debug out/program.zig
 ```
 
-## 7. Sanity checks before "P1 done"
+## 7. BPF sanity checks
 
-A BPF `.so` produced by P1 must satisfy:
+A BPF `.so` produced by the current pipeline must satisfy:
 
 1. `llvm-objdump -d solana_hello.so` shows a single exported
    `entrypoint` symbol with valid eBPF (SBPFv2 by default; v3
@@ -208,8 +208,9 @@ A BPF `.so` produced by P1 must satisfy:
    no `.rodata` symbol resolves to address < 0x100 (the Zig 0.16
    low-address quirk; see §4 note).
 
-Items 1–3, 5 are CI gates. Item 4 is best-effort in P1, mandatory
-in P3.
+Items 1–3 and 5 are the canonical hello acceptance checks. Closure-focused
+BPF acceptance is covered separately by `tests/solana/closures/` when the
+Solana harness is enabled.
 
 
 ## 8. What can go wrong (and how we respond)
@@ -227,7 +228,7 @@ release-engineering guidance for P2+ workers.
 | `sbpf-linker` rejects bitcode | LLVM IR shape it does not understand | Lower codegen complexity in `ZigBackend`; widen to `--cpu v3` only with an ADR addendum and acceptance evidence |
 | Loader rejects with low-address `Access violation` | Zig 0.16 module-scope const-array placement quirk (§4) | Codegen rule: copy module-scope const arrays to stack before taking their address |
 | BPF build rejects Zig `@trap` / abort builtin | Freestanding BPF cannot use the hosted panic path | Keep `runtime/zig/panic.zig` on the BPF-safe no-return path; add Solana-friendly logging only in P3 |
-| First-class closure BPF build fails with `Relocations found but no .rodata section` | Escaping closure records carry code pointers/relocations not accepted by the current BPF link shape | P1 acceptance does not require first-class closures on BPF. For P2/P3, choose direct-call lowering, a linker-supported rodata anchor, or an ADR-backed closure restriction |
+| First-class closure BPF build fails or runtime faults | Closure lowering regressed into an unsupported code-pointer relocation or invalid capture address | Keep P2 closure hardening: known callees lower to direct helper calls where possible, first-class closures use arena-backed capture storage and typed dispatch metadata, and `tests/solana/closures/invoke.sh` must remain green when `SOLANA_BPF=1` |
 | BPF verifier rejects the program | Stack frames too deep, unbounded loops, illegal helper, or unsupported relocation | Minimize generated code, compare against the Solana harness output, and add no-alloc/stack analysis in P3 |
 | Solana loader fails for ELF-layout reasons | Section layout or exported symbol wrong | Diff against the known-good P1 `solana_hello.so` flow; report suspected linker issues upstream and pin the last known-good tool |
 | Program deploys but returns the wrong value | Backend semantics diverged from interpreter | Determinism suite (`05-backends.md` §6) must catch native divergence; add a Solana harness case for BPF-only divergence |

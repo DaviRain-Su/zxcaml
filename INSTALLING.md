@@ -25,6 +25,12 @@ The last command should produce `sh.so`, a Solana BPF shared object.
 | solana-cli | stable | Runs the BPF acceptance harness and local validator checks | Installed only when `SOLANA_BPF=1` is set before running `init.sh` |
 | macOS `llvm@20` | Homebrew `llvm@20` | Provides `libLLVM` for `sbpf-linker 0.1.8` on macOS | Installs `llvm@20` via Homebrew on macOS and exports `DYLD_FALLBACK_LIBRARY_PATH` while the script runs |
 
+### P2 dependency state
+
+P2 adds compiler/language support only; it introduces **no new external
+prerequisites** beyond the P1 toolchain listed above. The same `./init.sh`,
+`zig build`, and `zig build test` commands are used locally and in CI.
+
 `init.sh` deliberately does not install Homebrew or Rust. On fresh macOS, install
 those first:
 

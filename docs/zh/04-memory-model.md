@@ -63,7 +63,7 @@ buffer 耗尽时返回 `error.OutOfMemory`。`reset` 在程序退出时把 bump 
 这些规则住在 `Typed AST → Core IR` lowering 中（见 `03-core-ir.md` §4）。
 这是前端控制的 **唯一** 旋钮。
 
-## 5. ADT 表示（P1）
+## 5. ADT 与 aggregate 表示
 
 对一个有 `n` 个 variant 的 ADT：
 
@@ -81,18 +81,18 @@ buffer 耗尽时返回 `error.OutOfMemory`。`reset` 在程序退出时把 bump 
 不受这个编码约束。
 
 
-## 6. Closure 与 recursion 表示（P1）
+## 6. Closure 与 recursion 表示
 
-P1 有三种 as-built 情况：
+当前管线有三种 as-built 情况：
 
 1. **顶层函数** lower 成使用 arena-threaded 调用约定的直接 Zig helper function。
 2. **不逃逸的嵌套递归函数** lower 成直接 helper function，捕获值作为额外参数传递。
-3. **逃逸的一等 closure** 在 Lowered IR 中表示为 arena 分配的 closure record，包含 code pointer
-   和 capture array（`prelude.Closure`）。该路径通过了 interpreter/native 验证；BPF 一等 closure
-   code pointer 不属于 P1 Solana acceptance example，仍是 P2/P3 hardening 项，因为本 mission
-   在该形状上观察到 `Relocations found but no .rodata section` linker 失败。
+3. **一等 closure** 在 Lowered IR 中表示为 arena-backed closure record，带显式 capture
+   storage 和类型化 closure-call 元数据。P2 已加固 BPF 路径，closure 示例不再依赖 BPF 不支持的
+   code-pointer relocation；closure 验收位于 `tests/solana/closures/`，examples corpus 包含
+   closure + ADT 和 stdlib 高阶函数案例。
 
-用户仍然看不到这些机制；他们只写普通的 `let` / `let rec` OCaml 子集代码。
+用户仍然看不到这些机制；他们只写普通的 `let` / `let rec` / `fun` OCaml 子集代码。
 
 ## 7. 字符串（P1）
 

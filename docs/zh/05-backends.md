@@ -20,12 +20,12 @@ Backend:
 
 返回对象都是 POD；后端对单次调用是无状态的。
 
-P1 出货：
+当前实现：
 
 - `ZigBackend`        —— 主路径，产出 `.zig` 源码。
 - `Interpreter`       —— 仅开发用，执行 Core IR。
 
-P1 stub（仅签名，必须能编译，被调用时返回"未实现"诊断）：
+Stub（仅签名，必须能编译，被调用时返回"未实现"诊断）：
 
 - `OCamlBackend`      —— 占位。注：之前草案说它是"子集正确性参考"，
   这一角色已删除，因为 ADR-010 让漂移在结构上不可能 ——
@@ -68,9 +68,12 @@ out/
 | `RLam` | 顶层 `fn` + arena 上的 capture 结构体 |
 | `RApp` | 直接 `fn` 调用（已知 callee）或经闭包间接调用 |
 | `RCtor` | arena 上放置的 struct 字面量 |
-| `RProj` | `obj.*.field` |
-| `EMatch` | 在判别符上 `switch` + 各 arm 内绑定 |
+| `RProj` / tuple projection / record field | 对生成的 product value 做直接字段访问 |
+| tuple / record 构造 | Zig struct 字面量或生成的 nominal record struct |
+| record update | struct copy 加字段覆盖 |
+| `EMatch` | decision-tree dispatch：在判别符上 `switch`，并处理 guard fallthrough |
 | `EIf` | `if (cond) ... else ...` |
+| closure | 已知 callee 走直接 helper 调用；一等值走 arena-backed closure record |
 | `RPrim IAdd / ...` | Zig 原生运算符（绕回 / 截断语义按 §2.5 规定） |
 
 ### 2.4 Arena 穿线
@@ -114,8 +117,8 @@ P1 发 `i64`，算术用 Zig 的 `+%`、`-%`、`*%`（绕回）。
 
 - 宿主里（Zig）一个 tagged-union `Value` 类型。
 - 闭包是 `(env, body)` 对，分配在宿主 arena 上。
-- 模式匹配是递归遍历；P1 不编译成 decision tree。
-- ADT 用 `{ tag, payload: []Value }` 表示。
+- 模式匹配递归遍历 Core `Pattern` 树，包括嵌套构造器、tuple、record、通配和 guarded arm。
+- ADT 用 `{ tag, payload: []Value }` 表示；tuple 和 record 值使用宿主侧 aggregate value。
 
 ### 3.4 限制
 
@@ -154,7 +157,7 @@ omlz run   foo.ml                                     # 始终走解释器
 
 ## 6. 确定性要求
 
-对于 P1 子集中任何程序和任何输入：
+对于已接受的 P1 + P2 子集中任何程序和任何输入：
 
 ```
 Interpreter(P)  ≡  ZigBackend(P)   （在可观察输出上）

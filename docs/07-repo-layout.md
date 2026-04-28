@@ -36,6 +36,10 @@ ZxCaml/
 │   ├── option_chain.ml
 │   ├── result_basic.ml
 │   ├── list_sum.ml
+│   ├── enum_adt.ml / tree_adt.ml
+│   ├── nested_pattern.ml / guard_match.ml
+│   ├── tuple_basic.ml / record_person.ml
+│   ├── stdlib_list.ml / closure_adt.ml
 │   └── solana_hello.ml         -- BPF acceptance program
 ├── tests/
 │   ├── ui/                     -- end-to-end .ml → expected output
@@ -160,6 +164,14 @@ examples/
 ├── option_chain.ml             -- Option.map / Option.bind acceptance
 ├── result_basic.ml             -- Result construction and pattern matching
 ├── list_sum.ml                 -- recursive sum over a list
+├── enum_adt.ml                 -- user-defined enum ADT
+├── option_adt.ml / tree_adt.ml -- parameterized and recursive ADTs
+├── nested_pattern.ml           -- nested constructor patterns
+├── guard_match.ml              -- guarded match arms + decision-tree dispatch
+├── tuple_basic.ml              -- tuple construction/destructuring and ADT payloads
+├── record_person.ml            -- records, field access, functional update
+├── stdlib_list.ml              -- expanded List functions with closures
+├── closure_adt.ml              -- closures capturing ADT values
 ├── solana_hello.ml             -- canonical BPF acceptance program
 ├── factorial.ml                -- recursion smoke test
 ├── arith_wrap.ml               -- i64 wrap semantics smoke test
@@ -181,10 +193,12 @@ tests/
 │   ├── hello.ml
 │   └── hello.core.snapshot
 └── solana/
-    ├── hello/                  -- the BPF acceptance harness
+    ├── hello/                  -- canonical BPF acceptance harness
     │   ├── solana_hello.ml
     │   ├── invoke.sh           -- shells solana-test-validator + deploy
     │   └── expected_output.txt -- stable final lines from invoke.sh
+    └── closures/               -- P2 BPF closure acceptance harness
+        └── invoke.sh
 ```
 
 The `tests/solana/` harness is opt-in (slow, requires the Solana
@@ -196,7 +210,7 @@ acceptance is gated on it.
 
 ## 7. `.github/workflows/`
 
-P1 ships `.github/workflows/ci.yml` on `push` to `main` and on pull
+The CI surface remains `.github/workflows/ci.yml` on `push` to `main` and on pull
 requests. The workflow runs on `macos-latest` and `ubuntu-latest`, calls
 the same root `./init.sh` used locally, then runs:
 
@@ -207,9 +221,10 @@ zig-out/bin/omlz check examples/*.ml   # skipping m0_unsupported.ml
 tests/solana/hello/invoke.sh          # when SOLANA_BPF=1
 ```
 
-The Solana BPF harness is opt-in by environment variable. macOS is enabled
-by default in the workflow because it is the primary development platform;
-Ubuntu can opt in through the repository variable.
+P2 uses the same build/test commands as P1. The examples corpus loop is
+glob-based, so new P2 examples are checked without structural CI changes. The
+Solana BPF harness remains opt-in by environment variable; closure acceptance
+can be run locally with `SOLANA_BPF=1 tests/solana/closures/invoke.sh`.
 
 ## 8. Conventions
 

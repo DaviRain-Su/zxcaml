@@ -36,6 +36,10 @@ ZxCaml/
 │   ├── option_chain.ml
 │   ├── result_basic.ml
 │   ├── list_sum.ml
+│   ├── enum_adt.ml / tree_adt.ml
+│   ├── nested_pattern.ml / guard_match.ml
+│   ├── tuple_basic.ml / record_person.ml
+│   ├── stdlib_list.ml / closure_adt.ml
 │   └── solana_hello.ml         -- BPF 验收程序
 ├── tests/
 │   ├── ui/                     -- 端到端 .ml → 期望输出
@@ -156,6 +160,14 @@ examples/
 ├── option_chain.ml             -- Option.map / Option.bind acceptance
 ├── result_basic.ml             -- Result 构造与模式匹配
 ├── list_sum.ml                 -- 列表递归求和
+├── enum_adt.ml                 -- 用户自定义 enum ADT
+├── option_adt.ml / tree_adt.ml -- 参数化和递归 ADT
+├── nested_pattern.ml           -- 嵌套构造器 pattern
+├── guard_match.ml              -- guarded match arm + decision-tree dispatch
+├── tuple_basic.ml              -- tuple 构造/解构和 ADT payload
+├── record_person.ml            -- record、字段访问、函数式 update
+├── stdlib_list.ml              -- 扩展 List 函数和 closure
+├── closure_adt.ml              -- 捕获 ADT 值的 closure
 ├── solana_hello.ml             -- canonical BPF acceptance program
 ├── factorial.ml                -- 递归 smoke test
 ├── arith_wrap.ml               -- i64 wrap semantics smoke test
@@ -176,9 +188,12 @@ tests/
 │   ├── hello.ml
 │   └── hello.core.snapshot
 └── solana/
-    ├── hello/                  -- BPF 验收骨架
+    ├── hello/                  -- canonical BPF 验收骨架
     │   ├── solana_hello.ml
-    │   └── invoke.sh           -- 启 solana-test-validator + 部署
+    │   ├── invoke.sh           -- 启 solana-test-validator + 部署
+    │   └── expected_output.txt -- invoke.sh 的稳定末尾输出
+    └── closures/               -- P2 BPF closure 验收骨架
+        └── invoke.sh
 ```
 
 `tests/solana/` 骨架是可选的（慢，需要 Solana 工具链），不是每次 commit 都跑。
@@ -187,7 +202,7 @@ P1 验收门槛挂在这里。
 
 ## 7. `.github/workflows/`
 
-P1 已交付 `.github/workflows/ci.yml`，在 push 到 `main` 和 pull request 时运行。
+CI 表面仍是 `.github/workflows/ci.yml`，在 push 到 `main` 和 pull request 时运行。
 workflow 覆盖 `macos-latest` 与 `ubuntu-latest`，调用本地同一个 root `./init.sh`，随后运行：
 
 ```text
@@ -197,8 +212,9 @@ zig-out/bin/omlz check examples/*.ml   # 跳过 m0_unsupported.ml
 tests/solana/hello/invoke.sh          # SOLANA_BPF=1 时
 ```
 
-Solana BPF harness 由环境变量 opt-in。workflow 中 macOS 默认启用，因为它是主要开发平台；
-Ubuntu 可通过 repository variable opt in。
+P2 使用与 P1 相同的 build/test 命令。Examples corpus loop 基于 glob，因此新增 P2 examples
+无需结构性 CI 改动就会被检查。Solana BPF harness 仍由环境变量 opt-in；closure 验收可本地通过
+`SOLANA_BPF=1 tests/solana/closures/invoke.sh` 运行。
 
 ## 8. 约定
 

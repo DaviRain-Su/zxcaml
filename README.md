@@ -104,23 +104,30 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**P1 Walking Skeleton is complete.** All 35 features implemented, 14/14 gates passed, 73+ tests.
+**P2 subset expansion is implemented.** The P1 walking skeleton remains the
+baseline, and P2 adds user-defined ADTs, nested and guarded pattern matching,
+decision-tree match compilation, tuples, records, an expanded stdlib, and
+first-class closure support on the BPF path.
 
-The `omlz` CLI works end-to-end: parse OCaml → Core IR → codegen → native or BPF binary.
+`omlz` works end-to-end: parse/type-check OCaml with upstream
+`compiler-libs` → emit sexp `0.7` → lower through Core IR → interpret,
+build native Zig, or build Solana BPF `.so` artifacts.
 
-### P1 Features
+### Current features
 
 - **CLI commands:** `omlz check <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`
-- **Wire format:** version 0.4 (evolved through 0.1 → 0.2 → 0.3 → 0.4)
-- **OCaml subset:** let bindings, nested let, let rec, pattern matching (constructors, variables, wildcards), ADTs (option, result), lists (`[]` / `::`), arithmetic (`+`, `-`, `*`, `/`, `mod` with i64 wrap), if/then/else, comparison operators, function application
+- **Wire format:** version 0.7 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`)
+- **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, tuples, records, field access, functional record update, lists (`[]` / `::`), and pattern matching over all of those forms
+- **Stdlib:** bundled `Option`, `Result`, and `List` modules with common combinators such as `map`, `bind`, `value`, `length`, `filter`, `fold_left`, `rev`, and `append`
 - **Memory model:** arena-only, fully inferred, hidden from the user
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
-- **Solana acceptance:** deploy + invoke against `solana-test-validator` works
-- **Determinism:** interpreter ≡ Zig native across the entire corpus
-- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix
+- **BPF closures:** first-class closures with captured environments are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
+- **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, with closure acceptance available under `tests/solana/closures/`
+- **Determinism:** interpreter ≡ Zig native across the P1 + P2 examples corpus
+- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, and an examples `omlz check` corpus loop
 - **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
-- **Examples:** 16 programs in `examples/` plus 10 UI tests (7 positive, 3 negative)
-- **Golden tests:** 9 Core IR snapshot pairs with `--bless` support
+- **Examples:** 29 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, and BPF smoke programs
+- **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
 ---
@@ -134,13 +141,13 @@ Read in order:
 | —  | [Installing](./INSTALLING.md) | Fresh setup, prerequisites, quickstart, and troubleshooting |
 | 00 | [Overview](./docs/00-overview.md) | Vision, scope, three cold showers (anti-traps) |
 | 01 | [Architecture](./docs/01-architecture.md) | Pipeline, layered IR, extension points |
-| 02 | [Grammar](./docs/02-grammar.md) | OCaml subset accepted in P1 |
+| 02 | [Grammar](./docs/02-grammar.md) | OCaml subset accepted through P2 |
 | 03 | [Core IR](./docs/03-core-ir.md) | ANF IR data model, the central contract |
-| 04 | [Memory model](./docs/04-memory-model.md) | Arena-only in P1, region descriptor for the future |
+| 04 | [Memory model](./docs/04-memory-model.md) | Arena-only current model, region descriptor for the future |
 | 05 | [Backends](./docs/05-backends.md) | Zig codegen, tree-walk interpreter, backend trait |
 | 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.so` (zig + sbpf-linker) |
 | 07 | [Repo layout](./docs/07-repo-layout.md) | Directory contract, who owns what |
-| 08 | [Roadmap](./docs/08-roadmap.md) | Phases P1–P7 and P1 internal steps |
+| 08 | [Roadmap](./docs/08-roadmap.md) | Phases P1–P7, with P1/P2 release notes |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |

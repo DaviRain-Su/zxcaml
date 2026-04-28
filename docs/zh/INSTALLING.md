@@ -25,6 +25,11 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 | solana-cli | stable | 运行 BPF acceptance harness 和本地 validator 检查 | 只有在运行 `init.sh` 前设置了 `SOLANA_BPF=1` 时才安装 |
 | macOS `llvm@20` | Homebrew `llvm@20` | 在 macOS 上为 `sbpf-linker 0.1.8` 提供 `libLLVM` | 在 macOS 上通过 Homebrew 安装 `llvm@20`，并在脚本运行期间导出 `DYLD_FALLBACK_LIBRARY_PATH` |
 
+### P2 依赖状态
+
+P2 只增加编译器/语言功能；它 **没有引入新的外部前置依赖**。本地和 CI 仍使用
+同一套 `./init.sh`、`zig build`、`zig build test` 命令。
+
 `init.sh` 有意不安装 Homebrew 或 Rust。在全新的 macOS 上，请先安装它们：
 
 ```sh

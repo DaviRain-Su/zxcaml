@@ -97,23 +97,29 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 
 ## 项目状态
 
-**P1 Walking Skeleton 已完成。** 35 项功能全部实现，14/14 关卡通过，73+ 测试。
+**P2 子集扩展已实现。** P1 walking skeleton 仍是基线；P2 增加了用户自定义
+ADT、嵌套和带 guard 的模式匹配、decision-tree match 编译、tuple、record、
+扩展 stdlib，以及 BPF 路径上的一等闭包支持。
 
-`omlz` CLI 已端到端工作：解析 OCaml → Core IR → 代码生成 → native 或 BPF 二进制。
+`omlz` 已端到端工作：通过上游 `compiler-libs` 解析/类型检查 OCaml → 发出
+sexp `0.7` → lower 到 Core IR → 解释执行、构建 native Zig，或构建 Solana BPF
+`.so` 产物。
 
-### P1 功能
+### 当前功能
 
 - **CLI 命令：** `omlz check <file>`、`omlz run <file>`、`omlz build --target=native <file> -o <out>`、`omlz build --target=bpf <file> -o <out>`
-- **Wire 格式：** 版本 0.4（经 0.1 → 0.2 → 0.3 → 0.4 演进）
-- **OCaml 子集：** let 绑定、嵌套 let、let rec、模式匹配（构造器、变量、通配符）、ADT（option、result）、列表（`[]` / `::`）、算术（`+`、`-`、`*`、`/`、`mod`，i64 回绕）、if/then/else、比较运算符、函数应用
+- **Wire 格式：** 版本 0.7（P1 为 `0.4`；P2 在 `0.5` 加用户 ADT、在 `0.6` 加嵌套/guarded pattern、在 `0.7` 加 tuple/record）
+- **OCaml 子集：** let 绑定、嵌套 let、let rec、curried 函数、函数应用、算术/比较运算、if/then/else、用户自定义 ADT、嵌套构造器模式、带 `when` 的 match arm、tuple、record、字段访问、函数式 record update、列表（`[]` / `::`），以及覆盖这些形式的模式匹配
+- **Stdlib：** 内置 `Option`、`Result`、`List` 模块，含 `map`、`bind`、`value`、`length`、`filter`、`fold_left`、`rev`、`append` 等常用组合子
 - **内存模型：** 仅 arena，完全推断，对用户隐藏
 - **后端：** 树遍历解释器、Zig native 代码生成、通过 `sbpf-linker --cpu v2` 的 BPF 代码生成
-- **Solana 验收：** 对 `solana-test-validator` 部署 + 调用成功
-- **确定性：** 解释器 ≡ Zig native，覆盖全部语料
-- **CI：** GitHub Actions 工作流，`macos-latest` + `ubuntu-latest` 矩阵
+- **BPF 闭包：** 捕获环境的一等闭包会 lower 成不依赖 BPF 不支持的 code-pointer relocation 的形态，并由 Solana closure acceptance 测试覆盖
+- **Solana 验收：** canonical hello harness 可在 `solana-test-validator` 上部署 + 调用，closure 验收位于 `tests/solana/closures/`
+- **确定性：** P1 + P2 examples corpus 上解释器 ≡ Zig native
+- **CI：** GitHub Actions 工作流覆盖 `macos-latest` + `ubuntu-latest`，运行 `./init.sh`、`zig build`、`zig build test` 和 examples `omlz check` 语料循环
 - **诊断信息：** 人性化的 `path:line:col: severity: message` 渲染
-- **示例：** `examples/` 下 16 个程序，外加 10 个 UI 测试（7 正向、3 负向）
-- **Golden 测试：** 9 对 Core IR 快照，支持 `--bless`
+- **示例：** `examples/` 下 29 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure 和 BPF smoke 程序
+- **Golden/UI 测试：** Core IR/sexp snapshot 和 UI 测试通过 `zig build test` 运行
 - **安装：** `./init.sh && zig build`（见 [INSTALLING.md](./INSTALLING.md)）
 
 ---
@@ -125,13 +131,13 @@ ZxCaml 保留 OCaml 语言、复用它的心智模型，但把程序导入一条
 | —  | [安装](./INSTALLING.md) | 全新 setup、前置依赖、quickstart 和故障排查 |
 | 00 | [概览](./00-overview.md) | 愿景、范围、三盆冷水（避免的陷阱） |
 | 01 | [架构](./01-architecture.md) | 管线、分层 IR、扩展点 |
-| 02 | [语法](./02-grammar.md) | P1 接受的 OCaml 子集 |
+| 02 | [语法](./02-grammar.md) | 截至 P2 接受的 OCaml 子集 |
 | 03 | [Core IR](./03-core-ir.md) | ANF IR 数据模型，核心契约 |
-| 04 | [内存模型](./04-memory-model.md) | P1 仅 arena，未来扩展用 region 描述符 |
+| 04 | [内存模型](./04-memory-model.md) | 当前仅 arena，未来扩展用 region 描述符 |
 | 05 | [后端](./05-backends.md) | Zig 代码生成、树遍历解释器、后端 trait |
 | 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.so` 的工具链链路（zig + sbpf-linker） |
 | 07 | [仓库布局](./07-repo-layout.md) | 目录契约，谁拥有什么 |
-| 08 | [路线图](./08-roadmap.md) | P1–P7 各阶段和 P1 内部步骤 |
+| 08 | [路线图](./08-roadmap.md) | P1–P7 各阶段，以及 P1/P2 release notes |
 | 09 | [决策（ADR）](./09-decisions.md) | 锁定的决策，附带理由 |
 | 10 | [前端桥接](./10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | —  | [备选方案对比](./alternatives-considered.md) | 为什么不自写、为什么不 fork OxCaml |

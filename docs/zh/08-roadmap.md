@@ -7,7 +7,7 @@
 | 阶段 | 主题 | 完成标志 |
 |---|---|---|
 | **P1** | MVP：OCaml 子集 → BPF `.so` | `examples/solana_hello.ml` 部署成功并返回 0 |
-| P2 | ADT 完整化 | 嵌套模式、记录更新、基础的 result-as-exception |
+| **P2** | 子集扩展 + match 优化 | 用户 ADT、嵌套/guarded pattern、tuple、record、stdlib 和 BPF closure |
 | P3 | Solana 形态子集 | `account` 类型、no-alloc 分析、syscall 绑定、真实 Anchor 风格程序 |
 | P4 | 区域推断 | 逃逸分析、`Region::Region(id)`、可选栈分配 |
 | P5 | 生态接入 | Zig FFI 声明、更大的原生 stdlib 子集 |
@@ -123,25 +123,40 @@ P1 已实现：
   Solana deploy/invoke harness、CI，以及 `06-bpf-target.md` §7 中记录为 PASS 的
   G13 BPF 字节可复现性。
 
-延期到 P2+：
+当 P1 发布时延期到 P2+ 的内容：
 
 - 用户自定义 ADT、records、tuples、嵌套构造器模式、guarded match arms、
   exceptions-as-result helpers、mutation/ref、modules/functors；
-- 把一等 closure 作为受支持的 BPF acceptance 形状（native 和 interpreter 路径已存在，
-  但 BPF code-pointer relocation 需要 P2/P3 设计选择）；
+- 把一等 closure 作为受支持的 BPF acceptance 形状（当时 native 和 interpreter 路径已存在，
+  但 BPF code-pointer relocation 需要后续设计选择）；
 - entrypoint 之外的 Solana-shaped API：account decoding、syscalls、CPI、IDL generation、
   no-allocation analysis；
 - region inference / multi-arena ownership 工作，以及任何非 BPF 交付目标。
 
-## 3. Phase 2 — ADT 完整化
+## 3. Phase 2 — 子集扩展 + match 优化（2026-04-29）
 
-- `match` 嵌套模式。
-- 记录更新语法 `{ r with x = 1 }`。
-- 基于 `result` 的错误传播 helper（无异常）。
-- decision-tree match 编译。
-- 更大的 stdlib：`Option.map / bind / get_or`、`Result.map / bind`、
-  `List.map / filter / fold / length / rev / append`。
-- 在 `examples/` 下加非平凡程序。
+**状态：** P2 milestone 已实现。P2 扩大了接受的 OCaml 子集，并保持 P1 BPF
+管线不变。
+
+P2 已实现：
+
+- 用户自定义 ADT 声明，包括参数化和递归 ADT；
+- 嵌套构造器 pattern 和带 `when` 的 match arm；
+- decision-tree match 编译，包含构造器 dispatch 和 guard fallthrough；
+- tuple 构造、tuple pattern，以及 `fst` / `snd` 投影 helper；
+- record 声明、构造、字段访问、record pattern、嵌套 record、参数化 record 和函数式 record update；
+- `List`、`Option`、`Result` 的 stdlib 扩展；
+- BPF 路径的一等 closure hardening；
+- 覆盖 ADT、pattern、tuple、record、stdlib 和 closure 的 examples。
+
+P2 **没有** 增加新的外部工具链依赖。当前 wire 格式是 **sexp `0.7`**：`0.5`
+加入类型声明，`0.6` 加入嵌套 pattern 和 guard，`0.7` 加入 tuple/record 节点。
+
+延期到 P3+：
+
+- entrypoint 之外的 Solana-shaped API：account decoding、syscall、CPI、IDL generation、no-allocation analysis；
+- module/functor、exception、mutable state、array、object、GADT、多态变体、effect；
+- region inference / multi-arena ownership 工作，以及任何非 BPF 交付目标。
 
 ## 4. Phase 3 — Solana 形态子集
 

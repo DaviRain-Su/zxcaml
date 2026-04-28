@@ -70,7 +70,7 @@ These rules live in `Typed AST → Core IR` lowering (see
 `03-core-ir.md` §4). They are the **only** knob the frontend
 controls.
 
-## 5. ADT representation (P1)
+## 5. ADT and aggregate representation
 
 For an ADT with `n` variants:
 
@@ -90,24 +90,23 @@ allowed to use a tagged-union representation native to the host
 language and is not bound by these encodings.
 
 
-## 6. Closure and recursion representation (P1)
+## 6. Closure and recursion representation
 
-P1 has three as-built cases:
+The current pipeline has three as-built cases:
 
 1. **Top-level functions** lower to direct Zig helper functions using the
    arena-threaded calling convention.
 2. **Nested recursive functions that do not escape** are lowered as direct
    helper functions with captured values threaded as extra parameters.
-3. **Escaping first-class closures** are represented in Lowered IR as an
-   arena-allocated closure record with a code pointer and capture array
-   (`prelude.Closure`). This path works for interpreter/native validation;
-   BPF first-class closure code pointers are not part of the P1 Solana
-   acceptance example and remain a P2/P3 hardening item because the mission
-   observed a `Relocations found but no .rodata section` linker failure on
-   that shape.
+3. **First-class closures** are represented in Lowered IR as arena-backed
+   closure records with explicit capture storage and typed closure-call
+   metadata. P2 hardened the BPF path so closure examples no longer rely on
+   unsupported code-pointer relocations; closure acceptance lives under
+   `tests/solana/closures/` and the examples corpus includes closure + ADT
+   and stdlib higher-order cases.
 
 The user still sees none of this machinery; they write ordinary `let` /
-`let rec` OCaml subset code.
+`let rec` / `fun` OCaml subset code.
 
 ## 7. Strings (P1)
 

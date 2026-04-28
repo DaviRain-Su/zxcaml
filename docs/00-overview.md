@@ -5,7 +5,7 @@
 ## 1. What ZxCaml is
 
 ZxCaml is a **compiler for an OCaml dialect** whose backend produces
-Solana **BPF** object files via **Zig**.
+Solana **BPF** shared objects (`.so`) via **Zig**.
 
 Concretely:
 
@@ -30,9 +30,9 @@ Concretely:
   representation. Reuse happens through:
   1. Writing a small native standard library in our subset, and
   2. **Zig FFI** for system / cryptographic primitives.
-- **Not a general-purpose compiler in P1.** P1's only validated target
-  is Solana BPF. Native binaries may fall out for free, but they are
-  not a goal.
+- **Not a general-purpose compiler.** The only validated deployment target
+  remains Solana BPF. Native binaries may fall out for developer
+  convenience, but they are not a supported deliverable.
 
 ## 3. Project naming
 
@@ -123,7 +123,7 @@ P4+ work on regions and ownership.
 | Memory model exposure | **Hidden**, fully inferred, arena-only |
 | Primary target | **Solana BPF** (`bpfel-freestanding` via Zig) |
 | Build driver | **single `build.zig`** (drives both OCaml and Zig steps) |
-| P1 endpoint | A `.ml` program produces a `.o` that loads on `solana-test-validator` and returns 0 |
+| P1 endpoint | A `.ml` program produces a Solana-loadable `.so` that loads on `solana-test-validator` and returns 0 |
 
 ## 6. Out of scope (forever, or until explicitly re-opened)
 

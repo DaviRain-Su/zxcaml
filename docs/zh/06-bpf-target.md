@@ -175,9 +175,9 @@ Native 仅供开发便利（**不是** P1 交付物）：
 zig build-exe -O Debug out/program.zig
 ```
 
-## 7. "P1 完成"前的正确性检查
+## 7. BPF 正确性检查
 
-P1 产出的 BPF `.so` 必须满足：
+当前管线产出的 BPF `.so` 必须满足：
 
 1. `llvm-objdump -d solana_hello.so` 显示一个 export 出去的
    `entrypoint` 符号，带合法 eBPF（默认 SBPFv2，v3 可选）指令。
@@ -194,7 +194,7 @@ P1 产出的 BPF `.so` 必须满足：
    没有 `.rodata` 符号解析到 < 0x100 的地址（Zig 0.16 的低地址怪癖；
    见 §4 的注）。
 
-1–3、5 是 CI 门槛。4 在 P1 是尽力而为，到 P3 强制要求。
+1–3、5 是 canonical hello 验收检查。启用 Solana harness 时，closure 相关 BPF 验收由 `tests/solana/closures/` 单独覆盖。
 
 
 ## 8. 可能出错的点（以及怎么应对）
@@ -211,7 +211,7 @@ P1 产出的 BPF `.so` 必须满足：
 | `sbpf-linker` 拒绝 bitcode | LLVM IR 形状它不理解 | 降低 `ZigBackend` codegen 复杂度；只有在有 ADR addendum 和 acceptance 证据时才放宽到 `--cpu v3` |
 | Loader 因低地址 `Access violation` 拒绝 | Zig 0.16 module-scope const-array placement quirk（§4） | Codegen 规则：对 module-scope const array 取地址前先复制到栈上 |
 | BPF build 拒绝 Zig `@trap` / abort builtin | freestanding BPF 不能使用 hosted panic path | `runtime/zig/panic.zig` 保持 BPF-safe no-return path；Solana-friendly logging 留到 P3 |
-| 一等 closure BPF build 报 `Relocations found but no .rodata section` | 逃逸 closure record 带 code pointer / relocation，当前 BPF link 形状不接受 | P1 acceptance 不要求 BPF 一等 closure。P2/P3 需选择 direct-call lowering、linker 支持的 rodata anchor，或 ADR 支持的 closure 限制 |
+| 一等 closure BPF build 失败或运行时 fault | Closure lowering 回退到不支持的 code-pointer relocation 或无效 capture 地址 | 保持 P2 closure hardening：已知 callee 尽量 lower 成直接 helper 调用，一等 closure 使用 arena-backed capture storage 和类型化 dispatch 元数据；`SOLANA_BPF=1` 时 `tests/solana/closures/invoke.sh` 必须保持绿色 |
 | BPF verifier 拒绝程序 | 栈帧过深、无界循环、非法 helper、或不支持的 relocation | 简化生成代码，对照 Solana harness 输出；P3 增加 no-alloc / stack analysis |
 | Solana loader 因 ELF layout 失败 | section layout 或 exported symbol 错误 | 与 P1 已知可用的 `solana_hello.so` flow 对比；疑似 linker 问题上报上游，并固定最后可用版本 |
 | 程序可部署但返回值错误 | 后端语义与解释器分叉 | Determinism suite（`05-backends.md` §6）必须捕获 native 分叉；BPF-only 分叉需增加 Solana harness case |

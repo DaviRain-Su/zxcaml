@@ -21,13 +21,13 @@ Backend:
 
 Returned objects are POD; backends are stateless w.r.t. each call.
 
-P1 ships:
+Current implementations:
 
 - `ZigBackend`        — main path, produces `.zig` source.
 - `Interpreter`       — dev-only, executes Core IR.
 
-P1 stubs (signatures only, must compile, must return "not
-implemented" diagnostics if invoked):
+Stubs (signatures only, must compile, must return "not implemented"
+diagnostics if invoked):
 
 - `OCamlBackend`      — placeholder. Note: the subset oracle role
   this slot used to claim has been removed because ADR-010 makes
@@ -71,9 +71,12 @@ out/
 | `RLam` | top-level `fn` + heap-allocated capture struct |
 | `RApp` | direct `fn` call (known callee) or indirect through closure |
 | `RCtor` | struct literal placed in arena |
-| `RProj` | `obj.*.field` |
-| `EMatch` | `switch` on the discriminator + per-arm bindings |
+| `RProj` / tuple projection / record field | direct field access on generated product values |
+| tuple / record construction | Zig struct literals or generated nominal record structs |
+| record update | struct copy with overridden fields |
+| `EMatch` | decision-tree dispatch: `switch` on discriminators plus guard fallthrough |
 | `EIf` | `if (cond) ... else ...` |
+| closures | direct helper calls for known callees; arena-backed closure records for first-class values |
 | `RPrim IAdd / ...` | Zig native operators (with wrap semantics decided per op; see §2.5) |
 
 ### 2.4 Arena threading
@@ -122,9 +125,10 @@ strategy and tests can isolate "frontend bugs" from "backend bugs".
 
 - A tagged-union `Value` type in the host (Zig).
 - Closures are pairs `(env, body)` allocated in a host arena.
-- Pattern matching is a recursive walk; no compile-down to
-  decision trees in P1.
-- ADTs are represented as `{ tag, payload: []Value }`.
+- Pattern matching is a recursive walk over the Core `Pattern` tree, including
+  nested constructor, tuple, record, wildcard, and guarded arms.
+- ADTs are represented as `{ tag, payload: []Value }`; tuple and record values
+  use host-side aggregate values.
 
 ### 3.4 Limitations
 
@@ -166,7 +170,7 @@ Driver logic:
 
 ## 6. Determinism requirement
 
-For any program in the P1 subset and any input:
+For any program in the accepted P1 + P2 subset and any input:
 
 ```
 Interpreter(P)  ≡  ZigBackend(P)  (mod observable outputs)

@@ -7,7 +7,7 @@
 | Phase | Theme | Done when… |
 |---|---|---|
 | **P1** | MVP: OCaml subset → BPF `.so` | `examples/solana_hello.ml` deploys and returns 0 |
-| P2 | ADT completeness | nested patterns, record update, basic exceptions-as-result |
+| **P2** | Subset expansion + match optimization | user ADTs, nested/guarded patterns, tuples, records, stdlib, and BPF closures |
 | P3 | Solana-shaped subset | `account` type, no-alloc analysis, syscall bindings, real Anchor-style program |
 | P4 | Region inference | escape analysis, `Region::Region(id)`, optional stack allocation |
 | P5 | Ecosystem reach | Zig FFI declarations, larger native stdlib subset |
@@ -137,28 +137,48 @@ Implemented in P1:
   and G13 BPF byte reproducibility documented as PASS in
   `06-bpf-target.md` §7.
 
-Deferred to P2+:
+Deferred to P2+ at the time of the P1 release:
 
 - user-defined ADTs, records, tuples, nested constructor patterns,
   guarded match arms, exceptions-as-result helpers, mutation/ref, and
   modules/functors;
 - first-class closures as a supported BPF acceptance shape (native and
-  interpreter paths exist, but BPF code-pointer relocations need a P2/P3
+  interpreter paths existed, but BPF code-pointer relocations needed a later
   design choice);
 - Solana-shaped APIs beyond the entrypoint: account decoding, syscalls,
   CPI, IDL generation, and no-allocation analysis;
 - region inference / multi-arena ownership work and any non-BPF
   deliverable target.
 
-## 3. Phase 2 — ADT completeness
+## 3. Phase 2 — Subset expansion + match optimization (2026-04-29)
 
-- Nested patterns in `match`.
-- Record update syntax `{ r with x = 1 }`.
-- `result`-based error propagation helper (no exceptions).
-- Decision-tree match compilation.
-- Larger stdlib: `Option.map / bind / get_or`, `Result.map / bind`,
-  `List.map / filter / fold / length / rev / append`.
-- Begin populating `examples/` with non-trivial programs.
+**Status:** Implemented for the P2 milestone. P2 expanded the accepted OCaml
+subset and kept the P1 BPF pipeline intact.
+
+Implemented in P2:
+
+- user-defined ADT declarations, including parameterized and recursive ADTs;
+- nested constructor patterns and guarded `when` match arms;
+- decision-tree match compilation with constructor dispatch and guard fallthrough;
+- tuple construction, tuple patterns, and `fst` / `snd` projection helpers;
+- record declarations, construction, field access, record patterns, nested
+  records, parameterized records, and functional record update;
+- stdlib expansion for `List`, `Option`, and `Result`;
+- first-class closure hardening for the BPF path;
+- examples covering ADTs, patterns, tuples, records, stdlib use, and closures.
+
+P2 did **not** add new external toolchain dependencies. The wire format is
+currently **sexp `0.7`**: `0.5` added type declarations, `0.6` added nested
+patterns and guards, and `0.7` added tuple/record nodes.
+
+Deferred to P3+:
+
+- Solana-shaped APIs beyond the entrypoint: account decoding, syscalls, CPI,
+  IDL generation, and no-allocation analysis;
+- modules/functors, exceptions, mutable state, arrays, objects, GADTs,
+  polymorphic variants, and effects;
+- region inference / multi-arena ownership work and any non-BPF deliverable
+  target.
 
 ## 4. Phase 3 — Solana-shaped subset
 

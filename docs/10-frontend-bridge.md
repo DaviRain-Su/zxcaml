@@ -93,24 +93,37 @@ The serialised form is an S-expression because:
 
 ### 3.1 Top-level shape
 
-As built in P1, the formal wire grammar lives in
-`src/frontend/zxc_sexp_format.md` and is version `0.4`. The top-level
-shape is deliberately compact:
+The current wire grammar is sexp **version `0.7`**. The header carries the
+version so `omlz` can reject stale frontend output with an upgrade hint:
 
 ```text
-(zxcaml-cir 0.4
+(zxcaml-cir 0.7
   (module
+    (type_decl (name color) (params)
+      (variants ((Red (payload_types))
+                 (Green (payload_types))
+                 (Blue (payload_types)))))
+    (record_type_decl (name person) (params)
+      (fields ((name (type-ref string)) (age (type-ref int)))))
     (let entrypoint
-      (lambda (_)
-        (match (ctor Some (const-int 1))
-          (case (ctor Some (var x)) (var x))
-          (case (ctor None) (const-int 0)))))))
+      (lambda (_input)
+        (let alice (record (fields ((name (const-string "alice"))
+                                    (age (const-int 30)))))
+          (match (tuple (items (ctor Red) (field_access (var alice) age)))
+            (case (tuple_pattern (ctor Red) (var n)) (var n))))))))
 ```
 
-The sexp does **not** carry type declarations, a source map, or spans in
-P1. Diagnostics carry locations separately on stderr. The accepted node
-families are `let`, `lambda`, `var`, `const-int`, `const-string`, `ctor`,
-`app`, `prim`, `if`, `match`, and `case`.
+P2 version history:
+
+| Version | Added surface |
+|---|---|
+| `0.4` | P1 expressions: `let`, `lambda`, `var`, literals, constructors, `app`, `prim`, `if`, `match`, `case` |
+| `0.5` | user-defined variant `type_decl` nodes |
+| `0.6` | nested pattern payloads and `when_guard` nodes |
+| `0.7` | tuple nodes, tuple patterns/projection, record type declarations, record expressions, field access, record update, record patterns |
+
+Diagnostics carry locations separately on stderr; ordinary comments and
+formatting trivia are not serialized.
 
 ### 3.2 Stability commitment
 
@@ -145,22 +158,22 @@ Out:
   upstream of serialisation).
 
 
-## 4. The accepted subset (P1)
+## 4. The accepted subset (through P2)
 
-The **definitive** list of `Typedtree` constructors accepted by the
-as-built P1 `zxc-frontend` is intentionally smaller than the future
-surface sketched in early planning docs.
+The **definitive** list of `Typedtree` constructors accepted by the current
+`zxc-frontend` is the implementation in `src/frontend/zxc_subset.ml`. This
+section summarizes the as-built P2 surface.
 
 ### 4.1 Top-level
 
 Accepted:
 
 - `Tstr_value` with exactly one binding, recursive or non-recursive.
+- `Tstr_type` for subset variant, tuple-alias, and record declarations.
 
-Rejected: `Tstr_type`, `Tstr_module`, `Tstr_modtype`, `Tstr_class`,
-`Tstr_open`, `Tstr_include`, `Tstr_exception`, `Tstr_primitive`
-(`external`), attributes, recursive modules, and multi-binding `and`
-groups.
+Rejected: modules, module types, classes, opens/includes, exceptions,
+`external`, attributes, recursive modules, private/constraint-heavy types,
+and multi-binding `and` value groups.
 
 ### 4.2 Expressions
 
@@ -168,17 +181,21 @@ Accepted:
 
 - `Texp_ident`
 - `Texp_constant` for `Const_int` and `Const_string`
-- `Texp_function` with one parameter and an expression body
+- `Texp_function` for the supported lambda/function-sugar forms
 - `Texp_let` with exactly one binding, recursive or non-recursive
-- `Texp_apply` for unlabeled/full applications and whitelisted primops
+- `Texp_apply` for unlabeled applications, whitelisted primops, `fst`/`snd`,
+  and stdlib-qualified calls such as `List.map`
 - `Texp_ifthenelse` with an `else` branch
-- `Texp_match` with no guards
-- `Texp_construct` for `None`, `Some`, `Ok`, `Error`, `[]`, and `::`
+- `Texp_match`, including `case.c_guard` expressions
+- `Texp_construct` for bundled and user-defined ADT constructors
+- `Texp_tuple`
+- `Texp_record` for construction and functional update
+- `Texp_field` for record field access
 
-Rejected: records, tuples, arrays, sequences, loops, objects, variants,
-field access/update, `letop`, local opens/modules, `try`, `assert`, `lazy`,
-partial applications, labels, and mutation primitives (`ref`, `:=`, `!`) with
-the dedicated mutation diagnostic.
+Rejected: arrays, sequences, loops, objects, polymorphic variants, `letop`,
+local opens/modules, `try`, `assert`, `lazy`, labels/optional arguments, and
+mutation primitives (`ref`, `:=`, `!`, `Texp_setfield`) with dedicated
+diagnostics where available.
 
 Whitelisted primops:
 
@@ -192,28 +209,31 @@ Accepted:
 
 - `Tpat_any` (`_`)
 - `Tpat_var`
-- `Tpat_construct` for `None`, `Some`, `Ok`, `Error`, `[]`, and `::`,
-  with simple wildcard/variable payload patterns in P1.
+- `Tpat_construct` for bundled and user-defined constructors, including
+  nested constructor payloads
+- `Tpat_tuple`
+- `Tpat_record`
 
-Rejected: aliases, constants beyond the supported constructor forms,
-tuples, records, arrays, lazy patterns, polymorphic variants, exception
-patterns, and guarded match arms.
+Rejected: aliases, constants beyond supported constructor forms, arrays, lazy
+patterns, polymorphic variants, exception patterns, and mutation-related
+patterns.
 
 ### 4.4 Types
 
-User-authored type declarations are rejected in P1 (`Tstr_type`). The
-bundled stdlib supplies `option`, `result`, and `list`; user programs may
-construct and match those values but may not define new ADTs yet.
+User-authored subset type declarations are accepted. The type language covers
+variables, named references, tuple type payloads, variant declarations, tuple
+aliases, and record declarations. GADTs, private types, record constructor
+payloads inside variants, and type constraints remain rejected.
 
 ## 5. Diagnostics
 
 Format on stderr (with `--json-diag`):
 
 ```json
-{"severity":"error","code":"P1-UNSUPPORTED",
+{"severity":"error","code":"P2-UNSUPPORTED",
  "feature":"Texp_try",
  "loc":{"file":"foo.ml","line":12,"col":3,"end_line":12,"end_col":18},
- "message":"`try ... with` is not supported in P1; see roadmap §4"}
+ "message":"`try ... with` is not supported in the current ZxCaml subset"}
 ```
 
 `omlz` consumes these and re-renders them in its own style.
