@@ -1,0 +1,2 @@
+==> transaction err: null
+==> SUCCESS: solana hello deployed and invoked

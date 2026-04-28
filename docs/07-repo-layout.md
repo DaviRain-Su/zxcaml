@@ -172,11 +172,15 @@ tests/
 └── solana/
     ├── hello/                  -- the BPF acceptance harness
     │   ├── solana_hello.ml
-    │   └── invoke.sh           -- shells solana-test-validator + deploy
+    │   ├── invoke.sh           -- shells solana-test-validator + deploy
+    │   └── expected_output.txt -- stable final lines from invoke.sh
 ```
 
 The `tests/solana/` harness is opt-in (slow, requires the Solana
-toolchain) and not run on every commit. P1 acceptance is gated on it.
+toolchain) and not run on every commit. Run it only with
+`SOLANA_BPF=1 tests/solana/hello/invoke.sh`; without that environment
+variable the script prints a skip message and exits successfully. P1
+acceptance is gated on it.
 
 ## 7. `.github/workflows/` (post-P1, illustrative)
 
