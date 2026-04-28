@@ -1,1 +1,1 @@
-tests/ui/type_decl.ml:1:0: error: Tstr_type is not supported in the current ZxCaml subset; expected top-level `let` declarations, integer constants, identifiers, string constants, one-argument functions, non-recursive nested `let` expressions, or the whitelisted constructors None/Some/Ok/Error/[]/::, including basic pattern matches over those values
+0

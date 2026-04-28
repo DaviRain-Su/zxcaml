@@ -1,15 +1,24 @@
-# ZxCaml frontend S-expression wire format v0.4
+# ZxCaml frontend S-expression wire format v0.5
 
 `zxc-frontend --emit=sexp <input.ml>` emits exactly one S-expression on
-stdout. Version `0.4` widens the M1 format with basic pattern matching over
-values and match patterns for wildcard, variable binding, and the whitelisted
-option/result/list constructors.
+stdout. Version `0.5` widens the P1 format with user-authored ADT type
+declarations while preserving existing expression and match nodes.
 
 ## Grammar
 
 ```text
-module       ::= "(" "zxcaml-cir" "0.4" "(" "module" decl* ")" ")"
-decl         ::= "(" "let" ident expr ")"
+module       ::= "(" "zxcaml-cir" "0.5" "(" "module" decl* ")" ")"
+decl         ::= let_decl | type_decl
+let_decl     ::= "(" "let" ident expr ")"
+type_decl    ::= "(" "type_decl" "(" "name" ident ")"
+                "(" "params" ident* ")"
+                ["(" "recursive" "true" ")"]
+                "(" "variants" "(" variant* ")" ")" ")"
+variant      ::= "(" ident "(" "payload_types" type_expr* ")" ")"
+type_expr    ::= "(" "type-var" ident ")"
+               | "(" "type-ref" ident type_expr* ")"
+               | "(" "recursive-ref" ident type_expr* ")"
+               | "(" "tuple-type" type_expr+ ")"
 expr         ::= const_int | const_string | var | lambda | let_expr | ctor | match_expr
 const_int    ::= "(" "const-int" integer ")"
 const_string ::= "(" "const-string" quoted-string ")"
@@ -44,7 +53,7 @@ let entrypoint _input = 0
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (const-int 0)))))
+(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (const-int 0)))))
 ```
 
 For a top-level value referenced from a function:
@@ -57,7 +66,7 @@ let entrypoint _input = x
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let x (const-int 1)) (let entrypoint (lambda (_) (var x)))))
+(zxcaml-cir 0.5 (module (let x (const-int 1)) (let entrypoint (lambda (_) (var x)))))
 ```
 
 For nested lets:
@@ -72,7 +81,7 @@ let entrypoint _input =
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (let x (const-int 5) (let y (const-int 7) (var x)))))))
+(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (let x (const-int 5) (let y (const-int 7) (var x)))))))
 ```
 
 For `None`:
@@ -84,7 +93,7 @@ let value = None
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let value (ctor None))))
+(zxcaml-cir 0.5 (module (let value (ctor None))))
 ```
 
 For `Some 1`:
@@ -96,7 +105,7 @@ let value = Some 1
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let value (ctor Some (const-int 1)))))
+(zxcaml-cir 0.5 (module (let value (ctor Some (const-int 1)))))
 ```
 
 For `Ok 0`:
@@ -108,7 +117,7 @@ let value = Ok 0
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let value (ctor Ok (const-int 0)))))
+(zxcaml-cir 0.5 (module (let value (ctor Ok (const-int 0)))))
 ```
 
 For `Error "oops"`:
@@ -120,7 +129,7 @@ let value = Error "oops"
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let value (ctor Error (const-string "oops")))))
+(zxcaml-cir 0.5 (module (let value (ctor Error (const-string "oops")))))
 ```
 
 For the list literal `[1; 2]`:
@@ -132,7 +141,7 @@ let value = [1; 2]
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let value (ctor "::" (const-int 1) (ctor "::" (const-int 2) (ctor "[]"))))))
+(zxcaml-cir 0.5 (module (let value (ctor "::" (const-int 1) (ctor "::" (const-int 2) (ctor "[]"))))))
 ```
 
 For wildcard let-bindings:
@@ -146,7 +155,7 @@ let entrypoint _input =
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (let _ (ctor Some (const-int 1)) (const-int 0))))))
+(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (let _ (ctor Some (const-int 1)) (const-int 0))))))
 ```
 
 For a `Some` arm and a `None` arm:
@@ -161,7 +170,7 @@ let entrypoint _ =
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)))))))
+(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)))))))
 ```
 
 For a wildcard arm:
@@ -175,7 +184,7 @@ let entrypoint _ =
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (match (ctor None) (case _ (const-int 0)))))))
+(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (match (ctor None) (case _ (const-int 0)))))))
 ```
 
 For a variable-binding arm:
@@ -189,7 +198,7 @@ let entrypoint _ =
 the frontend prints:
 
 ```text
-(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (match (ctor Some (const-int 7)) (case (var value) (const-int 1)))))))
+(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (match (ctor Some (const-int 7)) (case (var value) (const-int 1)))))))
 ```
 
 For list pattern matching:
@@ -209,10 +218,10 @@ the match arms include the built-in list constructors:
 
 ## Version compatibility
 
-Versions `0.1`, `0.2`, and `0.3` are deliberately deprecated by the OCaml
-frontend once F11 lands: new `zxc-frontend` binaries emit `0.4`. Downstream consumers
+Versions `0.1`, `0.2`, `0.3`, and `0.4` are deliberately deprecated by the OCaml
+frontend once F25 lands: new `zxc-frontend` binaries emit `0.5`. Downstream consumers
 should reject older versions with an upgrade hint rather than silently treating
-them as equivalent, because `0.4` adds match expressions and pattern nodes.
+them as equivalent, because `0.5` adds user-authored ADT type declarations.
 
 ## Diagnostic schema
 

@@ -1,15 +1,15 @@
 (* S-expression serializer for the ZxCaml OCaml frontend wire format.
 
    The serializer is intentionally hand-written to avoid any dependency beyond
-   compiler-libs.common.  Version 0.4 contains top-level let declarations,
+   compiler-libs.common.  Version 0.5 contains top-level let declarations,
    one-argument lambdas, integer/string constants, identifiers, nested lets,
-   whitelisted option/result constructor expressions, and basic match
-   expressions. *)
+   whitelisted option/result constructor expressions, basic match expressions,
+   and user-authored ADT type declarations. *)
 
 open Format
 open Zxc_subset
 
-let version = "0.4"
+let version = "0.5"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' -> true
@@ -74,10 +74,46 @@ and pp_match_pattern ppf = function
       List.iter (fun arg -> fprintf ppf " %a" pp_match_pattern arg) ctor.args;
       fprintf ppf ")"
 
-let pp_decl ppf decl =
-  fprintf ppf "(%s %a %a)"
-    (if decl.is_rec then "let-rec" else "let")
-    pp_atom decl.name pp_expr decl.body
+let rec pp_decl ppf decl =
+  match decl with
+  | Let_decl decl ->
+      fprintf ppf "(%s %a %a)"
+        (if decl.is_rec then "let-rec" else "let")
+        pp_atom decl.name pp_expr decl.body
+  | Type_decl decl ->
+      fprintf ppf "(type_decl (name %a)" pp_atom decl.type_name;
+      fprintf ppf " (params";
+      List.iter (fun param -> fprintf ppf " %a" pp_atom param) decl.params;
+      fprintf ppf ")";
+      if decl.is_recursive then fprintf ppf " (recursive true)";
+      fprintf ppf " (variants (";
+      pp_type_variants ppf decl.variants;
+      fprintf ppf ")))"
+
+and pp_type_variants ppf = function
+  | [] -> ()
+  | [ variant ] -> pp_type_variant ppf variant
+  | variant :: rest ->
+      pp_type_variant ppf variant;
+      List.iter (fun variant -> fprintf ppf " %a" pp_type_variant variant) rest
+
+and pp_type_variant ppf variant =
+  fprintf ppf "(%a (payload_types" pp_atom variant.constr_name;
+  List.iter (fun ty -> fprintf ppf " %a" pp_type_expr ty) variant.payload_types;
+  fprintf ppf "))"
+
+and pp_type_expr ppf = function
+  | Type_var name -> fprintf ppf "(type-var %a)" pp_atom name
+  | Type_tuple items ->
+      fprintf ppf "(tuple-type";
+      List.iter (fun item -> fprintf ppf " %a" pp_type_expr item) items;
+      fprintf ppf ")"
+  | Type_constr constr ->
+      fprintf ppf "(%s %a"
+        (if constr.is_recursive_ref then "recursive-ref" else "type-ref")
+        pp_atom constr.type_name;
+      List.iter (fun arg -> fprintf ppf " %a" pp_type_expr arg) constr.args;
+      fprintf ppf ")"
 
 let pp_module ppf = function
   | Module decls ->

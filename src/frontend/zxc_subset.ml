@@ -91,11 +91,38 @@ and ctor_pattern = {
   args : match_pattern list;
 }
 
-type decl = {
+type type_expr =
+  | Type_var of string
+  | Type_constr of type_constr
+  | Type_tuple of type_expr list
+
+and type_constr = {
+  type_name : string;
+  args : type_expr list;
+  is_recursive_ref : bool;
+}
+
+type type_variant = {
+  constr_name : string;
+  payload_types : type_expr list;
+}
+
+type value_decl = {
   name : string;
   body : expr;
   is_rec : bool;
 }
+
+type type_decl = {
+  type_name : string;
+  params : string list;
+  variants : type_variant list;
+  is_recursive : bool;
+}
+
+type decl =
+  | Let_decl of value_decl
+  | Type_decl of type_decl
 
 type modul = Module of decl list
 
@@ -209,6 +236,21 @@ let pat_kind : type k. k pattern_desc -> string = function
   | Tpat_value _ -> "Tpat_value"
   | Tpat_exception _ -> "Tpat_exception"
   | Tpat_or _ -> "Tpat_or"
+
+let core_type_kind (ctyp : core_type) =
+  match ctyp.ctyp_desc with
+  | Ttyp_any -> "Ttyp_any"
+  | Ttyp_var _ -> "Ttyp_var"
+  | Ttyp_arrow _ -> "Ttyp_arrow"
+  | Ttyp_tuple _ -> "Ttyp_tuple"
+  | Ttyp_constr _ -> "Ttyp_constr"
+  | Ttyp_object _ -> "Ttyp_object"
+  | Ttyp_class _ -> "Ttyp_class"
+  | Ttyp_alias _ -> "Ttyp_alias"
+  | Ttyp_variant _ -> "Ttyp_variant"
+  | Ttyp_poly _ -> "Ttyp_poly"
+  | Ttyp_package _ -> "Ttyp_package"
+  | Ttyp_open _ -> "Ttyp_open"
 
 let ident_name ident = Ident.name ident
 
@@ -350,17 +392,131 @@ and parse_expr (expr : expression) =
       Match { scrutinee; arms }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
+let type_var_name name = "'" ^ name
+
+let rec parse_type_expr ~current_type (ctyp : core_type) =
+  match ctyp.ctyp_desc with
+  | Ttyp_var name -> Type_var (type_var_name name)
+  | Ttyp_tuple items ->
+      Type_tuple (List.map (parse_type_expr ~current_type) items)
+  | Ttyp_constr (_path, lid, args) ->
+      let type_name = longident_name lid in
+      Type_constr
+        {
+          type_name;
+          args = List.map (parse_type_expr ~current_type) args;
+          is_recursive_ref = String.equal type_name current_type;
+        }
+  | _ ->
+      unsupported ~node_kind:(core_type_kind ctyp) ~loc:ctyp.ctyp_loc
+        ~message:
+          "only type variables, named type references, and tuple type payloads \
+           are supported in P2 M0 ADT declarations"
+        ()
+
+let parse_type_param (param, _) =
+  match param.ctyp_desc with
+  | Ttyp_var name -> type_var_name name
+  | _ ->
+      unsupported ~node_kind:(core_type_kind param) ~loc:param.ctyp_loc
+        ~message:
+          "only simple type-variable parameters are supported in P2 M0 ADT \
+           declarations"
+        ()
+
+let rec type_expr_has_recursive_ref = function
+  | Type_var _ -> false
+  | Type_constr constr ->
+      constr.is_recursive_ref
+      || List.exists type_expr_has_recursive_ref constr.args
+  | Type_tuple items -> List.exists type_expr_has_recursive_ref items
+
+let variant_has_recursive_ref variant =
+  List.exists type_expr_has_recursive_ref variant.payload_types
+
+let parse_constructor_decl ~current_type (constructor : constructor_declaration) =
+  (match constructor.cd_res with
+  | None -> ()
+  | Some res ->
+      unsupported ~node_kind:"GADT-constructor" ~loc:res.ctyp_loc
+        ~message:"GADT-style constructor result types are not supported in P2 M0"
+        ());
+  (match constructor.cd_vars with
+  | [] -> ()
+  | var :: _ ->
+      unsupported ~node_kind:"existential-constructor" ~loc:var.loc
+        ~message:"existential constructor variables are not supported in P2 M0"
+        ());
+  let payload_types =
+    match constructor.cd_args with
+    | Cstr_tuple args -> List.map (parse_type_expr ~current_type) args
+    | Cstr_record _ ->
+        unsupported ~node_kind:"Cstr_record" ~loc:constructor.cd_loc
+          ~message:"record constructor payloads are not supported until P2 M2"
+          ()
+  in
+  { constr_name = constructor.cd_name.txt; payload_types }
+
+let parse_type_declaration (type_decl : type_declaration) =
+  if type_decl.typ_cstrs <> [] then
+    unsupported ~node_kind:"type-constraint" ~loc:type_decl.typ_loc
+      ~message:"type constraints are not supported in P2 M0 ADT declarations"
+      ();
+  (match type_decl.typ_private with
+  | Public -> ()
+  | Private ->
+      unsupported ~node_kind:"private-type" ~loc:type_decl.typ_loc
+        ~message:"private type declarations are not supported in P2 M0"
+        ());
+  (match type_decl.typ_manifest with
+  | None -> ()
+  | Some manifest ->
+      unsupported ~node_kind:"type-alias" ~loc:manifest.ctyp_loc
+        ~message:"type aliases are not supported in P2 M0 ADT declarations"
+        ());
+  match type_decl.typ_kind with
+  | Ttype_variant constructors ->
+      let current_type = type_decl.typ_name.txt in
+      let variants =
+        List.map (parse_constructor_decl ~current_type) constructors
+      in
+      Type_decl
+        {
+          type_name = current_type;
+          params = List.map parse_type_param type_decl.typ_params;
+          variants;
+          is_recursive = List.exists variant_has_recursive_ref variants;
+        }
+  | Ttype_record _ ->
+      unsupported ~node_kind:"Ttype_record" ~loc:type_decl.typ_loc
+        ~message:"record type declarations are not supported until P2 M2"
+        ()
+  | Ttype_abstract ->
+      unsupported ~node_kind:"Ttype_abstract" ~loc:type_decl.typ_loc
+        ~message:"abstract type declarations are not supported in P2 M0"
+        ()
+  | Ttype_open ->
+      unsupported ~node_kind:"Ttype_open" ~loc:type_decl.typ_loc
+        ~message:"open type declarations are not supported in P2 M0"
+        ()
+
+
 let parse_value_binding (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
   let body = parse_expr binding.vb_expr in
-  { name; body; is_rec = false }
+  Let_decl { name; body; is_rec = false }
 
 let parse_structure_item (item : structure_item) =
   match item.str_desc with
   | Tstr_value (Nonrecursive, [ binding ]) -> [ parse_value_binding binding ]
   | Tstr_value (Recursive, [ binding ]) ->
-      let decl = parse_value_binding binding in
-      [ { decl with is_rec = true } ]
+      let decl =
+        match parse_value_binding binding with
+        | Let_decl decl -> Let_decl { decl with is_rec = true }
+        | Type_decl _ -> assert false
+      in
+      [ decl ]
+  | Tstr_type (_, declarations) -> List.map parse_type_declaration declarations
   | Tstr_value (_, []) ->
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()
   | Tstr_value (_, _ :: _ :: _) ->

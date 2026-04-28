@@ -1,7 +1,7 @@
 //! Typed Zig mirror for the M1 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 0.4 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 0.5 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -10,11 +10,12 @@ const Io = std.Io;
 const sexp_parser = @import("sexp_parser.zig");
 const Sexp = sexp_parser.Sexp;
 
-pub const expected_wire_version = "0.4";
+pub const expected_wire_version = sexp_parser.expected_wire_version;
 
 /// Typed mirror of an accepted frontend module.
 pub const Module = struct {
     decls: []const Decl,
+    type_decls: []const TypeDecl = &.{},
 };
 
 /// Typed mirror of an accepted top-level declaration.
@@ -27,6 +28,34 @@ pub const LetDecl = struct {
     name: []const u8,
     body: Expr,
     is_rec: bool = false,
+};
+
+/// Top-level user-authored ADT declaration emitted by sexp v0.5.
+pub const TypeDecl = struct {
+    name: []const u8,
+    params: []const []const u8,
+    variants: []const TypeVariant,
+    is_recursive: bool = false,
+};
+
+/// One constructor in a variant type declaration.
+pub const TypeVariant = struct {
+    name: []const u8,
+    payload_types: []const TypeExpr,
+};
+
+/// Type expression language used inside ADT constructor payloads.
+pub const TypeExpr = union(enum) {
+    TypeVar: []const u8,
+    TypeRef: TypeRef,
+    RecursiveRef: TypeRef,
+    Tuple: []const TypeExpr,
+};
+
+/// Named type reference, optionally applied to type arguments.
+pub const TypeRef = struct {
+    name: []const u8,
+    args: []const TypeExpr,
 };
 
 /// Typed mirror of accepted expressions.
@@ -128,6 +157,8 @@ pub const BridgeError = sexp_parser.ParseError || error{
     UnsupportedNode,
     MalformedModule,
     MalformedDecl,
+    MalformedTypeDecl,
+    MalformedTypeExpr,
     MalformedLambda,
     MalformedApp,
     MalformedLet,
@@ -148,7 +179,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
     try expectAtomValue(header[0], "zxcaml-cir");
 
     const file_version = try expectAtom(header[1]);
-    if (!std.mem.eql(u8, file_version, expected_wire_version)) {
+    if (!std.mem.eql(u8, file_version, expected_wire_version) and !std.mem.eql(u8, file_version, "0.4")) {
         return error.WireFormatVersionMismatch;
     }
 
@@ -161,14 +192,15 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=0.4\n");
+            try writeStderr(io, " expected=0.5\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
-                std.mem.eql(u8, extractHeaderVersion(bytes), "0.3"))
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.4"))
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits match-aware sexp 0.4.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits ADT-aware sexp 0.5.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -177,7 +209,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.4 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.5 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -190,16 +222,32 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
 
     var decls = std.ArrayList(Decl).empty;
     errdefer decls.deinit(arena.allocator());
+    var type_decls = std.ArrayList(TypeDecl).empty;
+    errdefer type_decls.deinit(arena.allocator());
 
     for (items[1..]) |decl_node| {
-        try decls.append(arena.allocator(), try parseDecl(arena, decl_node));
+        const decl_items = try expectList(decl_node);
+        if (decl_items.len == 0) return error.MalformedDecl;
+        const tag = try expectAtom(decl_items[0]);
+        if (std.mem.eql(u8, tag, "type_decl")) {
+            try type_decls.append(arena.allocator(), try parseTypeDecl(arena, decl_items));
+        } else {
+            try decls.append(arena.allocator(), try parseDeclItems(arena, decl_items));
+        }
     }
 
-    return .{ .decls = try decls.toOwnedSlice(arena.allocator()) };
+    return .{
+        .decls = try decls.toOwnedSlice(arena.allocator()),
+        .type_decls = try type_decls.toOwnedSlice(arena.allocator()),
+    };
 }
 
 fn parseDecl(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Decl {
     const items = try expectList(node);
+    return parseDeclItems(arena, items);
+}
+
+fn parseDeclItems(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Decl {
     if (items.len != 3) return error.MalformedDecl;
     const tag = try expectAtom(items[0]);
     const is_rec = if (std.mem.eql(u8, tag, "let")) false else if (std.mem.eql(u8, tag, "let-rec")) true else return error.MalformedDecl;
@@ -208,6 +256,110 @@ fn parseDecl(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Dec
     const body = try parseExpr(arena, items[2]);
 
     return .{ .Let = .{ .name = name, .body = body, .is_rec = is_rec } };
+}
+
+fn parseTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!TypeDecl {
+    if (items.len != 4 and items.len != 5) return error.MalformedTypeDecl;
+
+    const name_items = try expectList(items[1]);
+    if (name_items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(name_items[0], "name");
+
+    const params_items = try expectList(items[2]);
+    if (params_items.len == 0) return error.MalformedTypeDecl;
+    try expectAtomValue(params_items[0], "params");
+    var params = std.ArrayList([]const u8).empty;
+    errdefer params.deinit(arena.allocator());
+    for (params_items[1..]) |param_node| {
+        try params.append(arena.allocator(), try dupeAtom(arena, param_node));
+    }
+
+    var variants_index: usize = 3;
+    var is_recursive = false;
+    if (items.len == 5) {
+        const recursive_items = try expectList(items[3]);
+        if (recursive_items.len != 2) return error.MalformedTypeDecl;
+        try expectAtomValue(recursive_items[0], "recursive");
+        try expectAtomValue(recursive_items[1], "true");
+        is_recursive = true;
+        variants_index = 4;
+    }
+
+    return .{
+        .name = try dupeAtom(arena, name_items[1]),
+        .params = try params.toOwnedSlice(arena.allocator()),
+        .variants = try parseTypeVariants(arena, items[variants_index]),
+        .is_recursive = is_recursive,
+    };
+}
+
+fn parseTypeVariants(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError![]const TypeVariant {
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(items[0], "variants");
+    const variant_nodes = try expectList(items[1]);
+
+    var variants = std.ArrayList(TypeVariant).empty;
+    errdefer variants.deinit(arena.allocator());
+    for (variant_nodes) |variant_node| {
+        try variants.append(arena.allocator(), try parseTypeVariant(arena, variant_node));
+    }
+    return variants.toOwnedSlice(arena.allocator());
+}
+
+fn parseTypeVariant(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!TypeVariant {
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedTypeDecl;
+
+    const payload_items = try expectList(items[1]);
+    if (payload_items.len == 0) return error.MalformedTypeDecl;
+    try expectAtomValue(payload_items[0], "payload_types");
+
+    var payload_types = std.ArrayList(TypeExpr).empty;
+    errdefer payload_types.deinit(arena.allocator());
+    for (payload_items[1..]) |payload_node| {
+        try payload_types.append(arena.allocator(), try parseTypeExpr(arena, payload_node));
+    }
+
+    return .{
+        .name = try dupeAtom(arena, items[0]),
+        .payload_types = try payload_types.toOwnedSlice(arena.allocator()),
+    };
+}
+
+fn parseTypeExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!TypeExpr {
+    const items = try expectList(node);
+    if (items.len == 0) return error.MalformedTypeExpr;
+    const tag = try expectAtom(items[0]);
+
+    if (std.mem.eql(u8, tag, "type-var")) {
+        if (items.len != 2) return error.MalformedTypeExpr;
+        return .{ .TypeVar = try dupeAtom(arena, items[1]) };
+    }
+    if (std.mem.eql(u8, tag, "type-ref") or std.mem.eql(u8, tag, "recursive-ref")) {
+        if (items.len < 2) return error.MalformedTypeExpr;
+        var args = std.ArrayList(TypeExpr).empty;
+        errdefer args.deinit(arena.allocator());
+        for (items[2..]) |arg_node| {
+            try args.append(arena.allocator(), try parseTypeExpr(arena, arg_node));
+        }
+        const type_ref: TypeRef = .{
+            .name = try dupeAtom(arena, items[1]),
+            .args = try args.toOwnedSlice(arena.allocator()),
+        };
+        if (std.mem.eql(u8, tag, "recursive-ref")) return .{ .RecursiveRef = type_ref };
+        return .{ .TypeRef = type_ref };
+    }
+    if (std.mem.eql(u8, tag, "tuple-type")) {
+        if (items.len < 2) return error.MalformedTypeExpr;
+        var members = std.ArrayList(TypeExpr).empty;
+        errdefer members.deinit(arena.allocator());
+        for (items[1..]) |member_node| {
+            try members.append(arena.allocator(), try parseTypeExpr(arena, member_node));
+        }
+        return .{ .Tuple = try members.toOwnedSlice(arena.allocator()) };
+    }
+    return error.MalformedTypeExpr;
 }
 
 fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Expr {
@@ -475,7 +627,7 @@ test "parse empty module sexp" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.4 (module))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.5 (module))");
     try std.testing.expectEqual(@as(usize, 0), module.decls.len);
 }
 
@@ -483,7 +635,7 @@ test "parse single int constant module" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_) (const-int 0)))))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.5 (module (let entrypoint (lambda (_) (const-int 0)))))");
     try std.testing.expectEqual(@as(usize, 1), module.decls.len);
 
     const decl = switch (module.decls[0]) {
@@ -514,7 +666,7 @@ test "parse top-level and nested let expressions with variable references" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.4 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
+        "(zxcaml-cir 0.5 (module (let x (const-int 1)) (let entrypoint (lambda (_input) (let y (const-int 7) (var x))))))",
     );
     try std.testing.expectEqual(@as(usize, 2), module.decls.len);
 
@@ -546,12 +698,46 @@ test "parse top-level and nested let expressions with variable references" {
     try std.testing.expectEqualStrings("x", var_ref.name);
 }
 
+test "parse type declaration sexp nodes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.5 (module (type_decl (name tree) (params 'a) (recursive true) (variants ((Leaf (payload_types)) (Node (payload_types (recursive-ref tree (type-var 'a)) (recursive-ref tree (type-var 'a))))))) (let entrypoint (lambda (_) (const-int 0)))))",
+    );
+    try std.testing.expectEqual(@as(usize, 1), module.type_decls.len);
+    try std.testing.expectEqual(@as(usize, 1), module.decls.len);
+
+    const type_decl = module.type_decls[0];
+    try std.testing.expectEqualStrings("tree", type_decl.name);
+    try std.testing.expectEqual(@as(usize, 1), type_decl.params.len);
+    try std.testing.expectEqualStrings("'a", type_decl.params[0]);
+    try std.testing.expect(type_decl.is_recursive);
+    try std.testing.expectEqual(@as(usize, 2), type_decl.variants.len);
+    try std.testing.expectEqualStrings("Leaf", type_decl.variants[0].name);
+    try std.testing.expectEqual(@as(usize, 0), type_decl.variants[0].payload_types.len);
+    try std.testing.expectEqualStrings("Node", type_decl.variants[1].name);
+    try std.testing.expectEqual(@as(usize, 2), type_decl.variants[1].payload_types.len);
+
+    const left_ref = switch (type_decl.variants[1].payload_types[0]) {
+        .RecursiveRef => |ref| ref,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("tree", left_ref.name);
+    const left_param = switch (left_ref.args[0]) {
+        .TypeVar => |name| name,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("'a", left_param);
+}
+
 test "malformed sexp cases are rejected" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    try std.testing.expectError(error.UnmatchedParen, parseModule(&arena, "(zxcaml-cir 0.4 (module)"));
-    try std.testing.expectError(error.BadAtom, parseModule(&arena, "(zxcaml-cir 0.4 (module bad@atom))"));
+    try std.testing.expectError(error.UnmatchedParen, parseModule(&arena, "(zxcaml-cir 0.5 (module)"));
+    try std.testing.expectError(error.BadAtom, parseModule(&arena, "(zxcaml-cir 0.5 (module bad@atom))"));
 }
 
 test "version mismatch is rejected" {
@@ -572,7 +758,7 @@ test "parse constructor expressions and string payloads" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const module = try parseModule(&arena, "(zxcaml-cir 0.4 (module (let some_value (ctor Some (const-int 1))) (let error_value (ctor Error (const-string \"oops\")))))");
+    const module = try parseModule(&arena, "(zxcaml-cir 0.5 (module (let some_value (ctor Some (const-int 1))) (let error_value (ctor Error (const-string \"oops\")))))");
     try std.testing.expectEqual(@as(usize, 2), module.decls.len);
 
     const some_decl = switch (module.decls[0]) {
@@ -609,7 +795,7 @@ test "parse basic match expressions and patterns" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)) (case _ (const-int 9)))))))",
+        "(zxcaml-cir 0.5 (module (let entrypoint (lambda (_input) (match (ctor Some (const-int 1)) (case (ctor Some (var x)) (var x)) (case (ctor None) (const-int 0)) (case _ (const-int 9)))))))",
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
@@ -651,7 +837,7 @@ test "parse quoted list constructor expressions and patterns" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.4 (module (let entrypoint (lambda (_input) (match (ctor \"::\" (const-int 1) (ctor \"[]\")) (case (ctor \"::\" (var x) (var rest)) (var x)) (case (ctor \"[]\") (const-int 0)))))))",
+        "(zxcaml-cir 0.5 (module (let entrypoint (lambda (_input) (match (ctor \"::\" (const-int 1) (ctor \"[]\")) (case (ctor \"::\" (var x) (var rest)) (var x)) (case (ctor \"[]\") (const-int 0)))))))",
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
