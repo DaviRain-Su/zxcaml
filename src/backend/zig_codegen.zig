@@ -470,22 +470,30 @@ fn emitDecisionCase(
         try append(out, allocator, " => {\n");
     }
 
+    var case_covered = false;
     for (match_expr.arms) |arm| {
+        if (case_covered) break;
         switch (arm.pattern) {
             .Ctor => |ctor_pattern| {
                 if (!sameConstructor(ctor_pattern, selected_ctor)) continue;
                 try emitSpecializedCtorRow(out, allocator, ctor_pattern, arm.body.*, arm.guard, scrutinee_name, payload_name, block_id, indent_level + 1, ctx);
+                if (arm.guard == null and ctorPayloadsIrrefutable(ctor_pattern.args)) case_covered = true;
             },
             .Wildcard, .Var => {
                 const patterns = [_]lir.LPattern{arm.pattern};
                 const sources = [_][]const u8{scrutinee_name};
                 try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level + 1, ctx);
+                if (arm.guard == null) case_covered = true;
             },
         }
     }
 
-    if (!caseUnconditionallyCovered(match_expr, selected_ctor)) {
+    const exhaustively_covered = case_covered or try caseExhaustivelyCovered(allocator, ctx.type_decls, match_expr, selected_ctor);
+    if (!exhaustively_covered) {
         try emitNonExhaustivePanic(out, allocator, ctx.type_decls, match_expr, &.{}, indent_level + 1);
+    } else if (!case_covered) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "unreachable;\n");
     }
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "},\n");
@@ -1307,7 +1315,7 @@ fn missingConstructorsMessage(allocator: std.mem.Allocator, type_decls: []const 
         for (type_decls) |type_decl| {
             if (!std.mem.eql(u8, type_decl.name, type_name)) continue;
             for (type_decl.variants) |variant| {
-                if (constructorUnconditionallyCovered(match_expr, type_name, variant.name)) continue;
+                if (try constructorExhaustivelyCoveredByName(allocator, type_decls, match_expr, type_name, variant.name)) continue;
                 if (missing.items.len != 0) try append(&missing, allocator, ", ");
                 try append(&missing, allocator, variant.name);
             }
@@ -1318,7 +1326,7 @@ fn missingConstructorsMessage(allocator: std.mem.Allocator, type_decls: []const 
 
     const family = builtinMatchFamily(match_expr) orelse return missing.toOwnedSlice(allocator);
     for (family.constructors) |ctor_name| {
-        if (constructorUnconditionallyCovered(match_expr, null, ctor_name)) continue;
+        if (try constructorExhaustivelyCoveredByName(allocator, type_decls, match_expr, null, ctor_name)) continue;
         if (missing.items.len != 0) try append(&missing, allocator, ", ");
         try append(&missing, allocator, ctor_name);
     }
@@ -1332,19 +1340,22 @@ const BuiltinFamily = struct {
 fn builtinMatchFamily(match_expr: lir.LMatch) ?BuiltinFamily {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
-            .Ctor => |ctor| {
-                if (std.mem.eql(u8, ctor.name, "Some") or std.mem.eql(u8, ctor.name, "None")) {
-                    return .{ .constructors = &.{ "Some", "None" } };
-                }
-                if (std.mem.eql(u8, ctor.name, "Ok") or std.mem.eql(u8, ctor.name, "Error")) {
-                    return .{ .constructors = &.{ "Ok", "Error" } };
-                }
-                if (std.mem.eql(u8, ctor.name, "::") or std.mem.eql(u8, ctor.name, "[]")) {
-                    return .{ .constructors = &.{ "::", "[]" } };
-                }
-            },
+            .Ctor => |ctor| if (builtinFamilyForCtor(ctor.name)) |family| return family,
             .Wildcard, .Var => {},
         }
+    }
+    return null;
+}
+
+fn builtinFamilyForCtor(ctor_name: []const u8) ?BuiltinFamily {
+    if (std.mem.eql(u8, ctor_name, "Some") or std.mem.eql(u8, ctor_name, "None")) {
+        return .{ .constructors = &.{ "Some", "None" } };
+    }
+    if (std.mem.eql(u8, ctor_name, "Ok") or std.mem.eql(u8, ctor_name, "Error")) {
+        return .{ .constructors = &.{ "Ok", "Error" } };
+    }
+    if (std.mem.eql(u8, ctor_name, "::") or std.mem.eql(u8, ctor_name, "[]")) {
+        return .{ .constructors = &.{ "::", "[]" } };
     }
     return null;
 }
@@ -1379,6 +1390,34 @@ fn constructorUnconditionallyCovered(match_expr: lir.LMatch, type_name: ?[]const
     return false;
 }
 
+fn constructorExhaustivelyCoveredByName(
+    allocator: std.mem.Allocator,
+    type_decls: []const lir.LVariantType,
+    match_expr: lir.LMatch,
+    type_name: ?[]const u8,
+    constructor: []const u8,
+) EmitError!bool {
+    if (constructorUnconditionallyCovered(match_expr, type_name, constructor)) return true;
+
+    var payload_patterns = std.ArrayList(lir.LPattern).empty;
+    defer payload_patterns.deinit(allocator);
+
+    for (match_expr.arms) |arm| {
+        if (arm.guard != null) continue;
+        switch (arm.pattern) {
+            .Ctor => |ctor| {
+                if (!sameConstructorName(ctor, type_name, constructor)) continue;
+                if (ctor.args.len != 1) continue;
+                try payload_patterns.append(allocator, ctor.args[0]);
+            },
+            .Wildcard, .Var => {},
+        }
+    }
+
+    if (payload_patterns.items.len == 0) return false;
+    return patternsCoverFamily(allocator, type_decls, payload_patterns.items);
+}
+
 fn caseUnconditionallyCovered(match_expr: lir.LMatch, selected_ctor: lir.LCtorPattern) bool {
     for (match_expr.arms) |arm| {
         if (arm.guard != null) continue;
@@ -1388,6 +1427,107 @@ fn caseUnconditionallyCovered(match_expr: lir.LMatch, selected_ctor: lir.LCtorPa
         }
     }
     return false;
+}
+
+fn caseExhaustivelyCovered(
+    allocator: std.mem.Allocator,
+    type_decls: []const lir.LVariantType,
+    match_expr: lir.LMatch,
+    selected_ctor: lir.LCtorPattern,
+) EmitError!bool {
+    if (caseUnconditionallyCovered(match_expr, selected_ctor)) return true;
+
+    var payload_patterns = std.ArrayList(lir.LPattern).empty;
+    defer payload_patterns.deinit(allocator);
+
+    for (match_expr.arms) |arm| {
+        if (arm.guard != null) continue;
+        switch (arm.pattern) {
+            .Ctor => |ctor| {
+                if (!sameConstructor(ctor, selected_ctor)) continue;
+                if (ctor.args.len != 1) continue;
+                try payload_patterns.append(allocator, ctor.args[0]);
+            },
+            .Wildcard, .Var => {},
+        }
+    }
+
+    if (payload_patterns.items.len == 0) return false;
+    return patternsCoverFamily(allocator, type_decls, payload_patterns.items);
+}
+
+fn patternsCoverFamily(
+    allocator: std.mem.Allocator,
+    type_decls: []const lir.LVariantType,
+    patterns: []const lir.LPattern,
+) EmitError!bool {
+    for (patterns) |pattern| {
+        switch (pattern) {
+            .Wildcard, .Var => return true,
+            .Ctor => {},
+        }
+    }
+
+    const first_ctor = firstCtorPattern(patterns) orelse return false;
+    if (first_ctor.type_name) |type_name| {
+        const type_decl = findUserTypeDecl(type_decls, type_name) orelse return false;
+        for (type_decl.variants) |variant| {
+            if (!try constructorCoveredByPatterns(allocator, type_decls, patterns, type_name, variant.name)) return false;
+        }
+        return true;
+    }
+
+    const family = builtinFamilyForCtor(first_ctor.name) orelse return false;
+    for (family.constructors) |ctor_name| {
+        if (!try constructorCoveredByPatterns(allocator, type_decls, patterns, null, ctor_name)) return false;
+    }
+    return true;
+}
+
+fn constructorCoveredByPatterns(
+    allocator: std.mem.Allocator,
+    type_decls: []const lir.LVariantType,
+    patterns: []const lir.LPattern,
+    type_name: ?[]const u8,
+    constructor: []const u8,
+) EmitError!bool {
+    var nested_patterns = std.ArrayList(lir.LPattern).empty;
+    defer nested_patterns.deinit(allocator);
+
+    for (patterns) |pattern| {
+        switch (pattern) {
+            .Wildcard, .Var => return true,
+            .Ctor => |ctor| {
+                if (!sameConstructorName(ctor, type_name, constructor)) continue;
+                if (ctor.args.len == 0) return true;
+                if (ctorPayloadsIrrefutable(ctor.args)) return true;
+                if (ctor.args.len == 1) try nested_patterns.append(allocator, ctor.args[0]);
+            },
+        }
+    }
+
+    if (nested_patterns.items.len == 0) return false;
+    return patternsCoverFamily(allocator, type_decls, nested_patterns.items);
+}
+
+fn firstCtorPattern(patterns: []const lir.LPattern) ?lir.LCtorPattern {
+    for (patterns) |pattern| {
+        switch (pattern) {
+            .Ctor => |ctor| return ctor,
+            .Wildcard, .Var => {},
+        }
+    }
+    return null;
+}
+
+fn sameConstructorName(ctor: lir.LCtorPattern, type_name: ?[]const u8, constructor: []const u8) bool {
+    const same_type = if (type_name == null and ctor.type_name == null)
+        true
+    else if (type_name != null and ctor.type_name != null)
+        std.mem.eql(u8, type_name.?, ctor.type_name.?)
+    else
+        false;
+    return same_type and std.mem.eql(u8, ctor.name, constructor);
 }
 
 fn caseNeedsBuiltinPayload(match_expr: lir.LMatch, selected_ctor: lir.LCtorPattern) bool {
