@@ -179,10 +179,11 @@ pub const Match = struct {
 /// One pattern-match arm.
 pub const Arm = struct {
     pattern: Pattern,
+    guard: ?*const Expr = null,
     body: *const Expr,
 };
 
-/// Basic, non-nested pattern subset used by F11.
+/// Recursive pattern subset used by match arms.
 pub const Pattern = union(enum) {
     Wildcard,
     Var: PatternVar,
@@ -196,7 +197,7 @@ pub const PatternVar = struct {
     layout: layout.Layout,
 };
 
-/// Single-level constructor pattern such as `Some x`, `None`, `Ok x`, `Error e`, `[]`, or `x :: xs`.
+/// Constructor pattern such as `Some x`, `None`, `Ok x`, `Error e`, `[]`, `x :: xs`, or nested constructor payloads.
 pub const PatternCtor = struct {
     name: []const u8,
     args: []const Pattern,

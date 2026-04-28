@@ -204,6 +204,11 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
                 try append(out, allocator, " ((pattern ");
                 try formatPattern(out, allocator, arm.pattern);
                 try append(out, allocator, ") ");
+                if (arm.guard) |guard_expr| {
+                    try append(out, allocator, "(guard ");
+                    try formatExpr(out, allocator, guard_expr.*);
+                    try append(out, allocator, ") ");
+                }
                 try formatExpr(out, allocator, arm.body.*);
                 try append(out, allocator, ")");
             }

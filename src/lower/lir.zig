@@ -145,17 +145,18 @@ pub const LMatch = struct {
 /// Lowered match arm.
 pub const LArm = struct {
     pattern: LPattern,
+    guard: ?*const LExpr = null,
     body: *const LExpr,
 };
 
-/// Lowered F11 basic pattern subset.
+/// Lowered recursive pattern subset.
 pub const LPattern = union(enum) {
     Wildcard,
     Var: []const u8,
     Ctor: LCtorPattern,
 };
 
-/// Lowered single-level constructor pattern.
+/// Lowered constructor pattern, including nested constructor payloads.
 pub const LCtorPattern = struct {
     name: []const u8,
     args: []const LPattern,

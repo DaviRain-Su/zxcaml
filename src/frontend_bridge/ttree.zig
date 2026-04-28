@@ -124,17 +124,18 @@ pub const Match = struct {
 /// Single match arm.
 pub const Arm = struct {
     pattern: Pattern,
+    guard: ?*const Expr = null,
     body: *const Expr,
 };
 
-/// Basic, non-nested pattern forms accepted for F11/F13.
+/// Recursive pattern forms accepted for match arms.
 pub const Pattern = union(enum) {
     Wildcard,
     Var: []const u8,
     Ctor: CtorPattern,
 };
 
-/// Single-level constructor pattern such as `Some x`, `None`, `[]`, or `x :: xs`.
+/// Constructor pattern such as `Some x`, `None`, `[]`, `x :: xs`, or nested constructor payloads.
 pub const CtorPattern = struct {
     name: []const u8,
     args: []const Pattern,
@@ -514,11 +515,30 @@ fn parseArm(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Arm 
     if (items.len != 3) return error.MalformedMatch;
     try expectAtomValue(items[0], "case");
 
+    var guard: ?*const Expr = null;
     const body = try arena.allocator().create(Expr);
-    body.* = try parseExpr(arena, items[2]);
+    if (items[2].atomLike() == null) {
+        const body_items = try expectList(items[2]);
+        if (body_items.len == 3) {
+            const body_tag = try expectAtom(body_items[0]);
+            if (std.mem.eql(u8, body_tag, "when_guard")) {
+                const guard_ptr = try arena.allocator().create(Expr);
+                guard_ptr.* = try parseExpr(arena, body_items[1]);
+                guard = guard_ptr;
+                body.* = try parseExpr(arena, body_items[2]);
+            } else {
+                body.* = try parseExpr(arena, items[2]);
+            }
+        } else {
+            body.* = try parseExpr(arena, items[2]);
+        }
+    } else {
+        body.* = try parseExpr(arena, items[2]);
+    }
 
     return .{
         .pattern = try parsePattern(arena, items[1]),
+        .guard = guard,
         .body = body,
     };
 }
@@ -877,4 +897,41 @@ test "parse quoted list constructor expressions and patterns" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings("[]", nil_pattern.name);
+}
+
+test "parse nested constructor patterns and when guards" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.6 (module (let entrypoint (lambda (_input) (match (ctor Some (ctor Some (const-int 42))) (case (ctor Some (ctor Some (var v))) (when_guard (prim \">\" (var v) (const-int 40)) (var v))) (case (ctor None) (const-int 0)))))))",
+    );
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const lambda = switch (entrypoint.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const match_expr = switch (lambda.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const outer_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |pattern| pattern,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", outer_pattern.name);
+    const inner_pattern = switch (outer_pattern.args[0]) {
+        .Ctor => |pattern| pattern,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", inner_pattern.name);
+    const guard = match_expr.arms[0].guard orelse return error.TestUnexpectedResult;
+    const prim = switch (guard.*) {
+        .Prim => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings(">", prim.op);
 }

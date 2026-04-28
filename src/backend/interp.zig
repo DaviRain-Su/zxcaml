@@ -315,6 +315,10 @@ fn evalMatch(allocator: std.mem.Allocator, match_expr: ir.Match, env: *std.Strin
 
         if (try patternMatches(allocator, arm.pattern, scrutinee, env, &inserted)) {
             defer restoreEnv(env, inserted.items);
+            if (arm.guard) |guard_expr| {
+                const guard_value = try evalExpr(allocator, guard_expr.*, env);
+                if (!try boolValue(guard_value)) continue;
+            }
             return evalExpr(allocator, arm.body.*, env);
         }
         restoreEnv(env, inserted.items);

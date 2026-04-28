@@ -316,7 +316,10 @@ fn collectNestedFunctions(allocator: std.mem.Allocator, expr: ir.Expr, functions
         .Ctor => |ctor| for (ctor.args) |arg| try collectNestedFunctions(allocator, arg.*, functions, bound),
         .Match => |match_expr| {
             try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions, bound);
-            for (match_expr.arms) |arm| try collectNestedFunctions(allocator, arm.body.*, functions, bound);
+            for (match_expr.arms) |arm| {
+                if (arm.guard) |guard_expr| try collectNestedFunctions(allocator, guard_expr.*, functions, bound);
+                try collectNestedFunctions(allocator, arm.body.*, functions, bound);
+            }
         },
         .Constant, .Var => {},
     }
@@ -522,6 +525,7 @@ fn collectCaptures(
         .Match => |match_expr| {
             try collectCaptures(allocator, match_expr.scrutinee.*, bound, excluded, captures);
             for (match_expr.arms) |arm| {
+                if (arm.guard) |guard_expr| try collectCaptures(allocator, guard_expr.*, bound, excluded, captures);
                 try collectCaptures(allocator, arm.body.*, bound, excluded, captures);
             }
         },
@@ -659,6 +663,7 @@ fn lowerArms(allocator: std.mem.Allocator, arms: []const ir.Arm, ctx: *LowerCont
     for (arms, 0..) |arm, index| {
         lowered[index] = .{
             .pattern = try lowerPattern(allocator, arm.pattern),
+            .guard = if (arm.guard) |guard| try lowerExprPtrWithContext(allocator, guard.*, ctx) else null,
             .body = try lowerExprPtrWithContext(allocator, arm.body.*, ctx),
         };
     }
@@ -744,6 +749,11 @@ fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
+                if (!patternBindsName(arm.pattern, name)) {
+                    if (arm.guard) |guard_expr| {
+                        if (recBindingEscapes(name, guard_expr.*)) break :blk true;
+                    }
+                }
                 if (!patternBindsName(arm.pattern, name) and recBindingEscapes(name, arm.body.*)) break :blk true;
             }
             break :blk false;

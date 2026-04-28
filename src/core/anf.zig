@@ -541,9 +541,14 @@ fn lowerMatchWithScrutinee(
         defer inserted.deinit(arena.allocator());
 
         const lowered_pattern = try lowerPattern(arena, ctx, arm.pattern, exprTy(scrutinee.*), exprLayout(scrutinee.*), &inserted);
+        const guard = if (arm.guard) |guard_expr|
+            try lowerExprPtrExpected(arena, ctx, guard_expr.*, .Bool)
+        else
+            null;
         const body = try lowerExprPtr(arena, ctx, arm.body.*);
         try arms.append(arena.allocator(), .{
             .pattern = lowered_pattern,
+            .guard = guard,
             .body = body,
         });
 
@@ -570,6 +575,7 @@ fn inferMatchScrutineeExpectedTy(arena: *std.heap.ArenaAllocator, ctx: *LowerCon
 
     const result_ty = try inferMatchResultTy(arena, &pattern_var_tys, match_expr.arms);
     for (match_expr.arms) |arm| {
+        if (arm.guard) |guard_expr| try inferExprVarExpectations(arena, &pattern_var_tys, guard_expr.*, .Bool);
         try inferExprVarExpectations(arena, &pattern_var_tys, arm.body.*, result_ty);
     }
 
@@ -672,7 +678,10 @@ fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *T
         },
         .Match => |nested_match| {
             try inferExprVarExpectations(arena, pattern_var_tys, nested_match.scrutinee.*, null);
-            for (nested_match.arms) |arm| try inferExprVarExpectations(arena, pattern_var_tys, arm.body.*, expected_ty);
+            for (nested_match.arms) |arm| {
+                if (arm.guard) |guard_expr| try inferExprVarExpectations(arena, pattern_var_tys, guard_expr.*, .Bool);
+                try inferExprVarExpectations(arena, pattern_var_tys, arm.body.*, expected_ty);
+            }
         },
         .Lambda, .Constant => {},
     }
@@ -747,13 +756,10 @@ fn lowerCtorPattern(
     var args = std.ArrayList(ir.Pattern).empty;
     errdefer args.deinit(arena.allocator());
     for (ctor_pattern.args, 0..) |arg, index| {
-        switch (arg) {
-            .Ctor => return error.UnsupportedPattern,
-            .Wildcard, .Var => try args.append(
-                arena.allocator(),
-                try lowerPattern(arena, ctx, arg, payload_tys[index], layoutForTy(payload_tys[index]), inserted),
-            ),
-        }
+        try args.append(
+            arena.allocator(),
+            try lowerPattern(arena, ctx, arg, payload_tys[index], layoutForTy(payload_tys[index]), inserted),
+        );
     }
 
     return .{ .Ctor = .{
@@ -1097,6 +1103,11 @@ fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, name)) {
+                    if (arm.guard) |guard_expr| {
+                        if (recBindingEscapes(name, guard_expr.*)) break :blk true;
+                    }
+                }
                 if (!patternBindsTtreeName(arm.pattern, name) and recBindingEscapes(name, arm.body.*)) break :blk true;
             }
             break :blk false;
@@ -1158,6 +1169,11 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
         .Match => |match_expr| blk: {
             if (lambdaParamIsFunction(match_expr.scrutinee.*, param_name)) break :blk true;
             for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, param_name)) {
+                    if (arm.guard) |guard_expr| {
+                        if (lambdaParamIsFunction(guard_expr.*, param_name)) break :blk true;
+                    }
+                }
                 if (!patternBindsTtreeName(arm.pattern, param_name) and lambdaParamIsFunction(arm.body.*, param_name)) break :blk true;
             }
             break :blk false;
@@ -1180,6 +1196,11 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
             }
             if (try lambdaParamIsList(arena, match_expr.scrutinee.*, param_name)) break :blk true;
             for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, param_name)) {
+                    if (arm.guard) |guard_expr| {
+                        if (try lambdaParamIsList(arena, guard_expr.*, param_name)) break :blk true;
+                    }
+                }
                 if (try lambdaParamIsList(arena, arm.body.*, param_name)) break :blk true;
             }
             break :blk false;
