@@ -41,6 +41,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         try emitRecordType(&out, allocator, type_decl);
         try append(&out, allocator, "\n");
     }
+    try emitClosureCaptureStructs(&out, allocator, module.functions);
     for (module.functions) |func| {
         try emitFunction(&out, allocator, func, module.functions, module.type_decls, module.record_type_decls);
         try append(&out, allocator, "\n");
@@ -133,6 +134,28 @@ fn emitRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_de
     }
 }
 
+fn emitClosureCaptureStructs(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    functions: []const lir.LFunc,
+) EmitError!void {
+    for (functions) |func| {
+        if (func.calling_convention != .Closure or func.captures.len == 0) continue;
+        const type_name = try closureCaptureStructName(allocator, func.name);
+        defer allocator.free(type_name);
+        try appendPrint(out, allocator, "const {s} = struct {{\n", .{type_name});
+        for (func.captures) |capture| {
+            try append(out, allocator, "    ");
+            try emitIdentifier(out, allocator, capture.name);
+            try append(out, allocator, ": ");
+            const capture_ty = try zigTypeName(allocator, capture.ty);
+            defer allocator.free(capture_ty);
+            try appendPrint(out, allocator, "{s},\n", .{capture_ty});
+        }
+        try append(out, allocator, "};\n\n");
+    }
+}
+
 fn emitVariantConstructorHelper(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -202,7 +225,7 @@ fn emitFunction(
     }
     if (is_entrypoint) try append(out, allocator, "    _ = input;\n");
     if (func.calling_convention == .Closure) {
-        try emitClosureCaptureBindings(out, allocator, func.captures);
+        try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
     }
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
     var ctx: EmitContext = .{ .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls };
@@ -235,17 +258,23 @@ fn emittedClosureFunctionName(allocator: std.mem.Allocator, source_name: []const
     return std.fmt.allocPrint(allocator, "{s}__closure", .{base});
 }
 
-fn emitClosureCaptureBindings(out: *std.ArrayList(u8), allocator: std.mem.Allocator, captures: []const lir.LParam) EmitError!void {
+fn emitClosureCaptureBindings(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    func_name: []const u8,
+    captures: []const lir.LParam,
+) EmitError!void {
     if (captures.len == 0) try append(out, allocator, "    _ = closure;\n");
-    for (captures, 0..) |capture, index| {
+    if (captures.len == 0) return;
+
+    const type_name = try closureCaptureStructName(allocator, func_name);
+    defer allocator.free(type_name);
+    try appendPrint(out, allocator, "    const omlz_captures: *const {s} = @ptrCast(@alignCast(closure.captures.?));\n", .{type_name});
+    for (captures) |capture| {
         try append(out, allocator, "    const ");
         try emitIdentifier(out, allocator, capture.name);
-        try appendPrint(out, allocator, " = closure.captures[{d}].", .{index});
-        switch (capture.ty) {
-            .Int => try append(out, allocator, "asInt()"),
-            .Closure => try append(out, allocator, "asClosure()"),
-            else => return error.UnsupportedExpr,
-        }
+        try append(out, allocator, " = omlz_captures.");
+        try emitIdentifier(out, allocator, capture.name);
         try append(out, allocator, ";\n");
     }
 }
@@ -590,6 +619,10 @@ fn emitDecisionMatchArms(
             return;
         },
     }
+    if (matchHasBuiltinListCtorArm(match_expr)) {
+        try emitSequentialMatchRows(out, allocator, match_expr, scrutinee_name, block_id, indent_level, ctx);
+        return;
+    }
 
     const user_ctor_match = matchHasUserCtorArm(match_expr);
     var emitted = std.ArrayList([]const u8).empty;
@@ -898,6 +931,30 @@ fn emitCtorPatternSequence(
     }
 
     const variant = try ctorVariantName(ctor_pattern.name);
+    if (std.mem.eql(u8, ctor_pattern.name, "[]")) {
+        try emitIndent(out, allocator, indent_level);
+        try appendPrint(out, allocator, "if ({s}.tag == .nil) {{\n", .{source});
+        try emitPatternSequence(out, allocator, rest_patterns, rest_sources, body, guard, block_id, indent_level + 1, ctx);
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}\n");
+        return;
+    }
+    if (std.mem.eql(u8, ctor_pattern.name, "::")) {
+        if (ctor_pattern.args.len != 2) return error.UnsupportedExpr;
+        var payload_sources = std.ArrayList([]const u8).empty;
+        defer {
+            for (payload_sources.items) |payload_source| allocator.free(payload_source);
+            payload_sources.deinit(allocator);
+        }
+        try payload_sources.append(allocator, try std.fmt.allocPrint(allocator, "{s}.head", .{source}));
+        try payload_sources.append(allocator, try std.fmt.allocPrint(allocator, "{s}.tail.?.*", .{source}));
+        try emitIndent(out, allocator, indent_level);
+        try appendPrint(out, allocator, "if ({s}.tag == .cons) {{\n", .{source});
+        try emitCombinedPatternSequence(out, allocator, ctor_pattern.args, payload_sources.items, rest_patterns, rest_sources, body, guard, block_id, indent_level + 1, ctx);
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}\n");
+        return;
+    }
     try emitIndent(out, allocator, indent_level);
     try appendPrint(out, allocator, "switch ({s}) {{\n", .{source});
     try emitIndent(out, allocator, indent_level + 1);
@@ -1092,8 +1149,13 @@ fn emitSequentialMatchRows(
         try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level + 1, ctx);
     }
 
-    if (!matchHasUnguardedCatchAll(match_expr) and !matchHasCtorArm(match_expr)) {
-        try emitNonExhaustivePanic(out, allocator, ctx.type_decls, match_expr, &.{}, indent_level + 1);
+    if (!matchHasUnguardedCatchAll(match_expr)) {
+        if (!matchHasCtorArm(match_expr)) {
+            try emitNonExhaustivePanic(out, allocator, ctx.type_decls, match_expr, &.{}, indent_level + 1);
+        } else {
+            try emitIndent(out, allocator, indent_level + 1);
+            try append(out, allocator, "unreachable;\n");
+        }
     }
 }
 
@@ -1194,6 +1256,10 @@ fn emitCtorExpr(
     }
 
     if (ctor_expr.args.len == 0) {
+        if (std.mem.eql(u8, ctor_expr.name, "[]")) {
+            try appendPrint(out, allocator, "{s}.Nil()", .{ty_name});
+            return;
+        }
         try appendPrint(out, allocator, "{s}.{s}", .{ ty_name, variant });
         return;
     }
@@ -1245,44 +1311,45 @@ fn emitClosureExpr(
     const code_id = findClosureCodeId(ctx.functions, closure.name) orelse return error.UnsupportedExpr;
 
     try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
-    try emitIndent(out, allocator, indent_level + 1);
-    if (closure.captures.len == 0) {
-        try appendPrint(out, allocator, "var omlz_closure_captures_storage_{d}: [1]prelude.ClosureValue = undefined;\n", .{block_id});
+    if (closure.captures.len > 0) {
+        const captures_type_name = try closureCaptureStructName(allocator, closure.name);
+        defer allocator.free(captures_type_name);
+
         try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "const omlz_closure_captures_{d}: []const prelude.ClosureValue = omlz_closure_captures_storage_{d}[0..0];\n", .{ block_id, block_id });
-    } else {
-        try appendPrint(out, allocator, "var omlz_closure_captures_storage_{d}: [{d}]prelude.ClosureValue = undefined;\n", .{ block_id, closure.captures.len });
+        try appendPrint(out, allocator, "const omlz_closure_captures_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, captures_type_name });
         try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "var omlz_closure_captures_{d}: []prelude.ClosureValue = omlz_closure_captures_storage_{d}[0..];\n", .{ block_id, block_id });
-    }
-    for (closure.captures, 0..) |capture, index| {
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "omlz_closure_captures_{d}[{d}] = ", .{ block_id, index });
-        switch (capture.ty) {
-            .Int => {
-                try append(out, allocator, "prelude.ClosureValue.fromInt(");
-                try emitIdentifier(out, allocator, capture.name);
-                try append(out, allocator, ")");
-            },
-            .Closure => {
-                try append(out, allocator, "prelude.ClosureValue.fromClosure(");
-                try emitIdentifier(out, allocator, capture.name);
-                try append(out, allocator, ")");
-            },
-            else => return error.UnsupportedExpr,
+        try appendPrint(out, allocator, "omlz_closure_captures_{d}.* = .{{ ", .{block_id});
+        for (closure.captures, 0..) |capture, index| {
+            if (index != 0) try append(out, allocator, ", ");
+            try append(out, allocator, ".");
+            try emitIdentifier(out, allocator, capture.name);
+            try append(out, allocator, " = ");
+            try emitIdentifier(out, allocator, capture.name);
         }
-        try append(out, allocator, ";\n");
+        try append(out, allocator, " };\n");
     }
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "var omlz_closure_slot_{d}: prelude.Closure = undefined;\n", .{block_id});
+    try appendPrint(out, allocator, "const omlz_closure_slot_{d} = arena.allocOneOrTrap(prelude.Closure);\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "omlz_closure_slot_{d} = prelude.Closure.init({d}, omlz_closure_captures_{d});\n", .{ block_id, code_id, block_id });
+    if (closure.captures.len > 0) {
+        try appendPrint(out, allocator, "omlz_closure_slot_{d}.* = prelude.Closure.init({d}, omlz_closure_captures_{d});\n", .{ block_id, code_id, block_id });
+    } else {
+        try appendPrint(out, allocator, "omlz_closure_slot_{d}.* = prelude.Closure.init({d}, null);\n", .{ block_id, code_id });
+    }
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "omlz_closure_slot_{d}.self = &omlz_closure_slot_{d};\n", .{ block_id, block_id });
+    try appendPrint(out, allocator, "omlz_closure_slot_{d}.self = omlz_closure_slot_{d};\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "break :blk{d} &omlz_closure_slot_{d};\n", .{ block_id, block_id });
+    try appendPrint(out, allocator, "break :blk{d} omlz_closure_slot_{d};\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
+}
+
+fn closureCaptureStructName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, "omlz_closure_captures_");
+    try appendSanitized(&out, allocator, source_name);
+    return out.toOwnedSlice(allocator);
 }
 
 fn emitConsCtorExpr(
@@ -1313,7 +1380,7 @@ fn emitConsCtorExpr(
     try appendPrint(out, allocator, "const omlz_list_tail_box_{d} = {s}.Box(arena, omlz_list_tail_{d});\n", .{ block_id, ty_name, block_id });
 
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "const omlz_ctor_payload_{d} = {s}{{ .cons = .{{ .head = omlz_list_head_{d}, .tail = omlz_list_tail_box_{d} }} }};\n", .{ block_id, ty_name, block_id, block_id });
+    try appendPrint(out, allocator, "const omlz_ctor_payload_{d} = {s}.ConsFromTailPtr(omlz_list_head_{d}, omlz_list_tail_box_{d});\n", .{ block_id, ty_name, block_id, block_id });
 
     switch (ctor_expr.layout.region) {
         .Arena => {
@@ -1499,7 +1566,7 @@ fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
             }
             break :blk false;
         },
-        .Closure => false,
+        .Closure => true,
     };
 }
 
@@ -1564,6 +1631,18 @@ fn matchHasUserCtorArm(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (ctor.type_name != null) return true,
+            .Wildcard, .Var, .Tuple, .Record => {},
+        }
+    }
+    return false;
+}
+
+fn matchHasBuiltinListCtorArm(match_expr: lir.LMatch) bool {
+    for (match_expr.arms) |arm| {
+        switch (arm.pattern) {
+            .Ctor => |ctor| {
+                if (std.mem.eql(u8, ctor.name, "[]") or std.mem.eql(u8, ctor.name, "::")) return true;
+            },
             .Wildcard, .Var, .Tuple, .Record => {},
         }
     }
@@ -2889,9 +2968,9 @@ test "ZigBackend emits list constructors and cons pattern bindings" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.List(i64)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".nil") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".cons = .{ .head = omlz_list_head_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, ".cons => |omlz_match_payload_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".Nil()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".ConsFromTailPtr(omlz_list_head_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".tag == .cons") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".head") != null);
 }
 

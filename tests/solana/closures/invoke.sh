@@ -6,6 +6,14 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-export ZXCAML_SOLANA_SRC="$ROOT/tests/solana/closures/closure_hardening.ml"
 
-exec "$ROOT/tests/solana/hello/invoke.sh"
+run_case() {
+  local name="$1"
+  local src="$2"
+  echo "==> closure acceptance case: $name"
+  ZXCAML_SOLANA_SRC="$src" "$ROOT/tests/solana/hello/invoke.sh"
+}
+
+run_case "List.map immediate closure" "$ROOT/tests/solana/closures/list_map.ml"
+run_case "closure captures ADT value" "$ROOT/tests/solana/closures/closure_hardening.ml"
+run_case "escaping nested closure" "$ROOT/tests/solana/closures/nested_escape.ml"

@@ -37,10 +37,8 @@ pub const Arena = struct {
 
     /// Allocates one value of `T`, trapping on out-of-memory for BPF-friendly codegen.
     pub fn allocOneOrTrap(self: *Arena, comptime T: type) *T {
-        const byte_count = @sizeOf(T);
-        const base = @intFromPtr(self.buffer.ptr);
-        const aligned_addr = std.mem.alignForward(usize, base + self.offset, @alignOf(T));
-        const start = aligned_addr - base;
+        const byte_count = roundUpArenaSlot(@sizeOf(T));
+        const start = self.offset;
 
         if (start > self.buffer.len or byte_count > self.buffer.len - start) unreachable;
 
@@ -53,6 +51,13 @@ pub const Arena = struct {
         self.offset = 0;
     }
 };
+
+fn roundUpArenaSlot(comptime size: usize) usize {
+    if (size == 0) return 0;
+    var out = size;
+    while (out % 8 != 0) : (out += 1) {}
+    return out;
+}
 
 test "Arena allocates typed slices from a static buffer and resets" {
     var buf: [64]u8 align(8) = undefined;

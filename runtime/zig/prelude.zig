@@ -57,14 +57,14 @@ pub const ClosureValue = union(enum) {
     }
 };
 
-/// ADR-007 arena closure record: code pointer, captures, and recursive self-reference.
+/// ADR-007 arena closure record: table code id, erased typed captures, and recursive self-reference.
 pub const Closure = struct {
     code: u32,
-    captures: []const ClosureValue,
+    captures: ?*const anyopaque,
     self: ?*const Closure = null,
 
     /// Constructs a closure record value; generated code stores it in the arena.
-    pub fn init(code: u32, captures: []const ClosureValue) Closure {
+    pub fn init(code: u32, captures: ?*const anyopaque) Closure {
         return .{
             .code = code,
             .captures = captures,
@@ -125,11 +125,13 @@ pub fn Result(comptime T: type, comptime E: type) type {
 
 /// OCaml-style `'a list` representation used by generated Zig.
 pub fn List(comptime T: type) type {
-    return union(enum) {
-        nil,
-        cons: Cons,
+    return struct {
+        tag: Tag,
+        head: T = undefined,
+        tail: ?*const @This() = null,
 
         const Self = @This();
+        pub const Tag = enum(u8) { nil, cons };
 
         /// Heap-allocated cons-cell payload: head plus pointer to the tail list.
         pub const Cons = struct {
@@ -139,12 +141,14 @@ pub fn List(comptime T: type) type {
 
         /// Constructs `[]` without heap allocation.
         pub fn Nil() Self {
-            return .nil;
+            var out: Self = undefined;
+            out.tag = .nil;
+            return out;
         }
 
         /// Constructs a cons value from an already-boxed tail pointer.
         pub fn ConsFromTailPtr(head: T, tail: *const Self) Self {
-            return .{ .cons = .{ .head = head, .tail = tail } };
+            return .{ .tag = .cons, .head = head, .tail = tail };
         }
 
         /// Allocates a list value in the arena and returns a stable tail pointer.
@@ -200,13 +204,11 @@ test "List constructors preserve head and tail payloads" {
 
     const nil = List(i64).Nil();
     const one = List(i64).ConsAlloc(&arena, 1, nil);
-    switch (one) {
-        .cons => |cell| {
-            try @import("std").testing.expectEqual(@as(i64, 1), cell.head);
-            switch (cell.tail.*) {
-                .nil => {},
-                .cons => return error.TestUnexpectedResult,
-            }
+    switch (one.tag) {
+        .cons => {
+            try @import("std").testing.expectEqual(@as(i64, 1), one.head);
+            try @import("std").testing.expect(one.tail != null);
+            try @import("std").testing.expectEqual(List(i64).Tag.nil, one.tail.?.tag);
         },
         .nil => return error.TestUnexpectedResult,
     }
@@ -215,14 +217,16 @@ test "List constructors preserve head and tail payloads" {
 test "Closure records store code pointer, captures, and self-reference" {
     var buf: [256]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&buf);
-    const captures = arena.alloc(ClosureValue, 1) catch unreachable;
-    captures[0] = ClosureValue.fromInt(2);
+    const Captures = struct { value: i64 };
+    const captures = arena.alloc(Captures, 1) catch unreachable;
+    captures[0] = .{ .value = 2 };
     const slot = arena.alloc(Closure, 1) catch unreachable;
-    slot[0] = Closure.init(7, captures);
+    slot[0] = Closure.init(7, &captures[0]);
     slot[0].self = &slot[0];
 
     try std.testing.expectEqual(@as(u32, 7), slot[0].code);
-    try std.testing.expectEqual(@as(i64, 2), slot[0].captures[0].asInt());
+    const typed_captures: *const Captures = @ptrCast(@alignCast(slot[0].captures.?));
+    try std.testing.expectEqual(@as(i64, 2), typed_captures.value);
     try std.testing.expect(slot[0].self.? == &slot[0]);
 }
 
