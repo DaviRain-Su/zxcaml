@@ -106,8 +106,14 @@ pub fn build(b: *std.Build) void {
     const det_options = b.addOptions();
     // b.path().getPath() resolves to an absolute path joined with the build root.
     const omlz_abs = b.path("zig-out/bin/omlz").getPath(b);
+    const test_util_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_util.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     det_options.addOption([]const u8, "omlz_bin", omlz_abs);
     determinism_test_module.addOptions("det_options", det_options);
+    determinism_test_module.addImport("test_util", test_util_module);
     const determinism_tests = b.addTest(.{
         .root_module = determinism_test_module,
     });
@@ -128,6 +134,7 @@ pub fn build(b: *std.Build) void {
     const golden_options = b.addOptions();
     golden_options.addOption([]const u8, "omlz_bin", omlz_abs);
     golden_test_module.addOptions("golden_options", golden_options);
+    golden_test_module.addImport("test_util", test_util_module);
     const golden_tests = b.addTest(.{
         .root_module = golden_test_module,
     });
@@ -149,6 +156,7 @@ pub fn build(b: *std.Build) void {
     const ui_options = b.addOptions();
     ui_options.addOption([]const u8, "omlz_bin", omlz_abs);
     ui_test_module.addOptions("ui_options", ui_options);
+    ui_test_module.addImport("test_util", test_util_module);
     const ui_tests = b.addTest(.{
         .root_module = ui_test_module,
     });

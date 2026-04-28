@@ -16,6 +16,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const det_options = @import("det_options");
+const test_util = @import("test_util");
 
 /// Runs `omlz run <ml_file>` and returns (stdout, exit_code).
 /// Caller owns stdout and must free it.
@@ -69,17 +70,13 @@ fn runNative(allocator: Allocator, io: Io, ml_file: []const u8) !u8 {
 /// Core determinism check: for every `.ml` file in the given directory,
 /// compare interpreter output with native exit code.
 fn checkDeterminismCorpus(allocator: Allocator, io: Io, dir_path: []const u8) !usize {
-    const cwd = std.Io.Dir.cwd();
-    var dir = try cwd.openDir(io, dir_path, .{});
-    defer dir.close(io);
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, dir_path, ".ml");
+    defer test_util.freeStringList(allocator, names);
 
-    var iter = dir.iterate();
     var tested: usize = 0;
 
-    while (try iter.next(io)) |entry| {
-        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
-
-        const ml_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+    for (names) |name| {
+        const ml_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, name });
         defer allocator.free(ml_path);
 
         // Run interpreter
@@ -151,15 +148,12 @@ test "determinism: interpreter ≡ Zig native on tests/ui corpus" {
         };
         probe.close(io);
     }
-    var dir = try cwd.openDir(io, "tests/ui", .{});
-    defer dir.close(io);
 
-    var iter = dir.iterate();
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, "tests/ui", ".ml");
+    defer test_util.freeStringList(allocator, names);
 
-    while (try iter.next(io)) |entry| {
-        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
-
-        const ml_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}", .{entry.name});
+    for (names) |name| {
+        const ml_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}", .{name});
         defer allocator.free(ml_path);
 
         const interp = try runInterpreter(allocator, io, ml_path);

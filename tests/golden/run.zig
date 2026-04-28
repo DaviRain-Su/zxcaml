@@ -19,6 +19,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const golden_options = @import("golden_options");
+const test_util = @import("test_util");
 
 /// Runs `omlz check --emit=core-ir <ml_file>` and returns (stdout, exit_code).
 /// Caller owns stdout and must free it.
@@ -69,26 +70,23 @@ test "golden: Core IR snapshots match for all tests/golden/*.ml" {
     const io = std.testing.io;
 
     const cwd = std.Io.Dir.cwd();
-    var dir = try cwd.openDir(io, "tests/golden", .{});
-    defer dir.close(io);
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, "tests/golden", ".ml");
+    defer test_util.freeStringList(allocator, names);
 
-    var iter = dir.iterate();
     var tested: usize = 0;
     var failures: usize = 0;
 
-    while (try iter.next(io)) |entry| {
-        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
-
-        const ml_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}", .{entry.name});
+    for (names) |name| {
+        const ml_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}", .{name});
         defer allocator.free(ml_path);
 
-        const stem = entry.name[0 .. entry.name.len - 3];
-        const snapshot_name = try std.fmt.allocPrint(allocator, "{s}.core.snapshot", .{stem});
-        defer allocator.free(snapshot_name);
+        const stem = name[0 .. name.len - 3];
+        const snapshot_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.core.snapshot", .{stem});
+        defer allocator.free(snapshot_path);
 
         // Read expected snapshot
-        const snapshot_data = dir.readFileAlloc(io, snapshot_name, allocator, .limited(16384)) catch |err| {
-            std.debug.print("GOLDEN SKIP: {s}: cannot read snapshot {s}: {s}\n", .{ ml_path, snapshot_name, @errorName(err) });
+        const snapshot_data = cwd.readFileAlloc(io, snapshot_path, allocator, .limited(16384)) catch |err| {
+            std.debug.print("GOLDEN SKIP: {s}: cannot read snapshot {s}: {s}\n", .{ ml_path, snapshot_path, @errorName(err) });
             continue;
         };
         defer allocator.free(snapshot_data);
@@ -135,26 +133,25 @@ test "golden: snapshot determinism — no memory addresses or timestamps" {
     const io = std.testing.io;
 
     const cwd = std.Io.Dir.cwd();
-    var dir = try cwd.openDir(io, "tests/golden", .{});
-    defer dir.close(io);
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, "tests/golden", ".core.snapshot");
+    defer test_util.freeStringList(allocator, names);
 
-    var iter = dir.iterate();
+    for (names) |name| {
+        const snapshot_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}", .{name});
+        defer allocator.free(snapshot_path);
 
-    while (try iter.next(io)) |entry| {
-        if (!std.mem.endsWith(u8, entry.name, ".core.snapshot")) continue;
-
-        const snapshot_data = dir.readFileAlloc(io, entry.name, allocator, .limited(16384)) catch continue;
+        const snapshot_data = cwd.readFileAlloc(io, snapshot_path, allocator, .limited(16384)) catch continue;
         defer allocator.free(snapshot_data);
 
         // Check for hex addresses (0x prefix followed by hex digits)
         if (std.mem.indexOf(u8, snapshot_data, "0x") != null) {
-            std.debug.print("DETERMINISM FAIL: {s} contains '0x' (possible memory address)\n", .{entry.name});
+            std.debug.print("DETERMINISM FAIL: {s} contains '0x' (possible memory address)\n", .{name});
             return error.SnapshotNonDeterministic;
         }
 
         // Check for common timestamp patterns
         if (std.mem.indexOf(u8, snapshot_data, "timestamp") != null) {
-            std.debug.print("DETERMINISM FAIL: {s} contains 'timestamp'\n", .{entry.name});
+            std.debug.print("DETERMINISM FAIL: {s} contains 'timestamp'\n", .{name});
             return error.SnapshotNonDeterministic;
         }
 
@@ -165,7 +162,7 @@ test "golden: snapshot determinism — no memory addresses or timestamps" {
             if (line.len > 0) line_count += 1;
         }
         if (line_count > 1) {
-            std.debug.print("DETERMINISM WARNING: {s} has {d} non-empty lines (expected 1)\n", .{ entry.name, line_count });
+            std.debug.print("DETERMINISM WARNING: {s} has {d} non-empty lines (expected 1)\n", .{ name, line_count });
             // Not a failure — multi-line snapshots are allowed if deterministic
         }
     }

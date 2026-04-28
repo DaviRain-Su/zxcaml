@@ -20,6 +20,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const ui_options = @import("ui_options");
+const test_util = @import("test_util");
 
 /// Trims trailing newline / carriage-return from a slice.
 fn trimTrailingNewline(s: []const u8) []const u8 {
@@ -76,25 +77,22 @@ test "ui: all .ml files match their .expected counterparts" {
     const io = std.testing.io;
 
     const cwd = std.Io.Dir.cwd();
-    var dir = try cwd.openDir(io, "tests/ui", .{});
-    defer dir.close(io);
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, "tests/ui", ".ml");
+    defer test_util.freeStringList(allocator, names);
 
-    var iter = dir.iterate();
     var tested: usize = 0;
     var failures: usize = 0;
 
-    while (try iter.next(io)) |entry| {
-        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
-
-        const ml_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}", .{entry.name});
+    for (names) |name| {
+        const ml_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}", .{name});
         defer allocator.free(ml_path);
 
-        const expected_name = try std.fmt.allocPrint(allocator, "{s}.expected", .{entry.name});
-        defer allocator.free(expected_name);
+        const expected_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}.expected", .{name});
+        defer allocator.free(expected_path);
 
         // Read expected output
-        const expected_data = dir.readFileAlloc(io, expected_name, allocator, .limited(65536)) catch |err| {
-            std.debug.print("UI SKIP: {s}: cannot read {s}: {s}\n", .{ ml_path, expected_name, @errorName(err) });
+        const expected_data = cwd.readFileAlloc(io, expected_path, allocator, .limited(65536)) catch |err| {
+            std.debug.print("UI SKIP: {s}: cannot read {s}: {s}\n", .{ ml_path, expected_path, @errorName(err) });
             continue;
         };
         defer allocator.free(expected_data);

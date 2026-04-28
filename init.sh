@@ -14,6 +14,7 @@ ZIG_VERSION="${ZIG_VERSION:-0.16.0}"
 OCAML_VERSION="${OCAML_VERSION:-5.2.1}"
 OPAM_SWITCH="${OPAM_SWITCH:-zxcaml-p1}"
 SBPF_LINKER_VERSION="${SBPF_LINKER_VERSION:-0.1.8}"
+SOLANA_CLI_VERSION="${SOLANA_CLI_VERSION:-stable}"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -223,18 +224,8 @@ setup_solana_if_requested() {
 
   echo "    Installing Solana CLI for SOLANA_BPF=1..."
   local installer="/tmp/solana-install-init"
-  case "$OS:$ARCH" in
-    Linux:x86_64) curl -fsSL "https://release.anza.xyz/stable/solana-install-init-x86_64-unknown-linux-gnu" -o "$installer" ;;
-    Linux:aarch64|Linux:arm64) curl -fsSL "https://release.anza.xyz/stable/solana-install-init-aarch64-unknown-linux-gnu" -o "$installer" ;;
-    Darwin:x86_64) curl -fsSL "https://release.anza.xyz/stable/solana-install-init-x86_64-apple-darwin" -o "$installer" ;;
-    Darwin:arm64|Darwin:aarch64) curl -fsSL "https://release.anza.xyz/stable/solana-install-init-aarch64-apple-darwin" -o "$installer" ;;
-    *)
-      echo "ERROR: unsupported Solana CLI platform $OS/$ARCH" >&2
-      exit 1
-      ;;
-  esac
-  chmod +x "$installer"
-  "$installer" stable
+  curl -fsSL "https://release.anza.xyz/${SOLANA_CLI_VERSION}/install" -o "$installer"
+  sh "$installer"
 
   append_path "$HOME/.local/share/solana/install/active_release/bin"
   if ! command -v solana >/dev/null 2>&1; then

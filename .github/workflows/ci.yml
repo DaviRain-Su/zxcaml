@@ -24,10 +24,10 @@ jobs:
           - macos-latest
           - ubuntu-latest
     env:
-      # BPF acceptance is opt-in everywhere, with macOS enabled by default
-      # because that is the primary development environment for this project.
-      # Ubuntu can opt in by setting the repository variable SOLANA_BPF=1.
-      SOLANA_BPF: ${{ matrix.os == 'macos-latest' && '1' || vars.SOLANA_BPF }}
+      # BPF acceptance is opt-in in CI. The local harness remains available via
+      # SOLANA_BPF=1, but GitHub macOS runners currently lack a compatible
+      # OpenSSL Ed25519 signing path for the no-op invocation helper.
+      SOLANA_BPF: ${{ vars.SOLANA_BPF }}
 
     steps:
       - name: Checkout
