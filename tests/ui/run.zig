@@ -11,8 +11,7 @@
 //! - Positive tests: `.ml` programs that compile and run; `.expected` contains
 //!   the stdout (the interpreter's printed result, typically an integer).
 //! - Negative tests: `.ml` programs exercising unsupported features; `.expected`
-//!   contains the stderr diagnostic (JSON object from the frontend or a
-//!   human-readable error from the compiler pipeline).
+//!   contains the stderr diagnostic rendered by the compiler pipeline.
 //!
 //! Each `.ml` file must have a corresponding `.expected` file.
 

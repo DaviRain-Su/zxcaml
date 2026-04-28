@@ -4,15 +4,16 @@
 //! - Locate `zxc-frontend` first at `zig-out/bin/zxc-frontend`, then on `PATH`.
 //! - Invoke `zxc-frontend --emit=sexp <input.ml>` and return stdout as the sexp payload.
 //! - Drain stdout and stderr concurrently so large frontend output cannot deadlock the driver.
-//! - Forward frontend stderr line-by-line, preserving JSON diagnostics for F20 and prefixing text.
+//! - Forward frontend stderr line-by-line, rendering flat JSON diagnostics for users.
 //! - Parse successful stdout into the Zig `frontend_bridge` typed tree mirror.
 //!
 //! Protocol contract: `omlz check <file.ml>` calls this module, which runs
 //! `zxc-frontend --emit=sexp <input.ml>`. Stdout is the versioned
 //! S-expression consumed by the Zig frontend bridge in F03. Stderr is a stream
-//! of newline-separated diagnostic records: JSON objects are forwarded
-//! unchanged until F20 renders them structurally, while unstructured text is
-//! echoed as `[zxc-frontend] <line>`. A non-zero frontend exit becomes a
+//! of newline-separated diagnostic records: flat JSON objects are parsed and
+//! rendered as `path:line:col: severity: message`, while unstructured text is
+//! echoed as `[zxc-frontend] <line>`. If JSON parsing fails for a line, it is
+//! forwarded raw as a fallback. A non-zero frontend exit becomes a
 //! non-zero `omlz` exit. If the executable is absent from both the installed
 //! sibling path and `PATH`, `omlz` emits the documented INSTALLING.md hint.
 
@@ -20,6 +21,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const frontend_bridge = @import("../frontend_bridge/ttree.zig");
+const diag = @import("../util/diag.zig");
 
 pub const default_frontend_path = "zig-out/bin/zxc-frontend";
 pub const frontend_name = "zxc-frontend";
@@ -250,8 +252,14 @@ fn forwardFrontendStderr(io: Io, stderr: []const u8) !void {
         if (line.len == 0) continue;
 
         if (looksLikeJsonDiagnostic(line)) {
-            try writer.writeAll(line);
-            try writer.writeAll("\n");
+            var parsed = diag.parse(std.heap.page_allocator, line) catch {
+                try writer.writeAll(line);
+                try writer.writeAll("\n");
+                continue;
+            };
+            defer parsed.deinit();
+
+            try diag.render(writer, parsed.value);
         } else {
             try writer.writeAll("[zxc-frontend] ");
             try writer.writeAll(line);
