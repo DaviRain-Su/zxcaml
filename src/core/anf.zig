@@ -1661,6 +1661,23 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8,
     if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
         return .Bool;
     }
+    if (expected_ty) |ty| {
+        switch (ty) {
+            .Adt => |expected_adt| {
+                if ((std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "None")) and
+                    std.mem.eql(u8, expected_adt.name, "option"))
+                {
+                    return ty;
+                }
+                if ((std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Error")) and
+                    std.mem.eql(u8, expected_adt.name, "result"))
+                {
+                    return ty;
+                }
+            },
+            else => {},
+        }
+    }
     const adt_name = if (std.mem.eql(u8, name, "Some") or std.mem.eql(u8, name, "None")) "option" else "result";
     const param_count: usize = if (std.mem.eql(u8, adt_name, "option")) 1 else 2;
     const params = try arena.allocator().alloc(ir.Ty, param_count);
