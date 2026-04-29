@@ -20,6 +20,10 @@ pub const transfer_discriminator: u8 = 3;
 pub const transfer_instruction_data_len: usize = 9;
 /// Canonical packed SPL Token account length.
 pub const token_account_len: usize = 165;
+const max_cpi_account_infos: usize = 4;
+const pre_original_data_len_padding: usize = 4;
+const max_permitted_data_increase: usize = 10 * 1024;
+const account_alignment: usize = 8;
 
 /// Canonical SPL Token program id as base58 for diagnostics and tests.
 pub const program_id_base58 = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -103,20 +107,24 @@ pub inline fn zxcaml_transfer_one(arena: *Arena, input: [*]const u8) u64 {
     _ = arena;
     const input_mut: [*]u8 = @constCast(input);
     var cursor: usize = 0;
-    _ = readU64Raw(input_mut, &cursor);
+    const account_count = readU64Raw(input_mut, &cursor);
+    if (account_count < 3) return 1;
 
-    var infos: [3]cpi.SolAccountInfo = undefined;
-    parseAccountInfoNoGrowth(input_mut, &cursor, &infos[0]);
-    parseAccountInfoNoGrowth(input_mut, &cursor, &infos[1]);
-    parseAccountInfoNoGrowth(input_mut, &cursor, &infos[2]);
-
+    var infos: [max_cpi_account_infos]cpi.SolAccountInfo = undefined;
+    const info_count: usize = @min(@as(usize, @intCast(account_count)), infos.len);
+    for (infos[0..info_count]) |*info| {
+        parseAccountInfoNoGrowth(input_mut, &cursor, info);
+    }
     var token_program_id: Pubkey = undefined;
     writeProgramId(&token_program_id);
-    var metas = transferAccountMetas(infos[0].key, infos[1].key, infos[2].key);
+    var source_key = infos[0].key.*;
+    var destination_key = infos[1].key.*;
+    var authority_key = infos[2].key.*;
+    var metas = transferAccountMetas(&source_key, &destination_key, &authority_key);
     var data = encodeTransfer(1);
     const instruction = cpi.SolInstruction.fromSlices(&token_program_id, metas[0..], data[0..]);
-    const empty: []const cpi.SolSignerSeedsC = &.{};
-    return cpi.sol_invoke_signed_c(&instruction, infos[0..], empty);
+    var empty_seed_groups: [1]cpi.SolSignerSeedsC = undefined;
+    return cpi.sol_invoke_signed_c(&instruction, infos[0..info_count], empty_seed_groups[0..0]);
 }
 
 /// Parses canonical packed SPL Token account data.
@@ -162,17 +170,18 @@ inline fn parseAccountInfoNoGrowth(input: [*]u8, cursor: *usize, out: *cpi.SolAc
     cursor.* += 1;
     const executable = input[cursor.*];
     cursor.* += 1;
-    cursor.* += 4;
+    cursor.* += pre_original_data_len_padding;
     const key: *const Pubkey = @ptrCast(input + cursor.*);
+    cursor.* += pubkey_len;
+    const owner: *const Pubkey = @ptrCast(input + cursor.*);
     cursor.* += pubkey_len;
     const lamports: *align(1) u64 = @ptrCast(input + cursor.*);
     cursor.* += @sizeOf(u64);
     const data_len = readU64Raw(input, cursor);
     const data = (input + cursor.*)[0..@intCast(data_len)];
     cursor.* += @intCast(data_len);
-    cursor.* = std.mem.alignForward(usize, cursor.*, 8);
-    const owner: *const Pubkey = @ptrCast(input + cursor.*);
-    cursor.* += pubkey_len;
+    cursor.* += max_permitted_data_increase;
+    cursor.* = std.mem.alignForward(usize, cursor.*, account_alignment);
     const rent_epoch: *align(1) u64 = @ptrCast(input + cursor.*);
     cursor.* += @sizeOf(u64);
 

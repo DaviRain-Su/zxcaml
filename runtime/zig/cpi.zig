@@ -133,6 +133,12 @@ pub fn accountInfoFromView(view: account.AccountView) SolAccountInfo {
 pub inline fn sol_invoke_signed_c(instruction: *const SolInstruction, account_infos: []const SolAccountInfo, signer_seeds: []const SolSignerSeedsC) u64 {
     if (comptime is_bpf) {
         const syscall: SolInvokeSignedCFn = @ptrFromInt(sol_invoke_signed_c_address);
+        if (signer_seeds.len == 0) {
+            var empty_seed_bytes = [_]u8{0};
+            var empty_seed = [_]SolSignerSeed{.{ .addr = empty_seed_bytes[0..].ptr, .len = 0 }};
+            var empty_seed_groups = [_]SolSignerSeedsC{.{ .addr = empty_seed[0..].ptr, .len = 0 }};
+            return syscall(instruction, account_infos.ptr, account_infos.len, empty_seed_groups[0..].ptr, 0);
+        }
         return syscall(instruction, account_infos.ptr, account_infos.len, signer_seeds.ptr, signer_seeds.len);
     } else {
         return success;

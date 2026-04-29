@@ -22,6 +22,7 @@ RECIPIENT_KEYPAIR="$TMPDIR/recipient.json"
 MINT_KEYPAIR="$TMPDIR/mint.json"
 SOURCE_TOKEN_KEYPAIR="$TMPDIR/source-token.json"
 DEST_TOKEN_KEYPAIR="$TMPDIR/destination-token.json"
+SPL_TOKEN_PROGRAM_ID="TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 PROGRAM_SO="$TMPDIR/$PROGRAM_STEM.so"
 VALIDATOR_LOG="$TMPDIR/validator.log"
 BUILD_LOG="$TMPDIR/build.log"
@@ -379,10 +380,10 @@ if [[ "${ZXCAML_SOLANA_SPL_TOKEN:-}" == "1" ]]; then
   export ZXCAML_SPL_DEST_TOKEN_ACCOUNT
   ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT="$(solana-keygen pubkey "$SOURCE_TOKEN_KEYPAIR")"
   ZXCAML_SPL_DEST_TOKEN_ACCOUNT="$(solana-keygen pubkey "$DEST_TOKEN_KEYPAIR")"
-  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" create-token --decimals 0 --mint-authority "$PAYER_PUBKEY" "$MINT_KEYPAIR" >/dev/null
-  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" create-account "$MINT_PUBKEY" "$SOURCE_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
-  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" create-account "$MINT_PUBKEY" "$DEST_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
-  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" mint "$MINT_PUBKEY" 10 "$ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT" --mint-authority "$KEYPAIR" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-token --decimals 0 --mint-authority "$PAYER_PUBKEY" "$MINT_KEYPAIR" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" "$SOURCE_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" "$DEST_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" mint "$MINT_PUBKEY" 10 "$ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT" --mint-authority "$KEYPAIR" >/dev/null
 fi
 
 echo "==> building BPF shared object"
