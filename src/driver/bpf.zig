@@ -30,6 +30,7 @@ const RuntimeFile = struct {
 
 const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
+    .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
     .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
     .{ .src_path = "runtime/zig/bpf_entry.zig", .out_path = "out/bpf_entry.zig" },

@@ -6,9 +6,10 @@
 //! - Call the generated `omlz_user_entrypoint` function with arena threading.
 
 const Arena = @import("runtime/arena.zig").Arena;
+const AccountRuntime = @import("runtime/account.zig");
 const program = @import("program.zig");
 
-const arena_bytes = 1024;
+const arena_bytes = 32 * 1024;
 
 const loader_log_message linksection(".rodata") = "ZxCaml entrypoint".*;
 const sol_log_syscall = @as(*align(1) const fn ([*]const u8, u64) void, @ptrFromInt(0x207559bd));
@@ -19,6 +20,11 @@ export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
 
     var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
+    var accounts: []AccountRuntime.AccountView = undefined;
+    AccountRuntime.parseAccountsFromPtrInto(&arena, input, &accounts) catch {
+        arena.reset();
+        return 1;
+    };
     const status = program.omlz_user_entrypoint(&arena, input);
     arena.reset();
     return status;
