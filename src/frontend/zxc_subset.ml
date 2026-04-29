@@ -480,6 +480,51 @@ let tuple_projection_index = function
   | "snd" -> Some 1
   | _ -> None
 
+let pubkey_zero_bytes = String.make 32 '\000'
+
+let pubkey_token_program_bytes =
+  "\006\221\246\225\215\101\161\147\217\203\225\070\206\235\121\172\028\180\133\237\095\091\055\145\058\140\245\133\126\255\000\169"
+
+let pubkey_constant_expr = function
+  | "Pubkey.zero" -> Some (Const_string pubkey_zero_bytes)
+  | "Pubkey.token_program" -> Some (Const_string pubkey_token_program_bytes)
+  | _ -> None
+
+let hex_nibble ~loc = function
+  | '0' .. '9' as c -> Char.code c - Char.code '0'
+  | 'a' .. 'f' as c -> 10 + Char.code c - Char.code 'a'
+  | 'A' .. 'F' as c -> 10 + Char.code c - Char.code 'A'
+  | _ ->
+      unsupported ~node_kind:"Pubkey.of_hex" ~loc
+        ~message:"Pubkey.of_hex requires only hexadecimal characters"
+        ()
+
+let decode_pubkey_hex_literal ~loc value =
+  if String.length value <> 64 then
+    unsupported ~node_kind:"Pubkey.of_hex" ~loc
+      ~message:"Pubkey.of_hex requires exactly 64 hexadecimal characters"
+      ();
+  String.init 32 (fun index ->
+      let high = hex_nibble ~loc value.[index * 2] in
+      let low = hex_nibble ~loc value.[(index * 2) + 1] in
+      Char.chr ((high * 16) + low))
+
+let parse_pubkey_of_hex_args args ~loc =
+  match args with
+  | [ Nolabel, Some { exp_desc = Texp_constant (Const_string (value, _, _)); _ } ] ->
+      Const_string (decode_pubkey_hex_literal ~loc value)
+  | [ Nolabel, Some arg ] ->
+      unsupported ~node_kind:"Pubkey.of_hex" ~loc:arg.exp_loc
+        ~message:"Pubkey.of_hex requires a hex string literal argument"
+        ()
+  | [ _, Some arg ] ->
+      unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc ()
+  | [ _, None ] -> unsupported ~node_kind:"partial-application" ~loc ()
+  | _ ->
+      unsupported ~node_kind:"Pubkey.of_hex-arity" ~loc
+        ~message:"Pubkey.of_hex requires exactly one unlabeled argument"
+        ()
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> "_"
@@ -660,7 +705,10 @@ and parse_expr env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
   | Texp_constant (Const_string (value, _, _)) -> Const_string value
-  | Texp_ident (_, lid, _) -> Var (longident_name lid)
+  | Texp_ident (_, lid, _) -> (
+      match pubkey_constant_expr (longident_name lid) with
+      | Some expr -> expr
+      | None -> Var (longident_name lid))
   | Texp_function (params, Tfunction_body body) ->
       let params = List.map parse_param params in
       let body = parse_expr env body in
@@ -699,6 +747,9 @@ and parse_expr env (expr : expression) =
   | Texp_field (record_expr, _lid, label) ->
       Field_access
         { record_expr = parse_expr env record_expr; field_name = label.Types.lbl_name }
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when String.equal (longident_name lid) "Pubkey.of_hex" ->
+      parse_pubkey_of_hex_args args ~loc:expr.exp_loc
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when String.equal (longident_name lid) "Error.make" ->
       parse_error_make env args ~loc:expr.exp_loc

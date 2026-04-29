@@ -31,6 +31,8 @@ type instruction = {
   data : bytes;
 }
 
+type pubkey = bytes
+
 type signer_seeds = bytes array
 
 type error = {
@@ -121,6 +123,32 @@ module Syscall = struct
     }
 
   let sol_remaining_compute_units () = 0
+end
+
+module Pubkey = struct
+  let zero : pubkey = Bytes.make 32 '\000'
+
+  let token_program : pubkey =
+    Bytes.of_string
+      "\006\221\246\225\215\101\161\147\217\203\225\070\206\235\121\172\028\180\133\237\095\091\055\145\058\140\245\133\126\255\000\169"
+
+  let of_hex hex : pubkey =
+    let hex_nibble c =
+      match c with
+      | '0' .. '9' -> Char.code c - Char.code '0'
+      | 'a' .. 'f' -> 10 + Char.code c - Char.code 'a'
+      | 'A' .. 'F' -> 10 + Char.code c - Char.code 'A'
+      | _ -> invalid_arg "Pubkey.of_hex: non-hex character"
+    in
+    if String.length hex <> 64 then
+      invalid_arg "Pubkey.of_hex: expected exactly 64 hex characters";
+    let out = Bytes.create 32 in
+    for index = 0 to 31 do
+      let high = hex_nibble (String.get hex (index * 2)) in
+      let low = hex_nibble (String.get hex ((index * 2) + 1)) in
+      Bytes.set out index (Char.chr ((high * 16) + low))
+    done;
+    out
 end
 
 module Error = struct

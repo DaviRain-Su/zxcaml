@@ -62,6 +62,15 @@ let () =
   assert (
     try_find_program_address [| Bytes.of_string "seed" |] instruction.program_id
     = Some (instruction.program_id, 0));
+  assert (Bytes.length Pubkey.zero = 32);
+  assert (Bytes.for_all (( = ) '\000') Pubkey.zero);
+  assert (Bytes.length Pubkey.token_program = 32);
+  assert (Bytes.get Pubkey.token_program 0 = Char.chr 0x06);
+  assert (Bytes.get Pubkey.token_program 31 = Char.chr 0xa9);
+  assert (
+    Pubkey.of_hex
+      "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"
+    = Bytes.of_string "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`");
   Syscall.sol_log "hello";
   Syscall.sol_log_64 1 2 3 4 5;
   assert (Syscall.sol_sha256 (Bytes.of_string "abc") = Bytes.of_string "abc");

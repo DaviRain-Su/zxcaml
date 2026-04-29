@@ -213,6 +213,13 @@ CASES: list[tuple[str, str, str]] = [
         "(app (var Syscall.sol_log) (var message))))))\n",
     ),
     (
+        "pubkey hex literal emits raw bytes",
+        "let entrypoint _ = Pubkey.of_hex "
+        '"4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"\n',
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
+        '(const-string "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`")))))\n',
+    ),
+    (
         "zero argument syscall unit application",
         "let entrypoint _ = Syscall.sol_remaining_compute_units ()\n",
         "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
@@ -331,6 +338,21 @@ REJECT_CASES: list[tuple[str, str, str]] = [
         "error enum rejects more than 256 constructors",
         TOO_MANY_ERROR_CONSTRUCTORS,
         "program-specific error enums may define at most 256 codes",
+    ),
+    (
+        "pubkey hex rejects non literal",
+        "let entrypoint hex = Pubkey.of_hex hex\n",
+        "Pubkey.of_hex requires a hex string literal argument",
+    ),
+    (
+        "pubkey hex rejects wrong length",
+        'let entrypoint _ = Pubkey.of_hex "00"\n',
+        "Pubkey.of_hex requires exactly 64 hexadecimal characters",
+    ),
+    (
+        "pubkey hex rejects non hex characters",
+        'let entrypoint _ = Pubkey.of_hex "000000000000000000000000000000000000000000000000000000000000000g"\n',
+        "Pubkey.of_hex requires only hexadecimal characters",
     ),
 ]
 
