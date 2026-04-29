@@ -261,6 +261,7 @@ fn lowerEntrypointLet(
 
     return .{
         .name = try allocator.dupe(u8, let_decl.name),
+        .params = try lowerParams(allocator, lambda.params),
         .body = body.*,
         .return_ty = try lowerTy(allocator, exprTy(lambda.body.*)),
         .calling_convention = .ArenaThreaded,

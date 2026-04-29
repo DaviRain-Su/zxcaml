@@ -4,7 +4,7 @@
 //! - Materialise the BPF runtime shim next to generated `out/program.zig`.
 //! - Drive Zig's BPF bitcode emission step with the ADR-012 flags.
 //! - Invoke `sbpf-linker` with the ADR-013 default SBPF CPU and diagnostics.
-//! - Preserve an `entrypoint` symbol-table label for local objdump evidence.
+//! - Let `sbpf-linker --export entrypoint` preserve the loader entry symbol.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -84,17 +84,6 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         },
         else => |e| return e,
     };
-
-    const objcopy = try findLlvmObjcopy(allocator, io);
-    defer allocator.free(objcopy);
-
-    const objcopy_argv = [_][]const u8{
-        objcopy,
-        "--add-symbol",
-        "entrypoint=.text:0,global,function",
-        options.output_path,
-    };
-    try runAndForward(allocator, io, &objcopy_argv, null, error.BpfObjcopyFailed);
 }
 
 fn materializeRuntime(allocator: Allocator, io: Io) !void {

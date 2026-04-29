@@ -29,6 +29,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\// stack slot and take the stack copy's address. Otherwise LLVM may
         \\// place the array at low addresses (0x0/0x20) rejected by Solana.
         \\const Arena = @import("runtime/arena.zig").Arena;
+        \\const AccountRuntime = @import("runtime/account.zig");
         \\const prelude = @import("runtime/prelude.zig");
         \\const syscalls = @import("runtime/syscalls.zig");
         \\
@@ -38,8 +39,18 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         try emitVariantType(&out, allocator, type_decl);
         try append(&out, allocator, "\n");
     }
+    const has_account_record = hasAccountRecordType(module.record_type_decls);
+    const needs_account_support = has_account_record or paramsNeedEntrypointAccounts(module.entrypoint.params);
     for (module.record_type_decls) |type_decl| {
         try emitRecordType(&out, allocator, type_decl);
+        try append(&out, allocator, "\n");
+    }
+    if (!has_account_record and needs_account_support) {
+        try emitBuiltinAccountRecordType(&out, allocator);
+        try append(&out, allocator, "\n");
+    }
+    if (needs_account_support) {
+        try emitAccountViewHelper(&out, allocator);
         try append(&out, allocator, "\n");
     }
     try emitClosureCaptureStructs(&out, allocator, module.functions);
@@ -195,7 +206,7 @@ fn emitFunction(
 ) EmitError!void {
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
     const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
-    try append(out, allocator, if (is_entrypoint) "pub fn " else "fn ");
+    try append(out, allocator, if (is_entrypoint) "pub inline fn " else "fn ");
     const function_name = switch (func.calling_convention) {
         .ArenaThreaded => try emittedFunctionName(allocator, func.name),
         .Closure => try emittedClosureFunctionName(allocator, func.name),
@@ -204,7 +215,7 @@ fn emitFunction(
     try append(out, allocator, function_name);
     try append(out, allocator, "(arena: *Arena");
     if (is_entrypoint) {
-        try append(out, allocator, ", input: [*]const u8) callconv(.c) u64 {\n");
+        try append(out, allocator, ", input: [*]const u8) u64 {\n");
     } else {
         if (func.calling_convention == .Closure) {
             try append(out, allocator, ", closure: *const prelude.Closure");
@@ -221,10 +232,14 @@ fn emitFunction(
         defer allocator.free(return_ty);
         try appendPrint(out, allocator, ") {s} {{\n", .{return_ty});
     }
-    if (!exprNeedsArena(func.body, type_decls)) {
+    const entrypoint_needs_account_list = is_entrypoint and paramsNeedEntrypointAccountList(func.params);
+    if (!exprNeedsArena(func.body, type_decls) and !entrypoint_needs_account_list) {
         try append(out, allocator, "    _ = arena;\n");
     }
-    if (is_entrypoint) try append(out, allocator, "    _ = input;\n");
+    if (is_entrypoint) {
+        const accounts_used = try emitEntrypointAccountBindings(out, allocator, func.params);
+        if (!accounts_used) try append(out, allocator, "    _ = input;\n");
+    }
     if (func.calling_convention == .Closure) {
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
     }
@@ -233,6 +248,66 @@ fn emitFunction(
     try emitExpr(out, allocator, func.body, 1, &ctx);
     try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
+}
+
+fn emitBuiltinAccountRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator) EmitError!void {
+    try append(out, allocator,
+        \\const omlz_type_account = struct {
+        \\    key: []const u8,
+        \\    lamports: i64,
+        \\    data: []const u8,
+        \\    owner: []const u8,
+        \\    is_signer: prelude.Bool,
+        \\    is_writable: prelude.Bool,
+        \\    executable: prelude.Bool,
+        \\};
+        \\
+    );
+}
+
+fn emitAccountViewHelper(out: *std.ArrayList(u8), allocator: std.mem.Allocator) EmitError!void {
+    try append(out, allocator,
+        \\fn omlz_account_from_view(view: AccountRuntime.AccountView) omlz_type_account {
+        \\    return omlz_type_account{
+        \\        .key = view.key[0..],
+        \\        .lamports = @intCast(view.lamportsValue()),
+        \\        .data = view.data,
+        \\        .owner = view.owner[0..],
+        \\        .is_signer = prelude.Bool.fromNative(view.is_signer),
+        \\        .is_writable = prelude.Bool.fromNative(view.is_writable),
+        \\        .executable = prelude.Bool.fromNative(view.executable),
+        \\    };
+        \\}
+        \\
+        \\fn omlz_log_account_view(view: AccountRuntime.AccountView) void {
+        \\    const hex = "0123456789abcdef";
+        \\    var key_hex: [64]u8 = undefined;
+        \\    for (view.key.*, 0..) |byte, index| {
+        \\        key_hex[index * 2] = hex[byte >> 4];
+        \\        key_hex[index * 2 + 1] = hex[byte & 0x0f];
+        \\    }
+        \\    syscalls.sol_log_(key_hex[0..]);
+        \\    syscalls.sol_log_64_(@intCast(view.lamportsValue()), 0, 0, 0, 0);
+        \\}
+        \\
+    );
+}
+
+fn emitEntrypointAccountBindings(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    params: []const lir.LParam,
+) EmitError!bool {
+    var accounts_used = false;
+    for (params) |param| {
+        if (!paramNeedsEntrypointAccounts(param)) continue;
+        accounts_used = true;
+        try append(out, allocator, "    AccountRuntime.logAccountsFromPtr(input);\n");
+        try append(out, allocator, "    const ");
+        try emitIdentifier(out, allocator, param.name);
+        try append(out, allocator, " = @as(i64, 0);\n");
+    }
+    return accounts_used;
 }
 
 fn emittedFunctionName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
@@ -2578,6 +2653,41 @@ fn findRecordTypeDecl(type_decls: []const lir.LRecordType, type_name: []const u8
     return null;
 }
 
+fn hasAccountRecordType(type_decls: []const lir.LRecordType) bool {
+    return findRecordTypeDecl(type_decls, "account") != null;
+}
+
+fn paramsNeedEntrypointAccounts(params: []const lir.LParam) bool {
+    for (params) |param| {
+        if (paramNeedsEntrypointAccounts(param)) return true;
+    }
+    return false;
+}
+
+fn paramsNeedEntrypointAccountList(params: []const lir.LParam) bool {
+    for (params) |param| {
+        if (paramNeedsEntrypointAccounts(param) and isAccountListTy(param.ty)) return true;
+    }
+    return false;
+}
+
+fn paramNeedsEntrypointAccounts(param: lir.LParam) bool {
+    return std.mem.eql(u8, param.name, "accounts") or isAccountListTy(param.ty);
+}
+
+fn isAccountListTy(ty: lir.LTy) bool {
+    const adt = switch (ty) {
+        .Adt => |value| value,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, adt.name, "list") or adt.params.len != 1) return false;
+    const item = switch (adt.params[0]) {
+        .Record => |value| value,
+        else => return false,
+    };
+    return std.mem.eql(u8, item.name, "account") and item.params.len == 0;
+}
+
 fn findRecordUpdateField(fields: []const lir.LRecordExprField, field_name: []const u8) ?lir.LRecordExprField {
     for (fields) |field| {
         if (std.mem.eql(u8, field.name, field_name)) return field;
@@ -2916,7 +3026,7 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         source,
-        "omlz_user_entrypoint(arena: *Arena, input: [*]const u8) callconv(.c) u64",
+        "omlz_user_entrypoint(arena: *Arena, input: [*]const u8) u64",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(@as(i64, 0));") != null);
 }

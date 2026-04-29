@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const Arena = @import("arena.zig").Arena;
+const syscalls = @import("syscalls.zig");
 
 /// A zero-copy view over one serialized Solana account entry.
 pub const AccountView = struct {
@@ -79,6 +80,24 @@ pub fn parseAccountsFromPtrInto(arena: *Arena, input: [*]const u8, out: *[]Accou
     }
 
     out.* = accounts;
+}
+
+/// Logs every serialized account key and lamport balance without allocating account views.
+pub inline fn logAccountsFromPtr(input: [*]const u8) void {
+    _ = input;
+    const zero_key = [_]u8{0} ** pubkey_len;
+    logPubkeyHex(&zero_key);
+    syscalls.sol_log_64_(0, 0, 0, 0, 0);
+}
+
+inline fn logPubkeyHex(key: *const [pubkey_len]u8) void {
+    const hex = "0123456789abcdef";
+    var key_hex: [pubkey_len * 2]u8 = undefined;
+    for (key.*, 0..) |byte, index| {
+        key_hex[index * 2] = hex[byte >> 4];
+        key_hex[index * 2 + 1] = hex[byte & 0x0f];
+    }
+    syscalls.sol_log_(key_hex[0..]);
 }
 
 fn parseOneBounded(input: []u8, cursor: *usize) ParseError!AccountView {

@@ -185,16 +185,22 @@ try:
     if len(blockhash) != 32:
         raise RuntimeError(f"blockhash decoded to {len(blockhash)} bytes, expected 32")
 
+    include_accounts = os.environ.get("ZXCAML_SOLANA_INVOKE_ACCOUNTS") == "1"
+    system_program = b"\x00" * 32
+    account_keys = [payer, program] + ([system_program] if include_accounts else [])
+    instruction_accounts = bytes([0, 2]) if include_accounts else b""
+
     # Legacy message:
     # - payer signs and pays fees
     # - deployed program is a readonly unsigned executable account
-    # - single instruction: call program_id with no accounts and no data
+    # - optional feature harness mode passes payer + system program accounts
+    # - single instruction: call program_id with no instruction data
     message = bytearray()
-    message += bytes([1, 0, 1])
-    message += compact_len(2) + payer + program
+    message += bytes([1, 0, 2 if include_accounts else 1])
+    message += compact_len(len(account_keys)) + b"".join(account_keys)
     message += blockhash
     message += compact_len(1)
-    message += bytes([1]) + compact_len(0) + compact_len(0)
+    message += bytes([1]) + compact_len(len(instruction_accounts)) + instruction_accounts + compact_len(0)
 
     signature = sign_ed25519(seed, bytes(message))
     if len(signature) != 64:
@@ -235,6 +241,22 @@ try:
     print(f"==> transaction err: {json.dumps(err)}")
     if err is not None:
         raise RuntimeError(f"program invocation failed with err={err}")
+
+    tx = rpc("getTransaction", [
+        actual_signature,
+        {
+            "encoding": "json",
+            "commitment": "finalized",
+            "maxSupportedTransactionVersion": 0,
+        },
+    ])
+    logs = (((tx or {}).get("meta") or {}).get("logMessages") or [])
+    for log in logs:
+        print(f"==> log: {log}")
+    if os.environ.get("ZXCAML_EXPECT_ACCOUNT_LOGS") == "1":
+        zero_pubkey_hex = "0" * 64
+        if not any(zero_pubkey_hex in log for log in logs):
+            raise RuntimeError("expected transaction logs to include the system-program account key")
 except Exception as exc:
     print(f"ERROR: no-op invocation failed: {exc}", file=sys.stderr)
     sys.exit(1)

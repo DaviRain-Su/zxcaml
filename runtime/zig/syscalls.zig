@@ -38,21 +38,21 @@ pub const Rent = extern struct {
 };
 
 /// MurmurHash3-32 dispatch address for `sol_log_`.
-pub const sol_log_address: usize = 0x20755f21;
+pub const sol_log_address: usize = 0x207559bd;
 /// MurmurHash3-32 dispatch address for `sol_log_64_`.
 pub const sol_log_64_address: usize = 0x5c2a3178;
 /// MurmurHash3-32 dispatch address for `sol_log_pubkey`.
-pub const sol_log_pubkey_address: usize = 0x7ef08fcb;
+pub const sol_log_pubkey_address: usize = 0x7ef088ca;
 /// MurmurHash3-32 dispatch address for `sol_sha256`.
-pub const sol_sha256_address: usize = 0x11f49d42;
+pub const sol_sha256_address: usize = 0x11f49d86;
 /// MurmurHash3-32 dispatch address for `sol_keccak256`.
-pub const sol_keccak256_address: usize = 0xd763ada3;
+pub const sol_keccak256_address: usize = 0xd7793abb;
 /// MurmurHash3-32 dispatch address for `sol_get_clock_sysvar`.
 pub const sol_get_clock_sysvar_address: usize = 0x85532d94;
 /// MurmurHash3-32 dispatch address for `sol_get_rent_sysvar`.
 pub const sol_get_rent_sysvar_address: usize = 0x9aca9a41;
 /// MurmurHash3-32 dispatch address for `sol_remaining_compute_units`.
-pub const sol_remaining_compute_units_address: usize = 0x4e3bc231;
+pub const sol_remaining_compute_units_address: usize = 0xedef5aee;
 
 const is_bpf = builtin.target.cpu.arch == .bpfel or builtin.target.cpu.arch == .bpfeb;
 
@@ -65,7 +65,7 @@ const SolGetRentSysvarFn = *align(1) const fn (*Rent) u64;
 const SolRemainingComputeUnitsFn = *align(1) const fn () u64;
 
 /// Logs a UTF-8 byte slice through Solana's `sol_log_` syscall.
-pub fn sol_log_(message: []const u8) void {
+pub inline fn sol_log_(message: []const u8) void {
     if (comptime is_bpf) {
         const syscall: SolLogFn = @ptrFromInt(sol_log_address);
         syscall(message.ptr, message.len);
@@ -73,7 +73,7 @@ pub fn sol_log_(message: []const u8) void {
 }
 
 /// Logs five unsigned 64-bit values through Solana's `sol_log_64_` syscall.
-pub fn sol_log_64_(a: i64, b: i64, c: i64, d: i64, e: i64) void {
+pub inline fn sol_log_64_(a: i64, b: i64, c: i64, d: i64, e: i64) void {
     if (comptime is_bpf) {
         const syscall: SolLog64Fn = @ptrFromInt(sol_log_64_address);
         syscall(@bitCast(a), @bitCast(b), @bitCast(c), @bitCast(d), @bitCast(e));
@@ -81,7 +81,7 @@ pub fn sol_log_64_(a: i64, b: i64, c: i64, d: i64, e: i64) void {
 }
 
 /// Logs a public key through Solana's `sol_log_pubkey` syscall.
-pub fn sol_log_pubkey(pubkey: *const Pubkey) void {
+pub inline fn sol_log_pubkey(pubkey: *const Pubkey) void {
     if (comptime is_bpf) {
         const syscall: SolLogPubkeyFn = @ptrFromInt(sol_log_pubkey_address);
         syscall(pubkey);
@@ -89,12 +89,12 @@ pub fn sol_log_pubkey(pubkey: *const Pubkey) void {
 }
 
 /// Computes a SHA-256 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
-pub fn sol_sha256(payload: []const u8) Hash {
+pub inline fn sol_sha256(payload: []const u8) Hash {
     if (comptime is_bpf) {
         var descriptor = [_]SolBytes{.{ .addr = payload.ptr, .len = payload.len }};
         var out: Hash = undefined;
         const syscall: SolHashFn = @ptrFromInt(sol_sha256_address);
-        syscall(&descriptor, descriptor.len, &out);
+        syscall(&descriptor[0], descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -104,7 +104,7 @@ pub fn sol_sha256(payload: []const u8) Hash {
 }
 
 /// Computes SHA-256 and returns an arena-owned byte slice suitable for OCaml `bytes`.
-pub fn sol_sha256_alloc(arena: *Arena, payload: []const u8) []const u8 {
+pub inline fn sol_sha256_alloc(arena: *Arena, payload: []const u8) []const u8 {
     const digest = sol_sha256(payload);
     const out = arena.alloc(u8, digest.len) catch unreachable;
     @memcpy(out, &digest);
@@ -112,12 +112,12 @@ pub fn sol_sha256_alloc(arena: *Arena, payload: []const u8) []const u8 {
 }
 
 /// Computes a Keccak-256 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
-pub fn sol_keccak256(payload: []const u8) Hash {
+pub inline fn sol_keccak256(payload: []const u8) Hash {
     if (comptime is_bpf) {
         var descriptor = [_]SolBytes{.{ .addr = payload.ptr, .len = payload.len }};
         var out: Hash = undefined;
         const syscall: SolHashFn = @ptrFromInt(sol_keccak256_address);
-        syscall(&descriptor, descriptor.len, &out);
+        syscall(&descriptor[0], descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -127,7 +127,7 @@ pub fn sol_keccak256(payload: []const u8) Hash {
 }
 
 /// Computes Keccak-256 and returns an arena-owned byte slice suitable for OCaml `bytes`.
-pub fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8 {
+pub inline fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8 {
     const digest = sol_keccak256(payload);
     const out = arena.alloc(u8, digest.len) catch unreachable;
     @memcpy(out, &digest);
@@ -135,7 +135,7 @@ pub fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8 {
 }
 
 /// Reads the Clock sysvar through Solana's `sol_get_clock_sysvar` syscall.
-pub fn sol_get_clock_sysvar() Clock {
+pub inline fn sol_get_clock_sysvar() Clock {
     var clock: Clock = .{};
     if (comptime is_bpf) {
         const syscall: SolGetClockSysvarFn = @ptrFromInt(sol_get_clock_sysvar_address);
@@ -145,7 +145,7 @@ pub fn sol_get_clock_sysvar() Clock {
 }
 
 /// Reads the Rent sysvar through Solana's `sol_get_rent_sysvar` syscall.
-pub fn sol_get_rent_sysvar() Rent {
+pub inline fn sol_get_rent_sysvar() Rent {
     var rent: Rent = .{};
     if (comptime is_bpf) {
         const syscall: SolGetRentSysvarFn = @ptrFromInt(sol_get_rent_sysvar_address);
@@ -155,7 +155,7 @@ pub fn sol_get_rent_sysvar() Rent {
 }
 
 /// Returns the remaining compute units reported by Solana's runtime.
-pub fn sol_remaining_compute_units() u64 {
+pub inline fn sol_remaining_compute_units() u64 {
     if (comptime is_bpf) {
         const syscall: SolRemainingComputeUnitsFn = @ptrFromInt(sol_remaining_compute_units_address);
         return syscall();
@@ -164,14 +164,14 @@ pub fn sol_remaining_compute_units() u64 {
 }
 
 test "syscall dispatch addresses match Solana MurmurHash3-32 values" {
-    try std.testing.expectEqual(@as(usize, 0x20755f21), sol_log_address);
+    try std.testing.expectEqual(@as(usize, 0x207559bd), sol_log_address);
     try std.testing.expectEqual(@as(usize, 0x5c2a3178), sol_log_64_address);
-    try std.testing.expectEqual(@as(usize, 0x7ef08fcb), sol_log_pubkey_address);
-    try std.testing.expectEqual(@as(usize, 0x11f49d42), sol_sha256_address);
-    try std.testing.expectEqual(@as(usize, 0xd763ada3), sol_keccak256_address);
+    try std.testing.expectEqual(@as(usize, 0x7ef088ca), sol_log_pubkey_address);
+    try std.testing.expectEqual(@as(usize, 0x11f49d86), sol_sha256_address);
+    try std.testing.expectEqual(@as(usize, 0xd7793abb), sol_keccak256_address);
     try std.testing.expectEqual(@as(usize, 0x85532d94), sol_get_clock_sysvar_address);
     try std.testing.expectEqual(@as(usize, 0x9aca9a41), sol_get_rent_sysvar_address);
-    try std.testing.expectEqual(@as(usize, 0x4e3bc231), sol_remaining_compute_units_address);
+    try std.testing.expectEqual(@as(usize, 0xedef5aee), sol_remaining_compute_units_address);
 }
 
 test "hosted hash fallbacks match known SHA-256 and Keccak-256 vectors" {
