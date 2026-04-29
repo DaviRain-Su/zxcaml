@@ -23,6 +23,7 @@ const core_anf = @import("core/anf.zig");
 const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
 const arena_lower = @import("lower/arena.zig");
+const region_infer = @import("lower/region_infer.zig");
 
 /// Parses top-level CLI flags and dispatches implemented bootstrap commands.
 pub fn main(init: std.process.Init) !void {
@@ -411,12 +412,18 @@ fn buildNative(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    const inferred_core_module = region_infer.inferModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to infer Core IR regions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 
     var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer lowered_arena.deinit();
 
     var impl: arena_lower.ArenaStrategy = .{ .allocator = lowered_arena.allocator() };
-    const lowered_module = impl.loweringStrategy().lowerModule(core_module) catch |err| {
+    const lowered_module = impl.loweringStrategy().lowerModule(inferred_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to lower with ArenaStrategy: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -465,12 +472,18 @@ fn buildBpf(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    const inferred_core_module = region_infer.inferModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to infer Core IR regions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 
     var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer lowered_arena.deinit();
 
     var impl: arena_lower.ArenaStrategy = .{ .allocator = lowered_arena.allocator() };
-    const lowered_module = impl.loweringStrategy().lowerModule(core_module) catch |err| {
+    const lowered_module = impl.loweringStrategy().lowerModule(inferred_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to lower with ArenaStrategy: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -590,6 +603,7 @@ test {
     _ = @import("driver/idl.zig");
     _ = @import("lower/arena.zig");
     _ = @import("lower/lir.zig");
+    _ = @import("lower/region_infer.zig");
     _ = @import("lower/strategy.zig");
     _ = pipeline;
     _ = @import("frontend_bridge/sexp_lexer.zig");
