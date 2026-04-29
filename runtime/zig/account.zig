@@ -40,7 +40,7 @@ pub const ParseError = error{
 };
 
 const pre_original_data_len_padding = 4;
-const account_alignment = 16;
+const account_alignment = 8;
 const max_permitted_data_increase = 10 * 1024;
 const pubkey_len = 32;
 const not_duplicate_account: u8 = 0xff;
@@ -77,6 +77,22 @@ pub fn parseAccountsFromPtrInto(arena: *Arena, input: [*]const u8, out: *[]Accou
     if (account_count_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
 
     const accounts = try allocAccountViews(arena, @intCast(account_count_u64));
+    for (accounts) |*account| {
+        parseOneUncheckedInto(input_mut, &cursor, account);
+    }
+
+    out.* = accounts;
+}
+
+/// Parses accounts from an entrypoint pointer into caller-provided storage.
+pub fn parseAccountsFromPtrIntoStorage(input: [*]const u8, storage: []AccountView, out: *[]AccountView) ParseError!void {
+    const input_mut: [*]u8 = @constCast(input);
+    var cursor: usize = 0;
+    const account_count_u64 = readU64Unchecked(input_mut, &cursor);
+    if (account_count_u64 > storage.len) return error.AccountCountOverflow;
+    const account_count: usize = @intCast(account_count_u64);
+
+    const accounts = storage[0..account_count];
     for (accounts) |*account| {
         parseOneUncheckedInto(input_mut, &cursor, account);
     }

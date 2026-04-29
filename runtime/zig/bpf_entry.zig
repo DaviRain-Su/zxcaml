@@ -11,6 +11,7 @@ const syscalls = @import("runtime/syscalls.zig");
 const program = @import("program.zig");
 
 const arena_bytes = 32 * 1024;
+const max_entrypoint_accounts = 64;
 
 const loader_log_message linksection(".rodata") = "ZxCaml entrypoint".*;
 var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
@@ -23,8 +24,9 @@ export fn entrypoint(input: [*]u8) callconv(.c) u64 {
     syscalls.sol_log_(loader_log_message[0..]);
 
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
+    var account_storage: [max_entrypoint_accounts]AccountRuntime.AccountView = undefined;
     var accounts: []AccountRuntime.AccountView = undefined;
-    AccountRuntime.parseAccountsFromPtrInto(&arena, input, &accounts) catch return 1;
+    AccountRuntime.parseAccountsFromPtrIntoStorage(input, account_storage[0..], &accounts) catch return 1;
     const instruction_data = AccountRuntime.parseInstructionDataFromPtr(input) catch return 1;
     const status = program.omlz_user_entrypoint(&arena, input, accounts, instruction_data);
     arena.reset();

@@ -57,12 +57,20 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
     }
     try emitClosureCaptureStructs(&out, allocator, module.functions);
     for (module.functions) |func| {
+        if (isCounterHelperName(func.name)) continue;
         try emitFunction(&out, allocator, func, module.functions, module.type_decls, module.record_type_decls);
         try append(&out, allocator, "\n");
     }
     try emitFunction(&out, allocator, module.entrypoint, module.functions, module.type_decls, module.record_type_decls);
 
     return out.toOwnedSlice(allocator);
+}
+
+fn isCounterHelperName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "read_u8") or
+        std.mem.eql(u8, name, "read_u64_le") or
+        std.mem.eql(u8, name, "write_u64_le") or
+        std.mem.eql(u8, name, "set_account_data");
 }
 
 fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: lir.LVariantType) EmitError!void {
@@ -632,6 +640,10 @@ fn emitAppExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    switch (app.callee.*) {
+        .Var => |callee| if (try emitCounterAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return,
+        else => {},
+    }
     if (app.kind == .Closure) {
         const callee = switch (app.callee.*) {
             .Var => |var_ref| var_ref,
@@ -680,6 +692,7 @@ fn emitAppExpr(
         .Var => |callee| {
             if (try emitSyscallAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             if (try emitSplTokenAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
+            if (try emitCounterAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             if (try emitStdlibAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             const function_name = try emittedFunctionName(allocator, callee.name);
             defer freeEmittedFunctionName(allocator, callee.name, function_name);
@@ -780,6 +793,155 @@ fn emitSyscallAppExpr(
         return true;
     }
     return false;
+}
+
+fn emitCounterAppExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!bool {
+    if (std.mem.eql(u8, name, "read_u8")) {
+        if (app.args.len != 2) return error.UnsupportedExpr;
+        try emitCounterReadU8(out, allocator, app.args[0].*, app.args[1].*, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "read_u64_le")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try emitCounterReadU64Le(out, allocator, app.args[0].*, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "write_u64_le")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try emitCounterWriteU64Le(out, allocator, app.args[0].*, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "set_account_data")) {
+        if (app.args.len != 2) return error.UnsupportedExpr;
+        try emitCounterSetAccountData(out, allocator, app.args[0].*, app.args[1].*, indent_level, ctx);
+        return true;
+    }
+    return false;
+}
+
+fn emitCounterReadU8(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    bytes_expr: lir.LExpr,
+    offset_expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_bytes_{d} = ", .{block_id});
+    try emitExpr(out, allocator, bytes_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_offset_{d} = ", .{block_id});
+    try emitExpr(out, allocator, offset_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_counter_offset_{d} < 0) break :blk{d} @as(i64, 0);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_index_{d}: usize = @intCast(omlz_counter_offset_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_counter_index_{d} >= omlz_counter_bytes_{d}.len) break :blk{d} @as(i64, 0);\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} @as(i64, @intCast(omlz_counter_bytes_{d}[omlz_counter_index_{d}]));\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitCounterReadU64Le(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    bytes_expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_bytes_{d} = ", .{block_id});
+    try emitExpr(out, allocator, bytes_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_counter_bytes_{d}.len < 8) break :blk{d} @as(i64, 0);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_counter_value_{d}: u64 = 0;\n", .{block_id});
+    for (0..8) |index| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "omlz_counter_value_{d} |= @as(u64, omlz_counter_bytes_{d}[{d}]) << {d};\n", .{ block_id, block_id, index, index * 8 });
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} @as(i64, @bitCast(omlz_counter_value_{d}));\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitCounterWriteU64Le(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    value_expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "_ = arena;\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_signed_{d}: i64 = ", .{block_id});
+    try emitExpr(out, allocator, value_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_value_{d}: u64 = @bitCast(omlz_counter_signed_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_counter_out_{d}: [8]u8 = undefined;\n", .{block_id});
+    for (0..8) |index| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "omlz_counter_out_{d}[{d}] = @intCast((omlz_counter_value_{d} >> {d}) & 0xff);\n", .{ block_id, index, block_id, index * 8 });
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_counter_out_{d}[0..];\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitCounterSetAccountData(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    account_expr: lir.LExpr,
+    data_expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_account_{d} = ", .{block_id});
+    try emitExpr(out, allocator, account_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_counter_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, data_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_counter_data_{d}.len > omlz_counter_account_{d}.data.len) unreachable;\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_counter_account_{d}.data[0..omlz_counter_data_{d}.len], omlz_counter_data_{d});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitSplTokenAppExpr(

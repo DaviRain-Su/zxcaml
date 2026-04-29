@@ -27,3 +27,7 @@ path = "demo_test.rs"
 [[test]]
 name = "simple_cpi_test"
 path = "simple_cpi_test.rs"
+
+[[test]]
+name = "counter_test"
+path = "counter_test.rs"
