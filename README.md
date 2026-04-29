@@ -105,35 +105,38 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**P3 Solana runtime integration is implemented.** The P1 walking skeleton and
-P2 subset expansion remain the baseline. P3 adds typed Solana account views,
-syscall bindings, CPI helpers, SPL-Token transfer support, conservative
-`no_alloc` analysis, structured error codes, and JSON IDL emission.
+**P5 Ecosystem Reach is implemented.** P1-P4 deliver the walking skeleton,
+subset expansion, Solana runtime integration, and Mollusk test infrastructure.
+P5 adds external declarations for Zig FFI, Anchor 0.30+ compatible IDL
+generation, and functional persistent stdlib (Map, Set, Crypto).
 
 `omlz` works end-to-end: parse/type-check OCaml with upstream
-`compiler-libs` → emit sexp `0.9` → lower through Core IR → interpret,
-build native Zig, build Solana BPF `.so` artifacts, or emit JSON IDL.
+`compiler-libs` → emit sexp `1.0` → lower through Core IR → interpret,
+build native Zig, build Solana BPF `.so` artifacts, or emit Anchor-compatible
+IDL.
 
 ### Current features
 
 - **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz idl <file>`
-- **Wire format:** version 0.9 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`)
+- **Wire format:** version 1.0 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4 added instruction_data; P5 added external declarations)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, tuples, records, field access, functional record update, lists (`[]` / `::`), and pattern matching over all of those forms
-- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`), `Option` (`is_none`, `is_some`, `value`, `get`), and `Result` (`is_ok`, `is_error`, `ok`, `error`) modules
+- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`), `Option` (`is_none`, `is_some`, `value`, `get`), `Result` (`is_ok`, `is_error`, `ok`, `error`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only, fully inferred, hidden from the user; BPF entry arena is 32 KiB
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
-- **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use MurmurHash3-32 dispatch addresses
+- **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
+- **External declarations:** `external name : type = "zig_symbol"` syntax enables direct FFI to Zig runtime functions with type safety enforced by the frontend
 - **CPI and PDA helpers:** built-in `instruction` / `account_meta` records, `invoke`, `invoke_signed`, PDA helpers, and return-data syscalls mirror the Solana C ABI
 - **SPL-Token:** helper support and an acceptance example encode legacy Tokenkeg Transfer instructions with source/destination/authority metas
 - **no_alloc:** `omlz check --no-alloc` runs a conservative Core IR allocation proof and reports the allocation-causing node on failure
-- **IDL:** `omlz idl <file>` emits ZxCaml JSON with schema version, instruction accounts/args, user types, and structured error constants
+- **IDL:** `omlz idl <file>` emits Anchor 0.30+ compatible JSON with SHA-256 discriminators, instruction accounts/args, account types, events, errors, and constants
 - **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
 - **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, closure harness, account/syscall harness, simple CPI harness, and SPL-Token transfer harness
-- **Determinism:** interpreter ≡ Zig native across the P1 + P2 + P3 examples corpus
-- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, P3 `no_alloc` and IDL smoke checks, and an examples `omlz check` corpus loop
+- **Determinism:** interpreter ≡ Zig native across the P1 + P2 + P3 + P4 + P5 examples corpus
+- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, and an examples `omlz check` corpus loop
+- **Mollusk SVM tests:** 7 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo)
 - **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
-- **Examples:** 34 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, and SPL-Token programs
+- **Examples:** 39 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, and crypto demo programs
 - **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
