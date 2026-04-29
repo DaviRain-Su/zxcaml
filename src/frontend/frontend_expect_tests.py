@@ -278,6 +278,60 @@ CASES: list[tuple[str, str, str]] = [
         "(zxcaml-cir 0.9 (module (let entrypoint (lambda (seeds program_id) "
         "(app (var try_find_program_address) (var seeds) (var program_id))))))\n",
     ),
+    (
+        "error type reference emits structured error record type",
+        "type holder = { err : error }\nlet entrypoint holder = holder.err.code\n",
+        "(zxcaml-cir 0.9 (module "
+        "(record_type_decl (name error) (params) "
+        "(fields ((program_id_index (type-ref int)) (code (type-ref int))))) "
+        "(record_type_decl (name holder) (params) "
+        "(fields ((err (type-ref error))))) "
+        "(let entrypoint (lambda (holder) "
+        "(field_access (field_access (var holder) err) code)))))\n",
+    ),
+    (
+        "structured error make and return encoding",
+        "let entrypoint _ = let err = Error.make 0x12 0x34 in Error.encode err\n",
+        "(zxcaml-cir 0.9 (module "
+        "(record_type_decl (name error) (params) "
+        "(fields ((program_id_index (type-ref int)) (code (type-ref int))))) "
+        "(let entrypoint (lambda (_) "
+        "(let err (record (fields ((program_id_index (const-int 18)) (code (const-int 52))))) "
+        "(prim \"+\" (prim \"*\" (field_access (var err) program_id_index) (const-int 256)) "
+        "(field_access (var err) code)))))))\n",
+    ),
+    (
+        "structured error direct encoding",
+        "let entrypoint _ = Error.encode_code 0x12 0x34\n",
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
+        "(prim \"+\" (prim \"*\" (const-int 18) (const-int 256)) (const-int 52))))))\n",
+    ),
+]
+
+
+TOO_MANY_ERROR_CONSTRUCTORS = (
+    "type error = "
+    + " | ".join(f"E{i}" for i in range(257))
+    + "\nlet entrypoint _ = 0\n"
+)
+
+
+REJECT_CASES: list[tuple[str, str, str]] = [
+    (
+        "error code rejects values above 255",
+        "let entrypoint _ = Error.encode_code 0 256\n",
+        "program-specific error codes must be integer values in the 0-255 range",
+    ),
+    (
+        "error enum rejects payload constructors",
+        "type error = Bad of int\nlet entrypoint _ = 0\n",
+        "program-specific error enum constructors must not carry payloads",
+    ),
+    (
+        "error enum rejects more than 256 constructors",
+        TOO_MANY_ERROR_CONSTRUCTORS,
+        "program-specific error enums may define at most 256 codes",
+    ),
 ]
 
 
@@ -304,6 +358,31 @@ def run_case(tmp_dir: pathlib.Path, name: str, source: str, expected: str) -> bo
     return True
 
 
+def run_reject_case(
+    tmp_dir: pathlib.Path, name: str, source: str, expected_message: str
+) -> bool:
+    path = tmp_dir / (name.replace(" ", "_").replace("-", "_") + ".ml")
+    path.write_text(source, encoding="utf-8")
+
+    result = subprocess.run(
+        [str(FRONTEND_BIN), "--emit=sexp", str(path)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        print(f"FAIL {name}: frontend unexpectedly succeeded", file=sys.stderr)
+        print(result.stdout, file=sys.stderr)
+        return False
+    if expected_message not in result.stderr:
+        print(f"FAIL {name}: stderr mismatch", file=sys.stderr)
+        print(f"expected substring: {expected_message!r}", file=sys.stderr)
+        print(f"actual stderr:       {result.stderr!r}", file=sys.stderr)
+        return False
+    print(f"PASS {name}")
+    return True
+
+
 def main() -> int:
     if not FRONTEND_BIN.exists():
         print(f"missing frontend binary: {FRONTEND_BIN}", file=sys.stderr)
@@ -311,6 +390,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="zxcaml-frontend-expect-") as tmp:
         tmp_dir = pathlib.Path(tmp)
         passed = [run_case(tmp_dir, *case) for case in CASES]
+        passed.extend(run_reject_case(tmp_dir, *case) for case in REJECT_CASES)
     return 0 if all(passed) else 1
 
 

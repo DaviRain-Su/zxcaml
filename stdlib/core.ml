@@ -33,6 +33,11 @@ type instruction = {
 
 type signer_seeds = bytes array
 
+type error = {
+  program_id_index : int;
+  code : int;
+}
+
 type clock = {
   slot : int;
   epoch_start_timestamp : int;
@@ -116,6 +121,14 @@ module Syscall = struct
     }
 
   let sol_remaining_compute_units () = 0
+end
+
+module Error = struct
+  let make program_id_index code = { program_id_index; code }
+
+  let encode err = (err.program_id_index * 256) + err.code
+
+  let encode_code program_id_index code = (program_id_index * 256) + code
 end
 
 let invoke (_instruction : instruction) = 0

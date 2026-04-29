@@ -212,6 +212,9 @@ let builtin_account_meta_field_names =
 let builtin_instruction_field_names =
   StringSet.of_list [ "program_id"; "accounts"; "data" ]
 
+let builtin_error_field_names =
+  StringSet.of_list [ "program_id_index"; "code" ]
+
 let builtin_clock_field_names =
   StringSet.of_list
     [
@@ -295,6 +298,19 @@ let builtin_instruction_record_decl =
                  is_recursive_ref = false;
                });
           builtin_record_field "data" (builtin_type_ref "bytes");
+        ];
+      record_is_recursive = false;
+    }
+
+let builtin_error_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "error";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "program_id_index" (builtin_type_ref "int");
+          builtin_record_field "code" (builtin_type_ref "int");
         ];
       record_is_recursive = false;
     }
@@ -542,6 +558,80 @@ and parse_apply_args env args =
   in
   List.map parse_one args
 
+and parse_error_helper_args ~helper args ~loc =
+  let parse_one = function
+    | Nolabel, Some arg -> arg
+    | _, Some arg -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc ()
+    | _, None -> unsupported ~node_kind:"partial-application" ~loc:Location.none ()
+  in
+  match List.map parse_one args with
+  | args -> (
+      match (helper, args) with
+      | ("Error.make" | "Error.encode_code"), [ program_id_index; code ] ->
+          (program_id_index, code)
+      | _ ->
+          unsupported ~node_kind:(helper ^ "-arity") ~loc
+            ~message:(helper ^ " requires exactly two unlabeled arguments")
+            ())
+
+and parse_error_encode_arg args ~loc =
+  match args with
+  | [ Nolabel, Some err ] -> err
+  | [ _, Some arg ] -> unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc ()
+  | [ _, None ] -> unsupported ~node_kind:"partial-application" ~loc ()
+  | _ ->
+      unsupported ~node_kind:"Error.encode-arity" ~loc
+        ~message:"Error.encode requires exactly one unlabeled argument"
+        ()
+
+and validate_error_code_literal code_expr =
+  match code_expr.exp_desc with
+  | Texp_constant (Const_int code) when code < 0 || code > 255 ->
+      unsupported ~node_kind:"Error.code" ~loc:code_expr.exp_loc
+        ~message:
+          "program-specific error codes must be integer values in the 0-255 range"
+        ()
+  | _ -> ()
+
+and error_encoding_expr program_id_index code =
+  Prim
+    {
+      op = "+";
+      args =
+        [
+          Prim { op = "*"; args = [ program_id_index; Const_int 256 ] };
+          code;
+        ];
+    }
+
+and parse_error_make env args ~loc =
+  let program_id_index, code = parse_error_helper_args ~helper:"Error.make" args ~loc in
+  validate_error_code_literal code;
+  Record
+    {
+      fields =
+        [
+          {
+            field_name = "program_id_index";
+            field_value = parse_expr env program_id_index;
+          };
+          { field_name = "code"; field_value = parse_expr env code };
+        ];
+    }
+
+and parse_error_encode_code env args ~loc =
+  let program_id_index, code =
+    parse_error_helper_args ~helper:"Error.encode_code" args ~loc
+  in
+  validate_error_code_literal code;
+  error_encoding_expr (parse_expr env program_id_index) (parse_expr env code)
+
+and parse_error_encode env args ~loc =
+  let err = parse_expr env (parse_error_encode_arg args ~loc) in
+  error_encoding_expr
+    (Field_access { record_expr = err; field_name = "program_id_index" })
+    (Field_access { record_expr = err; field_name = "code" })
+
 and parse_tuple_projection_args env ~index args ~loc =
   match args with
   | [ Nolabel, Some arg ] -> Tuple_project { tuple_expr = parse_expr env arg; index }
@@ -609,6 +699,15 @@ and parse_expr env (expr : expression) =
   | Texp_field (record_expr, _lid, label) ->
       Field_access
         { record_expr = parse_expr env record_expr; field_name = label.Types.lbl_name }
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when String.equal (longident_name lid) "Error.make" ->
+      parse_error_make env args ~loc:expr.exp_loc
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when String.equal (longident_name lid) "Error.encode" ->
+      parse_error_encode env args ~loc:expr.exp_loc
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when String.equal (longident_name lid) "Error.encode_code" ->
+      parse_error_encode_code env args ~loc:expr.exp_loc
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when is_whitelisted_prim (longident_last lid) ->
       Prim { op = longident_last lid; args = parse_apply_args env args }
@@ -685,7 +784,24 @@ let record_field_has_recursive_ref field =
 
 let parse_type_params params = List.map parse_type_param params
 
+let validate_error_enum_constructor ~current_type constructor =
+  if String.equal current_type "error" then
+    match constructor.cd_args with
+    | Cstr_tuple [] -> ()
+    | _ ->
+        unsupported ~node_kind:"error-constructor-payload" ~loc:constructor.cd_loc
+          ~message:
+            "program-specific error enum constructors must not carry payloads"
+          ()
+
+let validate_error_enum_size ~current_type ~loc constructors =
+  if String.equal current_type "error" && List.length constructors > 256 then
+    unsupported ~node_kind:"error-enum-range" ~loc
+      ~message:"program-specific error enums may define at most 256 codes"
+      ()
+
 let parse_constructor_decl ~current_type (constructor : constructor_declaration) =
+  validate_error_enum_constructor ~current_type constructor;
   (match constructor.cd_res with
   | None -> ()
   | Some res ->
@@ -721,6 +837,8 @@ let parse_type_declaration (type_decl : type_declaration) =
         ());
   match type_decl.typ_kind with
   | Ttype_variant constructors ->
+      validate_error_enum_size ~current_type:type_decl.typ_name.txt
+        ~loc:type_decl.typ_loc constructors;
       (match type_decl.typ_manifest with
       | None -> ()
       | Some manifest ->
@@ -902,6 +1020,10 @@ let add_builtin_record_decls decls =
     decls_need_builtin_record ~type_name:"clock"
       ~field_names:builtin_clock_field_names decls
   in
+  let needs_error =
+    decls_need_builtin_record ~type_name:"error"
+      ~field_names:builtin_error_field_names decls
+  in
   let needs_account =
     decls_need_builtin_record ~type_name:"account"
       ~field_names:builtin_account_field_names decls
@@ -919,6 +1041,7 @@ let add_builtin_record_decls decls =
     List.filter_map
       (fun (needed, decl) -> if needed then Some decl else None)
       [
+        (needs_error, builtin_error_record_decl);
         (needs_account, builtin_account_record_decl);
         (needs_account_meta, builtin_account_meta_record_decl);
         (needs_instruction, builtin_instruction_record_decl);
