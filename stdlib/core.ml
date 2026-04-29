@@ -105,6 +105,278 @@ module List = struct
   let tl xs = match xs with [] -> unreachable () | _ :: rest -> rest
 end
 
+module Map = struct
+  type ('k, 'v) tree =
+    | Empty
+    | Node of ('k, 'v) tree * 'k * 'v * ('k, 'v) tree * int
+
+  type ('k, 'v) t = { compare : 'k -> 'k -> int; tree : ('k, 'v) tree }
+
+  let tree_size tree = match tree with Empty -> 0 | Node (_, _, _, _, size) -> size
+
+  let create left key value right =
+    Node (left, key, value, right, tree_size left + tree_size right + 1)
+
+  let singleton_tree key value = create Empty key value Empty
+
+  let delta = 3
+
+  let ratio = 2
+
+  let balance left key value right =
+    let left_size = tree_size left in
+    let right_size = tree_size right in
+    if left_size + right_size <= 1 then create left key value right
+    else if left_size > delta * right_size then
+      match left with
+      | Empty -> create left key value right
+      | Node (left_left, left_key, left_value, left_right, _) ->
+          if tree_size left_left >= ratio * tree_size left_right then
+            create left_left left_key left_value (create left_right key value right)
+          else (
+            match left_right with
+            | Empty ->
+                create left_left left_key left_value
+                  (create left_right key value right)
+            | Node
+                ( left_right_left,
+                  left_right_key,
+                  left_right_value,
+                  left_right_right,
+                  _ ) ->
+                create
+                  (create left_left left_key left_value left_right_left)
+                  left_right_key left_right_value
+                  (create left_right_right key value right))
+    else if right_size > delta * left_size then
+      match right with
+      | Empty -> create left key value right
+      | Node (right_left, right_key, right_value, right_right, _) ->
+          if tree_size right_right >= ratio * tree_size right_left then
+            create (create left key value right_left) right_key right_value
+              right_right
+          else (
+            match right_left with
+            | Empty ->
+                create (create left key value right_left) right_key right_value
+                  right_right
+            | Node
+                ( right_left_left,
+                  right_left_key,
+                  right_left_value,
+                  right_left_right,
+                  _ ) ->
+                create
+                  (create left key value right_left_left)
+                  right_left_key right_left_value
+                  (create right_left_right right_key right_value right_right))
+    else create left key value right
+
+  let empty compare = { compare; tree = Empty }
+
+  let singleton key value compare = { compare; tree = singleton_tree key value }
+
+  let rec add_tree compare key value tree =
+    match tree with
+    | Empty -> singleton_tree key value
+    | Node (left, node_key, node_value, right, _) ->
+        let ordering = compare key node_key in
+        if ordering = 0 then create left key value right
+        else if ordering < 0 then
+          balance (add_tree compare key value left) node_key node_value right
+        else balance left node_key node_value (add_tree compare key value right)
+
+  let add key value map =
+    { map with tree = add_tree map.compare key value map.tree }
+
+  let rec find_tree compare key tree =
+    match tree with
+    | Empty -> None
+    | Node (left, node_key, node_value, right, _) ->
+        let ordering = compare key node_key in
+        if ordering = 0 then Some node_value
+        else if ordering < 0 then find_tree compare key left
+        else find_tree compare key right
+
+  let find key map = find_tree map.compare key map.tree
+
+  let mem key map =
+    match find key map with None -> false | Some _ -> true
+
+  let rec min_binding tree =
+    match tree with
+    | Empty -> None
+    | Node (Empty, key, value, _, _) -> Some (key, value)
+    | Node (left, _, _, _, _) -> min_binding left
+
+  let rec remove_min_binding tree =
+    match tree with
+    | Empty -> Empty
+    | Node (Empty, _, _, right, _) -> right
+    | Node (left, key, value, right, _) ->
+        balance (remove_min_binding left) key value right
+
+  let merge left right =
+    match (left, right) with
+    | Empty, tree -> tree
+    | tree, Empty -> tree
+    | _ -> (
+        match min_binding right with
+        | None -> left
+        | Some (key, value) -> balance left key value (remove_min_binding right))
+
+  let rec remove_tree compare key tree =
+    match tree with
+    | Empty -> Empty
+    | Node (left, node_key, node_value, right, _) ->
+        let ordering = compare key node_key in
+        if ordering = 0 then merge left right
+        else if ordering < 0 then
+          balance (remove_tree compare key left) node_key node_value right
+        else balance left node_key node_value (remove_tree compare key right)
+
+  let remove key map =
+    { map with tree = remove_tree map.compare key map.tree }
+
+  let size map = tree_size map.tree
+
+  let rec to_list_acc tree acc =
+    match tree with
+    | Empty -> acc
+    | Node (left, key, value, right, _) ->
+        to_list_acc left ((key, value) :: to_list_acc right acc)
+
+  let to_list map = to_list_acc map.tree []
+end
+
+module Set = struct
+  type 'a tree = Empty | Node of 'a tree * 'a * 'a tree * int
+
+  type 'a t = { compare : 'a -> 'a -> int; tree : 'a tree }
+
+  let tree_size tree = match tree with Empty -> 0 | Node (_, _, _, size) -> size
+
+  let create left value right =
+    Node (left, value, right, tree_size left + tree_size right + 1)
+
+  let singleton_tree value = create Empty value Empty
+
+  let delta = 3
+
+  let ratio = 2
+
+  let balance left value right =
+    let left_size = tree_size left in
+    let right_size = tree_size right in
+    if left_size + right_size <= 1 then create left value right
+    else if left_size > delta * right_size then
+      match left with
+      | Empty -> create left value right
+      | Node (left_left, left_value, left_right, _) ->
+          if tree_size left_left >= ratio * tree_size left_right then
+            create left_left left_value (create left_right value right)
+          else (
+            match left_right with
+            | Empty -> create left_left left_value (create left_right value right)
+            | Node (left_right_left, left_right_value, left_right_right, _) ->
+                create
+                  (create left_left left_value left_right_left)
+                  left_right_value
+                  (create left_right_right value right))
+    else if right_size > delta * left_size then
+      match right with
+      | Empty -> create left value right
+      | Node (right_left, right_value, right_right, _) ->
+          if tree_size right_right >= ratio * tree_size right_left then
+            create (create left value right_left) right_value right_right
+          else (
+            match right_left with
+            | Empty -> create (create left value right_left) right_value right_right
+            | Node (right_left_left, right_left_value, right_left_right, _) ->
+                create
+                  (create left value right_left_left)
+                  right_left_value
+                  (create right_left_right right_value right_right))
+    else create left value right
+
+  let empty compare = { compare; tree = Empty }
+
+  let singleton value compare = { compare; tree = singleton_tree value }
+
+  let rec add_tree compare value tree =
+    match tree with
+    | Empty -> singleton_tree value
+    | Node (left, node_value, right, _) ->
+        let ordering = compare value node_value in
+        if ordering = 0 then create left value right
+        else if ordering < 0 then balance (add_tree compare value left) node_value right
+        else balance left node_value (add_tree compare value right)
+
+  let add value set = { set with tree = add_tree set.compare value set.tree }
+
+  let rec mem_tree compare value tree =
+    match tree with
+    | Empty -> false
+    | Node (left, node_value, right, _) ->
+        let ordering = compare value node_value in
+        if ordering = 0 then true
+        else if ordering < 0 then mem_tree compare value left
+        else mem_tree compare value right
+
+  let mem value set = mem_tree set.compare value set.tree
+
+  let rec min_elt tree =
+    match tree with
+    | Empty -> None
+    | Node (Empty, value, _, _) -> Some value
+    | Node (left, _, _, _) -> min_elt left
+
+  let rec remove_min_elt tree =
+    match tree with
+    | Empty -> Empty
+    | Node (Empty, _, right, _) -> right
+    | Node (left, value, right, _) -> balance (remove_min_elt left) value right
+
+  let merge left right =
+    match (left, right) with
+    | Empty, tree -> tree
+    | tree, Empty -> tree
+    | _ -> (
+        match min_elt right with
+        | None -> left
+        | Some value -> balance left value (remove_min_elt right))
+
+  let rec remove_tree compare value tree =
+    match tree with
+    | Empty -> Empty
+    | Node (left, node_value, right, _) ->
+        let ordering = compare value node_value in
+        if ordering = 0 then merge left right
+        else if ordering < 0 then balance (remove_tree compare value left) node_value right
+        else balance left node_value (remove_tree compare value right)
+
+  let remove value set =
+    { set with tree = remove_tree set.compare value set.tree }
+
+  let size set = tree_size set.tree
+
+  let rec to_list_acc tree acc =
+    match tree with
+    | Empty -> acc
+    | Node (left, value, right, _) ->
+        to_list_acc left (value :: to_list_acc right acc)
+
+  let to_list set = to_list_acc set.tree []
+
+  let union left right =
+    List.fold_left (fun acc value -> add value acc) left (to_list right)
+
+  let inter left right =
+    List.fold_left
+      (fun acc value -> if mem value right then add value acc else acc)
+      (empty left.compare) (to_list left)
+end
+
 module Syscall = struct
   external sol_log : string -> unit = "sol_log_"
 

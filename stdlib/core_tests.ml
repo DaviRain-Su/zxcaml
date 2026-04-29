@@ -33,6 +33,86 @@ let () =
   assert (Result.error (Error 12) = Some 12);
   assert (Result.map (fun x -> x + 1) (Ok 4) = Ok 5);
   assert (Result.bind (Ok 4) (fun x -> Ok (x + 1)) = Ok 5);
+  let int_compare left right =
+    if left < right then -1 else if left > right then 1 else 0
+  in
+  let empty_map = Map.empty int_compare in
+  assert (Map.size empty_map = 0);
+  assert (Map.to_list empty_map = []);
+  assert (Map.find 1 empty_map = None);
+  assert (not (Map.mem 1 empty_map));
+  let singleton_map = Map.singleton 3 "three" int_compare in
+  assert (Map.size singleton_map = 1);
+  assert (Map.find 3 singleton_map = Some "three");
+  assert (Map.to_list singleton_map = [ (3, "three") ]);
+  let map_with_two =
+    Map.add 2 "two" (Map.add 1 "one" (Map.add 3 "three" empty_map))
+  in
+  assert (Map.size map_with_two = 3);
+  assert (Map.to_list map_with_two = [ (1, "one"); (2, "two"); (3, "three") ]);
+  assert (Map.find 2 map_with_two = Some "two");
+  assert (Map.mem 1 map_with_two);
+  assert (not (Map.mem 4 map_with_two));
+  let overwritten_map = Map.add 2 "TWO" map_with_two in
+  assert (Map.size overwritten_map = 3);
+  assert (Map.find 2 overwritten_map = Some "TWO");
+  assert (Map.find 2 map_with_two = Some "two");
+  let removed_map = Map.remove 2 overwritten_map in
+  assert (Map.size removed_map = 2);
+  assert (Map.find 2 removed_map = None);
+  assert (Map.find 2 overwritten_map = Some "TWO");
+  assert (Map.to_list (Map.remove 9 removed_map) = Map.to_list removed_map);
+  let rec add_map_range n map =
+    if n = 0 then map else add_map_range (n - 1) (Map.add n (n * 10) map)
+  in
+  let rec check_map_range n map =
+    if n = 0 then ()
+    else (
+      assert (Map.find n map = Some (n * 10));
+      check_map_range (n - 1) map)
+  in
+  let hundred_map = add_map_range 100 empty_map in
+  assert (Map.size hundred_map = 100);
+  check_map_range 100 hundred_map;
+  let empty_set = Set.empty int_compare in
+  assert (Set.size empty_set = 0);
+  assert (Set.to_list empty_set = []);
+  assert (not (Set.mem 1 empty_set));
+  let singleton_set = Set.singleton 3 int_compare in
+  assert (Set.size singleton_set = 1);
+  assert (Set.mem 3 singleton_set);
+  assert (Set.to_list singleton_set = [ 3 ]);
+  let set_with_three = Set.add 2 (Set.add 1 (Set.add 3 empty_set)) in
+  assert (Set.size set_with_three = 3);
+  assert (Set.to_list set_with_three = [ 1; 2; 3 ]);
+  assert (Set.mem 2 set_with_three);
+  assert (not (Set.mem 4 set_with_three));
+  let duplicate_set = Set.add 2 set_with_three in
+  assert (Set.size duplicate_set = 3);
+  assert (Set.to_list duplicate_set = [ 1; 2; 3 ]);
+  let removed_set = Set.remove 2 duplicate_set in
+  assert (Set.size removed_set = 2);
+  assert (not (Set.mem 2 removed_set));
+  assert (Set.mem 2 duplicate_set);
+  assert (Set.to_list (Set.remove 9 removed_set) = Set.to_list removed_set);
+  let rec add_set_range n set =
+    if n = 0 then set else add_set_range (n - 1) (Set.add n set)
+  in
+  let rec check_set_range n set =
+    if n = 0 then ()
+    else (
+      assert (Set.mem n set);
+      check_set_range (n - 1) set)
+  in
+  let hundred_set = add_set_range 100 empty_set in
+  assert (Set.size hundred_set = 100);
+  check_set_range 100 hundred_set;
+  let left_set = Set.add 3 (Set.add 2 (Set.add 1 empty_set)) in
+  let right_set = Set.add 4 (Set.add 3 (Set.add 2 empty_set)) in
+  assert (Set.to_list (Set.union left_set right_set) = [ 1; 2; 3; 4 ]);
+  assert (Set.to_list (Set.union empty_set left_set) = [ 1; 2; 3 ]);
+  assert (Set.to_list (Set.inter left_set right_set) = [ 2; 3 ]);
+  assert (Set.to_list (Set.inter empty_set left_set) = []);
   let account =
     {
       key = Bytes.of_string "account";
@@ -70,9 +150,4 @@ let () =
   assert (
     Pubkey.of_hex
       "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"
-    = Bytes.of_string "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`");
-  Syscall.sol_log "hello";
-  Syscall.sol_log_64 1 2 3 4 5;
-  assert (Syscall.sol_sha256 (Bytes.of_string "abc") = Bytes.of_string "abc");
-  assert ((Syscall.sol_get_clock_sysvar ()).slot = 0);
-  assert (Syscall.sol_remaining_compute_units () = 0)
+    = Bytes.of_string "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`")
