@@ -5,6 +5,7 @@
 //! - Dispatch `omlz check <file.ml>` through the OCaml frontend subprocess.
 //! - Emit the M0 Core IR contract with `omlz check --emit=core-ir <file.ml>`.
 //! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
+//! - Dispatch `omlz idl <file.ml>` through frontend → ANF → JSON IDL emission.
 //! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
 //! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through Zig bitcode emission and sbpf-linker.
 //! - Reject all unimplemented commands with a non-zero exit status.
@@ -15,6 +16,7 @@ const build_options = @import("build_options");
 const pipeline = @import("driver/pipeline.zig");
 const driver_build = @import("driver/build.zig");
 const driver_bpf = @import("driver/bpf.zig");
+const driver_idl = @import("driver/idl.zig");
 const interp = @import("backend/interp.zig");
 const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
@@ -93,6 +95,22 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (args.len == 3 and std.mem.eql(u8, args[1], "idl")) {
+        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
+            if (shouldPrintGenericFrontendFailure(err)) {
+                try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
+            }
+            std.process.exit(1);
+        };
+        defer result.deinit();
+
+        switch (result) {
+            .success => |parsed| try emitIdl(init, parsed.module, args[2]),
+            .failed => |code| std.process.exit(if (code == 0) 1 else code),
+        }
+        return;
+    }
+
     if (args.len >= 3 and std.mem.eql(u8, args[1], "build")) {
         const build_args = parseBuildArgs(args) catch {
             try writeStderr(init.io, "error: unsupported build option; run `omlz --help` for usage.\n");
@@ -142,6 +160,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz check <file.ml>
         \\  omlz check --no-alloc <file.ml>
         \\  omlz check --emit=core-ir [--bless] <file.ml>
+        \\  omlz idl <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
         \\  omlz run <file.ml>
@@ -347,6 +366,38 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
     try writeStdout(init.io, rendered);
 }
 
+fn emitIdl(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, input_file: []const u8) !void {
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
+
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    const program_name = try deriveProgramName(init.gpa, input_file);
+    defer init.gpa.free(program_name);
+
+    const rendered = driver_idl.emitModule(init.gpa, core_module, .{ .program_name = program_name }) catch |err| {
+        try writeStderr(init.io, "error: failed to emit IDL: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(rendered);
+
+    try writeStdout(init.io, rendered);
+    try writeStdout(init.io, "\n");
+}
+
+fn deriveProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]u8 {
+    const basename = std.fs.path.basename(input_file);
+    const stem = if (std.mem.endsWith(u8, basename, ".ml")) basename[0 .. basename.len - 3] else basename;
+    return allocator.dupe(u8, stem);
+}
+
 fn buildNative(
     init: std.process.Init,
     module: @import("frontend_bridge/ttree.zig").Module,
@@ -537,6 +588,7 @@ test {
     _ = @import("core/types.zig");
     _ = @import("driver/build.zig");
     _ = @import("driver/bpf.zig");
+    _ = @import("driver/idl.zig");
     _ = @import("lower/arena.zig");
     _ = @import("lower/lir.zig");
     _ = @import("lower/strategy.zig");

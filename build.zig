@@ -217,6 +217,26 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_ui_tests.setCwd(b.path(""));
 
+    // IDL tests (G34): verify `omlz idl` emits valid JSON with the expected
+    // instruction, account, argument, type, and error-code sections.
+    const idl_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/idl/run.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const idl_options = b.addOptions();
+    idl_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    idl_test_module.addOptions("idl_options", idl_options);
+    const idl_tests = b.addTest(.{
+        .root_module = idl_test_module,
+    });
+    const run_idl_tests = b.addRunArtifact(idl_tests);
+    // The IDL harness invokes `omlz` as a subprocess, so omlz
+    // (and zxc-frontend) must be built before the test runs.
+    run_idl_tests.step.dependOn(b.getInstallStep());
+    // Set working directory to the project root so relative paths resolve.
+    run_idl_tests.setCwd(b.path(""));
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
@@ -229,4 +249,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_determinism_tests.step);
     test_step.dependOn(&run_golden_tests.step);
     test_step.dependOn(&run_ui_tests.step);
+    test_step.dependOn(&run_idl_tests.step);
 }
