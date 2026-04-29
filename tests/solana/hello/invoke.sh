@@ -19,6 +19,9 @@ TMPDIR="$(mktemp -d -t zxcaml-solana-hello-XXXXXX)"
 LEDGER="$TMPDIR/ledger"
 KEYPAIR="$TMPDIR/payer.json"
 RECIPIENT_KEYPAIR="$TMPDIR/recipient.json"
+MINT_KEYPAIR="$TMPDIR/mint.json"
+SOURCE_TOKEN_KEYPAIR="$TMPDIR/source-token.json"
+DEST_TOKEN_KEYPAIR="$TMPDIR/destination-token.json"
 PROGRAM_SO="$TMPDIR/$PROGRAM_STEM.so"
 VALIDATOR_LOG="$TMPDIR/validator.log"
 BUILD_LOG="$TMPDIR/build.log"
@@ -187,8 +190,18 @@ try:
         raise RuntimeError(f"blockhash decoded to {len(blockhash)} bytes, expected 32")
 
     simple_cpi = os.environ.get("ZXCAML_SOLANA_SIMPLE_CPI") == "1"
-    include_accounts = os.environ.get("ZXCAML_SOLANA_INVOKE_ACCOUNTS") == "1" or simple_cpi
+    spl_token = os.environ.get("ZXCAML_SOLANA_SPL_TOKEN") == "1"
+    include_accounts = os.environ.get("ZXCAML_SOLANA_INVOKE_ACCOUNTS") == "1" or simple_cpi or spl_token
     system_program = b"\x00" * 32
+    token_program_b58 = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    token_program = b58decode(token_program_b58)
+    if len(token_program) != 32:
+        raise RuntimeError(f"SPL Token program decoded to {len(token_program)} bytes, expected 32")
+
+    def token_balance(account_b58):
+        balance = rpc("getTokenAccountBalance", [account_b58, {"commitment": "finalized"}])
+        return int(balance["value"]["amount"])
+
     if simple_cpi:
         recipient_b58 = os.environ.get("ZXCAML_SIMPLE_CPI_RECIPIENT")
         if not recipient_b58:
@@ -201,12 +214,32 @@ try:
         program_index = 2
         readonly_unsigned = 2
         recipient_before = rpc("getBalance", [recipient_b58, {"commitment": "finalized"}])["value"]
+        source_token_before = None
+        destination_token_before = None
+    elif spl_token:
+        source_token_b58 = os.environ.get("ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT")
+        destination_token_b58 = os.environ.get("ZXCAML_SPL_DEST_TOKEN_ACCOUNT")
+        if not source_token_b58 or not destination_token_b58:
+            raise RuntimeError("ZXCAML_SOLANA_SPL_TOKEN requires source and destination token account env vars")
+        source_token = b58decode(source_token_b58)
+        destination_token = b58decode(destination_token_b58)
+        if len(source_token) != 32 or len(destination_token) != 32:
+            raise RuntimeError("SPL token account pubkeys must decode to 32 bytes")
+        account_keys = [payer, source_token, destination_token, program, token_program]
+        instruction_accounts = bytes([1, 2, 0, 4])
+        program_index = 3
+        readonly_unsigned = 2
+        recipient_before = None
+        source_token_before = token_balance(source_token_b58)
+        destination_token_before = token_balance(destination_token_b58)
     else:
         account_keys = [payer, program] + ([system_program] if include_accounts else [])
         instruction_accounts = bytes([0, 2]) if include_accounts else b""
         program_index = 1
         readonly_unsigned = 2 if include_accounts else 1
         recipient_before = None
+        source_token_before = None
+        destination_token_before = None
 
     # Legacy message:
     # - payer signs and pays fees
@@ -267,6 +300,23 @@ try:
             raise RuntimeError(
                 f"expected simple CPI transfer to add 1 lamport to recipient; before={recipient_before} after={recipient_after}"
             )
+    if spl_token:
+        source_token_after = token_balance(source_token_b58)
+        destination_token_after = token_balance(destination_token_b58)
+        print(
+            "==> SPL Token balances: "
+            f"source_before={source_token_before} source_after={source_token_after} "
+            f"destination_before={destination_token_before} destination_after={destination_token_after}"
+        )
+        if source_token_after != source_token_before - 1:
+            raise RuntimeError(
+                f"expected source token balance to decrease by 1; before={source_token_before} after={source_token_after}"
+            )
+        if destination_token_after != destination_token_before + 1:
+            raise RuntimeError(
+                "expected destination token balance to increase by 1; "
+                f"before={destination_token_before} after={destination_token_after}"
+            )
 
     tx = rpc("getTransaction", [
         actual_signature,
@@ -294,6 +344,9 @@ cd "$ROOT"
 for cmd in zig solana solana-keygen solana-test-validator curl python3 openssl sbpf-linker; do
   require_cmd "$cmd"
 done
+if [[ "${ZXCAML_SOLANA_SPL_TOKEN:-}" == "1" ]]; then
+  require_cmd spl-token
+fi
 
 echo "==> building omlz"
 zig build
@@ -314,6 +367,22 @@ if [[ "${ZXCAML_SOLANA_SIMPLE_CPI:-}" == "1" ]]; then
   export ZXCAML_SIMPLE_CPI_RECIPIENT
   ZXCAML_SIMPLE_CPI_RECIPIENT="$(solana-keygen pubkey "$RECIPIENT_KEYPAIR")"
   solana --url "$RPC_URL" --keypair "$KEYPAIR" --commitment finalized transfer --allow-unfunded-recipient "$ZXCAML_SIMPLE_CPI_RECIPIENT" 1 >/dev/null
+fi
+if [[ "${ZXCAML_SOLANA_SPL_TOKEN:-}" == "1" ]]; then
+  echo "==> creating temporary SPL Token mint and accounts"
+  PAYER_PUBKEY="$(solana-keygen pubkey "$KEYPAIR")"
+  solana-keygen new --no-bip39-passphrase --force --silent -o "$MINT_KEYPAIR" >/dev/null
+  solana-keygen new --no-bip39-passphrase --force --silent -o "$SOURCE_TOKEN_KEYPAIR" >/dev/null
+  solana-keygen new --no-bip39-passphrase --force --silent -o "$DEST_TOKEN_KEYPAIR" >/dev/null
+  MINT_PUBKEY="$(solana-keygen pubkey "$MINT_KEYPAIR")"
+  export ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT
+  export ZXCAML_SPL_DEST_TOKEN_ACCOUNT
+  ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT="$(solana-keygen pubkey "$SOURCE_TOKEN_KEYPAIR")"
+  ZXCAML_SPL_DEST_TOKEN_ACCOUNT="$(solana-keygen pubkey "$DEST_TOKEN_KEYPAIR")"
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" create-token --decimals 0 --mint-authority "$PAYER_PUBKEY" "$MINT_KEYPAIR" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" create-account "$MINT_PUBKEY" "$SOURCE_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" create-account "$MINT_PUBKEY" "$DEST_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" mint "$MINT_PUBKEY" 10 "$ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT" --mint-authority "$KEYPAIR" >/dev/null
 fi
 
 echo "==> building BPF shared object"

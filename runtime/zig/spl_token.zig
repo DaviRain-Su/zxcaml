@@ -6,6 +6,7 @@
 //! - Provide the canonical SPL Token program id and Transfer account metas.
 
 const std = @import("std");
+const Arena = @import("arena.zig").Arena;
 const cpi = @import("cpi.zig");
 
 /// 32-byte Solana public key.
@@ -60,6 +61,19 @@ pub inline fn writeProgramId(out: *Pubkey) void {
     };
 }
 
+/// Writes an SPL Token program id from either raw bytes or the canonical base58 text.
+pub fn writeProgramIdFromBytes(out: *Pubkey, bytes: []const u8) bool {
+    if (bytes.len == pubkey_len) {
+        @memcpy(out[0..], bytes[0..pubkey_len]);
+        return true;
+    }
+    if (bytes.len == program_id_base58.len) {
+        writeProgramId(out);
+        return true;
+    }
+    return false;
+}
+
 /// Encodes SPL Token Transfer instruction data into a fixed-size array.
 pub fn encodeTransfer(amount: u64) [transfer_instruction_data_len]u8 {
     var out: [transfer_instruction_data_len]u8 = undefined;
@@ -82,6 +96,27 @@ pub fn transferAccountMetas(source: *const Pubkey, destination: *const Pubkey, a
         .{ .pubkey = destination, .is_writable = 1, .is_signer = 0 },
         .{ .pubkey = authority, .is_writable = 0, .is_signer = 1 },
     };
+}
+
+/// Parses the first three input accounts and invokes SPL Token Transfer for one token.
+pub inline fn zxcaml_transfer_one(arena: *Arena, input: [*]const u8) u64 {
+    _ = arena;
+    const input_mut: [*]u8 = @constCast(input);
+    var cursor: usize = 0;
+    _ = readU64Raw(input_mut, &cursor);
+
+    var infos: [3]cpi.SolAccountInfo = undefined;
+    parseAccountInfoNoGrowth(input_mut, &cursor, &infos[0]);
+    parseAccountInfoNoGrowth(input_mut, &cursor, &infos[1]);
+    parseAccountInfoNoGrowth(input_mut, &cursor, &infos[2]);
+
+    var token_program_id: Pubkey = undefined;
+    writeProgramId(&token_program_id);
+    var metas = transferAccountMetas(infos[0].key, infos[1].key, infos[2].key);
+    var data = encodeTransfer(1);
+    const instruction = cpi.SolInstruction.fromSlices(&token_program_id, metas[0..], data[0..]);
+    const empty: []const cpi.SolSignerSeedsC = &.{};
+    return cpi.sol_invoke_signed_c(&instruction, infos[0..], empty);
 }
 
 /// Parses canonical packed SPL Token account data.
@@ -116,6 +151,55 @@ fn readPubkeyPtr(data: []const u8, cursor: *usize) Error!*const Pubkey {
     const ptr: *const Pubkey = @ptrCast(data.ptr + cursor.*);
     cursor.* += pubkey_len;
     return ptr;
+}
+
+inline fn parseAccountInfoNoGrowth(input: [*]u8, cursor: *usize, out: *cpi.SolAccountInfo) void {
+    _ = input[cursor.*];
+    cursor.* += 1;
+    const is_signer = input[cursor.*];
+    cursor.* += 1;
+    const is_writable = input[cursor.*];
+    cursor.* += 1;
+    const executable = input[cursor.*];
+    cursor.* += 1;
+    cursor.* += 4;
+    const key: *const Pubkey = @ptrCast(input + cursor.*);
+    cursor.* += pubkey_len;
+    const lamports: *align(1) u64 = @ptrCast(input + cursor.*);
+    cursor.* += @sizeOf(u64);
+    const data_len = readU64Raw(input, cursor);
+    const data = (input + cursor.*)[0..@intCast(data_len)];
+    cursor.* += @intCast(data_len);
+    cursor.* = std.mem.alignForward(usize, cursor.*, 8);
+    const owner: *const Pubkey = @ptrCast(input + cursor.*);
+    cursor.* += pubkey_len;
+    const rent_epoch: *align(1) u64 = @ptrCast(input + cursor.*);
+    cursor.* += @sizeOf(u64);
+
+    out.* = .{
+        .key = key,
+        .lamports = lamports,
+        .data_len = data.len,
+        .data = data.ptr,
+        .owner = owner,
+        .rent_epoch = rent_epoch.*,
+        .is_signer = is_signer,
+        .is_writable = is_writable,
+        .executable = executable,
+    };
+}
+
+inline fn readU64Raw(input: [*]const u8, cursor: *usize) u64 {
+    const start = cursor.*;
+    cursor.* += 8;
+    return @as(u64, input[start]) |
+        (@as(u64, input[start + 1]) << 8) |
+        (@as(u64, input[start + 2]) << 16) |
+        (@as(u64, input[start + 3]) << 24) |
+        (@as(u64, input[start + 4]) << 32) |
+        (@as(u64, input[start + 5]) << 40) |
+        (@as(u64, input[start + 6]) << 48) |
+        (@as(u64, input[start + 7]) << 56);
 }
 
 fn readPubkeyOption(data: []const u8, cursor: *usize) Error!?*const Pubkey {
@@ -189,6 +273,13 @@ test "SPL Token program id matches Tokenkeg bytes" {
     var copied: Pubkey = undefined;
     writeProgramId(&copied);
     try std.testing.expectEqualSlices(u8, &program_id, &copied);
+
+    var from_base58: Pubkey = undefined;
+    try std.testing.expect(writeProgramIdFromBytes(&from_base58, program_id_base58));
+    try std.testing.expectEqualSlices(u8, &program_id, &from_base58);
+    try std.testing.expect(writeProgramIdFromBytes(&from_base58, &program_id));
+    try std.testing.expectEqualSlices(u8, &program_id, &from_base58);
+    try std.testing.expect(!writeProgramIdFromBytes(&from_base58, "not-token"));
 }
 
 test "SPL Token Transfer instruction encoding is discriminator plus u64 little endian" {

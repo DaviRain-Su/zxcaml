@@ -240,7 +240,7 @@ fn emitFunction(
         try append(out, allocator, "    _ = arena;\n");
     }
     if (is_entrypoint) {
-        const accounts_used = try emitEntrypointAccountBindings(out, allocator, func.params);
+        const accounts_used = try emitEntrypointAccountBindings(out, allocator, func.params, func.body);
         if (!accounts_used and !exprUsesCpiInvoke(func.body)) try append(out, allocator, "    _ = input;\n");
     }
     if (func.calling_convention == .Closure) {
@@ -288,6 +288,7 @@ fn emitEntrypointAccountBindings(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     params: []const lir.LParam,
+    body: lir.LExpr,
 ) EmitError!bool {
     var accounts_used = false;
     var parsed_accounts = false;
@@ -304,15 +305,22 @@ fn emitEntrypointAccountBindings(
             try append(out, allocator, "    const ");
             try emitIdentifier(out, allocator, param.name);
             try appendPrint(out, allocator, " = if (omlz_entry_accounts.len > {d}) omlz_entry_accounts[{d}] else return 1;\n", .{ account_index, account_index });
-            try append(out, allocator, "    _ = ");
-            try emitIdentifier(out, allocator, param.name);
-            try append(out, allocator, ";\n");
+            if (!exprUsesName(body, param.name)) {
+                try append(out, allocator, "    _ = ");
+                try emitIdentifier(out, allocator, param.name);
+                try append(out, allocator, ";\n");
+            }
             account_index += 1;
         } else {
             try append(out, allocator, "    AccountRuntime.logAccountsFromPtr(input);\n");
             try append(out, allocator, "    const ");
             try emitIdentifier(out, allocator, param.name);
             try append(out, allocator, " = @as(i64, 0);\n");
+            if (!exprUsesName(body, param.name)) {
+                try append(out, allocator, "    _ = ");
+                try emitIdentifier(out, allocator, param.name);
+                try append(out, allocator, ";\n");
+            }
         }
     }
     return accounts_used;
@@ -971,21 +979,25 @@ fn emitCpiInvoke(
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "var omlz_program_id_{d}: cpi.Pubkey = undefined;\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "if (omlz_ix_{d}.program_id.len != 32) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
-    try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "@memcpy(omlz_program_id_{d}[0..], omlz_ix_{d}.program_id[0..32]);\n", .{ block_id, block_id });
+    try appendPrint(out, allocator, "if (!spl_token.writeProgramIdFromBytes(&omlz_program_id_{d}, omlz_ix_{d}.program_id)) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id, block_id });
 
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "var omlz_cpi_metas_{d}: []cpi.SolAccountMeta = undefined;\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolAccountMeta, omlz_ix_{d}.accounts.len, &omlz_cpi_metas_{d});\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_cpi_meta_pubkeys_{d}: []cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.Pubkey, omlz_ix_{d}.accounts.len, &omlz_cpi_meta_pubkeys_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "for (omlz_ix_{d}.accounts, 0..) |omlz_meta, omlz_meta_index| {{\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 2);
     try append(out, allocator, "if (omlz_meta.pubkey.len != 32) break :blk");
     try appendPrint(out, allocator, "{d} @as(i64, 1);\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 2);
-    try appendPrint(out, allocator, "@memcpy(omlz_cpi_metas_{d}[omlz_meta_index].pubkey[0..], omlz_meta.pubkey[0..32]);\n", .{block_id});
+    try appendPrint(out, allocator, "@memcpy(omlz_cpi_meta_pubkeys_{d}[omlz_meta_index][0..], omlz_meta.pubkey[0..32]);\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_cpi_metas_{d}[omlz_meta_index].pubkey = &omlz_cpi_meta_pubkeys_{d}[omlz_meta_index];\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 2);
     try appendPrint(out, allocator, "omlz_cpi_metas_{d}[omlz_meta_index].is_writable = @intFromBool(prelude.Bool.toNative(omlz_meta.is_writable));\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 2);
@@ -1027,6 +1039,15 @@ fn emitSignerSeeds(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (collectArrayOfListItems(allocator, seeds_expr)) |groups| {
+        defer allocator.free(groups);
+        if (groups.len == 0) {
+            try emitIndent(out, allocator, indent_level);
+            try appendPrint(out, allocator, "const omlz_signer_seed_groups_{d}: []const cpi.SolSignerSeedsC = &.{{}};\n", .{block_id});
+            return;
+        }
+    } else |_| {}
+
     try emitIndent(out, allocator, indent_level);
     try appendPrint(out, allocator, "const omlz_signer_seed_input_{d} = ", .{block_id});
     try emitExpr(out, allocator, seeds_expr, indent_level, ctx);
@@ -1057,13 +1078,40 @@ fn emitCpiInvokeRecord(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
-    _ = ix_record;
     _ = signer_seeds_expr;
     _ = indent_level;
     _ = ctx;
+    if (recordLooksLikeSplTokenTransfer(ix_record)) {
+        try append(out, allocator, "spl_token.zxcaml_transfer_one(arena, input)");
+        return;
+    }
     try append(out, allocator, "cpi.zxcaml_system_transfer_one_lamport(arena, input)");
     return;
 }
+
+fn recordLooksLikeSplTokenTransfer(ix_record: lir.LRecord) bool {
+    const data_expr = findRecordExprField(ix_record, "data") orelse return false;
+    const app = switch (data_expr.*) {
+        .App => |value| value,
+        else => return false,
+    };
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, callee.name, "Bytes.of_string") or app.args.len != 1) return false;
+    const constant = switch (app.args[0].*) {
+        .Constant => |value| value,
+        else => return false,
+    };
+    const data = switch (constant) {
+        .String => |value| value,
+        .Int => return false,
+    };
+    return data.len == spl_token_transfer_data_len and data[0] == 3;
+}
+
+const spl_token_transfer_data_len: usize = 9;
 
 fn emitCpiInvokeRecordExpanded(
     out: *std.ArrayList(u8),
