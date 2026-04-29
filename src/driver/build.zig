@@ -27,6 +27,7 @@ const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
     .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
+    .{ .src_path = "runtime/zig/spl_token.zig", .out_path = "out/runtime/spl_token.zig" },
     .{ .src_path = "runtime/zig/syscalls.zig", .out_path = "out/runtime/syscalls.zig" },
     .{ .src_path = "runtime/zig/native_entry.zig", .out_path = "out/native_entry.zig" },
 };

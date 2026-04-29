@@ -32,6 +32,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const AccountRuntime = @import("runtime/account.zig");
         \\const cpi = @import("runtime/cpi.zig");
         \\const prelude = @import("runtime/prelude.zig");
+        \\const spl_token = @import("runtime/spl_token.zig");
         \\const syscalls = @import("runtime/syscalls.zig");
         \\
         \\
@@ -657,6 +658,7 @@ fn emitAppExpr(
     switch (app.callee.*) {
         .Var => |callee| {
             if (try emitSyscallAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
+            if (try emitSplTokenAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             if (try emitStdlibAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             const function_name = try emittedFunctionName(allocator, callee.name);
             defer freeEmittedFunctionName(allocator, callee.name, function_name);
@@ -757,6 +759,187 @@ fn emitSyscallAppExpr(
         return true;
     }
     return false;
+}
+
+fn emitSplTokenAppExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!bool {
+    if (std.mem.eql(u8, name, "SplToken.program_id")) {
+        if (app.args.len > 1) return error.UnsupportedExpr;
+        try emitSplTokenProgramIdBytes(out, allocator, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "SplToken.transfer_data")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try emitSplTokenTransferData(out, allocator, app.args[0].*, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "SplToken.transfer_account_metas")) {
+        if (app.args.len != 3) return error.UnsupportedExpr;
+        try emitSplTokenTransferAccountMetas(out, allocator, app.args, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "SplToken.transfer_instruction")) {
+        if (app.args.len != 4) return error.UnsupportedExpr;
+        try emitSplTokenTransferInstruction(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    return false;
+}
+
+fn emitSplTokenProgramIdBytes(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_spl_program_id_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, spl_token.pubkey_len, &omlz_spl_program_id_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_spl_program_id_ptr_{d}: *spl_token.Pubkey = @ptrCast(omlz_spl_program_id_{d}.ptr);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "spl_token.writeProgramId(omlz_spl_program_id_ptr_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_spl_program_id_{d};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitSplTokenTransferData(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    amount_expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_spl_amount_{d} = ", .{block_id});
+    try emitExpr(out, allocator, amount_expr, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_spl_amount_{d} < 0) break :blk{d} @as([]const u8, &.{{}});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_spl_data_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, spl_token.transfer_instruction_data_len, &omlz_spl_data_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "_ = spl_token.encodeTransferInto(omlz_spl_data_{d}, @intCast(omlz_spl_amount_{d})) catch break :blk{d} @as([]const u8, &.{{}});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_spl_data_{d};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitSplTokenTransferAccountMetas(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    args: []const *const lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const account_meta_ty = try userTypeName(allocator, "account_meta");
+    defer allocator.free(account_meta_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+
+    const names = [_][]const u8{ "source", "destination", "authority" };
+    for (args, names) |arg, name| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_spl_{s}_{d} = ", .{ name, block_id });
+        try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+    }
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_spl_metas_{d}: []{s} = undefined;\n", .{ block_id, account_meta_ty });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap({s}, 3, &omlz_spl_metas_{d});\n", .{ account_meta_ty, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_spl_metas_{d}[0] = .{{ .pubkey = omlz_spl_source_{d}, .is_writable = prelude.Bool.true, .is_signer = prelude.Bool.false }};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_spl_metas_{d}[1] = .{{ .pubkey = omlz_spl_destination_{d}, .is_writable = prelude.Bool.true, .is_signer = prelude.Bool.false }};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_spl_metas_{d}[2] = .{{ .pubkey = omlz_spl_authority_{d}, .is_writable = prelude.Bool.false, .is_signer = prelude.Bool.true }};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_spl_metas_{d};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitSplTokenTransferInstruction(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const instruction_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(instruction_ty);
+    const account_meta_ty = try userTypeName(allocator, "account_meta");
+    defer allocator.free(account_meta_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+
+    const names = [_][]const u8{ "source", "destination", "authority" };
+    for (app.args[0..3], names) |arg, name| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_spl_{s}_{d} = ", .{ name, block_id });
+        try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_spl_amount_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[3].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_spl_amount_{d} < 0) break :blk{d} {s}{{ .program_id = &.{{}}, .accounts = &.{{}}, .data = &.{{}} }};\n", .{ block_id, block_id, instruction_ty });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_spl_program_id_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, spl_token.pubkey_len, &omlz_spl_program_id_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_spl_program_id_ptr_{d}: *spl_token.Pubkey = @ptrCast(omlz_spl_program_id_{d}.ptr);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "spl_token.writeProgramId(omlz_spl_program_id_ptr_{d});\n", .{block_id});
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_spl_data_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, spl_token.transfer_instruction_data_len, &omlz_spl_data_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "_ = spl_token.encodeTransferInto(omlz_spl_data_{d}, @intCast(omlz_spl_amount_{d})) catch break :blk{d} {s}{{ .program_id = &.{{}}, .accounts = &.{{}}, .data = &.{{}} }};\n", .{ block_id, block_id, block_id, instruction_ty });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_spl_metas_{d}: []{s} = undefined;\n", .{ block_id, account_meta_ty });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap({s}, 3, &omlz_spl_metas_{d});\n", .{ account_meta_ty, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_spl_metas_{d}[0] = .{{ .pubkey = omlz_spl_source_{d}, .is_writable = prelude.Bool.true, .is_signer = prelude.Bool.false }};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_spl_metas_{d}[1] = .{{ .pubkey = omlz_spl_destination_{d}, .is_writable = prelude.Bool.true, .is_signer = prelude.Bool.false }};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_spl_metas_{d}[2] = .{{ .pubkey = omlz_spl_authority_{d}, .is_writable = prelude.Bool.false, .is_signer = prelude.Bool.true }};\n", .{ block_id, block_id });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .program_id = omlz_spl_program_id_{d}, .accounts = omlz_spl_metas_{d}, .data = omlz_spl_data_{d} }};\n", .{ block_id, instruction_ty, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitCpiInvoke(
@@ -4024,6 +4207,94 @@ test "ZigBackend emits top-level return-data calls through runtime bindings" {
     try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_set_return_data(omlz_syscall_bytes_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_get_return_data_alloc(arena)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_set_return_data") == null);
+}
+
+test "ZigBackend emits SPL Token helper calls through runtime bindings" {
+    const meta_ty = lir.LTy{ .Record = .{ .name = "account_meta", .params = &.{} } };
+    const meta_array_params = [_]lir.LTy{meta_ty};
+    const meta_array_ty = lir.LTy{ .Adt = .{ .name = "array", .params = meta_array_params[0..] } };
+    const instruction_ty = lir.LTy{ .Record = .{ .name = "instruction", .params = &.{} } };
+    const module: lir.LModule = .{
+        .record_type_decls = &.{
+            .{
+                .name = "account_meta",
+                .fields = &.{
+                    .{ .name = "pubkey", .ty = .{ .TypeRef = .{ .name = "bytes" } } },
+                    .{ .name = "is_writable", .ty = .{ .TypeRef = .{ .name = "bool" } } },
+                    .{ .name = "is_signer", .ty = .{ .TypeRef = .{ .name = "bool" } } },
+                },
+            },
+            .{
+                .name = "instruction",
+                .fields = &.{
+                    .{ .name = "program_id", .ty = .{ .TypeRef = .{ .name = "bytes" } } },
+                    .{ .name = "accounts", .ty = .{ .TypeRef = .{ .name = "array", .args = &.{.{ .TypeRef = .{ .name = "account_meta" } }} } } },
+                    .{ .name = "data", .ty = .{ .TypeRef = .{ .name = "bytes" } } },
+                },
+            },
+        },
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .Let = .{
+                .name = "_",
+                .value = &.{ .App = .{
+                    .callee = &.{ .Var = .{ .name = "SplToken.transfer_instruction" } },
+                    .args = &.{
+                        &.{ .Constant = .{ .String = "source_pubkey_32_bytes___________" } },
+                        &.{ .Constant = .{ .String = "dest_pubkey_32_bytes_____________" } },
+                        &.{ .Constant = .{ .String = "auth_pubkey_32_bytes_____________" } },
+                        &.{ .Constant = .{ .Int = 500 } },
+                    },
+                    .ty = instruction_ty,
+                } },
+                .body = &.{ .Let = .{
+                    .name = "_",
+                    .value = &.{ .App = .{
+                        .callee = &.{ .Var = .{ .name = "SplToken.program_id" } },
+                        .args = &.{&.{ .Ctor = .{
+                            .name = "()",
+                            .args = &.{},
+                            .ty = .Unit,
+                            .layout = @import("../core/layout.zig").unitValue(),
+                        } }},
+                        .ty = .String,
+                    } },
+                    .body = &.{ .Let = .{
+                        .name = "_",
+                        .value = &.{ .App = .{
+                            .callee = &.{ .Var = .{ .name = "SplToken.transfer_data" } },
+                            .args = &.{&.{ .Constant = .{ .Int = 1 } }},
+                            .ty = .String,
+                        } },
+                        .body = &.{ .Let = .{
+                            .name = "_",
+                            .value = &.{ .App = .{
+                                .callee = &.{ .Var = .{ .name = "SplToken.transfer_account_metas" } },
+                                .args = &.{
+                                    &.{ .Constant = .{ .String = "source_pubkey_32_bytes___________" } },
+                                    &.{ .Constant = .{ .String = "dest_pubkey_32_bytes_____________" } },
+                                    &.{ .Constant = .{ .String = "auth_pubkey_32_bytes_____________" } },
+                                },
+                                .ty = meta_array_ty,
+                            } },
+                            .body = &.{ .Constant = .{ .Int = 0 } },
+                        } },
+                    } },
+                } },
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const spl_token = @import(\"runtime/spl_token.zig\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "spl_token.writeProgramId(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "spl_token.encodeTransferInto(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "arena.allocIntoOrTrap(omlz_type_account_meta, 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".is_writable = prelude.Bool.true, .is_signer = prelude.Bool.false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".is_writable = prelude.Bool.false, .is_signer = prelude.Bool.true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_SplToken_transfer_data") == null);
 }
 
 test "ZigBackend emits AccountView field reads and direct writable-field mutations" {

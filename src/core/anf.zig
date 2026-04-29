@@ -611,7 +611,9 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
     const int_result = try resultTy(arena, .Int, .Int);
     const bytes_ty: ir.Ty = .String;
     const clock_ty: ir.Ty = .{ .Record = .{ .name = "clock", .params = &.{} } };
+    const account_meta_ty: ir.Ty = .{ .Record = .{ .name = "account_meta", .params = &.{} } };
     const instruction_ty: ir.Ty = .{ .Record = .{ .name = "instruction", .params = &.{} } };
+    const account_meta_array_ty = try arrayTy(arena, account_meta_ty);
     const signer_seed_ty = try arrayTy(arena, bytes_ty);
     const signer_seeds_ty = try arrayTy(arena, signer_seed_ty);
 
@@ -670,6 +672,14 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ instruction_ty, signer_seeds_ty }), .return_ty = .Int };
     if (std.mem.eql(u8, name, "create_program_address") and arg_count == 2)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ signer_seed_ty, bytes_ty }), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "SplToken.program_id") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "SplToken.transfer_data") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Int}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "SplToken.transfer_account_metas") and arg_count == 3)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ bytes_ty, bytes_ty, bytes_ty }), .return_ty = account_meta_array_ty };
+    if (std.mem.eql(u8, name, "SplToken.transfer_instruction") and arg_count == 4)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ bytes_ty, bytes_ty, bytes_ty, .Int }), .return_ty = instruction_ty };
 
     return null;
 }
