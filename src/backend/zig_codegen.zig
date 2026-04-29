@@ -580,6 +580,7 @@ fn emitSyscallAppExpr(
 ) EmitError!bool {
     if (std.mem.eql(u8, name, "Syscall.sol_log")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_log_", false, false)) return true;
         try append(out, allocator, "syscalls.sol_log_(");
         try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
         try append(out, allocator, ")");
@@ -604,6 +605,7 @@ fn emitSyscallAppExpr(
     }
     if (std.mem.eql(u8, name, "Syscall.sol_sha256")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_sha256_alloc", true, true)) return true;
         try append(out, allocator, "syscalls.sol_sha256_alloc(arena, ");
         try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
         try append(out, allocator, ")");
@@ -611,6 +613,7 @@ fn emitSyscallAppExpr(
     }
     if (std.mem.eql(u8, name, "Syscall.sol_keccak256")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_keccak256_alloc", true, true)) return true;
         try append(out, allocator, "syscalls.sol_keccak256_alloc(arena, ");
         try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
         try append(out, allocator, ")");
@@ -626,6 +629,52 @@ fn emitSyscallAppExpr(
         try append(out, allocator, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))");
         return true;
     }
+    return false;
+}
+
+fn emitSyscallStringCallBlock(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+    call_name: []const u8,
+    pass_arena: bool,
+    returns_value: bool,
+) EmitError!bool {
+    switch (expr) {
+        .Constant => |constant| switch (constant) {
+            .String => |value| {
+                const block_id = ctx.next_block_id;
+                ctx.next_block_id += 1;
+                try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "var omlz_syscall_bytes_{d}: [{d}]u8 = undefined;\n", .{ block_id, value.len });
+                for (value, 0..) |byte, index| {
+                    try emitIndent(out, allocator, indent_level + 1);
+                    try appendPrint(out, allocator, "omlz_syscall_bytes_{d}[{d}] = {d};\n", .{ block_id, index, byte });
+                }
+                try emitIndent(out, allocator, indent_level + 1);
+                if (returns_value) {
+                    try appendPrint(out, allocator, "break :blk{d} {s}(", .{ block_id, call_name });
+                } else {
+                    try appendPrint(out, allocator, "{s}(", .{call_name});
+                }
+                if (pass_arena) try append(out, allocator, "arena, ");
+                try appendPrint(out, allocator, "omlz_syscall_bytes_{d}[0..]);\n", .{block_id});
+                if (!returns_value) {
+                    try emitIndent(out, allocator, indent_level + 1);
+                    try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+                }
+                try emitIndent(out, allocator, indent_level);
+                try append(out, allocator, "}");
+                return true;
+            },
+            else => {},
+        },
+        else => {},
+    }
+
     return false;
 }
 
@@ -3188,7 +3237,10 @@ test "ZigBackend emits Syscall module calls through runtime bindings" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "const syscalls = @import(\"runtime/syscalls.zig\");") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(\"hello\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "var omlz_syscall_bytes_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "[0] = 104") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "[4] = 111") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(omlz_syscall_bytes_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_64_(@as(i64, 1), @as(i64, 2), @as(i64, 3), @as(i64, 4), @as(i64, 5))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Syscall_sol_log") == null);

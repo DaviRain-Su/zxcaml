@@ -48,9 +48,11 @@ pub const sol_sha256_address: usize = 0x11f49d86;
 /// MurmurHash3-32 dispatch address for `sol_keccak256`.
 pub const sol_keccak256_address: usize = 0xd7793abb;
 /// MurmurHash3-32 dispatch address for `sol_get_clock_sysvar`.
-pub const sol_get_clock_sysvar_address: usize = 0x85532d94;
+pub const sol_get_clock_sysvar_address: usize = 0xd56b5fe9;
 /// MurmurHash3-32 dispatch address for `sol_get_rent_sysvar`.
-pub const sol_get_rent_sysvar_address: usize = 0x9aca9a41;
+pub const sol_get_rent_sysvar_address: usize = 0xbf7188f6;
+/// MurmurHash3-32 dispatch address for `sol_log_compute_units_`.
+pub const sol_log_compute_units_address: usize = 0x52ba5096;
 /// MurmurHash3-32 dispatch address for `sol_remaining_compute_units`.
 pub const sol_remaining_compute_units_address: usize = 0xedef5aee;
 
@@ -62,6 +64,7 @@ const SolLogPubkeyFn = *align(1) const fn (*const Pubkey) void;
 const SolHashFn = *align(1) const fn (*const SolBytes, u64, *Hash) void;
 const SolGetClockSysvarFn = *align(1) const fn (*Clock) u64;
 const SolGetRentSysvarFn = *align(1) const fn (*Rent) u64;
+const SolLogComputeUnitsFn = *align(1) const fn () void;
 const SolRemainingComputeUnitsFn = *align(1) const fn () u64;
 
 /// Logs a UTF-8 byte slice through Solana's `sol_log_` syscall.
@@ -136,29 +139,38 @@ pub inline fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8
 
 /// Reads the Clock sysvar through Solana's `sol_get_clock_sysvar` syscall.
 pub inline fn sol_get_clock_sysvar() Clock {
-    var clock: Clock = .{};
     if (comptime is_bpf) {
+        var clock: Clock = undefined;
         const syscall: SolGetClockSysvarFn = @ptrFromInt(sol_get_clock_sysvar_address);
         _ = syscall(&clock);
+        return clock;
     }
-    return clock;
+    return .{};
 }
 
 /// Reads the Rent sysvar through Solana's `sol_get_rent_sysvar` syscall.
 pub inline fn sol_get_rent_sysvar() Rent {
-    var rent: Rent = .{};
     if (comptime is_bpf) {
+        var rent: Rent = undefined;
         const syscall: SolGetRentSysvarFn = @ptrFromInt(sol_get_rent_sysvar_address);
         _ = syscall(&rent);
+        return rent;
     }
-    return rent;
+    return .{};
+}
+
+/// Logs the currently consumed compute units through Solana's runtime.
+pub inline fn sol_log_compute_units_() void {
+    if (comptime is_bpf) {
+        const syscall: SolLogComputeUnitsFn = @ptrFromInt(sol_log_compute_units_address);
+        syscall();
+    }
 }
 
 /// Returns the remaining compute units reported by Solana's runtime.
 pub inline fn sol_remaining_compute_units() u64 {
     if (comptime is_bpf) {
-        const syscall: SolRemainingComputeUnitsFn = @ptrFromInt(sol_remaining_compute_units_address);
-        return syscall();
+        sol_log_compute_units_();
     }
     return 0;
 }
@@ -169,8 +181,9 @@ test "syscall dispatch addresses match Solana MurmurHash3-32 values" {
     try std.testing.expectEqual(@as(usize, 0x7ef088ca), sol_log_pubkey_address);
     try std.testing.expectEqual(@as(usize, 0x11f49d86), sol_sha256_address);
     try std.testing.expectEqual(@as(usize, 0xd7793abb), sol_keccak256_address);
-    try std.testing.expectEqual(@as(usize, 0x85532d94), sol_get_clock_sysvar_address);
-    try std.testing.expectEqual(@as(usize, 0x9aca9a41), sol_get_rent_sysvar_address);
+    try std.testing.expectEqual(@as(usize, 0xd56b5fe9), sol_get_clock_sysvar_address);
+    try std.testing.expectEqual(@as(usize, 0xbf7188f6), sol_get_rent_sysvar_address);
+    try std.testing.expectEqual(@as(usize, 0x52ba5096), sol_log_compute_units_address);
     try std.testing.expectEqual(@as(usize, 0xedef5aee), sol_remaining_compute_units_address);
 }
 
