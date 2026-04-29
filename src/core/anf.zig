@@ -516,6 +516,8 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
     const int_list = try listTy(arena, .Int);
     const int_option = try optionTy(arena, .Int);
     const int_result = try resultTy(arena, .Int, .Int);
+    const bytes_ty: ir.Ty = .String;
+    const clock_ty: ir.Ty = .{ .Record = .{ .name = "clock", .params = &.{} } };
 
     if (std.mem.eql(u8, name, "List.length") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_list}), .return_ty = .Int };
@@ -545,6 +547,21 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = int_option };
     if (std.mem.eql(u8, name, "Result.error") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = int_option };
+
+    if (std.mem.eql(u8, name, "Syscall.sol_log") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.String}), .return_ty = .Unit };
+    if (std.mem.eql(u8, name, "Syscall.sol_log_64") and arg_count == 5)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int, .Int, .Int, .Int }), .return_ty = .Unit };
+    if (std.mem.eql(u8, name, "Syscall.sol_log_pubkey") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = .Unit };
+    if (std.mem.eql(u8, name, "Syscall.sol_sha256") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "Syscall.sol_keccak256") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "Syscall.sol_get_clock_sysvar") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = clock_ty };
+    if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
 
     return null;
 }
@@ -1527,6 +1544,10 @@ fn validateCtor(ctx: *LowerContext, name: []const u8, arg_count: usize) LowerErr
         if (arg_count != 0) return error.UnsupportedCtorArity;
         return null;
     }
+    if (std.mem.eql(u8, name, "()")) {
+        if (arg_count != 0) return error.UnsupportedCtorArity;
+        return null;
+    }
     if (std.mem.eql(u8, name, "::")) {
         if (arg_count != 2) return error.UnsupportedCtorArity;
         return null;
@@ -1660,6 +1681,9 @@ fn ctorTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, name: []const u8,
     }
     if (std.mem.eql(u8, name, "true") or std.mem.eql(u8, name, "false")) {
         return .Bool;
+    }
+    if (std.mem.eql(u8, name, "()")) {
+        return .Unit;
     }
     if (expected_ty) |ty| {
         switch (ty) {
@@ -1818,6 +1842,7 @@ fn typeRefToTyWithBindings(
     if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
     if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
     if (std.mem.eql(u8, ref.name, "string")) return .String;
+    if (std.mem.eql(u8, ref.name, "bytes")) return .String;
     if (findRecordDecl(record_type_decls, ref.name) != null) {
         return .{ .Record = .{
             .name = ref.name,
@@ -2490,6 +2515,54 @@ test "lower max_int and min_int as pinned i64 constants" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), min_const.value.Int);
+}
+
+test "lower Syscall module calls as typed builtin applications" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (message) (let _ (app (var Syscall.sol_log) (var message)) (app (var Syscall.sol_remaining_compute_units) (ctor \"()\")))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const log_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const log_app = switch (log_let.value.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const log_callee = switch (log_app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Syscall.sol_log", log_callee.name);
+    try std.testing.expectEqual(ir.Ty.Unit, log_app.ty);
+    try std.testing.expectEqual(ir.Ty.String, exprTy(log_app.args[0].*));
+
+    const remaining_app = switch (log_let.body.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const remaining_callee = switch (remaining_app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Syscall.sol_remaining_compute_units", remaining_callee.name);
+    try std.testing.expectEqual(ir.Ty.Int, remaining_app.ty);
 }
 
 test "lower constructor expressions with layout policy" {

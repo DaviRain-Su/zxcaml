@@ -30,6 +30,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\// place the array at low addresses (0x0/0x20) rejected by Solana.
         \\const Arena = @import("runtime/arena.zig").Arena;
         \\const prelude = @import("runtime/prelude.zig");
+        \\const syscalls = @import("runtime/syscalls.zig");
         \\
         \\
     );
@@ -478,6 +479,7 @@ fn emitAppExpr(
 
     switch (app.callee.*) {
         .Var => |callee| {
+            if (try emitSyscallAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             if (try emitStdlibAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             const function_name = try emittedFunctionName(allocator, callee.name);
             defer freeEmittedFunctionName(allocator, callee.name, function_name);
@@ -491,6 +493,85 @@ fn emitAppExpr(
         try emitExpr(out, allocator, arg.*, indent_level, ctx);
     }
     try append(out, allocator, ")");
+}
+
+fn emitSyscallAppExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!bool {
+    if (std.mem.eql(u8, name, "Syscall.sol_log")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_log_(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_log_64")) {
+        if (app.args.len != 5) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_log_64_(");
+        for (app.args, 0..) |arg, index| {
+            if (index != 0) try append(out, allocator, ", ");
+            try emitExpr(out, allocator, arg.*, indent_level, ctx);
+        }
+        try append(out, allocator, ")");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_log_pubkey")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_log_pubkey(@ptrCast((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ").ptr))");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_sha256")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_sha256_alloc(arena, ");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_keccak256")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_keccak256_alloc(arena, ");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_get_clock_sysvar")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try emitSyscallClockExpr(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))");
+        return true;
+    }
+    return false;
+}
+
+fn emitSyscallClockExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const clock_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(clock_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_clock_{d} = syscalls.sol_get_clock_sysvar();\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .slot = @intCast(omlz_clock_{d}.slot), .epoch_start_timestamp = @intCast(omlz_clock_{d}.epoch_start_timestamp), .epoch = @intCast(omlz_clock_{d}.epoch), .leader_schedule_epoch = @intCast(omlz_clock_{d}.leader_schedule_epoch), .unix_timestamp = @intCast(omlz_clock_{d}.unix_timestamp) }};\n", .{ block_id, clock_ty, block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitStdlibAppExpr(
@@ -1882,7 +1963,7 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
 fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
     return switch (expr) {
         .Constant, .Var => false,
-        .App => true,
+        .App => |app| appNeedsArena(app),
         .Let => |let_expr| exprNeedsArena(let_expr.value.*, type_decls) or exprNeedsArena(let_expr.body.*, type_decls),
         .If => |if_expr| exprNeedsArena(if_expr.cond.*, type_decls) or exprNeedsArena(if_expr.then_branch.*, type_decls) or exprNeedsArena(if_expr.else_branch.*, type_decls),
         .Prim => |prim| blk: {
@@ -1940,6 +2021,19 @@ fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
         },
         .Closure => true,
     };
+}
+
+fn appNeedsArena(app: lir.LApp) bool {
+    const callee = switch (app.callee.*) {
+        .Var => |var_ref| var_ref.name,
+        else => return true,
+    };
+    if (std.mem.eql(u8, callee, "Syscall.sol_log")) return false;
+    if (std.mem.eql(u8, callee, "Syscall.sol_log_64")) return false;
+    if (std.mem.eql(u8, callee, "Syscall.sol_log_pubkey")) return false;
+    if (std.mem.eql(u8, callee, "Syscall.sol_get_clock_sysvar")) return false;
+    if (std.mem.eql(u8, callee, "Syscall.sol_remaining_compute_units")) return false;
+    return true;
 }
 
 fn patternBindsName(pattern: lir.LPattern, name: []const u8) bool {
@@ -2424,6 +2518,7 @@ fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef, type_params: 
     if (std.mem.eql(u8, ref.name, "bool")) return allocator.dupe(u8, "prelude.Bool");
     if (std.mem.eql(u8, ref.name, "unit")) return allocator.dupe(u8, "void");
     if (std.mem.eql(u8, ref.name, "string")) return allocator.dupe(u8, "[]const u8");
+    if (std.mem.eql(u8, ref.name, "bytes")) return allocator.dupe(u8, "[]const u8");
     const base = try userTypeName(allocator, ref.name);
     if (ref.args.len == 0) return base;
     defer allocator.free(base);
@@ -2940,6 +3035,53 @@ test "ZigBackend emits option constructors through prelude tagged unions" {
     try std.testing.expect(std.mem.indexOf(u8, source, "prelude.Option(i64)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".some = @as(i64, 1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "arena.allocOneOrTrap(prelude.Option(i64))") != null);
+}
+
+test "ZigBackend emits Syscall module calls through runtime bindings" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "Syscall.sol_log" } },
+                .args = &.{&.{ .Constant = .{ .String = "hello" } }},
+                .ty = .Unit,
+            } },
+            .body = &.{ .Let = .{
+                .name = "_",
+                .value = &.{ .App = .{
+                    .callee = &.{ .Var = .{ .name = "Syscall.sol_log_64" } },
+                    .args = &.{
+                        &.{ .Constant = .{ .Int = 1 } },
+                        &.{ .Constant = .{ .Int = 2 } },
+                        &.{ .Constant = .{ .Int = 3 } },
+                        &.{ .Constant = .{ .Int = 4 } },
+                        &.{ .Constant = .{ .Int = 5 } },
+                    },
+                    .ty = .Unit,
+                } },
+                .body = &.{ .App = .{
+                    .callee = &.{ .Var = .{ .name = "Syscall.sol_remaining_compute_units" } },
+                    .args = &.{&.{ .Ctor = .{
+                        .name = "()",
+                        .args = &.{},
+                        .ty = .Unit,
+                        .layout = @import("../core/layout.zig").unitValue(),
+                    } }},
+                    .ty = .Int,
+                } },
+            } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const syscalls = @import(\"runtime/syscalls.zig\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(\"hello\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_64_(@as(i64, 1), @as(i64, 2), @as(i64, 3), @as(i64, 4), @as(i64, 5))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Syscall_sol_log") == null);
 }
 
 test "ZigBackend emits user ADTs as explicit tag and payload structs" {
