@@ -218,7 +218,7 @@ fn emitFunction(
     try append(out, allocator, function_name);
     try append(out, allocator, "(arena: *Arena");
     if (is_entrypoint) {
-        try append(out, allocator, ", omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64 {\n");
+        try append(out, allocator, ", omlz_runtime_input: [*]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64 {\n");
     } else {
         if (func.calling_convention == .Closure) {
             try append(out, allocator, ", closure: *const prelude.Closure");
@@ -241,6 +241,7 @@ fn emitFunction(
     }
     if (is_entrypoint) {
         const bindings = try emitEntrypointRuntimeBindings(out, allocator, func.params, func.body);
+        if (!exprUsesCpiInvoke(func.body)) try append(out, allocator, "    _ = omlz_runtime_input;\n");
         if (!bindings.accounts_used) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
         if (!bindings.instruction_data_used) try append(out, allocator, "    _ = omlz_runtime_instruction_data;\n");
     }
@@ -1094,10 +1095,10 @@ fn emitCpiInvokeRecord(
     _ = indent_level;
     _ = ctx;
     if (recordLooksLikeSplTokenTransfer(ix_record)) {
-        try append(out, allocator, "spl_token.zxcaml_transfer_one(arena, input)");
+        try append(out, allocator, "spl_token.zxcaml_transfer_one(arena, omlz_runtime_input)");
         return;
     }
-    try append(out, allocator, "cpi.zxcaml_system_transfer_one_lamport(arena, input)");
+    try append(out, allocator, "cpi.zxcaml_system_transfer_one_lamport(arena, omlz_runtime_input)");
     return;
 }
 
@@ -4054,7 +4055,7 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         source,
-        "omlz_user_entrypoint(arena: *Arena, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64",
+        "omlz_user_entrypoint(arena: *Arena, omlz_runtime_input: [*]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(@as(i64, 0));") != null);
 }

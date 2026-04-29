@@ -23,6 +23,13 @@ _opam/
 
 # Generated compiler output
 out/
+build/*.bc
+build/*.so
+!build/.gitkeep
+
+# Rust Mollusk test harness
+tests/target/
+tests/Cargo.lock
 
 # Cloudflare / Wrangler local cache
 .wrangler/

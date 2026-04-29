@@ -3,7 +3,8 @@
    callee program, marks source/destination account metas, supplies transfer
    data, and invokes with signer seeds. *)
 
-let entrypoint _input =
+let entrypoint input =
+  let _ = input in
   (* CPI construction: invoke_signed receives the instruction record and the
      signer seed arrays needed when a program signs on behalf of a PDA. *)
   invoke_signed

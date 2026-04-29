@@ -16,7 +16,7 @@ const loader_log_message linksection(".rodata") = "ZxCaml entrypoint".*;
 var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
 
 /// Solana loader entrypoint; returns the user program's u64 status code.
-export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
+export fn entrypoint(input: [*]u8) callconv(.c) u64 {
     // Minimal `return 0` programs can otherwise link to a section-only ELF that
     // `solana program deploy` rejects. A tiny log syscall keeps the dynamic
     // relocation/program-header shape expected by Solana's BPF loader.
@@ -26,7 +26,7 @@ export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
     var accounts: []AccountRuntime.AccountView = undefined;
     AccountRuntime.parseAccountsFromPtrInto(&arena, input, &accounts) catch return 1;
     const instruction_data = AccountRuntime.parseInstructionDataFromPtr(input) catch return 1;
-    const status = program.omlz_user_entrypoint(&arena, accounts, instruction_data);
+    const status = program.omlz_user_entrypoint(&arena, input, accounts, instruction_data);
     arena.reset();
     return status;
 }
