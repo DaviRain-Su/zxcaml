@@ -390,6 +390,12 @@ module Syscall = struct
     = "sol_remaining_compute_units"
 end
 
+module Crypto = struct
+  external sha256 : bytes -> bytes = "sol_sha256"
+
+  external keccak256 : bytes -> bytes = "sol_keccak256"
+end
+
 module Pubkey = struct
   let zero : pubkey = Bytes.make 32 '\000'
 
