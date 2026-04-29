@@ -19,6 +19,20 @@ type account = {
   executable : bool;
 }
 
+type account_meta = {
+  pubkey : bytes;
+  is_writable : bool;
+  is_signer : bool;
+}
+
+type instruction = {
+  program_id : bytes;
+  accounts : account_meta array;
+  data : bytes;
+}
+
+type signer_seeds = bytes array
+
 type clock = {
   slot : int;
   epoch_start_timestamp : int;
@@ -103,6 +117,18 @@ module Syscall = struct
 
   let sol_remaining_compute_units () = 0
 end
+
+let invoke (_instruction : instruction) = 0
+
+let invoke_signed (_instruction : instruction) (_signer_seeds : signer_seeds array)
+    =
+  0
+
+let create_program_address (_seeds : signer_seeds) (program_id : bytes) =
+  program_id
+
+let try_find_program_address (_seeds : signer_seeds) (program_id : bytes) =
+  Some (program_id, 0)
 
 let head xs = match xs with [] -> None | x :: _ -> Some x
 

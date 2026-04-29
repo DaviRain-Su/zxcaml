@@ -1,7 +1,7 @@
-//! Typed Zig mirror for the M0 P3 ZxCaml frontend S-expression format.
+//! Typed Zig mirror for the M1 P3 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 0.8 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 0.9 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -255,6 +255,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
 
     const file_version = try expectAtom(header[1]);
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "0.8") and
         !std.mem.eql(u8, file_version, "0.6") and
         !std.mem.eql(u8, file_version, "0.5") and
         !std.mem.eql(u8, file_version, "0.7") and
@@ -272,18 +273,19 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=0.8\n");
+            try writeStderr(io, " expected=0.9\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.4") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.5") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.6") or
-                std.mem.eql(u8, extractHeaderVersion(bytes), "0.7"))
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.7") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.8"))
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits account/syscall-aware sexp 0.8.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits CPI-aware sexp 0.9.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -292,7 +294,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.8 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.9 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -1288,4 +1290,59 @@ test "parse account type references and syscall apps in v0.8 sexp" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings("Syscall.sol_log_64", callee.name);
+}
+
+test "parse CPI type references and function apps in v0.9 sexp" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.9 (module (record_type_decl (name account_meta) (params) (fields ((pubkey (type-ref bytes)) (is_writable (type-ref bool)) (is_signer (type-ref bool))))) (record_type_decl (name instruction) (params) (fields ((program_id (type-ref bytes)) (accounts (type-ref array (type-ref account_meta))) (data (type-ref bytes))))) (let entrypoint (lambda (ix seeds) (let _ (app (var invoke_signed) (var ix) (var seeds)) (app (var create_program_address) (var seeds) (field_access (var ix) program_id)))))))",
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), module.record_type_decls.len);
+    try std.testing.expectEqualStrings("account_meta", module.record_type_decls[0].name);
+    try std.testing.expectEqualStrings("instruction", module.record_type_decls[1].name);
+
+    const accounts_ty = switch (module.record_type_decls[1].fields[1].ty) {
+        .TypeRef => |ref| ref,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("array", accounts_ty.name);
+    const account_meta_ty = switch (accounts_ty.args[0]) {
+        .TypeRef => |ref| ref,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("account_meta", account_meta_ty.name);
+
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const lambda = switch (entrypoint.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const let_expr = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const invoke_app = switch (let_expr.value.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const invoke_callee = switch (invoke_app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("invoke_signed", invoke_callee.name);
+    const pda_app = switch (let_expr.body.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const pda_callee = switch (pda_app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("create_program_address", pda_callee.name);
 }

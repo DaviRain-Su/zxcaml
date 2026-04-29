@@ -47,6 +47,21 @@ let () =
   assert (account.lamports = 42);
   assert (account.is_signer);
   assert (not account.executable);
+  let meta =
+    { pubkey = account.key; is_writable = account.is_writable; is_signer = account.is_signer }
+  in
+  let instruction =
+    { program_id = Bytes.of_string "program"; accounts = [| meta |]; data = account.data }
+  in
+  assert ((Array.get instruction.accounts 0).pubkey = account.key);
+  assert (invoke instruction = 0);
+  assert (invoke_signed instruction [| [| Bytes.of_string "seed" |] |] = 0);
+  assert (
+    create_program_address [| Bytes.of_string "seed" |] instruction.program_id
+    = instruction.program_id);
+  assert (
+    try_find_program_address [| Bytes.of_string "seed" |] instruction.program_id
+    = Some (instruction.program_id, 0));
   Syscall.sol_log "hello";
   Syscall.sol_log_64 1 2 3 4 5;
   assert (Syscall.sol_sha256 (Bytes.of_string "abc") = Bytes.of_string "abc");

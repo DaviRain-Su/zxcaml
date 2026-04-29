@@ -206,6 +206,12 @@ let builtin_account_field_names =
       "executable";
     ]
 
+let builtin_account_meta_field_names =
+  StringSet.of_list [ "pubkey"; "is_writable"; "is_signer" ]
+
+let builtin_instruction_field_names =
+  StringSet.of_list [ "program_id"; "accounts"; "data" ]
+
 let builtin_clock_field_names =
   StringSet.of_list
     [
@@ -255,6 +261,40 @@ let builtin_account_record_decl =
           builtin_record_field "is_signer" (builtin_type_ref "bool");
           builtin_record_field "is_writable" (builtin_type_ref "bool");
           builtin_record_field "executable" (builtin_type_ref "bool");
+        ];
+      record_is_recursive = false;
+    }
+
+let builtin_account_meta_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "account_meta";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "pubkey" (builtin_type_ref "bytes");
+          builtin_record_field "is_writable" (builtin_type_ref "bool");
+          builtin_record_field "is_signer" (builtin_type_ref "bool");
+        ];
+      record_is_recursive = false;
+    }
+
+let builtin_instruction_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "instruction";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "program_id" (builtin_type_ref "bytes");
+          builtin_record_field "accounts"
+            (Type_constr
+               {
+                 type_name = "array";
+                 args = [ builtin_type_ref "account_meta" ];
+                 is_recursive_ref = false;
+               });
+          builtin_record_field "data" (builtin_type_ref "bytes");
         ];
       record_is_recursive = false;
     }
@@ -858,19 +898,32 @@ let decls_need_builtin_record ~type_name ~field_names decls =
   || record_field_used_without_source_decl field_names decls)
 
 let add_builtin_record_decls decls =
+  let needs_clock =
+    decls_need_builtin_record ~type_name:"clock"
+      ~field_names:builtin_clock_field_names decls
+  in
+  let needs_account =
+    decls_need_builtin_record ~type_name:"account"
+      ~field_names:builtin_account_field_names decls
+  in
+  let needs_instruction =
+    decls_need_builtin_record ~type_name:"instruction"
+      ~field_names:builtin_instruction_field_names decls
+  in
+  let needs_account_meta =
+    needs_instruction
+    || decls_need_builtin_record ~type_name:"account_meta"
+         ~field_names:builtin_account_meta_field_names decls
+  in
   let builtins =
-    let acc =
-      if
-        decls_need_builtin_record ~type_name:"clock"
-          ~field_names:builtin_clock_field_names decls
-      then [ builtin_clock_record_decl ]
-      else []
-    in
-    if
-      decls_need_builtin_record ~type_name:"account"
-        ~field_names:builtin_account_field_names decls
-    then builtin_account_record_decl :: acc
-    else acc
+    List.filter_map
+      (fun (needed, decl) -> if needed then Some decl else None)
+      [
+        (needs_account, builtin_account_record_decl);
+        (needs_account_meta, builtin_account_meta_record_decl);
+        (needs_instruction, builtin_instruction_record_decl);
+        (needs_clock, builtin_clock_record_decl);
+      ]
   in
   builtins @ decls
 

@@ -25,21 +25,21 @@ CASES: list[tuple[str, str, str]] = [
     (
         "type decl sexp - enum",
         "type color = Red | Green | Blue\n",
-        "(zxcaml-cir 0.8 (module (type_decl (name color) (params) "
+        "(zxcaml-cir 0.9 (module (type_decl (name color) (params) "
         "(variants ((Red (payload_types)) (Green (payload_types)) "
         "(Blue (payload_types)))))))\n",
     ),
     (
         "type decl sexp - parameterized option",
         "type 'a option = None | Some of 'a\n",
-        "(zxcaml-cir 0.8 (module (type_decl (name option) (params 'a) "
+        "(zxcaml-cir 0.9 (module (type_decl (name option) (params 'a) "
         "(variants ((None (payload_types)) "
         "(Some (payload_types (type-var 'a))))))))\n",
     ),
     (
         "type decl sexp - recursive tree",
         "type 'a tree = Leaf | Node of 'a tree * 'a tree\n",
-        "(zxcaml-cir 0.8 (module (type_decl (name tree) (params 'a) "
+        "(zxcaml-cir 0.9 (module (type_decl (name tree) (params 'a) "
         "(recursive true) (variants ((Leaf (payload_types)) "
         "(Node (payload_types (recursive-ref tree (type-var 'a)) "
         "(recursive-ref tree (type-var 'a)))))))))\n",
@@ -47,7 +47,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "user adt constructor expression",
         "type color = Red | Green | Blue\nlet entrypoint _ = Red\n",
-        "(zxcaml-cir 0.8 (module (type_decl (name color) (params) "
+        "(zxcaml-cir 0.9 (module (type_decl (name color) (params) "
         "(variants ((Red (payload_types)) (Green (payload_types)) "
         "(Blue (payload_types))))) (let entrypoint (lambda (_) (ctor Red)))))\n",
     ),
@@ -57,7 +57,7 @@ CASES: list[tuple[str, str, str]] = [
             "type color = Red | Green | Blue\n"
             "let entrypoint c = match c with Red -> 1 | Green -> 2 | Blue -> 3\n"
         ),
-        "(zxcaml-cir 0.8 (module (type_decl (name color) (params) "
+        "(zxcaml-cir 0.9 (module (type_decl (name color) (params) "
         "(variants ((Red (payload_types)) (Green (payload_types)) "
         "(Blue (payload_types))))) (let entrypoint (lambda (c) "
         "(match (var c) (case (ctor Red) (const-int 1)) "
@@ -67,7 +67,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "nested builtin and user adt constructor expression",
         "type tree = Leaf of int\nlet entrypoint _ = Some (Leaf 42)\n",
-        "(zxcaml-cir 0.8 (module (type_decl (name tree) (params) "
+        "(zxcaml-cir 0.9 (module (type_decl (name tree) (params) "
         "(variants ((Leaf (payload_types (type-ref int)))))) "
         "(let entrypoint (lambda (_) (ctor Some (ctor Leaf (const-int 42)))))))\n",
     ),
@@ -77,7 +77,7 @@ CASES: list[tuple[str, str, str]] = [
             "type ('a, 'b) either = Left of 'a | Right of 'b\n"
             "let entrypoint x = match x with Some (Left v) -> v | Some _ -> 0 | None -> 0\n"
         ),
-        "(zxcaml-cir 0.8 (module (type_decl (name either) (params 'a 'b) "
+        "(zxcaml-cir 0.9 (module (type_decl (name either) (params 'a 'b) "
         "(variants ((Left (payload_types (type-var 'a))) "
         "(Right (payload_types (type-var 'b)))))) "
         "(let entrypoint (lambda (x) (match (var x) "
@@ -88,7 +88,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "guarded match arm",
         "let entrypoint x = match x with Some v when v > 10 -> 1 | Some _ -> 2 | None -> 3\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (x) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (x) "
         "(match (var x) "
         "(case (ctor Some (var v)) (when_guard (prim \">\" (var v) (const-int 10)) (const-int 1))) "
         "(case (ctor Some _) (const-int 2)) "
@@ -97,14 +97,14 @@ CASES: list[tuple[str, str, str]] = [
     (
         "multi argument function returning closure",
         "let make_op a b = fun x -> (x + a) * b\n",
-        "(zxcaml-cir 0.8 (module (let make_op "
+        "(zxcaml-cir 0.9 (module (let make_op "
         "(lambda (a b) (lambda (x) "
         "(prim \"*\" (prim \"+\" (var x) (var a)) (var b)))))))\n",
     ),
     (
         "qualified stdlib module function reference",
         "let entrypoint _ = List.map (fun x -> x + 1) [1; 2; 3]\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(app (var List.map) (lambda (x) (prim \"+\" (var x) (const-int 1))) "
         "(ctor \"::\" (const-int 1) (ctor \"::\" (const-int 2) "
         "(ctor \"::\" (const-int 3) (ctor \"[]\")))))))))\n",
@@ -112,38 +112,38 @@ CASES: list[tuple[str, str, str]] = [
     (
         "stdlib Option.value uses bundled unlabeled signature",
         "let entrypoint _ = Option.value (Some 7) 3\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(app (var Option.value) (ctor Some (const-int 7)) (const-int 3))))))\n",
     ),
     (
         "stdlib Result.ok uses bundled function",
         "let entrypoint _ = Result.ok (Ok 7)\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(app (var Result.ok) (ctor Ok (const-int 7)))))))\n",
     ),
     (
         "stdlib Result.error uses bundled function",
         "let entrypoint _ = Result.error (Error 3)\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(app (var Result.error) (ctor Error (const-int 3)))))))\n",
     ),
     (
         "tuple construction",
         "let entrypoint _ = (1, true, 42)\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(tuple (items (const-int 1) (ctor true) (const-int 42)))))))\n",
     ),
     (
         "tuple projection",
         "let entrypoint _ = let t = (1, 2) in fst t\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(let t (tuple (items (const-int 1) (const-int 2))) "
         "(tuple_project (var t) (index 0)))))))\n",
     ),
     (
         "tuple type declaration",
         "type pair = int * bool\nlet entrypoint _ = 0\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(tuple_type_decl (name pair) (params) "
         "(items (type-ref int) (type-ref bool))) "
         "(let entrypoint (lambda (_) (const-int 0)))))\n",
@@ -152,7 +152,7 @@ CASES: list[tuple[str, str, str]] = [
         "record construction",
         "type person = { name : string; age : int }\n"
         "let entrypoint _ = { name = \"alice\"; age = 30 }\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(record_type_decl (name person) (params) "
         "(fields ((name (type-ref string)) (age (type-ref int))))) "
         "(let entrypoint (lambda (_) "
@@ -162,7 +162,7 @@ CASES: list[tuple[str, str, str]] = [
         "record field access",
         "type person = { name : string; age : int }\n"
         "let entrypoint _ = let r = { name = \"alice\"; age = 30 } in r.name\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(record_type_decl (name person) (params) "
         "(fields ((name (type-ref string)) (age (type-ref int))))) "
         "(let entrypoint (lambda (_) "
@@ -173,7 +173,7 @@ CASES: list[tuple[str, str, str]] = [
         "record functional update",
         "type person = { name : string; age : int }\n"
         "let entrypoint _ = let r = { name = \"alice\"; age = 30 } in { r with age = 31 }\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(record_type_decl (name person) (params) "
         "(fields ((name (type-ref string)) (age (type-ref int))))) "
         "(let entrypoint (lambda (_) "
@@ -183,7 +183,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "builtin account field access emits account record type",
         "let entrypoint account = account.lamports\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(record_type_decl (name account) (params) "
         "(fields ((key (type-ref bytes)) (lamports (type-ref int)) "
         "(data (type-ref bytes)) (owner (type-ref bytes)) "
@@ -195,7 +195,7 @@ CASES: list[tuple[str, str, str]] = [
     (
         "account type reference in user record emits account type",
         "type holder = { account : account }\nlet entrypoint holder = holder.account.lamports\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(record_type_decl (name account) (params) "
         "(fields ((key (type-ref bytes)) (lamports (type-ref int)) "
         "(data (type-ref bytes)) (owner (type-ref bytes)) "
@@ -209,25 +209,74 @@ CASES: list[tuple[str, str, str]] = [
     (
         "syscall function reference",
         "let entrypoint message = Syscall.sol_log message\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (message) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (message) "
         "(app (var Syscall.sol_log) (var message))))))\n",
     ),
     (
         "zero argument syscall unit application",
         "let entrypoint _ = Syscall.sol_remaining_compute_units ()\n",
-        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_) "
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (_) "
         "(app (var Syscall.sol_remaining_compute_units) (ctor \"()\"))))))\n",
     ),
     (
         "clock syscall field access emits clock record type",
         "let entrypoint _ = (Syscall.sol_get_clock_sysvar ()).slot\n",
-        "(zxcaml-cir 0.8 (module "
+        "(zxcaml-cir 0.9 (module "
         "(record_type_decl (name clock) (params) "
         "(fields ((slot (type-ref int)) (epoch_start_timestamp (type-ref int)) "
         "(epoch (type-ref int)) (leader_schedule_epoch (type-ref int)) "
         "(unix_timestamp (type-ref int))))) "
         "(let entrypoint (lambda (_) "
         "(field_access (app (var Syscall.sol_get_clock_sysvar) (ctor \"()\")) slot)))))\n",
+    ),
+    (
+        "builtin account_meta type reference emits account_meta record type",
+        "type holder = { meta : account_meta }\nlet entrypoint holder = holder.meta.pubkey\n",
+        "(zxcaml-cir 0.9 (module "
+        "(record_type_decl (name account_meta) (params) "
+        "(fields ((pubkey (type-ref bytes)) (is_writable (type-ref bool)) "
+        "(is_signer (type-ref bool))))) "
+        "(record_type_decl (name holder) (params) "
+        "(fields ((meta (type-ref account_meta))))) "
+        "(let entrypoint (lambda (holder) "
+        "(field_access (field_access (var holder) meta) pubkey)))))\n",
+    ),
+    (
+        "builtin instruction field access emits instruction and account_meta types",
+        "let entrypoint ix = ix.program_id\n",
+        "(zxcaml-cir 0.9 (module "
+        "(record_type_decl (name account_meta) (params) "
+        "(fields ((pubkey (type-ref bytes)) (is_writable (type-ref bool)) "
+        "(is_signer (type-ref bool))))) "
+        "(record_type_decl (name instruction) (params) "
+        "(fields ((program_id (type-ref bytes)) "
+        "(accounts (type-ref array (type-ref account_meta))) "
+        "(data (type-ref bytes))))) "
+        "(let entrypoint (lambda (ix) (field_access (var ix) program_id)))))\n",
+    ),
+    (
+        "cpi invoke function reference",
+        "let entrypoint ix = invoke ix\n",
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (ix) "
+        "(app (var invoke) (var ix))))))\n",
+    ),
+    (
+        "cpi invoke_signed function reference",
+        "let entrypoint ix seeds = invoke_signed ix seeds\n",
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (ix seeds) "
+        "(app (var invoke_signed) (var ix) (var seeds))))))\n",
+    ),
+    (
+        "cpi create_program_address function reference",
+        "let entrypoint seeds program_id = create_program_address seeds program_id\n",
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (seeds program_id) "
+        "(app (var create_program_address) (var seeds) (var program_id))))))\n",
+    ),
+    (
+        "cpi try_find_program_address function reference",
+        "let entrypoint seeds program_id = try_find_program_address seeds program_id\n",
+        "(zxcaml-cir 0.9 (module (let entrypoint (lambda (seeds program_id) "
+        "(app (var try_find_program_address) (var seeds) (var program_id))))))\n",
     ),
 ]
 
