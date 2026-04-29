@@ -3,9 +3,12 @@
    callee program, marks source/destination account metas, supplies transfer
    data, and invokes with signer seeds. *)
 
+external log_message : string -> unit = "sol_log_"
+
 let entrypoint accounts input =
   let _ = accounts in
   let _ = input in
+  let _ = log_message "simple CPI via external binding" in
   (* CPI construction: invoke_signed receives the instruction record and the
      signer seed arrays needed when a program signs on behalf of a PDA. *)
   invoke_signed

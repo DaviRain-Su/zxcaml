@@ -725,6 +725,16 @@ fn emitExternalAppExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (std.mem.eql(u8, external.symbol, "sol_log_") and app.args.len == 1) {
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_log_", false, false)) return;
+    }
+    if (std.mem.eql(u8, external.symbol, "sol_sha256_alloc") and app.args.len == 1) {
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_sha256_alloc", true, true)) return;
+    }
+    if (std.mem.eql(u8, external.symbol, "sol_keccak256_alloc") and app.args.len == 1) {
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_keccak256_alloc", true, true)) return;
+    }
+
     const wrap_int = externalReturnIsInt(external);
     if (wrap_int) try append(out, allocator, "@as(i64, @intCast(");
     try emitExternalSymbolRef(out, allocator, external.symbol);
@@ -4565,7 +4575,7 @@ test "ZigBackend emits external calls as direct Zig symbol references" {
     const source = try emitModule(std.testing.allocator, module);
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(\"hi\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(omlz_syscall_bytes_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_sol_log") == null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_remaining") == null);

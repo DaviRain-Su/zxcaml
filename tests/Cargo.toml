@@ -35,3 +35,7 @@ path = "counter_test.rs"
 [[test]]
 name = "vault_test"
 path = "vault_test.rs"
+
+[[test]]
+name = "external_demo_test"
+path = "external_demo_test.rs"
