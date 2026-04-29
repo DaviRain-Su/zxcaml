@@ -380,7 +380,7 @@ fn emitIdl(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").
     const program_name = try deriveProgramName(init.gpa, input_file);
     defer init.gpa.free(program_name);
 
-    const rendered = driver_idl.emitModule(init.gpa, core_module, .{ .program_name = program_name }) catch |err| {
+    const rendered = driver_idl.emitModuleStdout(init.gpa, core_module, .{ .program_name = program_name }) catch |err| {
         try writeStderr(init.io, "error: failed to emit IDL: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -389,7 +389,6 @@ fn emitIdl(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").
     defer init.gpa.free(rendered);
 
     try writeStdout(init.io, rendered);
-    try writeStdout(init.io, "\n");
 }
 
 fn deriveProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]u8 {

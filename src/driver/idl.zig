@@ -24,27 +24,42 @@ pub fn emitModule(allocator: std.mem.Allocator, module: ir.Module, options: Emit
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
-    const program_id = options.program_id orelse findProgramId(module) orelse default_program_id;
-
-    try append(&out, allocator, "{\"address\":");
-    try appendJsonString(&out, allocator, program_id);
-    try append(&out, allocator, ",\"metadata\":{\"name\":");
-    try appendJsonString(&out, allocator, options.program_name);
-    try append(&out, allocator, ",\"version\":");
-    try appendJsonString(&out, allocator, program_version);
-    try append(&out, allocator, ",\"spec\":");
-    try appendJsonString(&out, allocator, anchor_spec_version);
-    try append(&out, allocator, "},\"instructions\":[");
-    try emitInstructions(&out, allocator, module);
-    try append(&out, allocator, "],\"accounts\":[");
-    try emitAccounts(&out, allocator, module);
-    try append(&out, allocator, "],\"types\":[");
-    try emitTypes(&out, allocator, module);
-    try append(&out, allocator, "],\"events\":[],\"errors\":[");
-    try emitErrors(&out, allocator, module);
-    try append(&out, allocator, "],\"constants\":[]}");
+    try emitModuleJson(&out, allocator, module, options);
 
     return out.toOwnedSlice(allocator);
+}
+
+/// Emits the complete stdout payload for `omlz idl`, including the trailing newline.
+pub fn emitModuleStdout(allocator: std.mem.Allocator, module: ir.Module, options: EmitOptions) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+
+    try emitModuleJson(&out, allocator, module, options);
+    try append(&out, allocator, "\n");
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn emitModuleJson(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.Module, options: EmitOptions) !void {
+    const program_id = options.program_id orelse findProgramId(module) orelse default_program_id;
+
+    try append(out, allocator, "{\"address\":");
+    try appendJsonString(out, allocator, program_id);
+    try append(out, allocator, ",\"metadata\":{\"name\":");
+    try appendJsonString(out, allocator, options.program_name);
+    try append(out, allocator, ",\"version\":");
+    try appendJsonString(out, allocator, program_version);
+    try append(out, allocator, ",\"spec\":");
+    try appendJsonString(out, allocator, anchor_spec_version);
+    try append(out, allocator, "},\"instructions\":[");
+    try emitInstructions(out, allocator, module);
+    try append(out, allocator, "],\"accounts\":[");
+    try emitAccounts(out, allocator, module);
+    try append(out, allocator, "],\"types\":[");
+    try emitTypes(out, allocator, module);
+    try append(out, allocator, "],\"events\":[],\"errors\":[");
+    try emitErrors(out, allocator, module);
+    try append(out, allocator, "],\"constants\":[]}");
 }
 
 fn emitInstructions(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.Module) !void {
@@ -589,6 +604,23 @@ test "IDL emitter keeps modules without entrypoints valid" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"errors\":[]") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"constants\":[]") != null);
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+}
+
+test "IDL stdout payload keeps opening brace and trailing newline together" {
+    const stdout_payload = try emitModuleStdout(std.testing.allocator, .{
+        .decls = &.{},
+        .type_decls = &.{},
+        .tuple_type_decls = &.{},
+        .record_type_decls = &.{},
+    }, .{ .program_name = "empty" });
+    defer std.testing.allocator.free(stdout_payload);
+
+    try std.testing.expect(stdout_payload.len > 2);
+    try std.testing.expectEqual(@as(u8, '{'), stdout_payload[0]);
+    try std.testing.expectEqual(@as(u8, '\n'), stdout_payload[stdout_payload.len - 1]);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, stdout_payload, .{});
     defer parsed.deinit();
 }
 
