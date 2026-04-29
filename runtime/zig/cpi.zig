@@ -1,0 +1,307 @@
+//! Solana cross-program invocation and return-data runtime bindings.
+//!
+//! RESPONSIBILITIES:
+//! - Define the C ABI structs consumed by Solana CPI and PDA syscalls.
+//! - Centralize MurmurHash3-32 dispatch addresses for CPI-related syscalls.
+//! - Provide deterministic hosted fallbacks for PDA and return-data tests.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const Arena = @import("arena.zig").Arena;
+const account = @import("account.zig");
+const syscalls = @import("syscalls.zig");
+
+/// 32-byte Solana public key.
+pub const Pubkey = syscalls.Pubkey;
+
+/// Maximum Solana PDA seed length in bytes.
+pub const max_seed_len: usize = 32;
+/// Maximum number of seeds accepted by Solana PDA helpers.
+pub const max_seeds: usize = 16;
+/// Domain separator appended by Solana PDA derivation.
+pub const pda_marker = "ProgramDerivedAddress";
+
+/// C ABI account metadata for a CPI instruction.
+pub const SolAccountMeta = extern struct {
+    pubkey: Pubkey,
+    is_writable: u8,
+    is_signer: u8,
+};
+
+/// C ABI instruction descriptor consumed by `sol_invoke_signed_c`.
+pub const SolInstruction = extern struct {
+    program_id: *const Pubkey,
+    accounts: [*]const SolAccountMeta,
+    account_len: u64,
+    data: [*]const u8,
+    data_len: u64,
+
+    /// Builds a C instruction descriptor from Zig slices.
+    pub fn fromSlices(program_id: *const Pubkey, accounts: []const SolAccountMeta, data: []const u8) SolInstruction {
+        return .{
+            .program_id = program_id,
+            .accounts = accounts.ptr,
+            .account_len = accounts.len,
+            .data = data.ptr,
+            .data_len = data.len,
+        };
+    }
+};
+
+/// C ABI account-info descriptor passed to CPI.
+pub const SolAccountInfo = extern struct {
+    key: *const Pubkey,
+    lamports: *align(1) u64,
+    data_len: u64,
+    data: [*]u8,
+    owner: *const Pubkey,
+    rent_epoch: u64,
+    is_signer: u8,
+    is_writable: u8,
+    executable: u8,
+};
+
+/// C ABI one-seed byte slice.
+pub const SolSignerSeed = extern struct {
+    addr: [*]const u8,
+    len: u64,
+
+    /// Builds one C seed descriptor from a Zig byte slice.
+    pub fn fromSlice(seed: []const u8) SolSignerSeed {
+        return .{ .addr = seed.ptr, .len = seed.len };
+    }
+};
+
+/// High-level signer seed collection used by hosted helpers and tests.
+pub const SolSignerSeeds = struct {
+    seeds: []const SolSignerSeed,
+
+    /// Exposes the collection as the C ABI descriptor.
+    pub fn toC(self: SolSignerSeeds) SolSignerSeedsC {
+        return .{ .addr = self.seeds.ptr, .len = self.seeds.len };
+    }
+};
+
+/// C ABI signer-seed collection consumed by `sol_invoke_signed_c`.
+pub const SolSignerSeedsC = extern struct {
+    addr: [*]const SolSignerSeed,
+    len: u64,
+};
+
+/// MurmurHash3-32 dispatch address for `sol_invoke_signed_c`.
+pub const sol_invoke_signed_c_address: usize = 0x5513f7b3;
+/// MurmurHash3-32 dispatch address for `sol_create_program_address`.
+pub const sol_create_program_address_address: usize = 0x01893541;
+/// MurmurHash3-32 dispatch address for `sol_try_find_program_address`.
+pub const sol_try_find_program_address_address: usize = 0x3ab62e77;
+/// MurmurHash3-32 dispatch address for `sol_set_return_data`.
+pub const sol_set_return_data_address: usize = 0x9313b89e;
+/// MurmurHash3-32 dispatch address for `sol_get_return_data`.
+pub const sol_get_return_data_address: usize = 0xa22b9c85;
+
+const success: u64 = 0;
+const invalid_seeds: u64 = 1;
+const return_data_capacity: usize = 1024;
+const is_bpf = builtin.target.cpu.arch == .bpfel or builtin.target.cpu.arch == .bpfeb;
+
+const SolInvokeSignedCFn = *align(1) const fn (*const SolInstruction, [*]const SolAccountInfo, u64, [*]const SolSignerSeedsC, u64) u64;
+const SolCreateProgramAddressFn = *align(1) const fn ([*]const SolSignerSeed, u64, *const Pubkey, *Pubkey) u64;
+const SolTryFindProgramAddressFn = *align(1) const fn ([*]const SolSignerSeed, u64, *const Pubkey, *Pubkey, *u8) u64;
+const SolSetReturnDataFn = *align(1) const fn ([*]const u8, u64) void;
+const SolGetReturnDataFn = *align(1) const fn ([*]u8, u64, *Pubkey) u64;
+
+var hosted_return_program_id: Pubkey = [_]u8{0} ** 32;
+var hosted_return_data: [return_data_capacity]u8 = undefined;
+var hosted_return_data_len: usize = 0;
+
+/// Converts a parsed account view into a CPI account-info descriptor.
+pub fn accountInfoFromView(view: account.AccountView) SolAccountInfo {
+    return .{
+        .key = view.key,
+        .lamports = view.lamports,
+        .data_len = view.data.len,
+        .data = view.data.ptr,
+        .owner = view.owner,
+        .rent_epoch = view.rentEpochValue(),
+        .is_signer = @intFromBool(view.is_signer),
+        .is_writable = @intFromBool(view.is_writable),
+        .executable = @intFromBool(view.executable),
+    };
+}
+
+/// Invokes another Solana program with optional signer seeds.
+pub inline fn sol_invoke_signed_c(instruction: *const SolInstruction, account_infos: []const SolAccountInfo, signer_seeds: []const SolSignerSeedsC) u64 {
+    if (comptime is_bpf) {
+        const syscall: SolInvokeSignedCFn = @ptrFromInt(sol_invoke_signed_c_address);
+        return syscall(instruction, account_infos.ptr, account_infos.len, signer_seeds.ptr, signer_seeds.len);
+    } else {
+        return success;
+    }
+}
+
+/// Invokes another Solana program without PDA signer seeds.
+pub inline fn invoke(instruction: *const SolInstruction, account_infos: []const SolAccountInfo) u64 {
+    const empty: []const SolSignerSeedsC = &.{};
+    return sol_invoke_signed_c(instruction, account_infos, empty);
+}
+
+/// Derives a program address from seeds and a program id.
+pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
+    if (comptime is_bpf) {
+        const syscall: SolCreateProgramAddressFn = @ptrFromInt(sol_create_program_address_address);
+        return syscall(seeds.ptr, seeds.len, program_id, out);
+    }
+    return createProgramAddressHosted(seeds, program_id, out);
+}
+
+/// Finds a valid program address and bump seed for a seed prefix.
+pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
+    if (comptime is_bpf) {
+        const syscall: SolTryFindProgramAddressFn = @ptrFromInt(sol_try_find_program_address_address);
+        return syscall(seeds.ptr, seeds.len, program_id, out, bump_seed);
+    }
+    return tryFindProgramAddressHosted(seeds, program_id, out, bump_seed);
+}
+
+/// Stores return data for the current instruction.
+pub inline fn sol_set_return_data(data: []const u8) void {
+    if (comptime is_bpf) {
+        const syscall: SolSetReturnDataFn = @ptrFromInt(sol_set_return_data_address);
+        syscall(data.ptr, data.len);
+    } else {
+        hosted_return_data_len = @min(data.len, hosted_return_data.len);
+        @memcpy(hosted_return_data[0..hosted_return_data_len], data[0..hosted_return_data_len]);
+    }
+}
+
+/// Copies return data into `out` and writes the producing program id.
+pub inline fn sol_get_return_data(out: []u8, program_id: *Pubkey) u64 {
+    if (comptime is_bpf) {
+        const syscall: SolGetReturnDataFn = @ptrFromInt(sol_get_return_data_address);
+        return syscall(out.ptr, out.len, program_id);
+    }
+    const copy_len = @min(out.len, hosted_return_data_len);
+    @memcpy(out[0..copy_len], hosted_return_data[0..copy_len]);
+    program_id.* = hosted_return_program_id;
+    return hosted_return_data_len;
+}
+
+/// Returns return data as an arena-owned byte slice for generated code.
+pub inline fn sol_get_return_data_alloc(arena: *Arena) []const u8 {
+    var scratch: [return_data_capacity]u8 = undefined;
+    var program_id: Pubkey = undefined;
+    const total_len = sol_get_return_data(scratch[0..], &program_id);
+    const copy_len = @min(total_len, scratch.len);
+    const out = arena.alloc(u8, copy_len) catch unreachable;
+    @memcpy(out, scratch[0..copy_len]);
+    return out;
+}
+
+fn createProgramAddressHosted(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
+    if (!validateSeeds(seeds)) return invalid_seeds;
+
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    for (seeds) |seed| {
+        hasher.update(seed.addr[0..@intCast(seed.len)]);
+    }
+    hasher.update(program_id);
+    hasher.update(pda_marker);
+    hasher.final(out);
+
+    return if (isOnCurve(out.*)) invalid_seeds else success;
+}
+
+fn tryFindProgramAddressHosted(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
+    if (seeds.len >= max_seeds or !validateSeeds(seeds)) return invalid_seeds;
+
+    var bump: u16 = 255;
+    while (true) : (bump -= 1) {
+        const bump_byte: [1]u8 = .{@intCast(bump)};
+        var all_seeds_buf: [max_seeds]SolSignerSeed = undefined;
+        @memcpy(all_seeds_buf[0..seeds.len], seeds);
+        all_seeds_buf[seeds.len] = SolSignerSeed.fromSlice(bump_byte[0..]);
+
+        if (createProgramAddressHosted(all_seeds_buf[0 .. seeds.len + 1], program_id, out) == success) {
+            bump_seed.* = @intCast(bump);
+            return success;
+        }
+        if (bump == 0) break;
+    }
+    return invalid_seeds;
+}
+
+fn validateSeeds(seeds: []const SolSignerSeed) bool {
+    if (seeds.len > max_seeds) return false;
+    for (seeds) |seed| {
+        if (seed.len > max_seed_len) return false;
+    }
+    return true;
+}
+
+fn isOnCurve(bytes: Pubkey) bool {
+    _ = std.crypto.ecc.Edwards25519.fromBytes(bytes) catch return false;
+    return true;
+}
+
+test "CPI syscall dispatch addresses match assigned MurmurHash3-32 values" {
+    try std.testing.expectEqual(@as(usize, 0x5513f7b3), sol_invoke_signed_c_address);
+    try std.testing.expectEqual(@as(usize, 0x01893541), sol_create_program_address_address);
+    try std.testing.expectEqual(@as(usize, 0x3ab62e77), sol_try_find_program_address_address);
+    try std.testing.expectEqual(@as(usize, 0x9313b89e), sol_set_return_data_address);
+    try std.testing.expectEqual(@as(usize, 0xa22b9c85), sol_get_return_data_address);
+}
+
+test "CPI C ABI structs have stable field offsets" {
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(SolAccountMeta, "pubkey"));
+    try std.testing.expectEqual(@as(usize, 32), @offsetOf(SolAccountMeta, "is_writable"));
+    try std.testing.expectEqual(@as(usize, 33), @offsetOf(SolAccountMeta, "is_signer"));
+    try std.testing.expectEqual(@as(usize, 34), @sizeOf(SolAccountMeta));
+
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(SolInstruction, "program_id"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(SolInstruction, "accounts"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(SolInstruction, "account_len"));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(SolInstruction, "data"));
+    try std.testing.expectEqual(@as(usize, 32), @offsetOf(SolInstruction, "data_len"));
+    try std.testing.expectEqual(@as(usize, 40), @sizeOf(SolInstruction));
+
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(SolSignerSeed));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(SolSignerSeedsC));
+}
+
+test "hosted PDA derivation is deterministic and finds a bump" {
+    var program_id: Pubkey = [_]u8{1} ** 32;
+    const seed_bytes = "zxcaml";
+    const seeds = [_]SolSignerSeed{SolSignerSeed.fromSlice(seed_bytes)};
+
+    var bump: u8 = 0;
+    var found: Pubkey = undefined;
+    try std.testing.expectEqual(success, sol_try_find_program_address(seeds[0..], &program_id, &found, &bump));
+    try std.testing.expect(bump <= 255);
+
+    const bump_seed: [1]u8 = .{bump};
+    const bumped_seeds = [_]SolSignerSeed{
+        SolSignerSeed.fromSlice(seed_bytes),
+        SolSignerSeed.fromSlice(bump_seed[0..]),
+    };
+    var first: Pubkey = undefined;
+    var second: Pubkey = undefined;
+    try std.testing.expectEqual(success, sol_create_program_address(bumped_seeds[0..], &program_id, &first));
+    try std.testing.expectEqual(success, sol_create_program_address(bumped_seeds[0..], &program_id, &second));
+    try std.testing.expectEqualSlices(u8, &first, &second);
+    try std.testing.expectEqualSlices(u8, &found, &first);
+}
+
+test "hosted return data round-trips through set/get helpers" {
+    sol_set_return_data("return payload");
+    var out: [32]u8 = undefined;
+    var program_id: Pubkey = undefined;
+
+    const len = sol_get_return_data(out[0..], &program_id);
+    try std.testing.expectEqual(@as(u64, "return payload".len), len);
+    try std.testing.expectEqualSlices(u8, "return payload", out[0.."return payload".len]);
+
+    var arena_buf: [64]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&arena_buf);
+    const allocated = sol_get_return_data_alloc(&arena);
+    try std.testing.expectEqualSlices(u8, "return payload", allocated);
+}

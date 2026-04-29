@@ -562,6 +562,10 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = clock_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
+    if ((std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = .Unit };
+    if ((std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
 
     return null;
 }
@@ -2563,6 +2567,54 @@ test "lower Syscall module calls as typed builtin applications" {
     };
     try std.testing.expectEqualStrings("Syscall.sol_remaining_compute_units", remaining_callee.name);
     try std.testing.expectEqual(ir.Ty.Int, remaining_app.ty);
+}
+
+test "lower CPI return-data calls as typed builtin applications" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.8 (module (let entrypoint (lambda (_input) (let _ (app (var Cpi.set_return_data) (const-string \"ok\")) (app (var Cpi.get_return_data) (ctor \"()\")))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const set_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const set_app = switch (set_let.value.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const set_callee = switch (set_app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Cpi.set_return_data", set_callee.name);
+    try std.testing.expectEqual(ir.Ty.Unit, set_app.ty);
+    try std.testing.expectEqual(ir.Ty.String, exprTy(set_app.args[0].*));
+
+    const get_app = switch (set_let.body.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const get_callee = switch (get_app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Cpi.get_return_data", get_callee.name);
+    try std.testing.expectEqual(ir.Ty.String, get_app.ty);
 }
 
 test "lower constructor expressions with layout policy" {

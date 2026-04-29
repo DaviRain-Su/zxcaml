@@ -30,6 +30,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\// place the array at low addresses (0x0/0x20) rejected by Solana.
         \\const Arena = @import("runtime/arena.zig").Arena;
         \\const AccountRuntime = @import("runtime/account.zig");
+        \\const cpi = @import("runtime/cpi.zig");
         \\const prelude = @import("runtime/prelude.zig");
         \\const syscalls = @import("runtime/syscalls.zig");
         \\
@@ -627,6 +628,19 @@ fn emitSyscallAppExpr(
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         try append(out, allocator, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "cpi.sol_set_return_data", false, false)) return true;
+        try append(out, allocator, "cpi.sol_set_return_data(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "cpi.sol_get_return_data_alloc(arena)");
         return true;
     }
     return false;
@@ -2157,6 +2171,10 @@ fn appNeedsArena(app: lir.LApp) bool {
     if (std.mem.eql(u8, callee, "Syscall.sol_log_pubkey")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_get_clock_sysvar")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_remaining_compute_units")) return false;
+    if (std.mem.eql(u8, callee, "Cpi.set_return_data")) return false;
+    if (std.mem.eql(u8, callee, "Syscall.sol_set_return_data")) return false;
+    if (std.mem.eql(u8, callee, "Cpi.get_return_data")) return false;
+    if (std.mem.eql(u8, callee, "Syscall.sol_get_return_data")) return false;
     return true;
 }
 
@@ -3237,6 +3255,7 @@ test "ZigBackend emits Syscall module calls through runtime bindings" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "const syscalls = @import(\"runtime/syscalls.zig\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const cpi = @import(\"runtime/cpi.zig\");") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "var omlz_syscall_bytes_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "[0] = 104") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "[4] = 111") != null);
@@ -3244,6 +3263,38 @@ test "ZigBackend emits Syscall module calls through runtime bindings" {
     try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_64_(@as(i64, 1), @as(i64, 2), @as(i64, 3), @as(i64, 4), @as(i64, 5))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Syscall_sol_log") == null);
+}
+
+test "ZigBackend emits CPI return-data calls through runtime bindings" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "Cpi.set_return_data" } },
+                .args = &.{&.{ .Constant = .{ .String = "ok" } }},
+                .ty = .Unit,
+            } },
+            .body = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "Cpi.get_return_data" } },
+                .args = &.{&.{ .Ctor = .{
+                    .name = "()",
+                    .args = &.{},
+                    .ty = .Unit,
+                    .layout = @import("../core/layout.zig").unitValue(),
+                } }},
+                .ty = .String,
+            } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const cpi = @import(\"runtime/cpi.zig\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_set_return_data(omlz_syscall_bytes_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_get_return_data_alloc(arena)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Cpi_set_return_data") == null);
 }
 
 test "ZigBackend emits user ADTs as explicit tag and payload structs" {
