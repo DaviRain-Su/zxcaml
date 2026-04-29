@@ -2,7 +2,7 @@
 //!
 //! RESPONSIBILITIES:
 //! - Compile an OCaml source that declares `sol_sha256 : bytes -> bytes`.
-//! - Verify the generated Zig converts the runtime `[32]u8` hash to `[]const u8`.
+//! - Verify the generated Zig hoists the runtime `[32]u8` hash storage before slicing.
 //! - Execute the hosted native binary so the generated source is type-checked.
 
 const std = @import("std");
@@ -46,7 +46,12 @@ test "external sol_sha256 bytes return is sliced and native code compiles" {
     const source = try std.Io.Dir.cwd().readFileAlloc(io, "out/program.zig", allocator, .limited(1024 * 1024));
     defer allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_external_bytes_") != null);
+    const hoist_index = std.mem.indexOf(u8, source, "    var omlz_external_bytes_") orelse return error.TestUnexpectedResult;
+    const return_index = std.mem.indexOf(u8, source, "    return @intCast(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hoist_index < return_index);
+    try std.testing.expect(std.mem.indexOf(u8, source, ": [32]u8 = undefined;\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_external_bytes_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, source, " = syscalls.sol_sha256(input);") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_sha256(input)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "[0..];") != null);
 

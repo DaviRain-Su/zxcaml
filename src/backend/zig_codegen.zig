@@ -260,9 +260,16 @@ fn emitFunction(
     if (func.calling_convention == .Closure) {
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
     }
-    try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
+    var body_out = std.ArrayList(u8).empty;
+    defer body_out.deinit(allocator);
+    var hoisted_decls = std.ArrayList(u8).empty;
+    defer hoisted_decls.deinit(allocator);
     var ctx: EmitContext = .{ .is_entrypoint = is_entrypoint, .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls, .externals = externals };
-    try emitExpr(out, allocator, func.body, 1, &ctx);
+    ctx.hoisted_decls = &hoisted_decls;
+    try emitExpr(&body_out, allocator, func.body, 1, &ctx);
+    try append(out, allocator, hoisted_decls.items);
+    try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
+    try append(out, allocator, body_out.items);
     try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
 }
@@ -403,6 +410,7 @@ const EmitContext = struct {
     type_decls: []const lir.LVariantType = &.{},
     record_type_decls: []const lir.LRecordType = &.{},
     externals: []const lir.LExternalDecl = &.{},
+    hoisted_decls: ?*std.ArrayList(u8) = null,
 };
 
 fn emitExpr(
@@ -745,6 +753,19 @@ fn emitExternalAppExpr(
     if (externalReturnIsBytes(external)) {
         const block_id = ctx.next_block_id;
         ctx.next_block_id += 1;
+        if (externalBytesReturnStorageType(external)) |storage_ty| {
+            try registerExternalBytesHoist(allocator, ctx, block_id, storage_ty);
+            try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "omlz_external_bytes_{d} = ", .{block_id});
+            try emitExternalDirectCall(out, allocator, external, app, indent_level + 1, ctx);
+            try append(out, allocator, ";\n");
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} omlz_external_bytes_{d}[0..];\n", .{ block_id, block_id });
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "}");
+            return;
+        }
         try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
         try emitIndent(out, allocator, indent_level + 1);
         try appendPrint(out, allocator, "const omlz_external_bytes_{d} = ", .{block_id});
@@ -761,6 +782,16 @@ fn emitExternalAppExpr(
     if (wrap_int) try append(out, allocator, "@as(i64, @intCast(");
     try emitExternalDirectCall(out, allocator, external, app, indent_level, ctx);
     if (wrap_int) try append(out, allocator, "))");
+}
+
+fn registerExternalBytesHoist(
+    allocator: std.mem.Allocator,
+    ctx: *EmitContext,
+    block_id: usize,
+    storage_ty: []const u8,
+) EmitError!void {
+    const hoisted_decls = ctx.hoisted_decls orelse return error.UnsupportedExpr;
+    try appendPrint(hoisted_decls, allocator, "    var omlz_external_bytes_{d}: {s} = undefined;\n", .{ block_id, storage_ty });
 }
 
 fn emitCryptoHashPubkeyLogBlock(
@@ -888,6 +919,16 @@ fn externalReturnIsBytes(external: lir.LExternalDecl) bool {
         .String => true,
         else => false,
     };
+}
+
+fn externalBytesReturnStorageType(external: lir.LExternalDecl) ?[]const u8 {
+    if (!externalReturnIsBytes(external)) return null;
+    if (std.mem.eql(u8, external.symbol, "sol_sha256") or
+        std.mem.eql(u8, external.symbol, "sol_keccak256"))
+    {
+        return "[32]u8";
+    }
+    return null;
 }
 
 fn isUnitExpr(expr: lir.LExpr) bool {
@@ -4734,7 +4775,12 @@ test "ZigBackend slices fixed-array bytes returned by external calls" {
     const source = try emitModule(std.testing.allocator, module);
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_external_bytes_") != null);
+    const hoist_index = std.mem.indexOf(u8, source, "    var omlz_external_bytes_") orelse return error.TestUnexpectedResult;
+    const return_index = std.mem.indexOf(u8, source, "    return @intCast(") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hoist_index < return_index);
+    try std.testing.expect(std.mem.indexOf(u8, source, ": [32]u8 = undefined;\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_external_bytes_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, source, " = syscalls.sol_sha256(input);") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_sha256(input)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "[0..];") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(digest)") != null);
