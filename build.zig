@@ -237,6 +237,26 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_idl_tests.setCwd(b.path(""));
 
+    // Codegen regression tests: compile focused `.ml` cases and inspect the
+    // emitted Zig source.
+    const codegen_external_bytes_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/codegen/external_bytes_return.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const codegen_options = b.addOptions();
+    codegen_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    codegen_external_bytes_test_module.addOptions("codegen_options", codegen_options);
+    const codegen_external_bytes_tests = b.addTest(.{
+        .root_module = codegen_external_bytes_test_module,
+    });
+    const run_codegen_external_bytes_tests = b.addRunArtifact(codegen_external_bytes_tests);
+    // This harness invokes `omlz build`, which writes out/program.zig. Keep it
+    // after the determinism harness, which also exercises native builds.
+    run_codegen_external_bytes_tests.step.dependOn(&run_determinism_tests.step);
+    run_codegen_external_bytes_tests.step.dependOn(b.getInstallStep());
+    run_codegen_external_bytes_tests.setCwd(b.path(""));
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
@@ -250,4 +270,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_golden_tests.step);
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
+    test_step.dependOn(&run_codegen_external_bytes_tests.step);
 }

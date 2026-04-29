@@ -735,8 +735,35 @@ fn emitExternalAppExpr(
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_keccak256_alloc", true, true)) return;
     }
 
+    if (externalReturnIsBytes(external)) {
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_external_bytes_{d} = ", .{block_id});
+        try emitExternalDirectCall(out, allocator, external, app, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} omlz_external_bytes_{d}[0..];\n", .{ block_id, block_id });
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return;
+    }
+
     const wrap_int = externalReturnIsInt(external);
     if (wrap_int) try append(out, allocator, "@as(i64, @intCast(");
+    try emitExternalDirectCall(out, allocator, external, app, indent_level, ctx);
+    if (wrap_int) try append(out, allocator, "))");
+}
+
+fn emitExternalDirectCall(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    external: lir.LExternalDecl,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
     try emitExternalSymbolRef(out, allocator, external.symbol);
     try append(out, allocator, "(");
     var wrote_arg = false;
@@ -756,7 +783,6 @@ fn emitExternalAppExpr(
         wrote_arg = true;
     }
     try append(out, allocator, ")");
-    if (wrap_int) try append(out, allocator, "))");
 }
 
 fn findExternalDecl(externals: []const lir.LExternalDecl, name: []const u8) ?lir.LExternalDecl {
@@ -803,6 +829,17 @@ fn externalReturnIsInt(external: lir.LExternalDecl) bool {
     };
     return switch (closure.ret.*) {
         .Int => true,
+        else => false,
+    };
+}
+
+fn externalReturnIsBytes(external: lir.LExternalDecl) bool {
+    const closure = switch (external.ty) {
+        .Closure => |value| value,
+        else => return false,
+    };
+    return switch (closure.ret.*) {
+        .String => true,
         else => false,
     };
 }
@@ -4579,6 +4616,55 @@ test "ZigBackend emits external calls as direct Zig symbol references" {
     try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_sol_log") == null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_remaining") == null);
+}
+
+test "ZigBackend slices fixed-array bytes returned by external calls" {
+    const unit_ty: lir.LTy = .Unit;
+    const bytes_ty: lir.LTy = .String;
+    const module: lir.LModule = .{
+        .externals = &.{
+            .{
+                .name = "sol_sha256",
+                .symbol = "sol_sha256",
+                .ty = .{ .Closure = .{ .params = &.{.String}, .ret = &bytes_ty } },
+            },
+            .{
+                .name = "sol_log",
+                .symbol = "sol_log_",
+                .ty = .{ .Closure = .{ .params = &.{.String}, .ret = &unit_ty } },
+            },
+        },
+        .entrypoint = .{
+            .name = "entrypoint",
+            .params = &.{.{ .name = "input", .ty = .String }},
+            .body = .{ .Let = .{
+                .name = "digest",
+                .value = &.{ .App = .{
+                    .callee = &.{ .Var = .{ .name = "sol_sha256" } },
+                    .args = &.{&.{ .Var = .{ .name = "input" } }},
+                    .ty = .String,
+                } },
+                .body = &.{ .Let = .{
+                    .name = "_",
+                    .value = &.{ .App = .{
+                        .callee = &.{ .Var = .{ .name = "sol_log" } },
+                        .args = &.{&.{ .Var = .{ .name = "digest" } }},
+                        .ty = .Unit,
+                    } },
+                    .body = &.{ .Constant = .{ .Int = 0 } },
+                } },
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_external_bytes_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_sha256(input)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "[0..];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(digest)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_sol_sha256") == null);
 }
 
 test "ZigBackend emits CPI return-data calls through runtime bindings" {
