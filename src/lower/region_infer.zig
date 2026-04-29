@@ -13,6 +13,64 @@ const layout = @import("../core/layout.zig");
 /// Errors produced by the Core IR region inference pass.
 pub const InferError = std.mem.Allocator.Error;
 
+const BindingId = usize;
+
+const BindingStack = struct {
+    allocator: std.mem.Allocator,
+    bindings: std.StringHashMap(std.ArrayList(BindingId)),
+
+    fn init(allocator: std.mem.Allocator) BindingStack {
+        return .{
+            .allocator = allocator,
+            .bindings = std.StringHashMap(std.ArrayList(BindingId)).init(allocator),
+        };
+    }
+
+    fn deinit(self: *BindingStack) void {
+        var it = self.bindings.iterator();
+        while (it.next()) |entry| entry.value_ptr.deinit(self.allocator);
+        self.bindings.deinit();
+    }
+
+    fn push(self: *BindingStack, name: []const u8, id: BindingId) InferError!void {
+        const result = try self.bindings.getOrPut(name);
+        if (!result.found_existing) result.value_ptr.* = std.ArrayList(BindingId).empty;
+        try result.value_ptr.append(self.allocator, id);
+    }
+
+    fn pop(self: *BindingStack, name: []const u8) void {
+        const stack = self.bindings.getPtr(name) orelse unreachable;
+        std.debug.assert(stack.items.len != 0);
+        stack.items.len -= 1;
+        if (stack.items.len == 0) {
+            stack.deinit(self.allocator);
+            _ = self.bindings.remove(name);
+        }
+    }
+
+    fn current(self: *const BindingStack, name: []const u8) ?BindingId {
+        const stack = self.bindings.get(name) orelse return null;
+        if (stack.items.len == 0) return null;
+        return stack.items[stack.items.len - 1];
+    }
+
+    fn contains(self: *const BindingStack, name: []const u8) bool {
+        return self.current(name) != null;
+    }
+};
+
+fn letBindingId(let_expr: ir.LetExpr) BindingId {
+    return @intFromPtr(let_expr.value);
+}
+
+fn paramBindingId(param: *const ir.Param) BindingId {
+    return @intFromPtr(param);
+}
+
+fn patternBindingId(pattern: *const ir.Pattern) BindingId {
+    return @intFromPtr(pattern);
+}
+
 /// Refines Core IR layouts by marking non-escaping primitive lets as stack values.
 pub fn inferModule(arena: *std.heap.ArenaAllocator, module: ir.Module) InferError!ir.Module {
     const allocator = arena.allocator();
@@ -62,9 +120,18 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
         .Let => |let_expr| blk: {
             var ctx = AnalyzeContext.init(arena.allocator());
             defer ctx.deinit();
+            const id = letBindingId(let_expr);
+            try ctx.pushBinding(let_expr.name, id);
             try ctx.analyzeExpr(let_expr.body.*, escape_context);
-            const binding_escapes = ctx.bindingEscapes(let_expr.name);
-            try ctx.analyzeExpr(let_expr.value.*, binding_escapes);
+            const binding_escapes = ctx.bindingEscapes(id);
+            ctx.popBinding(let_expr.name);
+            if (let_expr.is_rec) {
+                try ctx.pushBinding(let_expr.name, id);
+                defer ctx.popBinding(let_expr.name);
+                try ctx.analyzeExpr(let_expr.value.*, binding_escapes);
+            } else {
+                try ctx.analyzeExpr(let_expr.value.*, binding_escapes);
+            }
 
             var clone = CloneContext.init(arena.allocator(), &ctx.escapes);
             defer clone.deinit();
@@ -188,44 +255,66 @@ fn inferRecordFields(arena: *std.heap.ArenaAllocator, fields: []const ir.RecordE
 
 const AnalyzeContext = struct {
     allocator: std.mem.Allocator,
-    escapes: std.StringHashMap(bool),
+    escapes: std.AutoHashMap(BindingId, bool),
+    scopes: BindingStack,
 
     fn init(allocator: std.mem.Allocator) AnalyzeContext {
         return .{
             .allocator = allocator,
-            .escapes = std.StringHashMap(bool).init(allocator),
+            .escapes = std.AutoHashMap(BindingId, bool).init(allocator),
+            .scopes = BindingStack.init(allocator),
         };
     }
 
     fn deinit(self: *AnalyzeContext) void {
+        self.scopes.deinit();
         self.escapes.deinit();
     }
 
-    fn ensureBinding(self: *AnalyzeContext, name: []const u8) InferError!void {
-        if (!self.escapes.contains(name)) try self.escapes.put(name, false);
+    fn pushBinding(self: *AnalyzeContext, name: []const u8, id: BindingId) InferError!void {
+        if (!self.escapes.contains(id)) try self.escapes.put(id, false);
+        try self.scopes.push(name, id);
+    }
+
+    fn popBinding(self: *AnalyzeContext, name: []const u8) void {
+        self.scopes.pop(name);
     }
 
     fn markEscape(self: *AnalyzeContext, name: []const u8) void {
-        if (self.escapes.getPtr(name)) |value| value.* = true;
+        const id = self.scopes.current(name) orelse return;
+        if (self.escapes.getPtr(id)) |value| value.* = true;
     }
 
-    fn bindingEscapes(self: *const AnalyzeContext, name: []const u8) bool {
-        return self.escapes.get(name) orelse false;
+    fn bindingEscapes(self: *const AnalyzeContext, id: BindingId) bool {
+        return self.escapes.get(id) orelse false;
     }
 
     fn analyzeExpr(self: *AnalyzeContext, expr: ir.Expr, escape_context: bool) InferError!void {
         switch (expr) {
-            .Lambda => |lambda| try self.markLambdaCaptures(lambda),
+            .Lambda => |lambda| {
+                try self.markLambdaCaptures(lambda);
+                try self.pushParams(lambda.params);
+                defer self.popParams(lambda.params);
+                try self.analyzeExpr(lambda.body.*, true);
+            },
             .Constant => {},
             .App => |app| {
                 try self.analyzeExpr(app.callee.*, false);
                 for (app.args) |arg| try self.analyzeExpr(arg.*, true);
             },
             .Let => |let_expr| {
-                try self.ensureBinding(let_expr.name);
+                const id = letBindingId(let_expr);
+                try self.pushBinding(let_expr.name, id);
                 try self.analyzeExpr(let_expr.body.*, escape_context);
-                const value_escapes = self.bindingEscapes(let_expr.name);
-                try self.analyzeExpr(let_expr.value.*, value_escapes);
+                const value_escapes = self.bindingEscapes(id);
+                self.popBinding(let_expr.name);
+                if (let_expr.is_rec) {
+                    try self.pushBinding(let_expr.name, id);
+                    defer self.popBinding(let_expr.name);
+                    try self.analyzeExpr(let_expr.value.*, value_escapes);
+                } else {
+                    try self.analyzeExpr(let_expr.value.*, value_escapes);
+                }
             },
             .If => |if_expr| {
                 try self.analyzeExpr(if_expr.cond.*, false);
@@ -242,6 +331,8 @@ const AnalyzeContext = struct {
             .Match => |match_expr| {
                 try self.analyzeExpr(match_expr.scrutinee.*, escape_context);
                 for (match_expr.arms) |arm| {
+                    try self.pushPatternBindings(&arm.pattern);
+                    defer self.popPatternBindings(&arm.pattern);
                     if (arm.guard) |guard| try self.analyzeExpr(guard.*, false);
                     try self.analyzeExpr(arm.body.*, escape_context);
                 }
@@ -268,21 +359,71 @@ const AnalyzeContext = struct {
     fn markLambdaCaptures(self: *AnalyzeContext, lambda: ir.Lambda) InferError!void {
         var collector = FreeVarCollector.init(self.allocator, self);
         defer collector.deinit();
-        for (lambda.params) |param| try collector.bind(param.name);
+        try collector.pushParams(lambda.params);
         try collector.visit(lambda.body.*);
+    }
+
+    fn pushParams(self: *AnalyzeContext, params: []const ir.Param) InferError!void {
+        for (params) |*param| try self.pushBinding(param.name, paramBindingId(param));
+    }
+
+    fn popParams(self: *AnalyzeContext, params: []const ir.Param) void {
+        var index = params.len;
+        while (index > 0) {
+            index -= 1;
+            self.popBinding(params[index].name);
+        }
+    }
+
+    fn pushPatternBindings(self: *AnalyzeContext, pattern: *const ir.Pattern) InferError!void {
+        switch (pattern.*) {
+            .Wildcard => {},
+            .Var => |var_pattern| try self.pushBinding(var_pattern.name, patternBindingId(pattern)),
+            .Ctor => |ctor| for (ctor.args) |*arg| try self.pushPatternBindings(arg),
+            .Tuple => |items| for (items) |*item| try self.pushPatternBindings(item),
+            .Record => |fields| for (fields) |*field| try self.pushPatternBindings(&field.pattern),
+        }
+    }
+
+    fn popPatternBindings(self: *AnalyzeContext, pattern: *const ir.Pattern) void {
+        switch (pattern.*) {
+            .Wildcard => {},
+            .Var => |var_pattern| self.popBinding(var_pattern.name),
+            .Ctor => |ctor| {
+                var index = ctor.args.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&ctor.args[index]);
+                }
+            },
+            .Tuple => |items| {
+                var index = items.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&items[index]);
+                }
+            },
+            .Record => |fields| {
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&fields[index].pattern);
+                }
+            },
+        }
     }
 };
 
 const FreeVarCollector = struct {
     allocator: std.mem.Allocator,
     analyzer: *AnalyzeContext,
-    bound: std.StringHashMap(void),
+    bound: BindingStack,
 
     fn init(allocator: std.mem.Allocator, analyzer: *AnalyzeContext) FreeVarCollector {
         return .{
             .allocator = allocator,
             .analyzer = analyzer,
-            .bound = std.StringHashMap(void).init(allocator),
+            .bound = BindingStack.init(allocator),
         };
     }
 
@@ -290,14 +431,19 @@ const FreeVarCollector = struct {
         self.bound.deinit();
     }
 
-    fn bind(self: *FreeVarCollector, name: []const u8) InferError!void {
-        try self.bound.put(name, {});
+    fn pushBinding(self: *FreeVarCollector, name: []const u8, id: BindingId) InferError!void {
+        try self.bound.push(name, id);
+    }
+
+    fn popBinding(self: *FreeVarCollector, name: []const u8) void {
+        self.bound.pop(name);
     }
 
     fn visit(self: *FreeVarCollector, expr: ir.Expr) InferError!void {
         switch (expr) {
             .Lambda => |lambda| {
-                for (lambda.params) |param| try self.bind(param.name);
+                try self.pushParams(lambda.params);
+                defer self.popParams(lambda.params);
                 try self.visit(lambda.body.*);
             },
             .Constant => {},
@@ -306,8 +452,12 @@ const FreeVarCollector = struct {
                 for (app.args) |arg| try self.visit(arg.*);
             },
             .Let => |let_expr| {
+                const id = letBindingId(let_expr);
+                if (let_expr.is_rec) try self.pushBinding(let_expr.name, id);
+                defer if (let_expr.is_rec) self.popBinding(let_expr.name);
                 try self.visit(let_expr.value.*);
-                try self.bind(let_expr.name);
+                try self.pushBinding(let_expr.name, id);
+                defer self.popBinding(let_expr.name);
                 try self.visit(let_expr.body.*);
             },
             .If => |if_expr| {
@@ -327,7 +477,8 @@ const FreeVarCollector = struct {
             .Match => |match_expr| {
                 try self.visit(match_expr.scrutinee.*);
                 for (match_expr.arms) |arm| {
-                    try self.bindPattern(arm.pattern);
+                    try self.pushPatternBindings(&arm.pattern);
+                    defer self.popPatternBindings(&arm.pattern);
                     if (arm.guard) |guard| try self.visit(guard.*);
                     try self.visit(arm.body.*);
                 }
@@ -351,43 +502,88 @@ const FreeVarCollector = struct {
         }
     }
 
-    fn bindPattern(self: *FreeVarCollector, pattern: ir.Pattern) InferError!void {
-        switch (pattern) {
+    fn pushParams(self: *FreeVarCollector, params: []const ir.Param) InferError!void {
+        for (params) |*param| try self.pushBinding(param.name, paramBindingId(param));
+    }
+
+    fn popParams(self: *FreeVarCollector, params: []const ir.Param) void {
+        var index = params.len;
+        while (index > 0) {
+            index -= 1;
+            self.popBinding(params[index].name);
+        }
+    }
+
+    fn pushPatternBindings(self: *FreeVarCollector, pattern: *const ir.Pattern) InferError!void {
+        switch (pattern.*) {
             .Wildcard => {},
-            .Var => |var_pattern| try self.bind(var_pattern.name),
-            .Ctor => |ctor| for (ctor.args) |arg| try self.bindPattern(arg),
-            .Tuple => |items| for (items) |item| try self.bindPattern(item),
-            .Record => |fields| for (fields) |field| try self.bindPattern(field.pattern),
+            .Var => |var_pattern| try self.pushBinding(var_pattern.name, patternBindingId(pattern)),
+            .Ctor => |ctor| for (ctor.args) |*arg| try self.pushPatternBindings(arg),
+            .Tuple => |items| for (items) |*item| try self.pushPatternBindings(item),
+            .Record => |fields| for (fields) |*field| try self.pushPatternBindings(&field.pattern),
+        }
+    }
+
+    fn popPatternBindings(self: *FreeVarCollector, pattern: *const ir.Pattern) void {
+        switch (pattern.*) {
+            .Wildcard => {},
+            .Var => |var_pattern| self.popBinding(var_pattern.name),
+            .Ctor => |ctor| {
+                var index = ctor.args.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&ctor.args[index]);
+                }
+            },
+            .Tuple => |items| {
+                var index = items.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&items[index]);
+                }
+            },
+            .Record => |fields| {
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&fields[index].pattern);
+                }
+            },
         }
     }
 };
 
 const CloneContext = struct {
     allocator: std.mem.Allocator,
-    escapes: *const std.StringHashMap(bool),
-    layouts: std.StringHashMap(layout.Layout),
+    escapes: *const std.AutoHashMap(BindingId, bool),
+    scopes: BindingStack,
+    layouts: std.AutoHashMap(BindingId, layout.Layout),
 
-    fn init(allocator: std.mem.Allocator, escapes: *const std.StringHashMap(bool)) CloneContext {
+    fn init(allocator: std.mem.Allocator, escapes: *const std.AutoHashMap(BindingId, bool)) CloneContext {
         return .{
             .allocator = allocator,
             .escapes = escapes,
-            .layouts = std.StringHashMap(layout.Layout).init(allocator),
+            .scopes = BindingStack.init(allocator),
+            .layouts = std.AutoHashMap(BindingId, layout.Layout).init(allocator),
         };
     }
 
     fn deinit(self: *CloneContext) void {
+        self.scopes.deinit();
         self.layouts.deinit();
     }
 
     fn cloneLetExpr(self: *CloneContext, let_expr: ir.LetExpr, escape_context: bool) InferError!ir.LetExpr {
-        const binding_escapes = self.escapes.get(let_expr.name) orelse false;
+        const id = letBindingId(let_expr);
+        const binding_escapes = self.escapes.get(id) orelse false;
         const binding_layout = inferBindingLayout(let_expr.value.*, exprLayout(let_expr.value.*), binding_escapes);
-        const previous = self.layouts.get(let_expr.name);
-        try self.layouts.put(let_expr.name, binding_layout);
-        defer restoreLayout(&self.layouts, let_expr.name, previous);
 
+        if (let_expr.is_rec) try self.pushBinding(let_expr.name, id, binding_layout);
+        defer if (let_expr.is_rec) self.popBinding(let_expr.name, id);
         const cloned_value = try self.cloneExprPtr(let_expr.value.*, binding_escapes);
         const adjusted_value = try self.forceExprLayoutPtr(cloned_value, binding_layout);
+        if (!let_expr.is_rec) try self.pushBinding(let_expr.name, id, binding_layout);
+        defer if (!let_expr.is_rec) self.popBinding(let_expr.name, id);
         const cloned_body = try self.cloneExprPtr(let_expr.body.*, escape_context);
         return .{
             .name = let_expr.name,
@@ -415,7 +611,7 @@ const CloneContext = struct {
 
     fn cloneExpr(self: *CloneContext, expr: ir.Expr, escape_context: bool) InferError!ir.Expr {
         return switch (expr) {
-            .Lambda => |lambda| .{ .Lambda = try inferLambdaFromAllocator(self.allocator, lambda) },
+            .Lambda => |lambda| .{ .Lambda = try self.cloneLambda(lambda) },
             .Constant => expr,
             .App => |app| .{ .App = .{
                 .callee = try self.cloneExprPtr(app.callee.*, false),
@@ -440,7 +636,7 @@ const CloneContext = struct {
             .Var => |var_ref| .{ .Var = .{
                 .name = var_ref.name,
                 .ty = var_ref.ty,
-                .layout = self.layouts.get(var_ref.name) orelse var_ref.layout,
+                .layout = if (self.scopes.current(var_ref.name)) |id| self.layouts.get(id) orelse var_ref.layout else var_ref.layout,
             } },
             .Ctor => |ctor| .{ .Ctor = .{
                 .name = ctor.name,
@@ -497,6 +693,8 @@ const CloneContext = struct {
     fn cloneArms(self: *CloneContext, arms: []const ir.Arm, escape_context: bool) InferError![]const ir.Arm {
         const out = try self.allocator.alloc(ir.Arm, arms.len);
         for (arms, 0..) |arm, index| {
+            try self.pushPatternBindings(&arm.pattern);
+            defer self.popPatternBindings(&arm.pattern);
             out[index] = .{
                 .pattern = arm.pattern,
                 .guard = if (arm.guard) |guard| try self.cloneExprPtr(guard.*, false) else null,
@@ -522,30 +720,86 @@ const CloneContext = struct {
         ptr.* = forceExprLayout(expr.*, new_layout);
         return ptr;
     }
-};
 
-fn inferLambdaFromAllocator(allocator: std.mem.Allocator, lambda: ir.Lambda) InferError!ir.Lambda {
-    var ctx = AnalyzeContext.init(allocator);
-    defer ctx.deinit();
-    try ctx.analyzeExpr(lambda.body.*, true);
-
-    var clone = CloneContext.init(allocator, &ctx.escapes);
-    defer clone.deinit();
-    return .{
-        .params = lambda.params,
-        .body = try clone.cloneExprPtr(lambda.body.*, true),
-        .ty = lambda.ty,
-        .layout = lambda.layout,
-    };
-}
-
-fn restoreLayout(map: *std.StringHashMap(layout.Layout), name: []const u8, previous: ?layout.Layout) void {
-    if (previous) |value| {
-        map.put(name, value) catch unreachable;
-    } else {
-        _ = map.remove(name);
+    fn cloneLambda(self: *CloneContext, lambda: ir.Lambda) InferError!ir.Lambda {
+        try self.pushParams(lambda.params);
+        defer self.popParams(lambda.params);
+        return .{
+            .params = lambda.params,
+            .body = try self.cloneExprPtr(lambda.body.*, true),
+            .ty = lambda.ty,
+            .layout = lambda.layout,
+        };
     }
-}
+
+    fn pushBinding(self: *CloneContext, name: []const u8, id: BindingId, binding_layout: layout.Layout) InferError!void {
+        try self.scopes.push(name, id);
+        try self.layouts.put(id, binding_layout);
+    }
+
+    fn pushShadowBinding(self: *CloneContext, name: []const u8, id: BindingId) InferError!void {
+        try self.scopes.push(name, id);
+    }
+
+    fn popBinding(self: *CloneContext, name: []const u8, id: BindingId) void {
+        self.scopes.pop(name);
+        _ = self.layouts.remove(id);
+    }
+
+    fn popShadowBinding(self: *CloneContext, name: []const u8) void {
+        self.scopes.pop(name);
+    }
+
+    fn pushParams(self: *CloneContext, params: []const ir.Param) InferError!void {
+        for (params) |*param| try self.pushShadowBinding(param.name, paramBindingId(param));
+    }
+
+    fn popParams(self: *CloneContext, params: []const ir.Param) void {
+        var index = params.len;
+        while (index > 0) {
+            index -= 1;
+            self.popShadowBinding(params[index].name);
+        }
+    }
+
+    fn pushPatternBindings(self: *CloneContext, pattern: *const ir.Pattern) InferError!void {
+        switch (pattern.*) {
+            .Wildcard => {},
+            .Var => |var_pattern| try self.pushShadowBinding(var_pattern.name, patternBindingId(pattern)),
+            .Ctor => |ctor| for (ctor.args) |*arg| try self.pushPatternBindings(arg),
+            .Tuple => |items| for (items) |*item| try self.pushPatternBindings(item),
+            .Record => |fields| for (fields) |*field| try self.pushPatternBindings(&field.pattern),
+        }
+    }
+
+    fn popPatternBindings(self: *CloneContext, pattern: *const ir.Pattern) void {
+        switch (pattern.*) {
+            .Wildcard => {},
+            .Var => |var_pattern| self.popShadowBinding(var_pattern.name),
+            .Ctor => |ctor| {
+                var index = ctor.args.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&ctor.args[index]);
+                }
+            },
+            .Tuple => |items| {
+                var index = items.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&items[index]);
+                }
+            },
+            .Record => |fields| {
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    self.popPatternBindings(&fields[index].pattern);
+                }
+            },
+        }
+    }
+};
 
 fn inferBindingLayout(value: ir.Expr, original: layout.Layout, escapes: bool) layout.Layout {
     if (escapes) return arenaLayout(original);
@@ -740,6 +994,31 @@ fn primAdd(arena: *std.heap.ArenaAllocator, lhs: *const ir.Expr, rhs: *const ir.
     } });
 }
 
+fn tupleExpr(arena: *std.heap.ArenaAllocator, items: []const *const ir.Expr) !*const ir.Expr {
+    const item_copy = try arena.allocator().alloc(*const ir.Expr, items.len);
+    @memcpy(item_copy, items);
+    const tys = try arena.allocator().alloc(ir.Ty, items.len);
+    for (item_copy, 0..) |item, index| tys[index] = exprTy(item.*);
+    return makeExpr(arena, .{ .Tuple = .{
+        .items = item_copy,
+        .ty = .{ .Tuple = tys },
+        .layout = layout.structPack(),
+    } });
+}
+
+fn lambdaExpr(arena: *std.heap.ArenaAllocator, params: []const ir.Param, body: *const ir.Expr) !*const ir.Expr {
+    const param_copy = try arena.allocator().alloc(ir.Param, params.len);
+    @memcpy(param_copy, params);
+    const param_tys = try arena.allocator().alloc(ir.Ty, params.len);
+    for (param_copy, 0..) |param, index| param_tys[index] = param.ty;
+    return makeExpr(arena, .{ .Lambda = .{
+        .params = param_copy,
+        .body = body,
+        .ty = try arrowTy(arena, param_tys, exprTy(body.*)),
+        .layout = layout.closure(),
+    } });
+}
+
 fn letExpr(arena: *std.heap.ArenaAllocator, name: []const u8, value: *const ir.Expr, body: *const ir.Expr) !*const ir.Expr {
     return makeExpr(arena, .{ .Let = .{
         .name = name,
@@ -923,4 +1202,90 @@ test "escape analysis propagates through escaping match scrutinees" {
         else => return error.TestUnexpectedResult,
     };
     try expectLayoutRegion(inferred_match.scrutinee, .Arena);
+}
+
+test "escape analysis handles lambda parameter shadow before outer capture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const inner_lambda = try lambdaExpr(
+        &arena,
+        &.{.{ .name = "x", .ty = .Int }},
+        try varRef(&arena, "x", .Int),
+    );
+    const outer_lambda_body = try tupleExpr(&arena, &.{
+        inner_lambda,
+        try varRef(&arena, "x", .Int),
+    });
+    const capturing_lambda = try lambdaExpr(
+        &arena,
+        &.{.{ .name = "_unit", .ty = .Unit }},
+        outer_lambda_body,
+    );
+    const body = try letExpr(&arena, "x", try intConst(&arena, 1), try letExpr(&arena, "f", capturing_lambda, try intConst(&arena, 0)));
+
+    const inferred = try inferredEntrypointBody(&arena, body);
+    const x_let = switch (inferred.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try expectLayoutRegion(x_let.value, .Arena);
+}
+
+test "escape analysis handles match pattern shadow before outer capture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const arms = try arena.allocator().alloc(ir.Arm, 1);
+    arms[0] = .{
+        .pattern = .{ .Var = .{ .name = "x", .ty = .Int, .layout = layout.intConstant() } },
+        .body = try varRef(&arena, "x", .Int),
+    };
+    const shadowing_match = try makeExpr(&arena, .{ .Match = .{
+        .scrutinee = try intConst(&arena, 2),
+        .arms = arms,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } });
+    const outer_lambda_body = try tupleExpr(&arena, &.{
+        shadowing_match,
+        try varRef(&arena, "x", .Int),
+    });
+    const capturing_lambda = try lambdaExpr(
+        &arena,
+        &.{.{ .name = "_unit", .ty = .Unit }},
+        outer_lambda_body,
+    );
+    const body = try letExpr(&arena, "x", try intConst(&arena, 1), try letExpr(&arena, "f", capturing_lambda, try intConst(&arena, 0)));
+
+    const inferred = try inferredEntrypointBody(&arena, body);
+    const x_let = switch (inferred.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try expectLayoutRegion(x_let.value, .Arena);
+}
+
+test "escape analysis handles nested let shadow before outer capture" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const shadowing_let = try letExpr(&arena, "x", try intConst(&arena, 2), try varRef(&arena, "x", .Int));
+    const outer_lambda_body = try tupleExpr(&arena, &.{
+        shadowing_let,
+        try varRef(&arena, "x", .Int),
+    });
+    const capturing_lambda = try lambdaExpr(
+        &arena,
+        &.{.{ .name = "_unit", .ty = .Unit }},
+        outer_lambda_body,
+    );
+    const body = try letExpr(&arena, "x", try intConst(&arena, 1), try letExpr(&arena, "f", capturing_lambda, try intConst(&arena, 0)));
+
+    const inferred = try inferredEntrypointBody(&arena, body);
+    const x_let = switch (inferred.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try expectLayoutRegion(x_let.value, .Arena);
 }
