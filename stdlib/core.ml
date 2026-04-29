@@ -9,6 +9,24 @@ type 'a option = None | Some of 'a
 
 type ('a, 'b) result = Ok of 'a | Error of 'b
 
+type account = {
+  key : bytes;
+  lamports : int;
+  data : bytes;
+  owner : bytes;
+  is_signer : bool;
+  is_writable : bool;
+  executable : bool;
+}
+
+type clock = {
+  slot : int;
+  epoch_start_timestamp : int;
+  epoch : int;
+  leader_schedule_epoch : int;
+  unix_timestamp : int;
+}
+
 module Option = struct
   let map f = function None -> None | Some x -> Some (f x)
 
@@ -64,6 +82,26 @@ module List = struct
   let hd xs = match xs with [] -> unreachable () | x :: _ -> x
 
   let tl xs = match xs with [] -> unreachable () | _ :: rest -> rest
+end
+
+module Syscall = struct
+  let sol_log (_message : string) = ()
+
+  let sol_log_64 (_a : int) (_b : int) (_c : int) (_d : int) (_e : int) =
+    ()
+
+  let sol_sha256 payload = payload
+
+  let sol_get_clock_sysvar () =
+    {
+      slot = 0;
+      epoch_start_timestamp = 0;
+      epoch = 0;
+      leader_schedule_epoch = 0;
+      unix_timestamp = 0;
+    }
+
+  let sol_remaining_compute_units () = 0
 end
 
 let head xs = match xs with [] -> None | x :: _ -> Some x

@@ -32,4 +32,23 @@ let () =
   assert (Result.error (Ok 11) = None);
   assert (Result.error (Error 12) = Some 12);
   assert (Result.map (fun x -> x + 1) (Ok 4) = Ok 5);
-  assert (Result.bind (Ok 4) (fun x -> Ok (x + 1)) = Ok 5)
+  assert (Result.bind (Ok 4) (fun x -> Ok (x + 1)) = Ok 5);
+  let account =
+    {
+      key = Bytes.of_string "account";
+      lamports = 42;
+      data = Bytes.of_string "payload";
+      owner = Bytes.of_string "owner";
+      is_signer = true;
+      is_writable = false;
+      executable = false;
+    }
+  in
+  assert (account.lamports = 42);
+  assert (account.is_signer);
+  assert (not account.executable);
+  Syscall.sol_log "hello";
+  Syscall.sol_log_64 1 2 3 4 5;
+  assert (Syscall.sol_sha256 (Bytes.of_string "abc") = Bytes.of_string "abc");
+  assert ((Syscall.sol_get_clock_sysvar ()).slot = 0);
+  assert (Syscall.sol_remaining_compute_units () = 0)

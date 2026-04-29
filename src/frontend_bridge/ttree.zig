@@ -1,7 +1,7 @@
-//! Typed Zig mirror for the M2 ZxCaml frontend S-expression format.
+//! Typed Zig mirror for the M0 P3 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 0.7 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 0.8 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -257,6 +257,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
         !std.mem.eql(u8, file_version, "0.6") and
         !std.mem.eql(u8, file_version, "0.5") and
+        !std.mem.eql(u8, file_version, "0.7") and
         !std.mem.eql(u8, file_version, "0.4"))
     {
         return error.WireFormatVersionMismatch;
@@ -271,17 +272,18 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=0.7\n");
+            try writeStderr(io, " expected=0.8\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.4") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.5") or
-                std.mem.eql(u8, extractHeaderVersion(bytes), "0.6"))
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.6") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.7"))
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits tuple/record-aware sexp 0.7.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits account/syscall-aware sexp 0.8.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -290,7 +292,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.7 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 0.8 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -1250,4 +1252,40 @@ test "parse tuple and record v0.7 sexp nodes" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings("age", update.fields[0].name);
+}
+
+test "parse account type references and syscall apps in v0.8 sexp" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 0.8 (module (record_type_decl (name account) (params) (fields ((key (type-ref bytes)) (lamports (type-ref int)) (data (type-ref bytes)) (owner (type-ref bytes)) (is_signer (type-ref bool)) (is_writable (type-ref bool)) (executable (type-ref bool))))) (record_type_decl (name holder) (params) (fields ((acct (type-ref account))))) (let entrypoint (lambda (acct) (app (var Syscall.sol_log_64) (field_access (var acct) lamports) (const-int 0) (const-int 0) (const-int 0) (const-int 0))))))",
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), module.record_type_decls.len);
+    try std.testing.expectEqualStrings("account", module.record_type_decls[0].name);
+    try std.testing.expectEqual(@as(usize, 7), module.record_type_decls[0].fields.len);
+    const holder_field_ty = switch (module.record_type_decls[1].fields[0].ty) {
+        .TypeRef => |ref| ref,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("account", holder_field_ty.name);
+
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+    };
+    const lambda = switch (entrypoint.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const app = switch (lambda.body.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Syscall.sol_log_64", callee.name);
 }

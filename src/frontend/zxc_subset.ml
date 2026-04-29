@@ -192,7 +192,29 @@ exception Unsupported of diagnostic
 type type_env = { constructors : StringSet.t }
 
 let builtin_constructor_names =
-  [ "None"; "Some"; "Ok"; "Error"; "[]"; "::"; "true"; "false" ]
+  [ "None"; "Some"; "Ok"; "Error"; "[]"; "::"; "true"; "false"; "()" ]
+
+let builtin_account_field_names =
+  StringSet.of_list
+    [
+      "key";
+      "lamports";
+      "data";
+      "owner";
+      "is_signer";
+      "is_writable";
+      "executable";
+    ]
+
+let builtin_clock_field_names =
+  StringSet.of_list
+    [
+      "slot";
+      "epoch_start_timestamp";
+      "epoch";
+      "leader_schedule_epoch";
+      "unix_timestamp";
+    ]
 
 let initial_type_env =
   {
@@ -212,6 +234,46 @@ let type_env_add_type_decl env type_decl =
 
 let type_env_add_type_decls env type_decls =
   List.fold_left type_env_add_type_decl env type_decls
+
+let builtin_type_ref name =
+  Type_constr { type_name = name; args = []; is_recursive_ref = false }
+
+let builtin_record_field name ty =
+  { record_field_name = name; record_field_type = ty; record_field_mutable = false }
+
+let builtin_account_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "account";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "key" (builtin_type_ref "bytes");
+          builtin_record_field "lamports" (builtin_type_ref "int");
+          builtin_record_field "data" (builtin_type_ref "bytes");
+          builtin_record_field "owner" (builtin_type_ref "bytes");
+          builtin_record_field "is_signer" (builtin_type_ref "bool");
+          builtin_record_field "is_writable" (builtin_type_ref "bool");
+          builtin_record_field "executable" (builtin_type_ref "bool");
+        ];
+      record_is_recursive = false;
+    }
+
+let builtin_clock_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "clock";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "slot" (builtin_type_ref "int");
+          builtin_record_field "epoch_start_timestamp" (builtin_type_ref "int");
+          builtin_record_field "epoch" (builtin_type_ref "int");
+          builtin_record_field "leader_schedule_epoch" (builtin_type_ref "int");
+          builtin_record_field "unix_timestamp" (builtin_type_ref "int");
+        ];
+      record_is_recursive = false;
+    }
 
 let loc_of_location (location : Location.t) =
   let start = location.loc_start in
@@ -688,6 +750,130 @@ let parse_type_declaration (type_decl : type_declaration) =
         ~message:"open type declarations are not supported in P2"
         ()
 
+let rec type_expr_uses_type type_name = function
+  | Type_var _ -> false
+  | Type_tuple items -> List.exists (type_expr_uses_type type_name) items
+  | Type_constr constr ->
+      String.equal constr.type_name type_name
+      || List.exists (type_expr_uses_type type_name) constr.args
+
+let record_type_field_uses_type type_name field =
+  type_expr_uses_type type_name field.record_field_type
+
+let variant_uses_type type_name variant =
+  List.exists (type_expr_uses_type type_name) variant.payload_types
+
+let rec expr_uses_record_fields field_names = function
+  | Const_int _ | Const_string _ | Var _ -> false
+  | Lambda lambda -> expr_uses_record_fields field_names lambda.body
+  | App app ->
+      expr_uses_record_fields field_names app.callee
+      || List.exists (expr_uses_record_fields field_names) app.args
+  | Let let_expr ->
+      expr_uses_record_fields field_names let_expr.value
+      || expr_uses_record_fields field_names let_expr.body
+  | If if_expr ->
+      expr_uses_record_fields field_names if_expr.cond
+      || expr_uses_record_fields field_names if_expr.then_branch
+      || expr_uses_record_fields field_names if_expr.else_branch
+  | Prim prim -> List.exists (expr_uses_record_fields field_names) prim.args
+  | Ctor ctor -> List.exists (expr_uses_record_fields field_names) ctor.args
+  | Tuple items -> List.exists (expr_uses_record_fields field_names) items
+  | Tuple_project tuple_project ->
+      expr_uses_record_fields field_names tuple_project.tuple_expr
+  | Record record ->
+      List.exists
+        (fun field ->
+          StringSet.mem field.field_name field_names
+          || expr_uses_record_fields field_names field.field_value)
+        record.fields
+  | Field_access field_access ->
+      StringSet.mem field_access.field_name field_names
+      || expr_uses_record_fields field_names field_access.record_expr
+  | Record_update record_update ->
+      expr_uses_record_fields field_names record_update.base_expr
+      || List.exists
+           (fun field ->
+             StringSet.mem field.field_name field_names
+             || expr_uses_record_fields field_names field.field_value)
+           record_update.fields
+  | Match match_expr ->
+      expr_uses_record_fields field_names match_expr.scrutinee
+      || List.exists (match_arm_uses_record_fields field_names) match_expr.arms
+
+and match_arm_uses_record_fields field_names arm =
+  pattern_uses_record_fields field_names arm.pattern
+  || Option.fold ~none:false
+       ~some:(expr_uses_record_fields field_names)
+       arm.guard
+  || expr_uses_record_fields field_names arm.body
+
+and pattern_uses_record_fields field_names = function
+  | Pat_any | Pat_var _ -> false
+  | Pat_ctor ctor -> List.exists (pattern_uses_record_fields field_names) ctor.args
+  | Pat_tuple items -> List.exists (pattern_uses_record_fields field_names) items
+  | Pat_record fields ->
+      List.exists
+        (fun field ->
+          StringSet.mem field.pattern_field_name field_names
+          || pattern_uses_record_fields field_names field.pattern_field_value)
+        fields
+
+let decl_defines_record_type type_name = function
+  | Record_type_decl decl -> String.equal decl.record_type_name type_name
+  | Let_decl _ | Type_decl _ | Tuple_type_decl _ -> false
+
+let decl_uses_type type_name = function
+  | Let_decl _ -> false
+  | Type_decl decl -> List.exists (variant_uses_type type_name) decl.variants
+  | Tuple_type_decl decl ->
+      List.exists (type_expr_uses_type type_name) decl.tuple_items
+  | Record_type_decl decl ->
+      List.exists (record_type_field_uses_type type_name) decl.record_fields
+
+let decl_uses_record_fields field_names = function
+  | Let_decl decl -> expr_uses_record_fields field_names decl.body
+  | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ -> false
+
+let decl_defines_record_field field_name = function
+  | Record_type_decl decl ->
+      List.exists
+        (fun field -> String.equal field.record_field_name field_name)
+        decl.record_fields
+  | Let_decl _ | Type_decl _ | Tuple_type_decl _ -> false
+
+let record_field_used_without_source_decl field_names decls =
+  StringSet.exists
+    (fun field_name ->
+      (not (List.exists (decl_defines_record_field field_name) decls))
+      && List.exists
+           (decl_uses_record_fields (StringSet.singleton field_name))
+           decls)
+    field_names
+
+let decls_need_builtin_record ~type_name ~field_names decls =
+  (not (List.exists (decl_defines_record_type type_name) decls))
+  &&
+  (List.exists (decl_uses_type type_name) decls
+  || record_field_used_without_source_decl field_names decls)
+
+let add_builtin_record_decls decls =
+  let builtins =
+    let acc =
+      if
+        decls_need_builtin_record ~type_name:"clock"
+          ~field_names:builtin_clock_field_names decls
+      then [ builtin_clock_record_decl ]
+      else []
+    in
+    if
+      decls_need_builtin_record ~type_name:"account"
+        ~field_names:builtin_account_field_names decls
+    then builtin_account_record_decl :: acc
+    else acc
+  in
+  builtins @ decls
+
 
 let parse_value_binding env (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
@@ -728,4 +914,4 @@ let of_structure (structure : structure) =
         (env, List.rev_append item_decls acc))
       (initial_type_env, []) structure.str_items
   in
-  Module (List.rev decls)
+  Module (add_builtin_record_decls (List.rev decls))

@@ -4,11 +4,12 @@
    compiler-libs.common.  Version 0.7 contains top-level let declarations,
    whitelisted option/result constructor expressions, basic match expressions,
    user-authored ADT type declarations, nested constructor patterns, guarded
-   match arms, and tuple/record construction/projection forms. *)
+   match arms, tuple/record construction/projection forms, and the P3 account
+   and syscall surface. *)
 open Format
 open Zxc_subset
 
-let version = "0.7"
+let version = "0.8"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
