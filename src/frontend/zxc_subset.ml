@@ -179,11 +179,28 @@ type record_type_decl = {
   record_is_recursive : bool;
 }
 
+type external_type_expr =
+  | External_type_constr of external_type_constr
+  | External_type_tuple of external_type_expr list
+  | External_type_arrow of external_type_expr * external_type_expr
+
+and external_type_constr = {
+  external_type_name : string;
+  external_type_args : external_type_expr list;
+}
+
+type external_decl = {
+  external_name : string;
+  external_type : external_type_expr;
+  external_symbol : string;
+}
+
 type decl =
   | Let_decl of value_decl
   | Type_decl of type_decl
   | Tuple_type_decl of tuple_type_decl
   | Record_type_decl of record_type_decl
+  | External_decl of external_decl
 
 type modul = Module of decl list
 
@@ -959,12 +976,78 @@ let parse_type_declaration (type_decl : type_declaration) =
         ~message:"open type declarations are not supported in P2"
         ()
 
+let rec parse_external_type_expr (ctyp : core_type) =
+  match ctyp.ctyp_desc with
+  | Ttyp_constr (_path, lid, args) ->
+      External_type_constr
+        {
+          external_type_name = longident_name lid;
+          external_type_args = List.map parse_external_type_expr args;
+        }
+  | Ttyp_tuple items -> External_type_tuple (List.map parse_external_type_expr items)
+  | Ttyp_arrow (Nolabel, arg, result) ->
+      External_type_arrow
+        (parse_external_type_expr arg, parse_external_type_expr result)
+  | Ttyp_arrow (_, _, _) ->
+      unsupported ~node_kind:"labelled-external-type" ~loc:ctyp.ctyp_loc
+        ~message:"external declarations only support unlabeled function arrows"
+        ()
+  | Ttyp_poly ([], inner) -> parse_external_type_expr inner
+  | Ttyp_var _ | Ttyp_any ->
+      unsupported ~node_kind:(core_type_kind ctyp) ~loc:ctyp.ctyp_loc
+        ~message:
+          "polymorphic external declarations are not supported in the ZxCaml \
+           wire format"
+        ()
+  | _ ->
+      unsupported ~node_kind:(core_type_kind ctyp) ~loc:ctyp.ctyp_loc
+        ~message:
+          "external declarations only support named types, tuples, and \
+           unlabeled function arrows"
+        ()
+
+let parse_external_symbol ~loc = function
+  | [ symbol ] ->
+      if symbol <> "" then symbol
+      else
+        unsupported ~node_kind:"external-symbol" ~loc
+          ~message:"external declarations require a non-empty symbol string"
+          ()
+  | [] ->
+      unsupported ~node_kind:"external-symbol" ~loc
+        ~message:"external declarations require exactly one symbol string"
+        ()
+  | _ :: _ :: _ ->
+      unsupported ~node_kind:"external-symbol" ~loc
+        ~message:"external declarations with separate bytecode/native symbols are not supported"
+        ()
+
+let parse_external_decl (value : value_description) =
+  External_decl
+    {
+      external_name = value.val_name.txt;
+      external_type = parse_external_type_expr value.val_desc;
+      external_symbol = parse_external_symbol ~loc:value.val_loc value.val_prim;
+    }
+
 let rec type_expr_uses_type type_name = function
   | Type_var _ -> false
   | Type_tuple items -> List.exists (type_expr_uses_type type_name) items
   | Type_constr constr ->
       String.equal constr.type_name type_name
       || List.exists (type_expr_uses_type type_name) constr.args
+
+let rec external_type_expr_uses_type type_name = function
+  | External_type_constr constr ->
+      String.equal constr.external_type_name type_name
+      || List.exists
+           (external_type_expr_uses_type type_name)
+           constr.external_type_args
+  | External_type_tuple items ->
+      List.exists (external_type_expr_uses_type type_name) items
+  | External_type_arrow (arg, result) ->
+      external_type_expr_uses_type type_name arg
+      || external_type_expr_uses_type type_name result
 
 let record_type_field_uses_type type_name field =
   type_expr_uses_type type_name field.record_field_type
@@ -1030,7 +1113,7 @@ and pattern_uses_record_fields field_names = function
 
 let decl_defines_record_type type_name = function
   | Record_type_decl decl -> String.equal decl.record_type_name type_name
-  | Let_decl _ | Type_decl _ | Tuple_type_decl _ -> false
+  | Let_decl _ | Type_decl _ | Tuple_type_decl _ | External_decl _ -> false
 
 let decl_uses_type type_name = function
   | Let_decl _ -> false
@@ -1039,17 +1122,18 @@ let decl_uses_type type_name = function
       List.exists (type_expr_uses_type type_name) decl.tuple_items
   | Record_type_decl decl ->
       List.exists (record_type_field_uses_type type_name) decl.record_fields
+  | External_decl decl -> external_type_expr_uses_type type_name decl.external_type
 
 let decl_uses_record_fields field_names = function
   | Let_decl decl -> expr_uses_record_fields field_names decl.body
-  | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ -> false
+  | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | External_decl _ -> false
 
 let decl_defines_record_field field_name = function
   | Record_type_decl decl ->
       List.exists
         (fun field -> String.equal field.record_field_name field_name)
         decl.record_fields
-  | Let_decl _ | Type_decl _ | Tuple_type_decl _ -> false
+  | Let_decl _ | Type_decl _ | Tuple_type_decl _ | External_decl _ -> false
 
 let record_field_used_without_source_decl field_names decls =
   StringSet.exists
@@ -1115,7 +1199,8 @@ let parse_structure_item env (item : structure_item) =
       let decl =
         match parse_value_binding env binding with
         | Let_decl decl -> Let_decl { decl with is_rec = true }
-        | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ -> assert false
+        | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | External_decl _ ->
+            assert false
       in
       (env, [ decl ])
   | Tstr_type (_, declarations) ->
@@ -1126,6 +1211,7 @@ let parse_structure_item env (item : structure_item) =
           decls
       in
       (type_env_add_type_decls env type_decls, decls)
+  | Tstr_primitive value -> (env, [ parse_external_decl value ])
   | Tstr_value (_, []) ->
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()
   | Tstr_value (_, _ :: _ :: _) ->

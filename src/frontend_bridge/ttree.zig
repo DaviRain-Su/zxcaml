@@ -18,6 +18,7 @@ pub const Module = struct {
     type_decls: []const TypeDecl = &.{},
     tuple_type_decls: []const TupleTypeDecl = &.{},
     record_type_decls: []const RecordTypeDecl = &.{},
+    externals: []const ExternalDecl = &.{},
 };
 
 /// Typed mirror of an accepted top-level declaration.
@@ -30,6 +31,32 @@ pub const LetDecl = struct {
     name: []const u8,
     body: Expr,
     is_rec: bool = false,
+};
+
+/// Top-level external declaration emitted by sexp v1.0.
+pub const ExternalDecl = struct {
+    name: []const u8,
+    ty: ExternalTypeExpr,
+    symbol: []const u8,
+};
+
+/// Type expression language used by external declarations.
+pub const ExternalTypeExpr = union(enum) {
+    TypeRef: ExternalTypeRef,
+    Tuple: []const ExternalTypeExpr,
+    Arrow: ExternalTypeArrow,
+};
+
+/// Named external type reference, optionally applied to type arguments.
+pub const ExternalTypeRef = struct {
+    name: []const u8,
+    args: []const ExternalTypeExpr,
+};
+
+/// Function arrow type for external declarations.
+pub const ExternalTypeArrow = struct {
+    arg: *const ExternalTypeExpr,
+    result: *const ExternalTypeExpr,
 };
 
 /// Top-level user-authored ADT declaration emitted by sexp v0.6.
@@ -238,6 +265,8 @@ pub const BridgeError = sexp_parser.ParseError || error{
     UnsupportedNode,
     MalformedModule,
     MalformedDecl,
+    MalformedExternalDecl,
+    MalformedExternalType,
     MalformedTypeDecl,
     MalformedTypeExpr,
     MalformedTuple,
@@ -323,6 +352,8 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
     errdefer tuple_type_decls.deinit(arena.allocator());
     var record_type_decls = std.ArrayList(RecordTypeDecl).empty;
     errdefer record_type_decls.deinit(arena.allocator());
+    var externals = std.ArrayList(ExternalDecl).empty;
+    errdefer externals.deinit(arena.allocator());
 
     for (items[1..]) |decl_node| {
         const decl_items = try expectList(decl_node);
@@ -334,6 +365,8 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
             try tuple_type_decls.append(arena.allocator(), try parseTupleTypeDecl(arena, decl_items));
         } else if (std.mem.eql(u8, tag, "record_type_decl")) {
             try record_type_decls.append(arena.allocator(), try parseRecordTypeDecl(arena, decl_items));
+        } else if (std.mem.eql(u8, tag, "external")) {
+            try externals.append(arena.allocator(), try parseExternalDecl(arena, decl_items));
         } else {
             try decls.append(arena.allocator(), try parseDeclItems(arena, decl_items));
         }
@@ -344,6 +377,7 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
         .type_decls = try type_decls.toOwnedSlice(arena.allocator()),
         .tuple_type_decls = try tuple_type_decls.toOwnedSlice(arena.allocator()),
         .record_type_decls = try record_type_decls.toOwnedSlice(arena.allocator()),
+        .externals = try externals.toOwnedSlice(arena.allocator()),
     };
 }
 
@@ -361,6 +395,72 @@ fn parseDeclItems(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) B
     const body = try parseExpr(arena, items[2]);
 
     return .{ .Let = .{ .name = name, .body = body, .is_rec = is_rec } };
+}
+
+fn parseExternalDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!ExternalDecl {
+    if (items.len != 4) return error.MalformedExternalDecl;
+
+    const name_items = try expectList(items[1]);
+    if (name_items.len != 2) return error.MalformedExternalDecl;
+    try expectAtomValue(name_items[0], "name");
+
+    const type_items = try expectList(items[2]);
+    if (type_items.len != 2) return error.MalformedExternalDecl;
+    try expectAtomValue(type_items[0], "type");
+
+    const symbol_items = try expectList(items[3]);
+    if (symbol_items.len != 2) return error.MalformedExternalDecl;
+    try expectAtomValue(symbol_items[0], "symbol");
+
+    return .{
+        .name = try dupeAtom(arena, name_items[1]),
+        .ty = try parseExternalTypeExpr(arena, type_items[1]),
+        .symbol = try dupeAtom(arena, symbol_items[1]),
+    };
+}
+
+fn parseExternalTypeExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!ExternalTypeExpr {
+    if (node.atomLike()) |name| {
+        return .{ .TypeRef = .{
+            .name = try arena.allocator().dupe(u8, name),
+            .args = &.{},
+        } };
+    }
+
+    const items = try expectList(node);
+    if (items.len == 0) return error.MalformedExternalType;
+    const tag = try expectAtom(items[0]);
+
+    if (std.mem.eql(u8, tag, "arrow")) {
+        if (items.len != 3) return error.MalformedExternalType;
+        const arg = try arena.allocator().create(ExternalTypeExpr);
+        arg.* = try parseExternalTypeExpr(arena, items[1]);
+        const result = try arena.allocator().create(ExternalTypeExpr);
+        result.* = try parseExternalTypeExpr(arena, items[2]);
+        return .{ .Arrow = .{ .arg = arg, .result = result } };
+    }
+    if (std.mem.eql(u8, tag, "tuple")) {
+        if (items.len < 2) return error.MalformedExternalType;
+        var members = std.ArrayList(ExternalTypeExpr).empty;
+        errdefer members.deinit(arena.allocator());
+        for (items[1..]) |member_node| {
+            try members.append(arena.allocator(), try parseExternalTypeExpr(arena, member_node));
+        }
+        return .{ .Tuple = try members.toOwnedSlice(arena.allocator()) };
+    }
+    if (std.mem.eql(u8, tag, "type-ref")) {
+        if (items.len < 2) return error.MalformedExternalType;
+        var args = std.ArrayList(ExternalTypeExpr).empty;
+        errdefer args.deinit(arena.allocator());
+        for (items[2..]) |arg_node| {
+            try args.append(arena.allocator(), try parseExternalTypeExpr(arena, arg_node));
+        }
+        return .{ .TypeRef = .{
+            .name = try dupeAtom(arena, items[1]),
+            .args = try args.toOwnedSlice(arena.allocator()),
+        } };
+    }
+    return error.MalformedExternalType;
 }
 
 fn parseTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!TypeDecl {
@@ -1065,6 +1165,37 @@ test "parse type declaration sexp nodes" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings("'a", left_param);
+}
+
+test "parse external declaration sexp nodes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 1.0 (module (external (name \"sol_log\") (type (arrow bytes unit)) (symbol \"sol_log_\"))))",
+    );
+    try std.testing.expectEqual(@as(usize, 0), module.decls.len);
+    try std.testing.expectEqual(@as(usize, 1), module.externals.len);
+
+    const external = module.externals[0];
+    try std.testing.expectEqualStrings("sol_log", external.name);
+    try std.testing.expectEqualStrings("sol_log_", external.symbol);
+
+    const arrow = switch (external.ty) {
+        .Arrow => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const arg = switch (arrow.arg.*) {
+        .TypeRef => |ref| ref,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("bytes", arg.name);
+    const result = switch (arrow.result.*) {
+        .TypeRef => |ref| ref,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("unit", result.name);
 }
 
 test "malformed sexp cases are rejected" {

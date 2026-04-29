@@ -5,11 +5,11 @@
    whitelisted option/result constructor expressions, basic match expressions,
    user-authored ADT type declarations, nested constructor patterns, guarded
    match arms, tuple/record construction/projection forms, and the P3
-   account/syscall/CPI surface. *)
+   account/syscall/CPI surface, and P5 external declarations. *)
 open Format
 open Zxc_subset
 
-let version = "0.9"
+let version = "1.0"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
@@ -158,6 +158,10 @@ let rec pp_decl ppf decl =
       fprintf ppf " (fields (";
       pp_record_type_fields ppf decl.record_fields;
       fprintf ppf ")))"
+  | External_decl decl ->
+      fprintf ppf "(external (name %S) (type %a) (symbol %S))"
+        decl.external_name pp_external_type_expr decl.external_type
+        decl.external_symbol
 
 and pp_type_variants ppf = function
   | [] -> ()
@@ -196,6 +200,23 @@ and pp_type_expr ppf = function
         pp_atom constr.type_name;
       List.iter (fun arg -> fprintf ppf " %a" pp_type_expr arg) constr.args;
       fprintf ppf ")"
+
+and pp_external_type_expr ppf = function
+  | External_type_constr { external_type_name; external_type_args = [] } ->
+      pp_atom ppf external_type_name
+  | External_type_constr { external_type_name; external_type_args } ->
+      fprintf ppf "(type-ref %a" pp_atom external_type_name;
+      List.iter
+        (fun arg -> fprintf ppf " %a" pp_external_type_expr arg)
+        external_type_args;
+      fprintf ppf ")"
+  | External_type_tuple items ->
+      fprintf ppf "(tuple";
+      List.iter (fun item -> fprintf ppf " %a" pp_external_type_expr item) items;
+      fprintf ppf ")"
+  | External_type_arrow (arg, result) ->
+      fprintf ppf "(arrow %a %a)" pp_external_type_expr arg
+        pp_external_type_expr result
 
 let pp_module ppf = function
   | Module decls ->

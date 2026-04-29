@@ -106,23 +106,16 @@ module List = struct
 end
 
 module Syscall = struct
-  let sol_log (_message : string) = ()
+  external sol_log : string -> unit = "sol_log_"
 
-  let sol_log_64 (_a : int) (_b : int) (_c : int) (_d : int) (_e : int) =
-    ()
+  external sol_log_64 : int -> int -> int -> int -> int -> unit = "sol_log_64_"
 
-  let sol_sha256 payload = payload
+  external sol_sha256 : 'a -> 'a = "sol_sha256"
 
-  let sol_get_clock_sysvar () =
-    {
-      slot = 0;
-      epoch_start_timestamp = 0;
-      epoch = 0;
-      leader_schedule_epoch = 0;
-      unix_timestamp = 0;
-    }
+  external sol_get_clock_sysvar : unit -> clock = "sol_get_clock_sysvar"
 
-  let sol_remaining_compute_units () = 0
+  external sol_remaining_compute_units : unit -> int
+    = "sol_remaining_compute_units"
 end
 
 module Pubkey = struct
