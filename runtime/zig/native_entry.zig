@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const Arena = @import("runtime/arena.zig").Arena;
+const AccountRuntime = @import("runtime/account.zig");
 const program = @import("program.zig");
 
 const arena_bytes = 32 * 1024;
@@ -16,8 +17,9 @@ var native_arena_buffer: [arena_bytes]u8 align(8) = undefined;
 /// Runs the generated program and exits with its returned status byte.
 pub fn main() noreturn {
     var arena = Arena.fromStaticBuffer(&native_arena_buffer);
-    const empty_input = [_]u8{};
-    const status = program.omlz_user_entrypoint(&arena, empty_input[0..].ptr);
+    const empty_accounts: []AccountRuntime.AccountView = &.{};
+    const empty_instruction_data: []const u8 = &.{};
+    const status = program.omlz_user_entrypoint(&arena, empty_accounts, empty_instruction_data);
     arena.reset();
     std.process.exit(@intCast(status & 0xff));
 }

@@ -23,7 +23,10 @@ export fn entrypoint(input: [*]const u8) callconv(.c) u64 {
     syscalls.sol_log_(loader_log_message[0..]);
 
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
-    const status = program.omlz_user_entrypoint(&arena, input);
+    var accounts: []AccountRuntime.AccountView = undefined;
+    AccountRuntime.parseAccountsFromPtrInto(&arena, input, &accounts) catch return 1;
+    const instruction_data = AccountRuntime.parseInstructionDataFromPtr(input) catch return 1;
+    const status = program.omlz_user_entrypoint(&arena, accounts, instruction_data);
     arena.reset();
     return status;
 }

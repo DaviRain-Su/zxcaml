@@ -218,7 +218,7 @@ fn emitFunction(
     try append(out, allocator, function_name);
     try append(out, allocator, "(arena: *Arena");
     if (is_entrypoint) {
-        try append(out, allocator, ", input: [*]const u8) u64 {\n");
+        try append(out, allocator, ", omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64 {\n");
     } else {
         if (func.calling_convention == .Closure) {
             try append(out, allocator, ", closure: *const prelude.Closure");
@@ -240,8 +240,9 @@ fn emitFunction(
         try append(out, allocator, "    _ = arena;\n");
     }
     if (is_entrypoint) {
-        const accounts_used = try emitEntrypointAccountBindings(out, allocator, func.params, func.body);
-        if (!accounts_used and !exprUsesCpiInvoke(func.body)) try append(out, allocator, "    _ = input;\n");
+        const bindings = try emitEntrypointRuntimeBindings(out, allocator, func.params, func.body);
+        if (!bindings.accounts_used) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
+        if (!bindings.instruction_data_used) try append(out, allocator, "    _ = omlz_runtime_instruction_data;\n");
     }
     if (func.calling_convention == .Closure) {
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
@@ -284,27 +285,38 @@ fn emitAccountViewHelper(out: *std.ArrayList(u8), allocator: std.mem.Allocator) 
     );
 }
 
-fn emitEntrypointAccountBindings(
+const EntrypointRuntimeBindings = struct {
+    accounts_used: bool = false,
+    instruction_data_used: bool = false,
+};
+
+fn emitEntrypointRuntimeBindings(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     params: []const lir.LParam,
     body: lir.LExpr,
-) EmitError!bool {
-    var accounts_used = false;
-    var parsed_accounts = false;
+) EmitError!EntrypointRuntimeBindings {
+    var bindings: EntrypointRuntimeBindings = .{};
     var account_index: usize = 0;
     for (params) |param| {
-        if (!paramNeedsEntrypointAccounts(param)) continue;
-        accounts_used = true;
-        if (isAccountTy(param.ty)) {
-            if (!parsed_accounts) {
-                try append(out, allocator, "    var omlz_entry_accounts: []AccountRuntime.AccountView = undefined;\n");
-                try append(out, allocator, "    AccountRuntime.parseAccountsFromPtrInto(arena, input, &omlz_entry_accounts) catch return 1;\n");
-                parsed_accounts = true;
-            }
+        if (paramNeedsEntrypointInstructionData(param)) {
+            bindings.instruction_data_used = true;
             try append(out, allocator, "    const ");
             try emitIdentifier(out, allocator, param.name);
-            try appendPrint(out, allocator, " = if (omlz_entry_accounts.len > {d}) omlz_entry_accounts[{d}] else return 1;\n", .{ account_index, account_index });
+            try append(out, allocator, " = omlz_runtime_instruction_data;\n");
+            if (!exprUsesName(body, param.name)) {
+                try append(out, allocator, "    _ = ");
+                try emitIdentifier(out, allocator, param.name);
+                try append(out, allocator, ";\n");
+            }
+            continue;
+        }
+        if (!paramNeedsEntrypointAccounts(param)) continue;
+        bindings.accounts_used = true;
+        if (isAccountTy(param.ty)) {
+            try append(out, allocator, "    const ");
+            try emitIdentifier(out, allocator, param.name);
+            try appendPrint(out, allocator, " = if (omlz_runtime_accounts.len > {d}) omlz_runtime_accounts[{d}] else return 1;\n", .{ account_index, account_index });
             if (!exprUsesName(body, param.name)) {
                 try append(out, allocator, "    _ = ");
                 try emitIdentifier(out, allocator, param.name);
@@ -312,7 +324,7 @@ fn emitEntrypointAccountBindings(
             }
             account_index += 1;
         } else {
-            try append(out, allocator, "    AccountRuntime.logAccountsFromPtr(input);\n");
+            try append(out, allocator, "    for (omlz_runtime_accounts) |omlz_entry_account| omlz_log_account_view(omlz_entry_account);\n");
             try append(out, allocator, "    const ");
             try emitIdentifier(out, allocator, param.name);
             try append(out, allocator, " = @as(i64, 0);\n");
@@ -323,7 +335,7 @@ fn emitEntrypointAccountBindings(
             }
         }
     }
-    return accounts_used;
+    return bindings;
 }
 
 fn emittedFunctionName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
@@ -3671,6 +3683,26 @@ fn paramNeedsEntrypointAccounts(param: lir.LParam) bool {
     return std.mem.eql(u8, param.name, "accounts") or isAccountTy(param.ty) or isAccountListTy(param.ty);
 }
 
+fn paramNeedsEntrypointInstructionData(param: lir.LParam) bool {
+    return std.mem.eql(u8, param.name, "input") or
+        std.mem.eql(u8, param.name, "instruction_data") or
+        (std.mem.eql(u8, param.name, "data") and isBytesTy(param.ty));
+}
+
+fn isBytesTy(ty: lir.LTy) bool {
+    return switch (ty) {
+        .String => true,
+        .Adt => |adt| blk: {
+            if (!std.mem.eql(u8, adt.name, "array") or adt.params.len != 1) break :blk false;
+            break :blk switch (adt.params[0]) {
+                .Int => true,
+                else => false,
+            };
+        },
+        else => false,
+    };
+}
+
 fn isAccountListTy(ty: lir.LTy) bool {
     const adt = switch (ty) {
         .Adt => |value| value,
@@ -4022,9 +4054,30 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         source,
-        "omlz_user_entrypoint(arena: *Arena, input: [*]const u8) u64",
+        "omlz_user_entrypoint(arena: *Arena, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(@as(i64, 0));") != null);
+}
+
+test "ZigBackend binds entrypoint instruction_data parameter from runtime bytes" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .params = &.{
+            .{ .name = "accounts", .ty = .Int },
+            .{ .name = "input", .ty = .String },
+        },
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .Var = .{ .name = "input" } },
+            .body = &.{ .Constant = .{ .Int = 0 } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "for (omlz_runtime_accounts) |omlz_entry_account| omlz_log_account_view(omlz_entry_account);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const input = omlz_runtime_instruction_data;") != null);
 }
 
 test "ZigBackend documents and emits the BPF const-array stack-copy shim" {
@@ -4376,7 +4429,7 @@ test "ZigBackend emits AccountView field reads and direct writable-field mutatio
     const source = try emitModule(std.testing.allocator, module);
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "const acct = if (omlz_entry_accounts.len > 0) omlz_entry_accounts[0] else return 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const acct = if (omlz_runtime_accounts.len > 0) omlz_runtime_accounts[0] else return 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_account_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".lamports.* = @intCast(@as(i64, 7));") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "@memcpy(omlz_account_") != null);

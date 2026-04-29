@@ -84,6 +84,48 @@ pub fn parseAccountsFromPtrInto(arena: *Arena, input: [*]const u8, out: *[]Accou
     out.* = accounts;
 }
 
+/// Parses instruction data from a bounded Solana input buffer after accounts.
+pub fn parseInstructionData(input: []const u8) ParseError![]const u8 {
+    var cursor: usize = 0;
+    const account_count_u64 = try readU64(input, &cursor);
+    if (account_count_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
+    const account_count: usize = @intCast(account_count_u64);
+
+    for (0..account_count) |_| {
+        try skipOneBounded(input, &cursor);
+    }
+
+    const data_len_u64 = try readU64(input, &cursor);
+    if (data_len_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
+    const data_len: usize = @intCast(data_len_u64);
+    if (data_len > input.len -| cursor) return error.TruncatedInput;
+    const data_start = cursor;
+    cursor += data_len;
+
+    if (pubkey_len > input.len -| cursor) return error.TruncatedInput;
+    return input[data_start..cursor];
+}
+
+/// Parses instruction data from Solana's raw entrypoint pointer after accounts.
+pub fn parseInstructionDataFromPtr(input: [*]const u8) ParseError![]const u8 {
+    var cursor: usize = 0;
+    const account_count_u64 = readU64Unchecked(input, &cursor);
+    if (account_count_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
+    const account_count: usize = @intCast(account_count_u64);
+
+    for (0..account_count) |_| {
+        try skipOneUnchecked(input, &cursor);
+    }
+
+    const data_len_u64 = readU64Unchecked(input, &cursor);
+    if (data_len_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
+    const data_len: usize = @intCast(data_len_u64);
+    const data = (input + cursor)[0..data_len];
+    cursor += data_len;
+    cursor += pubkey_len;
+    return data;
+}
+
 /// Logs every serialized account key and lamport balance from Solana input.
 pub inline fn logAccountsFromPtr(input: [*]const u8) void {
     var scratch: [1024]u8 align(8) = undefined;
@@ -180,6 +222,32 @@ fn parseOneUncheckedInto(input: [*]u8, cursor: *usize, out: *AccountView) void {
     cursor.* += @sizeOf(u64);
 }
 
+fn skipOneBounded(input: []const u8, cursor: *usize) ParseError!void {
+    try skipBytes(input, cursor, 4); // dup_info + signer/writable/executable flags.
+    try consumeZeroPadding(input, cursor, pre_original_data_len_padding);
+    try skipBytes(input, cursor, pubkey_len);
+    try skipBytes(input, cursor, pubkey_len);
+    try skipBytes(input, cursor, @sizeOf(u64));
+
+    const data_len_u64 = try readU64(input, cursor);
+    if (data_len_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
+    const data_len: usize = @intCast(data_len_u64);
+    try skipBytes(input, cursor, data_len);
+    try skipBytes(input, cursor, max_permitted_data_increase);
+    try consumeAlignmentPadding(input, cursor, account_alignment);
+    try skipBytes(input, cursor, @sizeOf(u64));
+}
+
+fn skipOneUnchecked(input: [*]const u8, cursor: *usize) ParseError!void {
+    cursor.* += 4 + pre_original_data_len_padding + pubkey_len + pubkey_len + @sizeOf(u64);
+    const data_len_u64 = readU64Unchecked(input, cursor);
+    if (data_len_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
+    cursor.* += @intCast(data_len_u64);
+    cursor.* += max_permitted_data_increase;
+    cursor.* = std.mem.alignForward(usize, cursor.*, account_alignment);
+    cursor.* += @sizeOf(u64);
+}
+
 inline fn allocAccountViews(arena: *Arena, count: usize) ParseError![]AccountView {
     if (count > arena.buffer.len / @sizeOf(AccountView)) return error.OutOfMemory;
 
@@ -252,6 +320,11 @@ fn consumeAlignmentPadding(input: []const u8, cursor: *usize, alignment: usize) 
         if (byte != 0) return error.InvalidPadding;
     }
     cursor.* = aligned;
+}
+
+fn skipBytes(input: []const u8, cursor: *usize, count: usize) ParseError!void {
+    if (count > input.len -| cursor.*) return error.TruncatedInput;
+    cursor.* += count;
 }
 
 fn writeU64(buf: []u8, cursor: *usize, value: u64) void {
@@ -370,6 +443,48 @@ test "golden account parser preserves serialized fields and zero-copy pointers" 
     try std.testing.expect(!unchecked_accounts[1].executable);
     try std.testing.expectEqual(@as(u64, 900), unchecked_accounts[1].lamportsValue());
     try std.testing.expectEqual(@as(u8, 0x30), unchecked_accounts[1].key[0]);
+}
+
+test "golden instruction data parser extracts bytes after accounts" {
+    var input = [_]u8{0} ** 12_000;
+    var cursor: usize = 0;
+    writeU64(&input, &cursor, 1);
+
+    input[cursor] = not_duplicate_account;
+    input[cursor + 1] = 1;
+    input[cursor + 2] = 1;
+    input[cursor + 3] = 0;
+    cursor += 4;
+    writeZeroes(&input, &cursor, pre_original_data_len_padding);
+    writePubkey(&input, &cursor, 0x10);
+    writePubkey(&input, &cursor, 0x80);
+    writeU64(&input, &cursor, 1234);
+    writeU64(&input, &cursor, 2);
+    input[cursor] = 0xde;
+    input[cursor + 1] = 0xad;
+    cursor += 2;
+    writeZeroes(&input, &cursor, max_permitted_data_increase);
+    const aligned = std.mem.alignForward(usize, cursor, account_alignment);
+    writeZeroes(&input, &cursor, aligned - cursor);
+    writeU64(&input, &cursor, 55);
+
+    writeU64(&input, &cursor, 4);
+    const instruction_data_offset = cursor;
+    input[cursor] = 0xca;
+    input[cursor + 1] = 0xfe;
+    input[cursor + 2] = 0xba;
+    input[cursor + 3] = 0xbe;
+    cursor += 4;
+    writePubkey(&input, &cursor, 0x40);
+
+    const instruction_data = try parseInstructionData(input[0..cursor]);
+    try std.testing.expectEqual(@as(usize, instruction_data_offset), @intFromPtr(instruction_data.ptr) - @intFromPtr(&input));
+    try std.testing.expectEqualSlices(u8, &.{ 0xca, 0xfe, 0xba, 0xbe }, instruction_data);
+
+    const unchecked_instruction_data = try parseInstructionDataFromPtr(@ptrCast(&input));
+    try std.testing.expectEqualSlices(u8, instruction_data, unchecked_instruction_data);
+
+    try std.testing.expectError(error.TruncatedInput, parseInstructionData(input[0 .. cursor - pubkey_len]));
 }
 
 test "account parser reports structured errors for malformed bounded inputs" {

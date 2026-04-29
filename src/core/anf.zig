@@ -228,6 +228,8 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
         const owned_name = try arena.allocator().dupe(u8, param_name);
         const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_"))
             .Unit
+        else if (isInstructionDataParamName(param_name))
+            .String
         else if (lambdaParamIsAccount(lambda.body.*, param_name))
             try accountTy(arena)
         else if (try lambdaParamIsList(arena, lambda.body.*, param_name))
@@ -2422,6 +2424,11 @@ fn isAccountFieldName(field_name: []const u8) bool {
         std.mem.eql(u8, field_name, "is_signer") or
         std.mem.eql(u8, field_name, "is_writable") or
         std.mem.eql(u8, field_name, "executable");
+}
+
+fn isInstructionDataParamName(param_name: []const u8) bool {
+    return std.mem.eql(u8, param_name, "input") or
+        std.mem.eql(u8, param_name, "instruction_data");
 }
 
 fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_name: []const u8) LowerError!bool {
