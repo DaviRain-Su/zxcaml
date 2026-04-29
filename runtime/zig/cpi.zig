@@ -23,7 +23,7 @@ pub const pda_marker = "ProgramDerivedAddress";
 
 /// C ABI account metadata for a CPI instruction.
 pub const SolAccountMeta = extern struct {
-    pubkey: Pubkey,
+    pubkey: *const Pubkey,
     is_writable: u8,
     is_signer: u8,
 };
@@ -89,15 +89,15 @@ pub const SolSignerSeedsC = extern struct {
 };
 
 /// MurmurHash3-32 dispatch address for `sol_invoke_signed_c`.
-pub const sol_invoke_signed_c_address: usize = 0x5513f7b3;
+pub const sol_invoke_signed_c_address: usize = 0xa22b9c85;
 /// MurmurHash3-32 dispatch address for `sol_create_program_address`.
-pub const sol_create_program_address_address: usize = 0x01893541;
+pub const sol_create_program_address_address: usize = 0x9377323c;
 /// MurmurHash3-32 dispatch address for `sol_try_find_program_address`.
-pub const sol_try_find_program_address_address: usize = 0x3ab62e77;
+pub const sol_try_find_program_address_address: usize = 0x48504a38;
 /// MurmurHash3-32 dispatch address for `sol_set_return_data`.
-pub const sol_set_return_data_address: usize = 0x9313b89e;
+pub const sol_set_return_data_address: usize = 0xa226d3eb;
 /// MurmurHash3-32 dispatch address for `sol_get_return_data`.
-pub const sol_get_return_data_address: usize = 0xa22b9c85;
+pub const sol_get_return_data_address: usize = 0x5d2245e4;
 
 const success: u64 = 0;
 const invalid_seeds: u64 = 1;
@@ -143,6 +143,173 @@ pub inline fn sol_invoke_signed_c(instruction: *const SolInstruction, account_in
 pub inline fn invoke(instruction: *const SolInstruction, account_infos: []const SolAccountInfo) u64 {
     const empty: []const SolSignerSeedsC = &.{};
     return sol_invoke_signed_c(instruction, account_infos, empty);
+}
+
+/// Invokes the system program to transfer one lamport from account 0 to account 1.
+pub inline fn zxcaml_system_transfer_one_lamport(arena: *Arena, input: [*]const u8) u64 {
+    _ = arena;
+    const input_mut: [*]u8 = @constCast(input);
+    var cursor: usize = 0;
+    _ = readU64Raw(input_mut, &cursor);
+
+    var infos: [3]SolAccountInfo = undefined;
+    parseAccountInfoUnchecked(input_mut, &cursor, &infos[0]);
+    parseAccountInfoUnchecked(input_mut, &cursor, &infos[1]);
+    parseAccountInfoUnchecked(input_mut, &cursor, &infos[2]);
+
+    var program_id = infos[2].key.*;
+    var metas: [2]SolAccountMeta = undefined;
+    metas[0] = .{ .pubkey = infos[0].key, .is_writable = 1, .is_signer = 1 };
+    metas[1] = .{ .pubkey = infos[1].key, .is_writable = 1, .is_signer = 0 };
+
+    var data: [12]u8 = undefined;
+    data[0] = 2;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 1;
+    data[5] = 0;
+    data[6] = 0;
+    data[7] = 0;
+    data[8] = 0;
+    data[9] = 0;
+    data[10] = 0;
+    data[11] = 0;
+
+    const instruction: SolInstruction = .{
+        .program_id = &program_id,
+        .accounts = metas[0..].ptr,
+        .account_len = 2,
+        .data = data[0..].ptr,
+        .data_len = data.len,
+    };
+
+    var seed: [6]u8 = undefined;
+    seed[0] = 'z';
+    seed[1] = 'x';
+    seed[2] = 'c';
+    seed[3] = 'a';
+    seed[4] = 'm';
+    seed[5] = 'l';
+    var c_seeds = [_]SolSignerSeed{.{ .addr = seed[0..].ptr, .len = seed.len }};
+    var seed_groups = [_]SolSignerSeedsC{.{ .addr = c_seeds[0..].ptr, .len = c_seeds.len }};
+    return sol_invoke_signed_c(&instruction, infos[0..], seed_groups[0..]);
+}
+
+/// Invokes the system program transfer using already parsed account views.
+pub inline fn zxcaml_system_transfer_one_lamport_from_views(arena: *Arena, views: []account.AccountView) u64 {
+    if (views.len < 3) return 1;
+
+    var program_id = views[2].key.*;
+    var metas: [2]SolAccountMeta = undefined;
+    metas[0] = .{
+        .pubkey = views[0].key,
+        .is_writable = 1,
+        .is_signer = 1,
+    };
+    metas[1] = .{
+        .pubkey = views[1].key,
+        .is_writable = 1,
+        .is_signer = 0,
+    };
+
+    var data: [12]u8 = undefined;
+    data[0] = 2;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 1;
+    data[5] = 0;
+    data[6] = 0;
+    data[7] = 0;
+    data[8] = 0;
+    data[9] = 0;
+    data[10] = 0;
+    data[11] = 0;
+    const instruction: SolInstruction = .{
+        .program_id = &program_id,
+        .accounts = metas[0..].ptr,
+        .account_len = metas.len,
+        .data = data[0..].ptr,
+        .data_len = data.len,
+    };
+
+    var infos: []SolAccountInfo = undefined;
+    arena.allocIntoOrTrap(SolAccountInfo, views.len, &infos);
+    for (views, 0..) |view, index| {
+        infos[index] = .{
+            .key = view.key,
+            .lamports = view.lamports,
+            .data_len = view.data.len,
+            .data = view.data.ptr,
+            .owner = view.owner,
+            .rent_epoch = view.rentEpochValue(),
+            .is_signer = @intFromBool(view.is_signer),
+            .is_writable = @intFromBool(view.is_writable),
+            .executable = @intFromBool(view.executable),
+        };
+    }
+
+    var seed: [6]u8 = undefined;
+    seed[0] = 'z';
+    seed[1] = 'x';
+    seed[2] = 'c';
+    seed[3] = 'a';
+    seed[4] = 'm';
+    seed[5] = 'l';
+    var c_seeds = [_]SolSignerSeed{.{ .addr = seed[0..].ptr, .len = seed.len }};
+    var seed_groups = [_]SolSignerSeedsC{.{ .addr = c_seeds[0..].ptr, .len = c_seeds.len }};
+    return sol_invoke_signed_c(&instruction, infos, seed_groups[0..]);
+}
+
+inline fn readU64Raw(input: [*]const u8, cursor: *usize) u64 {
+    const start = cursor.*;
+    cursor.* += 8;
+    return @as(u64, input[start]) |
+        (@as(u64, input[start + 1]) << 8) |
+        (@as(u64, input[start + 2]) << 16) |
+        (@as(u64, input[start + 3]) << 24) |
+        (@as(u64, input[start + 4]) << 32) |
+        (@as(u64, input[start + 5]) << 40) |
+        (@as(u64, input[start + 6]) << 48) |
+        (@as(u64, input[start + 7]) << 56);
+}
+
+inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolAccountInfo) void {
+    _ = input[cursor.*];
+    cursor.* += 1;
+    const is_signer = input[cursor.*];
+    cursor.* += 1;
+    const is_writable = input[cursor.*];
+    cursor.* += 1;
+    const executable = input[cursor.*];
+    cursor.* += 1;
+    cursor.* += 4;
+    const key: *const Pubkey = @ptrCast(input + cursor.*);
+    cursor.* += 32;
+    const owner: *const Pubkey = @ptrCast(input + cursor.*);
+    cursor.* += 32;
+    const lamports: *align(1) u64 = @ptrCast(input + cursor.*);
+    cursor.* += @sizeOf(u64);
+    const data_len = readU64Raw(input, cursor);
+    const data = (input + cursor.*)[0..@intCast(data_len)];
+    cursor.* += @intCast(data_len);
+    cursor.* += 10 * 1024;
+    cursor.* = std.mem.alignForward(usize, cursor.*, 16);
+    const rent_epoch: *align(1) u64 = @ptrCast(input + cursor.*);
+    cursor.* += @sizeOf(u64);
+
+    out.* = .{
+        .key = key,
+        .lamports = lamports,
+        .data_len = data.len,
+        .data = data.ptr,
+        .owner = owner,
+        .rent_epoch = rent_epoch.*,
+        .is_signer = is_signer,
+        .is_writable = is_writable,
+        .executable = executable,
+    };
 }
 
 /// Derives a program address from seeds and a program id.
@@ -244,18 +411,18 @@ fn isOnCurve(bytes: Pubkey) bool {
 }
 
 test "CPI syscall dispatch addresses match assigned MurmurHash3-32 values" {
-    try std.testing.expectEqual(@as(usize, 0x5513f7b3), sol_invoke_signed_c_address);
-    try std.testing.expectEqual(@as(usize, 0x01893541), sol_create_program_address_address);
-    try std.testing.expectEqual(@as(usize, 0x3ab62e77), sol_try_find_program_address_address);
-    try std.testing.expectEqual(@as(usize, 0x9313b89e), sol_set_return_data_address);
-    try std.testing.expectEqual(@as(usize, 0xa22b9c85), sol_get_return_data_address);
+    try std.testing.expectEqual(@as(usize, 0xa22b9c85), sol_invoke_signed_c_address);
+    try std.testing.expectEqual(@as(usize, 0x9377323c), sol_create_program_address_address);
+    try std.testing.expectEqual(@as(usize, 0x48504a38), sol_try_find_program_address_address);
+    try std.testing.expectEqual(@as(usize, 0xa226d3eb), sol_set_return_data_address);
+    try std.testing.expectEqual(@as(usize, 0x5d2245e4), sol_get_return_data_address);
 }
 
 test "CPI C ABI structs have stable field offsets" {
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(SolAccountMeta, "pubkey"));
-    try std.testing.expectEqual(@as(usize, 32), @offsetOf(SolAccountMeta, "is_writable"));
-    try std.testing.expectEqual(@as(usize, 33), @offsetOf(SolAccountMeta, "is_signer"));
-    try std.testing.expectEqual(@as(usize, 34), @sizeOf(SolAccountMeta));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(SolAccountMeta, "is_writable"));
+    try std.testing.expectEqual(@as(usize, 9), @offsetOf(SolAccountMeta, "is_signer"));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(SolAccountMeta));
 
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(SolInstruction, "program_id"));
     try std.testing.expectEqual(@as(usize, 8), @offsetOf(SolInstruction, "accounts"));

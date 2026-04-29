@@ -99,7 +99,18 @@ pub const Lexer = struct {
                     if (self.index >= self.input.len) return error.UnterminatedString;
                     const escaped = self.input[self.index];
                     self.index += 1;
-                    const decoded_ch: u8 = switch (escaped) {
+                    const decoded_ch: u8 = if (escaped >= '0' and escaped <= '7') blk: {
+                        var value: u16 = escaped - '0';
+                        var digits: usize = 1;
+                        while (digits < 3 and self.index < self.input.len) : (digits += 1) {
+                            const digit = self.input[self.index];
+                            if (digit < '0' or digit > '7') break;
+                            value = value * 8 + (digit - '0');
+                            self.index += 1;
+                        }
+                        if (value > 255) return error.BadStringEscape;
+                        break :blk @intCast(value);
+                    } else switch (escaped) {
                         '"' => '"',
                         '\\' => '\\',
                         'n' => '\n',
@@ -162,6 +173,14 @@ test "lexer tokenizes atoms identifiers integers strings and parens" {
     try expectAtom("0.1", try lexer.next());
     try std.testing.expectEqual(Token.r_paren, try lexer.next());
     try std.testing.expectEqual(Token.eof, try lexer.next());
+}
+
+test "lexer decodes OCaml octal string escapes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var lexer = Lexer.init(arena.allocator(), "\"\\002\\000\\377\"");
+    try expectString(&.{ 2, 0, 255 }, try lexer.next());
 }
 
 test "lexer rejects a bad atom character" {

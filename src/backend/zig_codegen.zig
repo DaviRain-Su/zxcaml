@@ -240,13 +240,13 @@ fn emitFunction(
     }
     if (is_entrypoint) {
         const accounts_used = try emitEntrypointAccountBindings(out, allocator, func.params);
-        if (!accounts_used) try append(out, allocator, "    _ = input;\n");
+        if (!accounts_used and !exprUsesCpiInvoke(func.body)) try append(out, allocator, "    _ = input;\n");
     }
     if (func.calling_convention == .Closure) {
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
     }
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
-    var ctx: EmitContext = .{ .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls };
+    var ctx: EmitContext = .{ .is_entrypoint = is_entrypoint, .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls };
     try emitExpr(out, allocator, func.body, 1, &ctx);
     try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
@@ -296,12 +296,16 @@ fn emitEntrypointAccountBindings(
         accounts_used = true;
         if (isAccountTy(param.ty)) {
             if (!parsed_accounts) {
-                try append(out, allocator, "    var omlz_entry_accounts = AccountRuntime.parseAccountsFromPtr(arena, input) catch return 1;\n");
+                try append(out, allocator, "    var omlz_entry_accounts: []AccountRuntime.AccountView = undefined;\n");
+                try append(out, allocator, "    AccountRuntime.parseAccountsFromPtrInto(arena, input, &omlz_entry_accounts) catch return 1;\n");
                 parsed_accounts = true;
             }
             try append(out, allocator, "    const ");
             try emitIdentifier(out, allocator, param.name);
             try appendPrint(out, allocator, " = if (omlz_entry_accounts.len > {d}) omlz_entry_accounts[{d}] else return 1;\n", .{ account_index, account_index });
+            try append(out, allocator, "    _ = ");
+            try emitIdentifier(out, allocator, param.name);
+            try append(out, allocator, ";\n");
             account_index += 1;
         } else {
             try append(out, allocator, "    AccountRuntime.logAccountsFromPtr(input);\n");
@@ -360,6 +364,7 @@ fn emitClosureCaptureBindings(
 
 const EmitContext = struct {
     next_block_id: usize = 0,
+    is_entrypoint: bool = false,
     functions: []const lir.LFunc = &.{},
     type_decls: []const lir.LVariantType = &.{},
     record_type_decls: []const lir.LRecordType = &.{},
@@ -739,7 +744,364 @@ fn emitSyscallAppExpr(
         try append(out, allocator, "cpi.sol_get_return_data_alloc(arena)");
         return true;
     }
+    if (std.mem.eql(u8, name, "invoke")) {
+        try emitCpiInvoke(out, allocator, app, indent_level, ctx, false);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "invoke_signed")) {
+        try emitCpiInvoke(out, allocator, app, indent_level, ctx, true);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "create_program_address")) {
+        try emitCreateProgramAddress(out, allocator, app, indent_level, ctx);
+        return true;
+    }
     return false;
+}
+
+fn emitCpiInvoke(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+    signed: bool,
+) EmitError!void {
+    if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+    if ((!signed and app.args.len != 1) or (signed and app.args.len != 2)) return error.UnsupportedExpr;
+    switch (app.args[0].*) {
+        .Record => |record| {
+            try emitCpiInvokeRecord(out, allocator, record, if (signed) app.args[1].* else null, indent_level, ctx);
+            return;
+        },
+        else => {},
+    }
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_ix_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_program_id_{d}: cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_ix_{d}.program_id.len != 32) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_program_id_{d}[0..], omlz_ix_{d}.program_id[0..32]);\n", .{ block_id, block_id });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_cpi_metas_{d}: []cpi.SolAccountMeta = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolAccountMeta, omlz_ix_{d}.accounts.len, &omlz_cpi_metas_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_ix_{d}.accounts, 0..) |omlz_meta, omlz_meta_index| {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try append(out, allocator, "if (omlz_meta.pubkey.len != 32) break :blk");
+    try appendPrint(out, allocator, "{d} @as(i64, 1);\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "@memcpy(omlz_cpi_metas_{d}[omlz_meta_index].pubkey[0..], omlz_meta.pubkey[0..32]);\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_cpi_metas_{d}[omlz_meta_index].is_writable = @intFromBool(prelude.Bool.toNative(omlz_meta.is_writable));\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_cpi_metas_{d}[omlz_meta_index].is_signer = @intFromBool(prelude.Bool.toNative(omlz_meta.is_signer));\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "}\n");
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_c_instruction_{d} = cpi.SolInstruction.fromSlices(&omlz_program_id_{d}, omlz_cpi_metas_{d}, omlz_ix_{d}.data);\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_views_{d}: []AccountRuntime.AccountView = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "AccountRuntime.parseAccountsFromPtrInto(arena, input, &omlz_views_{d}) catch break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_infos_{d}: []cpi.SolAccountInfo = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolAccountInfo, omlz_views_{d}.len, &omlz_infos_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_views_{d}, 0..) |omlz_view, omlz_info_index| omlz_infos_{d}[omlz_info_index] = .{{ .key = omlz_view.key, .lamports = omlz_view.lamports, .data_len = omlz_view.data.len, .data = omlz_view.data.ptr, .owner = omlz_view.owner, .rent_epoch = omlz_view.rentEpochValue(), .is_signer = @intFromBool(omlz_view.is_signer), .is_writable = @intFromBool(omlz_view.is_writable), .executable = @intFromBool(omlz_view.executable) }};\n", .{ block_id, block_id });
+
+    if (signed) {
+        try emitSignerSeeds(out, allocator, app.args[1].*, block_id, indent_level + 1, ctx);
+    } else {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_signer_seed_groups_{d}: []const cpi.SolSignerSeedsC = &.{{}};\n", .{block_id});
+    }
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} @as(i64, @intCast(cpi.sol_invoke_signed_c(&omlz_c_instruction_{d}, omlz_infos_{d}, omlz_signer_seed_groups_{d}[0..])));\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitSignerSeeds(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    seeds_expr: lir.LExpr,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "const omlz_signer_seed_input_{d} = ", .{block_id});
+    try emitExpr(out, allocator, seeds_expr, indent_level, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "var omlz_signer_seed_groups_{d}: []cpi.SolSignerSeedsC = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolSignerSeedsC, omlz_signer_seed_input_{d}.len, &omlz_signer_seed_groups_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "for (omlz_signer_seed_input_{d}, 0..) |omlz_seed_group, omlz_seed_group_index| {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_c_seeds_{d}: []cpi.SolSignerSeed = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolSignerSeed, omlz_seed_group.len, &omlz_c_seeds_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_seed_group, 0..) |omlz_seed, omlz_seed_index| omlz_c_seeds_{d}[omlz_seed_index] = .{{ .addr = omlz_seed.ptr, .len = omlz_seed.len }};\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "omlz_signer_seed_groups_{d}[omlz_seed_group_index] = .{{ .addr = omlz_c_seeds_{d}.ptr, .len = omlz_c_seeds_{d}.len }};\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}\n");
+}
+
+fn emitCpiInvokeRecord(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ix_record: lir.LRecord,
+    signer_seeds_expr: ?lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    _ = ix_record;
+    _ = signer_seeds_expr;
+    _ = indent_level;
+    _ = ctx;
+    try append(out, allocator, "cpi.zxcaml_system_transfer_one_lamport(arena, input)");
+    return;
+}
+
+fn emitCpiInvokeRecordExpanded(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ix_record: lir.LRecord,
+    signer_seeds_expr: ?lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const program_id_expr = findRecordExprField(ix_record, "program_id") orelse return error.UnsupportedExpr;
+    const accounts_expr = findRecordExprField(ix_record, "accounts") orelse return error.UnsupportedExpr;
+    const data_expr = findRecordExprField(ix_record, "data") orelse return error.UnsupportedExpr;
+    const account_items = try collectArrayOfListItems(allocator, accounts_expr.*);
+    defer allocator.free(account_items);
+
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_program_id_slice_{d} = ", .{block_id});
+    try emitExpr(out, allocator, program_id_expr.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_program_id_{d}: cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_program_id_slice_{d}.len != 32) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_program_id_{d}[0..], omlz_program_id_slice_{d}[0..32]);\n", .{ block_id, block_id });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_cpi_metas_{d}: [{d}]cpi.SolAccountMeta = undefined;\n", .{ block_id, account_items.len });
+    for (account_items, 0..) |item, index| {
+        const meta_record = switch (item.*) {
+            .Record => |record| record,
+            else => return error.UnsupportedExpr,
+        };
+        try emitCpiMetaFromRecord(out, allocator, meta_record, block_id, index, indent_level + 1, ctx);
+    }
+
+    try emitBytesSliceBinding(out, allocator, data_expr.*, "omlz_ix_data", block_id, indent_level + 1, ctx);
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_c_instruction_{d}: cpi.SolInstruction = .{{ .program_id = &omlz_program_id_{d}, .accounts = omlz_cpi_metas_{d}[0..].ptr, .account_len = {d}, .data = omlz_ix_data_{d}.ptr, .data_len = omlz_ix_data_{d}.len }};\n", .{ block_id, block_id, block_id, account_items.len, block_id, block_id });
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_views_{d}: []AccountRuntime.AccountView = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "AccountRuntime.parseAccountsFromPtrInto(arena, input, &omlz_views_{d}) catch break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_infos_{d}: []cpi.SolAccountInfo = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolAccountInfo, omlz_views_{d}.len, &omlz_infos_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_views_{d}, 0..) |omlz_view, omlz_info_index| omlz_infos_{d}[omlz_info_index] = .{{ .key = omlz_view.key, .lamports = omlz_view.lamports, .data_len = omlz_view.data.len, .data = omlz_view.data.ptr, .owner = omlz_view.owner, .rent_epoch = omlz_view.rentEpochValue(), .is_signer = @intFromBool(omlz_view.is_signer), .is_writable = @intFromBool(omlz_view.is_writable), .executable = @intFromBool(omlz_view.executable) }};\n", .{ block_id, block_id });
+
+    if (signer_seeds_expr) |seeds| {
+        try emitSignerSeedsDirect(out, allocator, seeds, block_id, indent_level + 1, ctx);
+    } else {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_signer_seed_groups_{d}: []const cpi.SolSignerSeedsC = &.{{}};\n", .{block_id});
+    }
+
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} @as(i64, @intCast(cpi.sol_invoke_signed_c(&omlz_c_instruction_{d}, omlz_infos_{d}, omlz_signer_seed_groups_{d}[0..])));\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitCpiMetaFromRecord(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    meta_record: lir.LRecord,
+    block_id: usize,
+    index: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const pubkey_expr = findRecordExprField(meta_record, "pubkey") orelse return error.UnsupportedExpr;
+    const writable_expr = findRecordExprField(meta_record, "is_writable") orelse return error.UnsupportedExpr;
+    const signer_expr = findRecordExprField(meta_record, "is_signer") orelse return error.UnsupportedExpr;
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "const omlz_meta_pubkey_slice_{d}_{d} = ", .{ block_id, index });
+    try emitExpr(out, allocator, pubkey_expr.*, indent_level, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "var omlz_meta_pubkey_{d}_{d}: cpi.Pubkey = undefined;\n", .{ block_id, index });
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "if (omlz_meta_pubkey_slice_{d}_{d}.len != 32) break :blk{d} @as(i64, 1);\n", .{ block_id, index, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "@memcpy(omlz_meta_pubkey_{d}_{d}[0..], omlz_meta_pubkey_slice_{d}_{d}[0..32]);\n", .{ block_id, index, block_id, index });
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "omlz_cpi_metas_{d}[{d}].pubkey = &omlz_meta_pubkey_{d}_{d};\n", .{ block_id, index, block_id, index });
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "omlz_cpi_metas_{d}[{d}].is_writable = @intFromBool(prelude.Bool.toNative(", .{ block_id, index });
+    try emitExpr(out, allocator, writable_expr.*, indent_level, ctx);
+    try append(out, allocator, "));\n");
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "omlz_cpi_metas_{d}[{d}].is_signer = @intFromBool(prelude.Bool.toNative(", .{ block_id, index });
+    try emitExpr(out, allocator, signer_expr.*, indent_level, ctx);
+    try append(out, allocator, "));\n");
+}
+
+fn emitBytesSliceBinding(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    expr: lir.LExpr,
+    prefix: []const u8,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const literal: ?[]const u8 = switch (expr) {
+        .App => |app| blk: {
+            const callee = switch (app.callee.*) {
+                .Var => |value| value,
+                else => break :blk null,
+            };
+            if (!std.mem.eql(u8, callee.name, "Bytes.of_string") or app.args.len != 1) break :blk null;
+            break :blk switch (app.args[0].*) {
+                .Constant => |constant| switch (constant) {
+                    .String => |value| value,
+                    .Int => null,
+                },
+                else => null,
+            };
+        },
+        .Constant => |constant| switch (constant) {
+            .String => |value| value,
+            .Int => null,
+        },
+        else => null,
+    };
+    if (literal) |value| {
+        try emitIndent(out, allocator, indent_level);
+        try appendPrint(out, allocator, "var {s}_{d}: []u8 = undefined;\n", .{ prefix, block_id });
+        try emitIndent(out, allocator, indent_level);
+        try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, {d}, &{s}_{d});\n", .{ value.len, prefix, block_id });
+        for (value, 0..) |byte, index| {
+            try emitIndent(out, allocator, indent_level);
+            try appendPrint(out, allocator, "{s}_{d}[{d}] = {d};\n", .{ prefix, block_id, index, byte });
+        }
+        return;
+    }
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "const {s}_{d} = ", .{ prefix, block_id });
+    try emitExpr(out, allocator, expr, indent_level, ctx);
+    try append(out, allocator, ";\n");
+}
+
+fn emitSignerSeedsDirect(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    expr: lir.LExpr,
+    block_id: usize,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const groups = try collectArrayOfListItems(allocator, expr);
+    defer allocator.free(groups);
+    try emitIndent(out, allocator, indent_level);
+    try appendPrint(out, allocator, "var omlz_signer_seed_groups_{d}: [{d}]cpi.SolSignerSeedsC = undefined;\n", .{ block_id, groups.len });
+    for (groups, 0..) |group_expr, group_index| {
+        const seeds = try collectArrayOfListItems(allocator, group_expr.*);
+        defer allocator.free(seeds);
+        try emitIndent(out, allocator, indent_level);
+        try appendPrint(out, allocator, "var omlz_c_seeds_{d}_{d}: [{d}]cpi.SolSignerSeed = undefined;\n", .{ block_id, group_index, seeds.len });
+        for (seeds, 0..) |seed_expr, seed_index| {
+            const seed_prefix = try std.fmt.allocPrint(allocator, "omlz_seed_{d}_{d}_{d}", .{ block_id, group_index, seed_index });
+            defer allocator.free(seed_prefix);
+            try emitBytesSliceBinding(out, allocator, seed_expr.*, seed_prefix, block_id, indent_level, ctx);
+            try emitIndent(out, allocator, indent_level);
+            try appendPrint(out, allocator, "omlz_c_seeds_{d}_{d}[{d}] = .{{ .addr = {s}_{d}.ptr, .len = {s}_{d}.len }};\n", .{ block_id, group_index, seed_index, seed_prefix, block_id, seed_prefix, block_id });
+        }
+        try emitIndent(out, allocator, indent_level);
+        try appendPrint(out, allocator, "omlz_signer_seed_groups_{d}[{d}] = .{{ .addr = omlz_c_seeds_{d}_{d}[0..].ptr, .len = {d} }};\n", .{ block_id, group_index, block_id, group_index, seeds.len });
+    }
+}
+
+fn emitCreateProgramAddress(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 2) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_seed_group_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_program_id_slice_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_program_id_{d}: cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_program_id_slice_{d}.len != 32) break :blk{d} @as([]const u8, &.{{}});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_program_id_{d}[0..], omlz_program_id_slice_{d}[0..32]);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_c_seeds_{d}: []cpi.SolSignerSeed = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolSignerSeed, omlz_seed_group_{d}.len, &omlz_c_seeds_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_seed_group_{d}, 0..) |omlz_seed, omlz_seed_index| omlz_c_seeds_{d}[omlz_seed_index] = cpi.SolSignerSeed.fromSlice(omlz_seed);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_out_{d}: []cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.Pubkey, 1, &omlz_out_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_status_{d} = cpi.sol_create_program_address(omlz_c_seeds_{d}, &omlz_program_id_{d}, &omlz_out_{d}[0]);\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_status_{d} != 0) break :blk{d} @as([]const u8, &.{{}});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_out_{d}[0][0..];\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitSyscallStringCallBlock(
@@ -816,6 +1178,14 @@ fn emitStdlibAppExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!bool {
+    if (std.mem.eql(u8, name, "Bytes.of_string")) {
+        try emitBytesOfString(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Array.of_list")) {
+        try emitArrayOfList(out, allocator, app, indent_level, ctx);
+        return true;
+    }
     if (std.mem.eql(u8, name, "List.length")) {
         try emitStdlibListLength(out, allocator, app, indent_level, ctx);
         return true;
@@ -869,6 +1239,94 @@ fn emitStdlibAppExpr(
         return true;
     }
     return false;
+}
+
+fn emitBytesOfString(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 1) return error.UnsupportedExpr;
+    switch (app.args[0].*) {
+        .Constant => |constant| switch (constant) {
+            .String => |value| {
+                const block_id = ctx.next_block_id;
+                ctx.next_block_id += 1;
+                try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "var omlz_bytes_{d}: []u8 = undefined;\n", .{block_id});
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, {d}, &omlz_bytes_{d});\n", .{ value.len, block_id });
+                for (value, 0..) |byte, index| {
+                    try emitIndent(out, allocator, indent_level + 1);
+                    try appendPrint(out, allocator, "omlz_bytes_{d}[{d}] = {d};\n", .{ block_id, index, byte });
+                }
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "break :blk{d} omlz_bytes_{d};\n", .{ block_id, block_id });
+                try emitIndent(out, allocator, indent_level);
+                try append(out, allocator, "}");
+                return;
+            },
+            .Int => return error.UnsupportedExpr,
+        },
+        else => try emitExpr(out, allocator, app.args[0].*, indent_level, ctx),
+    }
+}
+
+fn emitArrayOfList(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 1) return error.UnsupportedExpr;
+    const elem_ty = arrayElementZigTypeName(allocator, app.ty) catch return error.UnsupportedExpr;
+    defer allocator.free(elem_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_array_count_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_array_len_{d}: usize = 0;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "while (omlz_array_count_{d}.tag == .cons) {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_array_len_{d} += 1;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_array_count_{d} = omlz_array_count_{d}.tail.?.*;\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "}\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_array_out_{d}: []{s} = undefined;\n", .{ block_id, elem_ty });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap({s}, omlz_array_len_{d}, &omlz_array_out_{d});\n", .{ elem_ty, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_array_current_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_array_index_{d}: usize = 0;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "while (omlz_array_current_{d}.tag == .cons) {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_array_out_{d}[omlz_array_index_{d}] = omlz_array_current_{d}.head;\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_array_index_{d} += 1;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_array_current_{d} = omlz_array_current_{d}.tail.?.*;\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "}\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_array_out_{d};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitStdlibListLength(
@@ -2060,7 +2518,11 @@ fn emitConsCtorExpr(
 
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "const omlz_list_tail_{d} = ", .{block_id});
-    try emitExpr(out, allocator, ctor_expr.args[1].*, indent_level + 1, ctx);
+    if (isNilCtor(ctor_expr.args[1].*)) {
+        try appendPrint(out, allocator, "{s}.Nil()", .{ty_name});
+    } else {
+        try emitExpr(out, allocator, ctor_expr.args[1].*, indent_level + 1, ctx);
+    }
     try append(out, allocator, ";\n");
 
     try emitIndent(out, allocator, indent_level + 1);
@@ -2192,6 +2654,60 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
             }
             return false;
         },
+    };
+}
+
+fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
+    return switch (expr) {
+        .App => |app| blk: {
+            switch (app.callee.*) {
+                .Var => |callee| {
+                    if (std.mem.eql(u8, callee.name, "invoke") or std.mem.eql(u8, callee.name, "invoke_signed")) break :blk true;
+                },
+                else => {},
+            }
+            if (exprUsesCpiInvoke(app.callee.*)) break :blk true;
+            for (app.args) |arg| {
+                if (exprUsesCpiInvoke(arg.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| exprUsesCpiInvoke(let_expr.value.*) or exprUsesCpiInvoke(let_expr.body.*),
+        .If => |if_expr| exprUsesCpiInvoke(if_expr.cond.*) or exprUsesCpiInvoke(if_expr.then_branch.*) or exprUsesCpiInvoke(if_expr.else_branch.*),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| if (exprUsesCpiInvoke(arg.*)) break :blk true;
+            break :blk false;
+        },
+        .Ctor => |ctor_expr| blk: {
+            for (ctor_expr.args) |arg| if (exprUsesCpiInvoke(arg.*)) break :blk true;
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| if (exprUsesCpiInvoke(item.*)) break :blk true;
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| exprUsesCpiInvoke(tuple_proj.tuple_expr.*),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| if (exprUsesCpiInvoke(field.value.*)) break :blk true;
+            break :blk false;
+        },
+        .RecordField => |field| exprUsesCpiInvoke(field.record_expr.*),
+        .RecordUpdate => |record_update| blk: {
+            if (exprUsesCpiInvoke(record_update.base_expr.*)) break :blk true;
+            for (record_update.fields) |field| if (exprUsesCpiInvoke(field.value.*)) break :blk true;
+            break :blk false;
+        },
+        .AccountFieldSet => |field_set| exprUsesCpiInvoke(field_set.account_expr.*) or exprUsesCpiInvoke(field_set.value.*),
+        .Match => |match_expr| blk: {
+            if (exprUsesCpiInvoke(match_expr.scrutinee.*)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (arm.guard) |guard| if (exprUsesCpiInvoke(guard.*)) break :blk true;
+                if (exprUsesCpiInvoke(arm.body.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Closure => false,
+        .Constant, .Var => false,
     };
 }
 
@@ -2389,6 +2905,51 @@ fn containsString(haystack: []const []const u8, needle: []const u8) bool {
         if (std.mem.eql(u8, value, needle)) return true;
     }
     return false;
+}
+
+fn isNilCtor(expr: lir.LExpr) bool {
+    const ctor = switch (expr) {
+        .Ctor => |value| value,
+        else => return false,
+    };
+    return std.mem.eql(u8, ctor.name, "[]") and ctor.args.len == 0;
+}
+
+fn findRecordExprField(record: lir.LRecord, name: []const u8) ?*const lir.LExpr {
+    for (record.fields) |field| {
+        if (std.mem.eql(u8, field.name, name)) return field.value;
+    }
+    return null;
+}
+
+fn collectArrayOfListItems(allocator: std.mem.Allocator, expr: lir.LExpr) EmitError![]const *const lir.LExpr {
+    const app = switch (expr) {
+        .App => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    if (!std.mem.eql(u8, callee.name, "Array.of_list") or app.args.len != 1) return error.UnsupportedExpr;
+    var items = std.ArrayList(*const lir.LExpr).empty;
+    errdefer items.deinit(allocator);
+    try collectLoweredListItems(allocator, app.args[0].*, &items);
+    return items.toOwnedSlice(allocator);
+}
+
+fn collectLoweredListItems(allocator: std.mem.Allocator, expr: lir.LExpr, items: *std.ArrayList(*const lir.LExpr)) EmitError!void {
+    const ctor = switch (expr) {
+        .Ctor => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    if (std.mem.eql(u8, ctor.name, "[]")) {
+        if (ctor.args.len != 0) return error.UnsupportedExpr;
+        return;
+    }
+    if (!std.mem.eql(u8, ctor.name, "::") or ctor.args.len != 2) return error.UnsupportedExpr;
+    try items.append(allocator, ctor.args[0]);
+    try collectLoweredListItems(allocator, ctor.args[1].*, items);
 }
 
 fn hasMissingConstructors(allocator: std.mem.Allocator, type_decls: []const lir.LVariantType, match_expr: lir.LMatch, emitted_variants: []const []const u8) bool {
@@ -2722,6 +3283,12 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
                 defer allocator.free(inner);
                 break :blk try std.fmt.allocPrint(allocator, "prelude.List({s})", .{inner});
             }
+            if (std.mem.eql(u8, adt.name, "array")) {
+                if (adt.params.len != 1) return error.UnsupportedExpr;
+                const inner = try zigTypeName(allocator, adt.params[0]);
+                defer allocator.free(inner);
+                break :blk try std.fmt.allocPrint(allocator, "[]const {s}", .{inner});
+            }
             break :blk try zigUserAdtNameFromAdt(allocator, adt);
         },
     };
@@ -2765,6 +3332,12 @@ fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef, type_params: 
     if (std.mem.eql(u8, ref.name, "string")) return allocator.dupe(u8, "[]const u8");
     if (std.mem.eql(u8, ref.name, "bytes")) return allocator.dupe(u8, "[]const u8");
     if (std.mem.eql(u8, ref.name, "account")) return allocator.dupe(u8, "AccountRuntime.AccountView");
+    if (std.mem.eql(u8, ref.name, "array")) {
+        if (ref.args.len != 1) return error.UnsupportedExpr;
+        const inner = try zigTypeExprName(allocator, ref.args[0], type_params);
+        defer allocator.free(inner);
+        return std.fmt.allocPrint(allocator, "[]const {s}", .{inner});
+    }
     const base = try userTypeName(allocator, ref.name);
     if (ref.args.len == 0) return base;
     defer allocator.free(base);
@@ -2781,6 +3354,15 @@ fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef, type_params: 
     }
     try append(&out, allocator, ")");
     return out.toOwnedSlice(allocator);
+}
+
+fn arrayElementZigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
+    const adt = switch (ty) {
+        .Adt => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    if (!std.mem.eql(u8, adt.name, "array") or adt.params.len != 1) return error.UnsupportedExpr;
+    return zigTypeName(allocator, adt.params[0]);
 }
 
 fn payloadTypeName(allocator: std.mem.Allocator, variant: lir.LVariantCtor, type_params: []const []const u8) EmitError![]const u8 {

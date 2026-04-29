@@ -18,6 +18,7 @@ PROGRAM_STEM="$(basename "$SRC" .ml)"
 TMPDIR="$(mktemp -d -t zxcaml-solana-hello-XXXXXX)"
 LEDGER="$TMPDIR/ledger"
 KEYPAIR="$TMPDIR/payer.json"
+RECIPIENT_KEYPAIR="$TMPDIR/recipient.json"
 PROGRAM_SO="$TMPDIR/$PROGRAM_STEM.so"
 VALIDATOR_LOG="$TMPDIR/validator.log"
 BUILD_LOG="$TMPDIR/build.log"
@@ -185,10 +186,27 @@ try:
     if len(blockhash) != 32:
         raise RuntimeError(f"blockhash decoded to {len(blockhash)} bytes, expected 32")
 
-    include_accounts = os.environ.get("ZXCAML_SOLANA_INVOKE_ACCOUNTS") == "1"
+    simple_cpi = os.environ.get("ZXCAML_SOLANA_SIMPLE_CPI") == "1"
+    include_accounts = os.environ.get("ZXCAML_SOLANA_INVOKE_ACCOUNTS") == "1" or simple_cpi
     system_program = b"\x00" * 32
-    account_keys = [payer, program] + ([system_program] if include_accounts else [])
-    instruction_accounts = bytes([0, 2]) if include_accounts else b""
+    if simple_cpi:
+        recipient_b58 = os.environ.get("ZXCAML_SIMPLE_CPI_RECIPIENT")
+        if not recipient_b58:
+            raise RuntimeError("ZXCAML_SOLANA_SIMPLE_CPI requires ZXCAML_SIMPLE_CPI_RECIPIENT")
+        recipient = b58decode(recipient_b58)
+        if len(recipient) != 32:
+            raise RuntimeError(f"recipient decoded to {len(recipient)} bytes, expected 32")
+        account_keys = [payer, recipient, program, system_program]
+        instruction_accounts = bytes([0, 1, 3])
+        program_index = 2
+        readonly_unsigned = 2
+        recipient_before = rpc("getBalance", [recipient_b58, {"commitment": "finalized"}])["value"]
+    else:
+        account_keys = [payer, program] + ([system_program] if include_accounts else [])
+        instruction_accounts = bytes([0, 2]) if include_accounts else b""
+        program_index = 1
+        readonly_unsigned = 2 if include_accounts else 1
+        recipient_before = None
 
     # Legacy message:
     # - payer signs and pays fees
@@ -196,11 +214,11 @@ try:
     # - optional feature harness mode passes payer + system program accounts
     # - single instruction: call program_id with no instruction data
     message = bytearray()
-    message += bytes([1, 0, 2 if include_accounts else 1])
+    message += bytes([1, 0, readonly_unsigned])
     message += compact_len(len(account_keys)) + b"".join(account_keys)
     message += blockhash
     message += compact_len(1)
-    message += bytes([1]) + compact_len(len(instruction_accounts)) + instruction_accounts + compact_len(0)
+    message += bytes([program_index]) + compact_len(len(instruction_accounts)) + instruction_accounts + compact_len(0)
 
     signature = sign_ed25519(seed, bytes(message))
     if len(signature) != 64:
@@ -242,6 +260,14 @@ try:
     if err is not None:
         raise RuntimeError(f"program invocation failed with err={err}")
 
+    if simple_cpi:
+        recipient_after = rpc("getBalance", [recipient_b58, {"commitment": "finalized"}])["value"]
+        print(f"==> simple CPI recipient balance: before={recipient_before} after={recipient_after}")
+        if recipient_after != recipient_before + 1:
+            raise RuntimeError(
+                f"expected simple CPI transfer to add 1 lamport to recipient; before={recipient_before} after={recipient_after}"
+            )
+
     tx = rpc("getTransaction", [
         actual_signature,
         {
@@ -282,6 +308,13 @@ wait_for_validator
 
 echo "==> funding temporary payer"
 solana --url "$RPC_URL" --keypair "$KEYPAIR" --commitment finalized airdrop 10 >/dev/null
+if [[ "${ZXCAML_SOLANA_SIMPLE_CPI:-}" == "1" ]]; then
+  echo "==> creating temporary CPI recipient"
+  solana-keygen new --no-bip39-passphrase --force --silent -o "$RECIPIENT_KEYPAIR" >/dev/null
+  export ZXCAML_SIMPLE_CPI_RECIPIENT
+  ZXCAML_SIMPLE_CPI_RECIPIENT="$(solana-keygen pubkey "$RECIPIENT_KEYPAIR")"
+  solana --url "$RPC_URL" --keypair "$KEYPAIR" --commitment finalized transfer --allow-unfunded-recipient "$ZXCAML_SIMPLE_CPI_RECIPIENT" 1 >/dev/null
+fi
 
 echo "==> building BPF shared object"
 "$ROOT/zig-out/bin/omlz" build --target=bpf "$SRC" -o "$PROGRAM_SO" >"$BUILD_LOG" 2>&1

@@ -35,6 +35,21 @@ pub const Arena = struct {
         return ptr[0..count];
     }
 
+    /// Allocates `count` contiguous values into `out`, trapping on failure without returning an aggregate slice.
+    pub fn allocIntoOrTrap(self: *Arena, comptime T: type, count: usize, out: *[]T) void {
+        const byte_count = @sizeOf(T) * count;
+        const base = @intFromPtr(self.buffer.ptr);
+        const aligned_addr = std.mem.alignForward(usize, base + self.offset, @alignOf(T));
+        const start = aligned_addr - base;
+        const end = start + byte_count;
+
+        if (end > self.buffer.len) unreachable;
+
+        self.offset = end;
+        const ptr: [*]T = @ptrCast(@alignCast(self.buffer.ptr + start));
+        out.* = ptr[0..count];
+    }
+
     /// Allocates one value of `T`, trapping on out-of-memory for BPF-friendly codegen.
     pub fn allocOneOrTrap(self: *Arena, comptime T: type) *T {
         const byte_count = roundUpArenaSlot(@sizeOf(T));
@@ -74,6 +89,10 @@ test "Arena allocates typed slices from a static buffer and resets" {
     const one = arena.allocOneOrTrap(u16);
     one.* = 42;
     try std.testing.expectEqual(@as(u16, 42), one.*);
+
+    var bytes: []u8 = undefined;
+    arena.allocIntoOrTrap(u8, 2, &bytes);
+    try std.testing.expectEqual(@as(usize, 2), bytes.len);
 
     arena.reset();
     try std.testing.expectEqual(@as(usize, 0), arena.offset);
