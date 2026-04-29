@@ -61,7 +61,7 @@ const is_bpf = builtin.target.cpu.arch == .bpfel or builtin.target.cpu.arch == .
 const SolLogFn = *align(1) const fn ([*]const u8, u64) void;
 const SolLog64Fn = *align(1) const fn (u64, u64, u64, u64, u64) void;
 const SolLogPubkeyFn = *align(1) const fn (*const Pubkey) void;
-const SolHashFn = *align(1) const fn (*const SolBytes, u64, *Hash) void;
+const SolHashFn = *align(1) const fn ([*]const u8, u64, [*]u8) u64;
 const SolGetClockSysvarFn = *align(1) const fn (*Clock) u64;
 const SolGetRentSysvarFn = *align(1) const fn (*Rent) u64;
 const SolLogComputeUnitsFn = *align(1) const fn () void;
@@ -94,10 +94,12 @@ pub inline fn sol_log_pubkey(pubkey: *const Pubkey) void {
 /// Computes a SHA-256 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
 pub inline fn sol_sha256(payload: []const u8) Hash {
     if (comptime is_bpf) {
-        var descriptor = [_]SolBytes{.{ .addr = payload.ptr, .len = payload.len }};
+        var descriptor: [1]SolBytes = undefined;
+        descriptor[0].addr = payload.ptr;
+        descriptor[0].len = payload.len;
         var out: Hash = undefined;
         const syscall: SolHashFn = @ptrFromInt(sol_sha256_address);
-        syscall(&descriptor[0], descriptor.len, &out);
+        _ = syscall(@ptrCast(&descriptor[0]), descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -109,7 +111,8 @@ pub inline fn sol_sha256(payload: []const u8) Hash {
 /// Computes SHA-256 and returns an arena-owned byte slice suitable for OCaml `bytes`.
 pub inline fn sol_sha256_alloc(arena: *Arena, payload: []const u8) []const u8 {
     const digest = sol_sha256(payload);
-    const out = arena.alloc(u8, digest.len) catch unreachable;
+    var out: []u8 = undefined;
+    arena.allocIntoOrTrap(u8, digest.len, &out);
     @memcpy(out, &digest);
     return out;
 }
@@ -117,10 +120,12 @@ pub inline fn sol_sha256_alloc(arena: *Arena, payload: []const u8) []const u8 {
 /// Computes a Keccak-256 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
 pub inline fn sol_keccak256(payload: []const u8) Hash {
     if (comptime is_bpf) {
-        var descriptor = [_]SolBytes{.{ .addr = payload.ptr, .len = payload.len }};
+        var descriptor: [1]SolBytes = undefined;
+        descriptor[0].addr = payload.ptr;
+        descriptor[0].len = payload.len;
         var out: Hash = undefined;
         const syscall: SolHashFn = @ptrFromInt(sol_keccak256_address);
-        syscall(&descriptor[0], descriptor.len, &out);
+        _ = syscall(@ptrCast(&descriptor[0]), descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -132,7 +137,8 @@ pub inline fn sol_keccak256(payload: []const u8) Hash {
 /// Computes Keccak-256 and returns an arena-owned byte slice suitable for OCaml `bytes`.
 pub inline fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8 {
     const digest = sol_keccak256(payload);
-    const out = arena.alloc(u8, digest.len) catch unreachable;
+    var out: []u8 = undefined;
+    arena.allocIntoOrTrap(u8, digest.len, &out);
     @memcpy(out, &digest);
     return out;
 }

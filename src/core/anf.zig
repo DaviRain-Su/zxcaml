@@ -683,6 +683,10 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_keccak256") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "Crypto.sha256") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "Crypto.keccak256") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_get_clock_sysvar") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = clock_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units") and arg_count == 1)

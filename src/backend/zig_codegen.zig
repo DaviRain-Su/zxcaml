@@ -728,6 +728,13 @@ fn emitExternalAppExpr(
     if (std.mem.eql(u8, external.symbol, "sol_log_") and app.args.len == 1) {
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_log_", false, false)) return;
     }
+    if (std.mem.eql(u8, external.symbol, "sol_log_pubkey") and app.args.len == 1) {
+        if (try emitCryptoHashPubkeyLogBlock(out, allocator, app.args[0].*, indent_level, ctx)) return;
+        try append(out, allocator, "syscalls.sol_log_pubkey(@ptrCast((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ").ptr))");
+        return;
+    }
     if (std.mem.eql(u8, external.symbol, "sol_sha256_alloc") and app.args.len == 1) {
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_sha256_alloc", true, true)) return;
     }
@@ -754,6 +761,45 @@ fn emitExternalAppExpr(
     if (wrap_int) try append(out, allocator, "@as(i64, @intCast(");
     try emitExternalDirectCall(out, allocator, external, app, indent_level, ctx);
     if (wrap_int) try append(out, allocator, "))");
+}
+
+fn emitCryptoHashPubkeyLogBlock(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    expr: lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!bool {
+    const app = switch (expr) {
+        .App => |value| value,
+        else => return false,
+    };
+    if (app.args.len != 1) return false;
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return false,
+    };
+    const syscall_name = if (std.mem.eql(u8, callee.name, "Crypto.sha256"))
+        "syscalls.sol_sha256"
+    else if (std.mem.eql(u8, callee.name, "Crypto.keccak256"))
+        "syscalls.sol_keccak256"
+    else
+        return false;
+
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_crypto_hash_{d} = {s}(", .{ block_id, syscall_name });
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ");\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "syscalls.sol_log_pubkey(&omlz_crypto_hash_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+    return true;
 }
 
 fn emitExternalDirectCall(
@@ -891,7 +937,7 @@ fn emitSyscallAppExpr(
         try append(out, allocator, ").ptr))");
         return true;
     }
-    if (std.mem.eql(u8, name, "Syscall.sol_sha256")) {
+    if (std.mem.eql(u8, name, "Syscall.sol_sha256") or std.mem.eql(u8, name, "Crypto.sha256")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_sha256_alloc", true, true)) return true;
         try append(out, allocator, "syscalls.sol_sha256_alloc(arena, ");
@@ -899,7 +945,7 @@ fn emitSyscallAppExpr(
         try append(out, allocator, ")");
         return true;
     }
-    if (std.mem.eql(u8, name, "Syscall.sol_keccak256")) {
+    if (std.mem.eql(u8, name, "Syscall.sol_keccak256") or std.mem.eql(u8, name, "Crypto.keccak256")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_keccak256_alloc", true, true)) return true;
         try append(out, allocator, "syscalls.sol_keccak256_alloc(arena, ");
@@ -4616,6 +4662,34 @@ test "ZigBackend emits external calls as direct Zig symbol references" {
     try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_sol_log") == null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_remaining") == null);
+}
+
+test "ZigBackend emits Crypto wrappers through arena-backed hash syscalls" {
+    const bytes_ty: lir.LTy = .String;
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "sha",
+            .value = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "Crypto.sha256" } },
+                .args = &.{&.{ .Var = .{ .name = "input" } }},
+                .ty = bytes_ty,
+            } },
+            .body = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "Crypto.keccak256" } },
+                .args = &.{&.{ .Var = .{ .name = "sha" } }},
+                .ty = bytes_ty,
+            } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_sha256_alloc(arena, input)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_keccak256_alloc(arena, sha)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Crypto_sha256") == null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Crypto_keccak256") == null);
 }
 
 test "ZigBackend slices fixed-array bytes returned by external calls" {
