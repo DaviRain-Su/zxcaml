@@ -64,6 +64,29 @@ test "idl: entrypoint fixture emits valid instruction schema" {
     try expectContains(result.stdout, "\"constants\":[]");
 }
 
+test "idl: multi-instruction example emits all marked instructions" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const result = try runIdl(allocator, io, "examples/multi_ix.ml");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.exit_code != 0) {
+        std.debug.print("omlz idl failed with stderr:\n{s}\n", .{result.stderr});
+    }
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{});
+    defer parsed.deinit();
+
+    try expectContains(result.stdout, "\"metadata\":{\"name\":\"multi_ix\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}");
+    try expectContains(result.stdout, "\"instructions\":[{\"name\":\"increment\",\"discriminator\":[11,18,104,9,104,174,59,33],\"accounts\":[{\"name\":\"counter_account\",\"writable\":true,\"signer\":false}],\"args\":[{\"name\":\"amount\",\"type\":\"i64\"}]},{\"name\":\"reset\",\"discriminator\":[23,81,251,84,138,183,240,214],\"accounts\":[{\"name\":\"counter_account\",\"writable\":false,\"signer\":true}],\"args\":[]},{\"name\":\"entrypoint\",\"discriminator\":[237,127,171,8,17,8,23,233],\"accounts\":[{\"name\":\"counter_account\",\"writable\":true,\"signer\":false}],\"args\":[{\"name\":\"amount\",\"type\":\"i64\"}]}]");
+    try expectContains(result.stdout, "\"accounts\":[{\"name\":\"counter\",\"discriminator\":[224,175,173,76,237,56,46,210]}]");
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"instruction_increment\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"instruction_reset\"") == null);
+}
+
 test "idl: no entrypoint emits empty instructions array" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

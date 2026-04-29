@@ -53,7 +53,7 @@ fn emitInstructions(out: *std.ArrayList(u8), allocator: std.mem.Allocator, modul
         const let_decl = switch (decl) {
             .Let => |value| value,
         };
-        if (!std.mem.eql(u8, let_decl.name, "entrypoint")) continue;
+        const instruction_name = instructionNameForLet(let_decl.name) orelse continue;
         const lambda = switch (let_decl.value.*) {
             .Lambda => |value| value,
             else => continue,
@@ -63,15 +63,31 @@ fn emitInstructions(out: *std.ArrayList(u8), allocator: std.mem.Allocator, modul
         first_instruction = false;
 
         try append(out, allocator, "{\"name\":");
-        try appendJsonString(out, allocator, let_decl.name);
+        try appendJsonString(out, allocator, instruction_name);
         try append(out, allocator, ",\"discriminator\":");
-        try emitDiscriminator(out, allocator, "global:", let_decl.name);
+        try emitDiscriminator(out, allocator, "global:", instruction_name);
         try append(out, allocator, ",\"accounts\":[");
         try emitInstructionAccounts(out, allocator, lambda);
         try append(out, allocator, "],\"args\":[");
         try emitInstructionArgs(out, allocator, lambda);
         try append(out, allocator, "]}");
     }
+}
+
+fn instructionNameForLet(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "entrypoint")) return name;
+
+    const instruction_prefix = "instruction_";
+    if (std.mem.startsWith(u8, name, instruction_prefix) and name.len > instruction_prefix.len) {
+        return name[instruction_prefix.len..];
+    }
+
+    const entrypoint_prefix = "entrypoint_";
+    if (std.mem.startsWith(u8, name, entrypoint_prefix) and name.len > entrypoint_prefix.len) {
+        return name[entrypoint_prefix.len..];
+    }
+
+    return null;
 }
 
 fn emitInstructionAccounts(out: *std.ArrayList(u8), allocator: std.mem.Allocator, lambda: ir.Lambda) !void {
@@ -545,6 +561,14 @@ fn appendPrint(
     const bytes = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(bytes);
     try append(out, allocator, bytes);
+}
+
+test "IDL emitter recognizes entrypoint and prefixed instruction names" {
+    try std.testing.expectEqualStrings("entrypoint", instructionNameForLet("entrypoint").?);
+    try std.testing.expectEqualStrings("increment", instructionNameForLet("instruction_increment").?);
+    try std.testing.expectEqualStrings("withdraw", instructionNameForLet("entrypoint_withdraw").?);
+    try std.testing.expect(instructionNameForLet("instruction_") == null);
+    try std.testing.expect(instructionNameForLet("helper") == null);
 }
 
 test "IDL emitter keeps modules without entrypoints valid" {
