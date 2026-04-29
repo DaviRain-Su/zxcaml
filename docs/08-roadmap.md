@@ -8,7 +8,7 @@
 |---|---|---|
 | **P1** | MVP: OCaml subset → BPF `.so` | `examples/solana_hello.ml` deploys and returns 0 |
 | **P2** | Subset expansion + match optimization | user ADTs, nested/guarded patterns, tuples, records, stdlib, and BPF closures |
-| P3 | Solana-shaped subset | `account` type, no-alloc analysis, syscall bindings, real Anchor-style program |
+| **P3** | Solana-shaped subset | account views, syscalls, CPI, SPL-Token example, no-alloc analysis, and IDL |
 | P4 | Region inference | escape analysis, `Region::Region(id)`, optional stack allocation |
 | P5 | Ecosystem reach | Zig FFI declarations, larger native stdlib subset |
 | P6 (opt) | Self-hosting | rewrite `src/core/anf.zig` (and friends) in our subset |
@@ -180,15 +180,33 @@ Deferred to P3+:
 - region inference / multi-arena ownership work and any non-BPF deliverable
   target.
 
-## 4. Phase 3 — Solana-shaped subset
+## 4. Phase 3 — Solana-shaped subset (2026-04-29)
 
-- `account` type: a typed view over BPF account input bytes.
-- A `no_alloc` attribute and an analysis that proves a function
-  performs no arena allocation.
-- Syscall bindings: `sol_log`, `sol_get_clock_sysvar`, basic CPI
-  signatures.
-- A real example: a small SPL-Token-style transfer program.
-- IDL emission stub (one-shot JSON, not Anchor-compatible yet).
+**Status:** Implemented for the P3 milestone. P3 shifted the project from a
+language subset that can compile to BPF into a Solana runtime-aware compiler
+slice.
+
+Implemented in P3:
+
+- built-in `account` values backed by zero-copy views over the Solana BPF input
+  buffer;
+- runtime syscall bindings using MurmurHash3-32 dispatch addresses;
+- CPI records and helpers (`instruction`, `account_meta`, `invoke`,
+  `invoke_signed`), PDA helpers, and return-data bindings;
+- account data/lamports mutation support through the zero-copy account buffer;
+- SPL-Token transfer instruction encoding and a Tokenkeg transfer acceptance
+  example;
+- structured error-code conventions;
+- `omlz check --no-alloc`, a conservative Core IR allocation analysis;
+- `omlz idl`, a one-shot ZxCaml JSON IDL emitter;
+- BPF entry arena increased from 1 KiB to 32 KiB;
+- examples for account/syscall, syscall-only, simple CPI, and SPL-Token flows;
+- CI smoke checks for `no_alloc` and IDL JSON emission.
+
+The wire format is currently **sexp `0.9`**: `0.8` added account/syscall
+references, and `0.9` added CPI type/function references.
+
+For the operational guide, see [`11-solana-p3.md`](./11-solana-p3.md).
 
 ## 5. Phase 4 — Region inference
 

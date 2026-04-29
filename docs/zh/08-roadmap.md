@@ -8,7 +8,7 @@
 |---|---|---|
 | **P1** | MVP：OCaml 子集 → BPF `.so` | `examples/solana_hello.ml` 部署成功并返回 0 |
 | **P2** | 子集扩展 + match 优化 | 用户 ADT、嵌套/guarded pattern、tuple、record、stdlib 和 BPF closure |
-| P3 | Solana 形态子集 | `account` 类型、no-alloc 分析、syscall 绑定、真实 Anchor 风格程序 |
+| **P3** | Solana 形态子集 | account 视图、syscall、CPI、SPL-Token 示例、no-alloc 分析和 IDL |
 | P4 | 区域推断 | 逃逸分析、`Region::Region(id)`、可选栈分配 |
 | P5 | 生态接入 | Zig FFI 声明、更大的原生 stdlib 子集 |
 | P6（可选） | 自举 | 把 `src/core/anf.zig`（及伙伴）用我们的子集重写 |
@@ -158,13 +158,30 @@ P2 **没有** 增加新的外部工具链依赖。当前 wire 格式是 **sexp `
 - module/functor、exception、mutable state、array、object、GADT、多态变体、effect；
 - region inference / multi-arena ownership 工作，以及任何非 BPF 交付目标。
 
-## 4. Phase 3 — Solana 形态子集
+## 4. Phase 3 — Solana 形态子集（2026-04-29）
 
-- `account` 类型：BPF account 输入字节的带类型视图。
-- `no_alloc` attribute 和一道分析，证明某函数不在 arena 上分配。
-- syscall 绑定：`sol_log`、`sol_get_clock_sysvar`、基础 CPI 签名。
-- 一个真实 example：小型 SPL-Token 风格的 transfer 程序。
-- IDL 发出 stub（一次性 JSON，尚未兼容 Anchor）。
+**状态：** P3 milestone 已实现。P3 把项目从"能编译到 BPF 的语言子集"推进为
+一个具备 Solana runtime awareness 的编译器切片。
+
+P3 已实现：
+
+- 内置 `account` 值，背后是 Solana BPF 输入 buffer 上的零拷贝视图；
+- 使用 MurmurHash3-32 dispatch 地址的 runtime syscall 绑定；
+- CPI records 和 helpers（`instruction`、`account_meta`、`invoke`、
+  `invoke_signed`）、PDA helpers，以及 return-data 绑定；
+- 通过零拷贝 account buffer 支持 account data/lamports mutation；
+- SPL-Token transfer instruction 编码，以及 Tokenkeg transfer acceptance 示例；
+- 结构化错误码约定；
+- `omlz check --no-alloc`，一项保守的 Core IR 分配分析；
+- `omlz idl`，一次性的 ZxCaml JSON IDL 发出器；
+- BPF entry arena 从 1 KiB 增加到 32 KiB；
+- account/syscall、syscall-only、simple CPI 和 SPL-Token 流程示例；
+- CI 中的 `no_alloc` 和 IDL JSON emission smoke check。
+
+当前 wire format 是 **sexp `0.9`**：`0.8` 增加 account/syscall 引用，
+`0.9` 增加 CPI 类型/函数引用。
+
+操作指南见 [`11-solana-p3.md`](./11-solana-p3.md)。
 
 ## 5. Phase 4 — 区域推断
 

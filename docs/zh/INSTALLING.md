@@ -25,10 +25,16 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 | solana-cli | stable | 运行 BPF acceptance harness 和本地 validator 检查 | 只有在运行 `init.sh` 前设置了 `SOLANA_BPF=1` 时才安装 |
 | macOS `llvm@20` | Homebrew `llvm@20` | 在 macOS 上为 `sbpf-linker 0.1.8` 提供 `libLLVM` | 在 macOS 上通过 Homebrew 安装 `llvm@20`，并在脚本运行期间导出 `DYLD_FALLBACK_LIBRARY_PATH` |
 
-### P2 依赖状态
+### P3 依赖状态
 
-P2 只增加编译器/语言功能；它 **没有引入新的外部前置依赖**。本地和 CI 仍使用
-同一套 `./init.sh`、`zig build`、`zig build test` 命令。
+P3 增加 Solana runtime integration，但**没有引入新的编译器构建前置依赖**。
+本地和 CI 仍使用同一套 `./init.sh`、`zig build`、`zig build test` 命令。
+
+运行 BPF acceptance 时，`SOLANA_BPF=1 ./init.sh` 必须让
+`solana-test-validator` 可用。SPL-Token transfer harness 还需要 `spl-token`
+CLI，以及本地 validator 上的 legacy SPL Token program
+`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`。运行
+`omlz check --no-alloc` 或 `omlz idl` 不需要额外工具。
 
 `init.sh` 有意不安装 Homebrew 或 Rust。在全新的 macOS 上，请先安装它们：
 
@@ -55,6 +61,9 @@ SOLANA_BPF=1 ./init.sh
 3. `sbpf-linker 0.1.8`；
 4. Homebrew `llvm@20` 和 macOS LLVM 动态库路径；
 5. 当 `SOLANA_BPF=1` 时的 `solana`、`solana-keygen` 和 `solana-test-validator`。
+
+如果你要运行 SPL-Token acceptance harness，还要确保同一个 shell 中
+`spl-token --version` 能成功。
 
 然后构建编译器：
 
@@ -131,5 +140,8 @@ zig version
 ocaml -vnum
 sbpf-linker --version
 zig build
+zig build test
+zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml
+zig-out/bin/omlz idl tests/idl/entrypoint.ml
 zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 ```

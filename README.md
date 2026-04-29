@@ -38,7 +38,8 @@ Solana BPF .so
   **Zig 0.16**.
 - Source language: **OCaml** (subset, growing).
 - Primary target: **Solana BPF** (`bpfel-freestanding`).
-- Memory model (P2): **arena, fully inferred, hidden from the user**.
+- Memory model (P3): **arena, fully inferred, hidden from the user**;
+  BPF entry programs use a 32 KiB arena.
 - Core IR shape: **ANF** (A-Normal Form), typed, layout-tagged.
 - CLI binary name: **`omlz`** (OCaml on Zig).
 - Build driver: a single **`build.zig`** orchestrates both the
@@ -104,29 +105,35 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**P2 subset expansion is implemented.** The P1 walking skeleton remains the
-baseline, and P2 adds user-defined ADTs, nested and guarded pattern matching,
-decision-tree match compilation, tuples, records, an expanded stdlib, and
-first-class closure support on the BPF path.
+**P3 Solana runtime integration is implemented.** The P1 walking skeleton and
+P2 subset expansion remain the baseline. P3 adds typed Solana account views,
+syscall bindings, CPI helpers, SPL-Token transfer support, conservative
+`no_alloc` analysis, structured error codes, and JSON IDL emission.
 
 `omlz` works end-to-end: parse/type-check OCaml with upstream
-`compiler-libs` → emit sexp `0.7` → lower through Core IR → interpret,
-build native Zig, or build Solana BPF `.so` artifacts.
+`compiler-libs` → emit sexp `0.9` → lower through Core IR → interpret,
+build native Zig, build Solana BPF `.so` artifacts, or emit JSON IDL.
 
 ### Current features
 
-- **CLI commands:** `omlz check <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`
-- **Wire format:** version 0.7 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`)
+- **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz idl <file>`
+- **Wire format:** version 0.9 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, tuples, records, field access, functional record update, lists (`[]` / `::`), and pattern matching over all of those forms
 - **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`), `Option` (`is_none`, `is_some`, `value`, `get`), and `Result` (`is_ok`, `is_error`, `ok`, `error`) modules
-- **Memory model:** arena-only, fully inferred, hidden from the user
+- **Memory model:** arena-only, fully inferred, hidden from the user; BPF entry arena is 32 KiB
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
+- **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
+- **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use MurmurHash3-32 dispatch addresses
+- **CPI and PDA helpers:** built-in `instruction` / `account_meta` records, `invoke`, `invoke_signed`, PDA helpers, and return-data syscalls mirror the Solana C ABI
+- **SPL-Token:** helper support and an acceptance example encode legacy Tokenkeg Transfer instructions with source/destination/authority metas
+- **no_alloc:** `omlz check --no-alloc` runs a conservative Core IR allocation proof and reports the allocation-causing node on failure
+- **IDL:** `omlz idl <file>` emits ZxCaml JSON with schema version, instruction accounts/args, user types, and structured error constants
 - **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
-- **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, with closure acceptance available under `tests/solana/closures/`
-- **Determinism:** interpreter ≡ Zig native across the P1 + P2 examples corpus
-- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, and an examples `omlz check` corpus loop
+- **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, closure harness, account/syscall harness, simple CPI harness, and SPL-Token transfer harness
+- **Determinism:** interpreter ≡ Zig native across the P1 + P2 + P3 examples corpus
+- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, P3 `no_alloc` and IDL smoke checks, and an examples `omlz check` corpus loop
 - **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
-- **Examples:** 29 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, and BPF smoke programs
+- **Examples:** 34 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, and SPL-Token programs
 - **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
@@ -150,6 +157,7 @@ Read in order:
 | 08 | [Roadmap](./docs/08-roadmap.md) | Phases P1–P7, with P1/P2 release notes |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
+| 11 | [Solana P3 guide](./docs/11-solana-p3.md) | Account layout, syscalls, CPI, SPL-Token, no_alloc, IDL, and CI coverage |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |
 | —  | [OxCaml relationship](./docs/oxcaml-relationship.md) | What OxCaml is, four ways to "use" it, which to pick |
 | —  | [zignocchio relationship](./docs/zignocchio-relationship.md) | The Zig→Solana SDK we read for ideas, what we learned, what we did not import (ADR-014) |

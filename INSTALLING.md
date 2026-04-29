@@ -25,11 +25,17 @@ The last command should produce `sh.so`, a Solana BPF shared object.
 | solana-cli | stable | Runs the BPF acceptance harness and local validator checks | Installed only when `SOLANA_BPF=1` is set before running `init.sh` |
 | macOS `llvm@20` | Homebrew `llvm@20` | Provides `libLLVM` for `sbpf-linker 0.1.8` on macOS | Installs `llvm@20` via Homebrew on macOS and exports `DYLD_FALLBACK_LIBRARY_PATH` while the script runs |
 
-### P2 dependency state
+### P3 dependency state
 
-P2 adds compiler/language support only; it introduces **no new external
-prerequisites** beyond the P1 toolchain listed above. The same `./init.sh`,
+P3 adds Solana runtime integration but introduces **no new compiler build
+prerequisites** beyond the P1/P2 toolchain listed above. The same `./init.sh`,
 `zig build`, and `zig build test` commands are used locally and in CI.
+
+For BPF acceptance runs, `SOLANA_BPF=1 ./init.sh` must make
+`solana-test-validator` available. The SPL-Token transfer harness additionally
+expects the `spl-token` CLI and the legacy SPL Token program
+`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` on the local validator. No extra
+tool is needed for `omlz check --no-alloc` or `omlz idl`.
 
 `init.sh` deliberately does not install Homebrew or Rust. On fresh macOS, install
 those first:
@@ -57,6 +63,9 @@ This is the same script CI uses. It verifies or installs:
 3. `sbpf-linker 0.1.8`;
 4. Homebrew `llvm@20` and the macOS LLVM dynamic-library path;
 5. `solana`, `solana-keygen`, and `solana-test-validator` when `SOLANA_BPF=1`.
+
+If you intend to run the SPL-Token acceptance harness, also ensure
+`spl-token --version` succeeds in the same shell.
 
 Then build the compiler:
 
@@ -132,5 +141,8 @@ zig version
 ocaml -vnum
 sbpf-linker --version
 zig build
+zig build test
+zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml
+zig-out/bin/omlz idl tests/idl/entrypoint.ml
 zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 ```

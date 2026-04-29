@@ -68,6 +68,14 @@ jobs:
       - name: Test
         run: zig build test
 
+      - name: P3 no_alloc smoke
+        run: zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml
+
+      - name: P3 IDL JSON smoke
+        run: |
+          set -euo pipefail
+          zig-out/bin/omlz idl tests/idl/entrypoint.ml | python3 -m json.tool >/dev/null
+
       - name: Check examples corpus
         run: |
           set -euo pipefail
