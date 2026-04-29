@@ -134,6 +134,16 @@ pub fn build(b: *std.Build) void {
     });
     const run_runtime_prelude_tests = b.addRunArtifact(runtime_prelude_tests);
 
+    const core_no_alloc_test_module = b.createModule(.{
+        .root_source_file = b.path("src/core/no_alloc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_no_alloc_tests = b.addTest(.{
+        .root_module = core_no_alloc_test_module,
+    });
+    const run_core_no_alloc_tests = b.addRunArtifact(core_no_alloc_tests);
+
     // Determinism property test (F16 / G09): runs every .ml in examples/
     // through both interpreter and Zig native, byte-diffs the results.
     const determinism_test_module = b.createModule(.{
@@ -215,6 +225,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_runtime_cpi_tests.step);
     test_step.dependOn(&run_runtime_spl_token_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);
+    test_step.dependOn(&run_core_no_alloc_tests.step);
     test_step.dependOn(&run_determinism_tests.step);
     test_step.dependOn(&run_golden_tests.step);
     test_step.dependOn(&run_ui_tests.step);

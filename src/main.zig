@@ -18,6 +18,7 @@ const driver_bpf = @import("driver/bpf.zig");
 const interp = @import("backend/interp.zig");
 const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
+const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
 const arena_lower = @import("lower/arena.zig");
 
@@ -53,6 +54,10 @@ pub fn main(init: std.process.Init) !void {
 
         switch (result) {
             .success => |parsed| {
+                if (check_args.emit != null and check_args.no_alloc) {
+                    try writeStderr(init.io, "error: --no-alloc cannot be combined with --emit\n");
+                    std.process.exit(1);
+                }
                 if (check_args.emit) |emit_kind| {
                     if (std.mem.eql(u8, emit_kind, "core-ir")) {
                         try emitCoreIr(init, parsed.module, check_args);
@@ -61,6 +66,10 @@ pub fn main(init: std.process.Init) !void {
 
                     try writeStderr(init.io, "error: unsupported --emit value; expected core-ir\n");
                     std.process.exit(1);
+                }
+                if (check_args.no_alloc) {
+                    try runNoAllocCheck(init, parsed.module);
+                    return;
                 }
                 return;
             },
@@ -131,6 +140,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz --version
         \\  omlz --help
         \\  omlz check <file.ml>
+        \\  omlz check --no-alloc <file.ml>
         \\  omlz check --emit=core-ir [--bless] <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
@@ -143,12 +153,14 @@ const CheckArgs = struct {
     emit: ?[]const u8,
     input_file: []const u8,
     bless: bool = false,
+    no_alloc: bool = false,
 };
 
 fn parseCheckArgs(args: []const []const u8) !CheckArgs {
     var emit: ?[]const u8 = null;
     var input_file: ?[]const u8 = null;
     var bless = false;
+    var no_alloc = false;
 
     var index: usize = 2;
     while (index < args.len) : (index += 1) {
@@ -157,6 +169,8 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
             emit = arg["--emit=".len..];
         } else if (std.mem.eql(u8, arg, "--bless")) {
             bless = true;
+        } else if (std.mem.eql(u8, arg, "--no-alloc")) {
+            no_alloc = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             return error.UnsupportedCheckArgs;
         } else if (input_file == null) {
@@ -170,6 +184,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         .emit = emit,
         .input_file = input_file orelse return error.UnsupportedCheckArgs,
         .bless = bless,
+        .no_alloc = no_alloc,
     };
 }
 
@@ -256,6 +271,41 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
     } else {
         try writeStdout(init.io, rendered);
         try writeStdout(init.io, "\n");
+    }
+}
+
+fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module) !void {
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
+
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    const result = core_no_alloc.checkModule(init.gpa, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to run no_alloc analysis: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    switch (result) {
+        .Pass => try writeStdout(init.io, "no_alloc: PASS\n"),
+        .Fail => |site| {
+            try writeStderr(init.io, "no_alloc: FAIL function ");
+            try writeStderr(init.io, site.function_name);
+            try writeStderr(init.io, ": allocation site ");
+            try writeStderr(init.io, core_no_alloc.nodeLabel(site.kind));
+            if (site.detail) |detail| {
+                try writeStderr(init.io, " ");
+                try writeStderr(init.io, detail);
+            }
+            try writeStderr(init.io, "\n");
+            std.process.exit(1);
+        },
     }
 }
 
