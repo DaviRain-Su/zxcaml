@@ -68,6 +68,9 @@ jobs:
       - name: Test
         run: zig build test
 
+      - name: Mollusk SVM tests
+        run: cd tests && cargo test
+
       - name: P3 no_alloc smoke
         run: zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml
 
