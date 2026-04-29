@@ -2,7 +2,7 @@
    The example constructs the Tokenkeg program id, source/destination/authority
    account metas, the Transfer instruction bytes, and invokes the token program. *)
 
-let entrypoint _input =
+let entrypoint _accounts _input =
   (* SPL Token transfer flow: amount is encoded below in the instruction data. *)
   let amount = 1 in
   (* Keep the amount binding visible to the example and to the compiler pipeline. *)
