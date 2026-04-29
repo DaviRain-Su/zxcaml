@@ -87,6 +87,7 @@ pub const RecordTypeDecl = struct {
     params: []const []const u8,
     fields: []const RecordTypeField,
     is_recursive: bool = false,
+    is_account: bool = false,
 };
 
 /// One record field in a type declaration.
@@ -527,28 +528,41 @@ fn parseTupleTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sex
 }
 
 fn parseRecordTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RecordTypeDecl {
-    if (items.len != 4 and items.len != 5) return error.MalformedTypeDecl;
+    if (items.len < 4 or items.len > 6) return error.MalformedTypeDecl;
 
     const name_items = try expectList(items[1]);
     if (name_items.len != 2) return error.MalformedTypeDecl;
     try expectAtomValue(name_items[0], "name");
 
-    var fields_index: usize = 3;
+    var fields_node: ?*const Sexp = null;
     var is_recursive = false;
-    if (items.len == 5) {
-        const recursive_items = try expectList(items[3]);
-        if (recursive_items.len != 2) return error.MalformedTypeDecl;
-        try expectAtomValue(recursive_items[0], "recursive");
-        try expectAtomValue(recursive_items[1], "true");
-        is_recursive = true;
-        fields_index = 4;
+    var is_account = false;
+    for (items[3..]) |item| {
+        const item_items = try expectList(item);
+        if (item_items.len == 0) return error.MalformedTypeDecl;
+        const tag = try expectAtom(item_items[0]);
+        if (std.mem.eql(u8, tag, "recursive")) {
+            if (item_items.len != 2) return error.MalformedTypeDecl;
+            try expectAtomValue(item_items[1], "true");
+            is_recursive = true;
+        } else if (std.mem.eql(u8, tag, "fields")) {
+            if (fields_node != null) return error.MalformedTypeDecl;
+            fields_node = item;
+        } else if (std.mem.eql(u8, tag, "account_attr")) {
+            if (item_items.len != 1) return error.MalformedTypeDecl;
+            is_account = true;
+        } else {
+            return error.MalformedTypeDecl;
+        }
     }
+    const fields = fields_node orelse return error.MalformedTypeDecl;
 
     return .{
         .name = try dupeAtom(arena, name_items[1]),
         .params = try parseParams(arena, items[2]),
-        .fields = try parseRecordTypeFields(arena, items[fields_index]),
+        .fields = try parseRecordTypeFields(arena, fields),
         .is_recursive = is_recursive,
+        .is_account = is_account,
     };
 }
 
@@ -1409,6 +1423,22 @@ test "parse tuple and record v0.7 sexp nodes" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqualStrings("age", update.fields[0].name);
+}
+
+test "parse record account attribute marker" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(
+        &arena,
+        "(zxcaml-cir 1.0 (module (record_type_decl (name counter) (params) (fields ((count (type-ref int)))) (account_attr)) (record_type_decl (name metadata) (params) (fields ((authority (type-ref bytes))))) (let entrypoint (lambda (_) (const-int 0)))))",
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), module.record_type_decls.len);
+    try std.testing.expectEqualStrings("counter", module.record_type_decls[0].name);
+    try std.testing.expect(module.record_type_decls[0].is_account);
+    try std.testing.expectEqualStrings("metadata", module.record_type_decls[1].name);
+    try std.testing.expect(!module.record_type_decls[1].is_account);
 }
 
 test "parse account type references and syscall apps in v0.8 sexp" {

@@ -162,6 +162,7 @@ fn lowerRecordTypeDecls(arena: *std.heap.ArenaAllocator, decls: []const ttree.Re
             .params = try dupeStringSlice(arena, decl.params),
             .fields = fields,
             .is_recursive = decl.is_recursive,
+            .is_account = decl.is_account,
         };
     }
     return lowered;

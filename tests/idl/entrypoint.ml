@@ -1,4 +1,6 @@
-type vault = { owner : bytes; balance : int }
+type vault = { owner : bytes; balance : int } [@@account]
+
+type metadata = { authority : bytes }
 
 type status = Ready | Frozen of int
 

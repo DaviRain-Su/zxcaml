@@ -28,6 +28,7 @@ pub const RecordType = struct {
     params: []const []const u8 = &.{},
     fields: []const RecordField = &.{},
     is_recursive: bool = false,
+    is_account: bool = false,
 };
 
 /// One field in a record type declaration.

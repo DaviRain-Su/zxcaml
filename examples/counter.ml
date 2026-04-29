@@ -7,6 +7,8 @@ external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
 external log_message : string -> unit = "sol_log_"
 external log_values : int -> int -> int -> int -> int -> unit = "sol_log_64_"
 
+type counter = { count : int } [@@account]
+
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
   let _ = hash_bytes bytes in

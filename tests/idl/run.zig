@@ -57,6 +57,7 @@ test "idl: entrypoint fixture emits valid instruction schema" {
     try expectContains(result.stdout, "\"args\":[{\"name\":\"amount\",\"type\":\"i64\"}]");
     try expectContains(result.stdout, "\"accounts\":[{\"name\":\"vault\",\"discriminator\":[222,213,79,124,216,238,238,131]}]");
     try expectContains(result.stdout, "\"name\":\"vault\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"owner\",\"type\":\"bytes\"},{\"name\":\"balance\",\"type\":\"i64\"}]}");
+    try expectContains(result.stdout, "\"name\":\"metadata\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"authority\",\"type\":\"bytes\"}]}");
     try expectContains(result.stdout, "\"name\":\"status\",\"type\":{\"kind\":\"enum\",\"variants\":[{\"name\":\"Ready\"},{\"name\":\"Frozen\",\"fields\":[{\"name\":\"field0\",\"type\":\"i64\"}]}]}");
     try expectContains(result.stdout, "\"events\":[]");
     try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_insufficient_funds\",\"code\":65537}]");

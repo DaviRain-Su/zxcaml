@@ -128,7 +128,7 @@ fn emitDiscriminator(out: *std.ArrayList(u8), allocator: std.mem.Allocator, pref
 fn emitAccounts(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.Module) !void {
     var first = true;
     for (module.record_type_decls) |type_decl| {
-        if (!shouldEmitRecordType(type_decl.name)) continue;
+        if (!type_decl.is_account or isBuiltinRecordType(type_decl.name)) continue;
         if (!first) try append(out, allocator, ",");
         first = false;
 
@@ -153,7 +153,7 @@ fn emitTypes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.M
         try emitTupleType(out, allocator, type_decl);
     }
     for (module.record_type_decls) |type_decl| {
-        if (!shouldEmitRecordType(type_decl.name)) continue;
+        if (isBuiltinRecordType(type_decl.name)) continue;
         if (!first) try append(out, allocator, ",");
         first = false;
         try emitRecordType(out, allocator, type_decl);
@@ -351,10 +351,10 @@ fn emitDefinedType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: 
     try append(out, allocator, "}}");
 }
 
-fn shouldEmitRecordType(name: []const u8) bool {
-    return !std.mem.eql(u8, name, "account") and
-        !std.mem.eql(u8, name, "account_meta") and
-        !std.mem.eql(u8, name, "instruction");
+fn isBuiltinRecordType(name: []const u8) bool {
+    return std.mem.eql(u8, name, "account") or
+        std.mem.eql(u8, name, "account_meta") or
+        std.mem.eql(u8, name, "instruction");
 }
 
 fn isAccountTy(ty: ir.Ty) bool {
@@ -582,11 +582,15 @@ test "IDL emitter maps records, variants, options, and Anchor discriminators" {
         .{ .name = "balance", .ty = int_ref },
         .{ .name = "enabled", .ty = option_ref },
     };
+    const metadata_fields = [_]types.RecordField{
+        .{ .name = "authority", .ty = .{ .TypeRef = .{ .name = "bytes" } } },
+    };
     const variant_types = [_]types.VariantType{
         .{ .name = "status", .variants = variant_ctors[0..] },
     };
     const record_types = [_]types.RecordType{
-        .{ .name = "vault", .fields = record_fields[0..] },
+        .{ .name = "vault", .fields = record_fields[0..], .is_account = true },
+        .{ .name = "metadata", .fields = metadata_fields[0..] },
     };
 
     const json = try emitModule(std.testing.allocator, .{
@@ -600,6 +604,7 @@ test "IDL emitter maps records, variants, options, and Anchor discriminators" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"accounts\":[{\"name\":\"vault\",\"discriminator\":[222,213,79,124,216,238,238,131]}]") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"status\",\"type\":{\"kind\":\"enum\",\"variants\":[{\"name\":\"Ready\"},{\"name\":\"Frozen\",\"fields\":[{\"name\":\"field0\",\"type\":\"i64\"}]}]}") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"vault\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"balance\",\"type\":\"i64\"},{\"name\":\"enabled\",\"type\":{\"option\":\"bool\"}}]}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"metadata\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"authority\",\"type\":\"bytes\"}]}") != null);
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
     defer parsed.deinit();
 }

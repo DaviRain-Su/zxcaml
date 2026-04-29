@@ -6,6 +6,8 @@
 
 external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
 
+type vault = { owner : bytes; balance : int } [@@account]
+
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
   let _ = hash_bytes bytes in
