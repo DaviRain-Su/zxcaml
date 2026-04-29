@@ -329,6 +329,19 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, record_update.layout);
             try append(out, allocator, ")");
         },
+        .AccountFieldSet => |field_set| {
+            try append(out, allocator, "(account-field-set ");
+            try formatExpr(out, allocator, field_set.account_expr.*);
+            try append(out, allocator, " ");
+            try append(out, allocator, field_set.field_name);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, field_set.value.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, field_set.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, field_set.layout);
+            try append(out, allocator, ")");
+        },
     }
 }
 

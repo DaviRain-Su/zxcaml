@@ -118,6 +118,7 @@ fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_d
 }
 
 fn emitRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: lir.LRecordType) EmitError!void {
+    if (std.mem.eql(u8, type_decl.name, "account") and type_decl.params.len == 0) return;
     const type_name = try userTypeName(allocator, type_decl.name);
     defer allocator.free(type_name);
     if (type_decl.params.len == 0) {
@@ -268,18 +269,6 @@ fn emitBuiltinAccountRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allo
 
 fn emitAccountViewHelper(out: *std.ArrayList(u8), allocator: std.mem.Allocator) EmitError!void {
     try append(out, allocator,
-        \\fn omlz_account_from_view(view: AccountRuntime.AccountView) omlz_type_account {
-        \\    return omlz_type_account{
-        \\        .key = view.key[0..],
-        \\        .lamports = @intCast(view.lamportsValue()),
-        \\        .data = view.data,
-        \\        .owner = view.owner[0..],
-        \\        .is_signer = prelude.Bool.fromNative(view.is_signer),
-        \\        .is_writable = prelude.Bool.fromNative(view.is_writable),
-        \\        .executable = prelude.Bool.fromNative(view.executable),
-        \\    };
-        \\}
-        \\
         \\fn omlz_log_account_view(view: AccountRuntime.AccountView) void {
         \\    const hex = "0123456789abcdef";
         \\    var key_hex: [64]u8 = undefined;
@@ -300,13 +289,26 @@ fn emitEntrypointAccountBindings(
     params: []const lir.LParam,
 ) EmitError!bool {
     var accounts_used = false;
+    var parsed_accounts = false;
+    var account_index: usize = 0;
     for (params) |param| {
         if (!paramNeedsEntrypointAccounts(param)) continue;
         accounts_used = true;
-        try append(out, allocator, "    AccountRuntime.logAccountsFromPtr(input);\n");
-        try append(out, allocator, "    const ");
-        try emitIdentifier(out, allocator, param.name);
-        try append(out, allocator, " = @as(i64, 0);\n");
+        if (isAccountTy(param.ty)) {
+            if (!parsed_accounts) {
+                try append(out, allocator, "    var omlz_entry_accounts = AccountRuntime.parseAccountsFromPtr(arena, input) catch return 1;\n");
+                parsed_accounts = true;
+            }
+            try append(out, allocator, "    const ");
+            try emitIdentifier(out, allocator, param.name);
+            try appendPrint(out, allocator, " = if (omlz_entry_accounts.len > {d}) omlz_entry_accounts[{d}] else return 1;\n", .{ account_index, account_index });
+            account_index += 1;
+        } else {
+            try append(out, allocator, "    AccountRuntime.logAccountsFromPtr(input);\n");
+            try append(out, allocator, "    const ");
+            try emitIdentifier(out, allocator, param.name);
+            try append(out, allocator, " = @as(i64, 0);\n");
+        }
     }
     return accounts_used;
 }
@@ -397,6 +399,7 @@ fn emitExpr(
         .Record => |record_expr| try emitRecordExpr(out, allocator, record_expr, indent_level, ctx),
         .RecordField => |record_field| try emitRecordFieldExpr(out, allocator, record_field, indent_level, ctx),
         .RecordUpdate => |record_update| try emitRecordUpdateExpr(out, allocator, record_update, indent_level, ctx),
+        .AccountFieldSet => |field_set| try emitAccountFieldSetExpr(out, allocator, field_set, indent_level, ctx),
     }
 }
 
@@ -436,6 +439,7 @@ fn emitRecordExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (isAccountTy(record_expr.ty)) return error.UnsupportedExpr;
     const ty_name = try zigTypeName(allocator, record_expr.ty);
     defer allocator.free(ty_name);
     try appendPrint(out, allocator, "{s}{{ ", .{ty_name});
@@ -456,10 +460,102 @@ fn emitRecordFieldExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (record_field.record_ty) |record_ty| {
+        if (isAccountTy(record_ty)) {
+            try emitAccountFieldReadExpr(out, allocator, record_field, indent_level, ctx);
+            return;
+        }
+    }
     try append(out, allocator, "(");
     try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
     try append(out, allocator, ").");
     try emitIdentifier(out, allocator, record_field.field_name);
+}
+
+fn emitAccountFieldReadExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    record_field: lir.LRecordField,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (std.mem.eql(u8, record_field.field_name, "lamports")) {
+        try append(out, allocator, "@as(i64, @intCast((");
+        try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
+        try append(out, allocator, ").lamportsValue()))");
+        return;
+    }
+    if (std.mem.eql(u8, record_field.field_name, "data")) {
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
+        try append(out, allocator, ").data");
+        return;
+    }
+    if (std.mem.eql(u8, record_field.field_name, "key")) {
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
+        try append(out, allocator, ").key[0..]");
+        return;
+    }
+    if (std.mem.eql(u8, record_field.field_name, "owner")) {
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
+        try append(out, allocator, ").owner[0..]");
+        return;
+    }
+    if (std.mem.eql(u8, record_field.field_name, "is_signer") or
+        std.mem.eql(u8, record_field.field_name, "is_writable") or
+        std.mem.eql(u8, record_field.field_name, "executable"))
+    {
+        try append(out, allocator, "prelude.Bool.fromNative((");
+        try emitExpr(out, allocator, record_field.record_expr.*, indent_level, ctx);
+        try append(out, allocator, ").");
+        try emitIdentifier(out, allocator, record_field.field_name);
+        try append(out, allocator, ")");
+        return;
+    }
+    return error.UnsupportedExpr;
+}
+
+fn emitAccountFieldSetExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    field_set: lir.LAccountFieldSet,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_account_{d} = ", .{block_id});
+    try emitExpr(out, allocator, field_set.account_expr.*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    if (std.mem.eql(u8, field_set.field_name, "lamports")) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "omlz_account_{d}.lamports.* = @intCast(", .{block_id});
+        try emitExpr(out, allocator, field_set.value.*, indent_level + 1, ctx);
+        try append(out, allocator, ");\n");
+    } else if (std.mem.eql(u8, field_set.field_name, "data")) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_account_data_{d} = ", .{block_id});
+        try emitExpr(out, allocator, field_set.value.*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "if (omlz_account_data_{d}.len > omlz_account_{d}.data.len) unreachable;\n", .{ block_id, block_id });
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "@memcpy(omlz_account_{d}.data[0..omlz_account_data_{d}.len], omlz_account_data_{d});\n", .{ block_id, block_id, block_id });
+    } else if (std.mem.eql(u8, field_set.field_name, "key") or std.mem.eql(u8, field_set.field_name, "owner")) {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "@compileError(\"ZXCAML: account field '{s}' is read-only\");\n", .{field_set.field_name});
+    } else {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "@compileError(\"ZXCAML: account field '{s}' is not writable\");\n", .{field_set.field_name});
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitRecordUpdateExpr(
@@ -630,7 +726,7 @@ fn emitSyscallAppExpr(
         try append(out, allocator, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))");
         return true;
     }
-    if (std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) {
+    if (std.mem.eql(u8, name, "set_return_data") or std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "cpi.sol_set_return_data", false, false)) return true;
         try append(out, allocator, "cpi.sol_set_return_data(");
@@ -638,7 +734,7 @@ fn emitSyscallAppExpr(
         try append(out, allocator, ")");
         return true;
     }
-    if (std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) {
+    if (std.mem.eql(u8, name, "get_return_data") or std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         try append(out, allocator, "cpi.sol_get_return_data_alloc(arena)");
         return true;
@@ -2077,6 +2173,7 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
             }
             return false;
         },
+        .AccountFieldSet => |field_set| exprUsesName(field_set.account_expr.*, name) or exprUsesName(field_set.value.*, name),
         .Match => |match_expr| {
             if (exprUsesName(match_expr.scrutinee.*, name)) return true;
             for (match_expr.arms) |arm| {
@@ -2157,6 +2254,7 @@ fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
             }
             break :blk false;
         },
+        .AccountFieldSet => |field_set| exprNeedsArena(field_set.account_expr.*, type_decls) or exprNeedsArena(field_set.value.*, type_decls),
         .Closure => true,
     };
 }
@@ -2171,8 +2269,10 @@ fn appNeedsArena(app: lir.LApp) bool {
     if (std.mem.eql(u8, callee, "Syscall.sol_log_pubkey")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_get_clock_sysvar")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_remaining_compute_units")) return false;
+    if (std.mem.eql(u8, callee, "set_return_data")) return false;
     if (std.mem.eql(u8, callee, "Cpi.set_return_data")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_set_return_data")) return false;
+    if (std.mem.eql(u8, callee, "get_return_data")) return false;
     if (std.mem.eql(u8, callee, "Cpi.get_return_data")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_get_return_data")) return false;
     return true;
@@ -2584,6 +2684,10 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
         .String => allocator.dupe(u8, "[]const u8"),
         .Var => return error.UnsupportedExpr,
         .Closure => allocator.dupe(u8, "*const prelude.Closure"),
+        .Record => |record| blk: {
+            if (isAccountRecordTy(record)) break :blk try allocator.dupe(u8, "AccountRuntime.AccountView");
+            break :blk try zigUserRecordNameFromRecord(allocator, record);
+        },
         .Tuple => |items| blk: {
             var out = std.ArrayList(u8).empty;
             errdefer out.deinit(allocator);
@@ -2597,7 +2701,6 @@ fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const u8 {
             try append(&out, allocator, " }");
             break :blk try out.toOwnedSlice(allocator);
         },
-        .Record => |record| try zigUserRecordNameFromRecord(allocator, record),
         .Adt => |adt| blk: {
             if (std.mem.eql(u8, adt.name, "option")) {
                 if (adt.params.len != 1) return error.UnsupportedExpr;
@@ -2661,6 +2764,7 @@ fn zigTypeRefName(allocator: std.mem.Allocator, ref: lir.LTypeRef, type_params: 
     if (std.mem.eql(u8, ref.name, "unit")) return allocator.dupe(u8, "void");
     if (std.mem.eql(u8, ref.name, "string")) return allocator.dupe(u8, "[]const u8");
     if (std.mem.eql(u8, ref.name, "bytes")) return allocator.dupe(u8, "[]const u8");
+    if (std.mem.eql(u8, ref.name, "account")) return allocator.dupe(u8, "AccountRuntime.AccountView");
     const base = try userTypeName(allocator, ref.name);
     if (ref.args.len == 0) return base;
     defer allocator.free(base);
@@ -2724,6 +2828,18 @@ fn hasAccountRecordType(type_decls: []const lir.LRecordType) bool {
     return findRecordTypeDecl(type_decls, "account") != null;
 }
 
+fn isAccountTy(ty: lir.LTy) bool {
+    const record = switch (ty) {
+        .Record => |value| value,
+        else => return false,
+    };
+    return isAccountRecordTy(record);
+}
+
+fn isAccountRecordTy(record: lir.LRecordTy) bool {
+    return std.mem.eql(u8, record.name, "account") and record.params.len == 0;
+}
+
 fn paramsNeedEntrypointAccounts(params: []const lir.LParam) bool {
     for (params) |param| {
         if (paramNeedsEntrypointAccounts(param)) return true;
@@ -2739,7 +2855,7 @@ fn paramsNeedEntrypointAccountList(params: []const lir.LParam) bool {
 }
 
 fn paramNeedsEntrypointAccounts(param: lir.LParam) bool {
-    return std.mem.eql(u8, param.name, "accounts") or isAccountListTy(param.ty);
+    return std.mem.eql(u8, param.name, "accounts") or isAccountTy(param.ty) or isAccountListTy(param.ty);
 }
 
 fn isAccountListTy(ty: lir.LTy) bool {
@@ -3295,6 +3411,97 @@ test "ZigBackend emits CPI return-data calls through runtime bindings" {
     try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_set_return_data(omlz_syscall_bytes_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_get_return_data_alloc(arena)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Cpi_set_return_data") == null);
+}
+
+test "ZigBackend emits top-level return-data calls through runtime bindings" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "set_return_data" } },
+                .args = &.{&.{ .Constant = .{ .String = "ok" } }},
+                .ty = .Unit,
+            } },
+            .body = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "get_return_data" } },
+                .args = &.{&.{ .Ctor = .{
+                    .name = "()",
+                    .args = &.{},
+                    .ty = .Unit,
+                    .layout = @import("../core/layout.zig").unitValue(),
+                } }},
+                .ty = .String,
+            } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_set_return_data(omlz_syscall_bytes_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "cpi.sol_get_return_data_alloc(arena)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_set_return_data") == null);
+}
+
+test "ZigBackend emits AccountView field reads and direct writable-field mutations" {
+    const account_ty = lir.LTy{ .Record = .{ .name = "account", .params = &.{} } };
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .params = &.{.{ .name = "acct", .ty = account_ty }},
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .AccountFieldSet = .{
+                .account_expr = &.{ .Var = .{ .name = "acct" } },
+                .field_name = "lamports",
+                .value = &.{ .Constant = .{ .Int = 7 } },
+            } },
+            .body = &.{ .Let = .{
+                .name = "_",
+                .value = &.{ .AccountFieldSet = .{
+                    .account_expr = &.{ .Var = .{ .name = "acct" } },
+                    .field_name = "data",
+                    .value = &.{ .Constant = .{ .String = "ok" } },
+                } },
+                .body = &.{ .RecordField = .{
+                    .record_expr = &.{ .Var = .{ .name = "acct" } },
+                    .field_name = "lamports",
+                    .record_ty = account_ty,
+                } },
+            } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const acct = if (omlz_entry_accounts.len > 0) omlz_entry_accounts[0] else return 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_account_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".lamports.* = @intCast(@as(i64, 7));") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "@memcpy(omlz_account_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, ".lamportsValue()") != null);
+}
+
+test "ZigBackend rejects non-writable account fields with compile errors" {
+    const account_ty = lir.LTy{ .Record = .{ .name = "account", .params = &.{} } };
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .params = &.{.{ .name = "acct", .ty = account_ty }},
+        .body = .{ .Let = .{
+            .name = "_",
+            .value = &.{ .AccountFieldSet = .{
+                .account_expr = &.{ .Var = .{ .name = "acct" } },
+                .field_name = "key",
+                .value = &.{ .Constant = .{ .String = "readonly" } },
+            } },
+            .body = &.{ .Constant = .{ .Int = 0 } },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "@compileError(\"ZXCAML: account field 'key' is read-only\");") != null);
 }
 
 test "ZigBackend emits user ADTs as explicit tag and payload structs" {

@@ -157,7 +157,7 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate => evalExpr(allocator, expr, env),
+        .Constant, .Let, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => evalExpr(allocator, expr, env),
         .App, .If, .Prim => evalExpr(allocator, expr, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
@@ -181,6 +181,7 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         .Record => |record_expr| evalRecord(allocator, record_expr, env),
         .RecordField => |record_field| evalRecordField(allocator, record_field, env),
         .RecordUpdate => |record_update| evalRecordUpdate(allocator, record_update, env),
+        .AccountFieldSet => |field_set| evalAccountFieldSet(allocator, field_set, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
 }
@@ -595,6 +596,12 @@ fn evalRecordUpdate(allocator: std.mem.Allocator, record_update: ir.RecordUpdate
         fields[index] = .{ .name = base_field.name, .value = value };
     }
     return .{ .Record = .{ .fields = fields } };
+}
+
+fn evalAccountFieldSet(allocator: std.mem.Allocator, field_set: ir.AccountFieldSet, env: *std.StringHashMap(Value)) EvalError!Value {
+    _ = try evalExpr(allocator, field_set.account_expr.*, env);
+    _ = try evalExpr(allocator, field_set.value.*, env);
+    return .{ .Ctor = .{ .name = "()", .args = &.{} } };
 }
 
 fn findRecordValue(record: RecordValue, field_name: []const u8) ?Value {

@@ -228,6 +228,8 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
         const owned_name = try arena.allocator().dupe(u8, param_name);
         const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_"))
             .Unit
+        else if (lambdaParamIsAccount(lambda.body.*, param_name))
+            try accountTy(arena)
         else if (try lambdaParamIsList(arena, lambda.body.*, param_name))
             try listTy(arena, .Int)
         else if (lambdaParamIsFunction(lambda.body.*, param_name))
@@ -306,6 +308,7 @@ fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: 
         .Record => |record_expr| try lowerRecord(arena, ctx, record_expr),
         .RecordField => |field_access| try lowerRecordField(arena, ctx, field_access),
         .RecordUpdate => |record_update| try lowerRecordUpdate(arena, ctx, record_update),
+        .FieldSet => |field_set| try lowerFieldSet(arena, ctx, field_set),
     };
 }
 
@@ -392,6 +395,20 @@ fn lowerRecordUpdate(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, record
         .fields = fields,
         .ty = base_ty,
         .layout = layout.structPack(),
+    } };
+}
+
+fn lowerFieldSet(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, field_set: ttree.FieldSet) LowerError!ir.Expr {
+    const account_expr = try lowerExprPtr(arena, ctx, field_set.record_expr.*);
+    const account_ty = exprTy(account_expr.*);
+    if (!isAccountTy(account_ty)) return error.UnsupportedNode;
+    const field_ty = try recordFieldAccessTy(arena, ctx, account_ty, field_set.field_name);
+    return .{ .AccountFieldSet = .{
+        .account_expr = account_expr,
+        .field_name = try arena.allocator().dupe(u8, field_set.field_name),
+        .value = try lowerExprPtrExpected(arena, ctx, field_set.value.*, field_ty),
+        .ty = .Unit,
+        .layout = layout.unitValue(),
     } };
 }
 
@@ -562,9 +579,9 @@ fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8, ar
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = clock_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
-    if ((std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) and arg_count == 1)
+    if ((std.mem.eql(u8, name, "set_return_data") or std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = .Unit };
-    if ((std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) and arg_count == 1)
+    if ((std.mem.eql(u8, name, "get_return_data") or std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
 
     return null;
@@ -916,6 +933,13 @@ fn renameExprValueVars(arena: *std.heap.ArenaAllocator, expr: ir.Expr, renames: 
             .fields = try renameRecordExprFieldsVars(arena, record_update.fields, renames),
             .ty = record_update.ty,
             .layout = record_update.layout,
+        } },
+        .AccountFieldSet => |field_set| .{ .AccountFieldSet = .{
+            .account_expr = try renameExprVars(arena, field_set.account_expr, renames),
+            .field_name = field_set.field_name,
+            .value = try renameExprVars(arena, field_set.value, renames),
+            .ty = field_set.ty,
+            .layout = field_set.layout,
         } },
     };
 }
@@ -1349,7 +1373,7 @@ fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBind
             }
             break :blk .{ .Tuple = tys };
         },
-        .Lambda, .App, .Ctor, .Match, .TupleProj, .Record, .RecordField, .RecordUpdate => null,
+        .Lambda, .App, .Ctor, .Match, .TupleProj, .Record, .RecordField, .RecordUpdate, .FieldSet => null,
     };
 }
 
@@ -1395,6 +1419,10 @@ fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *T
         .RecordUpdate => |record_update| {
             try inferExprVarExpectations(arena, pattern_var_tys, record_update.base_expr.*, null);
             for (record_update.fields) |field| try inferExprVarExpectations(arena, pattern_var_tys, field.value, null);
+        },
+        .FieldSet => |field_set| {
+            try inferExprVarExpectations(arena, pattern_var_tys, field_set.record_expr.*, null);
+            try inferExprVarExpectations(arena, pattern_var_tys, field_set.value.*, null);
         },
         .Match => |nested_match| {
             try inferExprVarExpectations(arena, pattern_var_tys, nested_match.scrutinee.*, null);
@@ -1887,6 +1915,13 @@ fn resultTy(arena: *std.heap.ArenaAllocator, ok_ty: ir.Ty, err_ty: ir.Ty) LowerE
     } };
 }
 
+fn accountTy(arena: *std.heap.ArenaAllocator) LowerError!ir.Ty {
+    return .{ .Record = .{
+        .name = try arena.allocator().dupe(u8, "account"),
+        .params = &.{},
+    } };
+}
+
 fn tySlice(arena: *std.heap.ArenaAllocator, tys: []const ir.Ty) LowerError![]const ir.Ty {
     const out = try arena.allocator().alloc(ir.Ty, tys.len);
     for (tys, 0..) |ty, index| out[index] = ty;
@@ -2006,6 +2041,14 @@ fn recordFieldAccessTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ty: 
     return recordFieldTyForRecord(arena, ctx, decl, ty, field_name);
 }
 
+fn isAccountTy(ty: ir.Ty) bool {
+    const record = switch (ty) {
+        .Record => |value| value,
+        else => return false,
+    };
+    return std.mem.eql(u8, record.name, "account") and record.params.len == 0;
+}
+
 fn layoutForTy(ty: ir.Ty) layout.Layout {
     return switch (ty) {
         .Int, .Bool, .Var => layout.intConstant(),
@@ -2073,6 +2116,7 @@ fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
             }
             break :blk false;
         },
+        .FieldSet => |field_set| recBindingEscapes(name, field_set.record_expr.*) or recBindingEscapes(name, field_set.value.*),
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -2172,6 +2216,7 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
             }
             break :blk false;
         },
+        .FieldSet => |field_set| lambdaParamIsFunction(field_set.record_expr.*, param_name) or lambdaParamIsFunction(field_set.value.*, param_name),
         .Match => |match_expr| blk: {
             if (lambdaParamIsFunction(match_expr.scrutinee.*, param_name)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -2186,6 +2231,91 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
         },
         .Constant, .Var => false,
     };
+}
+
+fn lambdaParamIsAccount(expr: ttree.Expr, param_name: []const u8) bool {
+    return switch (expr) {
+        .RecordField => |field_access| (exprIsVarNamed(field_access.record_expr.*, param_name) and isAccountFieldName(field_access.field_name)) or
+            lambdaParamIsAccount(field_access.record_expr.*, param_name),
+        .FieldSet => |field_set| (exprIsVarNamed(field_set.record_expr.*, param_name) and isAccountFieldName(field_set.field_name)) or
+            lambdaParamIsAccount(field_set.record_expr.*, param_name) or
+            lambdaParamIsAccount(field_set.value.*, param_name),
+        .App => |app| blk: {
+            if (lambdaParamIsAccount(app.callee.*, param_name)) break :blk true;
+            for (app.args) |arg| {
+                if (lambdaParamIsAccount(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Lambda => |lambda| !lambdaParamShadows(lambda.params, param_name) and lambdaParamIsAccount(lambda.body.*, param_name),
+        .Let => |let_expr| lambdaParamIsAccount(let_expr.value.*, param_name) or
+            (!std.mem.eql(u8, let_expr.name, param_name) and lambdaParamIsAccount(let_expr.body.*, param_name)),
+        .If => |if_expr| lambdaParamIsAccount(if_expr.cond.*, param_name) or
+            lambdaParamIsAccount(if_expr.then_branch.*, param_name) or
+            lambdaParamIsAccount(if_expr.else_branch.*, param_name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (lambdaParamIsAccount(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (lambdaParamIsAccount(arg, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (lambdaParamIsAccount(item, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| lambdaParamIsAccount(tuple_proj.tuple_expr.*, param_name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (lambdaParamIsAccount(field.value, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordUpdate => |record_update| blk: {
+            if (lambdaParamIsAccount(record_update.base_expr.*, param_name)) break :blk true;
+            for (record_update.fields) |field| {
+                if (lambdaParamIsAccount(field.value, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Match => |match_expr| blk: {
+            if (lambdaParamIsAccount(match_expr.scrutinee.*, param_name)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, param_name)) {
+                    if (arm.guard) |guard_expr| {
+                        if (lambdaParamIsAccount(guard_expr.*, param_name)) break :blk true;
+                    }
+                    if (lambdaParamIsAccount(arm.body.*, param_name)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .Constant, .Var => false,
+    };
+}
+
+fn exprIsVarNamed(expr: ttree.Expr, name: []const u8) bool {
+    return switch (expr) {
+        .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+        else => false,
+    };
+}
+
+fn isAccountFieldName(field_name: []const u8) bool {
+    return std.mem.eql(u8, field_name, "key") or
+        std.mem.eql(u8, field_name, "lamports") or
+        std.mem.eql(u8, field_name, "data") or
+        std.mem.eql(u8, field_name, "owner") or
+        std.mem.eql(u8, field_name, "is_signer") or
+        std.mem.eql(u8, field_name, "is_writable") or
+        std.mem.eql(u8, field_name, "executable");
 }
 
 fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_name: []const u8) LowerError!bool {
@@ -2257,6 +2387,8 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
             }
             break :blk false;
         },
+        .FieldSet => |field_set| (try lambdaParamIsList(arena, field_set.record_expr.*, param_name)) or
+            (try lambdaParamIsList(arena, field_set.value.*, param_name)),
         .Constant, .Var => false,
     };
 }
@@ -2329,6 +2461,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Record => |record_expr| record_expr.ty,
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
+        .AccountFieldSet => |field_set| field_set.ty,
     };
 }
 
@@ -2386,6 +2519,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Record => |record_expr| record_expr.layout,
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
+        .AccountFieldSet => |field_set| field_set.layout,
     };
 }
 
@@ -2615,6 +2749,36 @@ test "lower CPI return-data calls as typed builtin applications" {
     };
     try std.testing.expectEqualStrings("Cpi.get_return_data", get_callee.name);
     try std.testing.expectEqual(ir.Ty.String, get_app.ty);
+}
+
+test "lower account field assignment as typed account mutation" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.9 (module (record_type_decl (name account) (params) (fields ((key (type-ref bytes)) (lamports (type-ref int)) (data (type-ref bytes)) (owner (type-ref bytes)) (is_signer (type-ref bool)) (is_writable (type-ref bool)) (executable (type-ref bool))))) (let entrypoint (lambda (account) (field_set (var account) lamports (const-int 42))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(isAccountTy(lambda.params[0].ty));
+    const field_set = switch (lambda.body.*) {
+        .AccountFieldSet => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("lamports", field_set.field_name);
+    try std.testing.expectEqual(ir.Ty.Unit, field_set.ty);
+    try std.testing.expectEqual(ir.Ty.Int, exprTy(field_set.value.*));
 }
 
 test "lower constructor expressions with layout policy" {

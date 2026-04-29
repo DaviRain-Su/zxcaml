@@ -99,6 +99,7 @@ pub const Expr = union(enum) {
     Record: Record,
     RecordField: RecordField,
     RecordUpdate: RecordUpdate,
+    FieldSet: FieldSet,
 };
 
 /// Single lambda form.
@@ -177,6 +178,13 @@ pub const RecordField = struct {
 pub const RecordUpdate = struct {
     base_expr: *const Expr,
     fields: []const RecordExprField,
+};
+
+/// In-place record field assignment expression emitted for mutable fields.
+pub const FieldSet = struct {
+    record_expr: *const Expr,
+    field_name: []const u8,
+    value: *const Expr,
 };
 
 /// Pattern match expression with arms evaluated top-to-bottom.
@@ -576,6 +584,7 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "record")) return .{ .Record = try parseRecord(arena, items) };
     if (std.mem.eql(u8, tag, "field_access")) return .{ .RecordField = try parseRecordField(arena, items) };
     if (std.mem.eql(u8, tag, "record_update")) return .{ .RecordUpdate = try parseRecordUpdate(arena, items) };
+    if (std.mem.eql(u8, tag, "field_set")) return .{ .FieldSet = try parseFieldSet(arena, items) };
     return error.UnsupportedNode;
 }
 
@@ -626,6 +635,19 @@ fn parseRecordUpdate(arena: *std.heap.ArenaAllocator, items: []const *const Sexp
     return .{
         .base_expr = base_expr,
         .fields = try parseRecordExprFields(arena, items[2]),
+    };
+}
+
+fn parseFieldSet(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!FieldSet {
+    if (items.len != 4) return error.MalformedRecord;
+    const record_expr = try arena.allocator().create(Expr);
+    record_expr.* = try parseExpr(arena, items[1]);
+    const value = try arena.allocator().create(Expr);
+    value.* = try parseExpr(arena, items[3]);
+    return .{
+        .record_expr = record_expr,
+        .field_name = try dupeAtom(arena, items[2]),
+        .value = value,
     };
 }
 

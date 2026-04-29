@@ -60,6 +60,7 @@ pub const LExpr = union(enum) {
     Record: LRecord,
     RecordField: LRecordField,
     RecordUpdate: LRecordUpdate,
+    AccountFieldSet: LAccountFieldSet,
 };
 
 /// Lowered function application.
@@ -174,6 +175,7 @@ pub const LRecordExprField = struct {
 pub const LRecordField = struct {
     record_expr: *const LExpr,
     field_name: []const u8,
+    record_ty: ?LTy = null,
 };
 
 /// Lowered functional record update expression.
@@ -181,6 +183,13 @@ pub const LRecordUpdate = struct {
     base_expr: *const LExpr,
     fields: []const LRecordExprField,
     ty: LTy,
+};
+
+/// Lowered in-place mutation of a writable Solana account field.
+pub const LAccountFieldSet = struct {
+    account_expr: *const LExpr,
+    field_name: []const u8,
+    value: *const LExpr,
 };
 
 /// Lowered pattern match expression. Arms keep source order; first match wins.

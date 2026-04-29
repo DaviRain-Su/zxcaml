@@ -403,6 +403,10 @@ fn collectNestedFunctions(
             try collectNestedFunctions(allocator, record_update.base_expr.*, functions, next_closure_id, bound);
             for (record_update.fields) |field| try collectNestedFunctions(allocator, field.value.*, functions, next_closure_id, bound);
         },
+        .AccountFieldSet => |field_set| {
+            try collectNestedFunctions(allocator, field_set.account_expr.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, field_set.value.*, functions, next_closure_id, bound);
+        },
         .Match => |match_expr| {
             try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions, next_closure_id, bound);
             for (match_expr.arms) |arm| {
@@ -520,11 +524,17 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
         .RecordField => |record_field| .{ .RecordField = .{
             .record_expr = try lowerExprPtrWithContext(allocator, record_field.record_expr.*, ctx),
             .field_name = try allocator.dupe(u8, record_field.field_name),
+            .record_ty = try lowerTy(allocator, exprTy(record_field.record_expr.*)),
         } },
         .RecordUpdate => |record_update| .{ .RecordUpdate = .{
             .base_expr = try lowerExprPtrWithContext(allocator, record_update.base_expr.*, ctx),
             .fields = try lowerRecordExprFields(allocator, record_update.fields, ctx),
             .ty = try lowerTy(allocator, record_update.ty),
+        } },
+        .AccountFieldSet => |field_set| .{ .AccountFieldSet = .{
+            .account_expr = try lowerExprPtrWithContext(allocator, field_set.account_expr.*, ctx),
+            .field_name = try allocator.dupe(u8, field_set.field_name),
+            .value = try lowerExprPtrWithContext(allocator, field_set.value.*, ctx),
         } },
     };
 }
@@ -682,6 +692,10 @@ fn collectCaptures(
             try collectCaptures(allocator, record_update.base_expr.*, bound, excluded, captures);
             for (record_update.fields) |field| try collectCaptures(allocator, field.value.*, bound, excluded, captures);
         },
+        .AccountFieldSet => |field_set| {
+            try collectCaptures(allocator, field_set.account_expr.*, bound, excluded, captures);
+            try collectCaptures(allocator, field_set.value.*, bound, excluded, captures);
+        },
         .Match => |match_expr| {
             try collectCaptures(allocator, match_expr.scrutinee.*, bound, excluded, captures);
             for (match_expr.arms) |arm| {
@@ -815,6 +829,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Record => |record_expr| record_expr.ty,
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
+        .AccountFieldSet => |field_set| field_set.ty,
     };
 }
 
@@ -988,6 +1003,7 @@ fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
             }
             break :blk false;
         },
+        .AccountFieldSet => |field_set| recBindingEscapes(name, field_set.account_expr.*) or recBindingEscapes(name, field_set.value.*),
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {

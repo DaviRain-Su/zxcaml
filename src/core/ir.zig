@@ -93,6 +93,7 @@ pub const Expr = union(enum) {
     Record: Record,
     RecordField: RecordField,
     RecordUpdate: RecordUpdate,
+    AccountFieldSet: AccountFieldSet,
 };
 
 /// Function application expression.
@@ -215,6 +216,15 @@ pub const RecordField = struct {
 pub const RecordUpdate = struct {
     base_expr: *const Expr,
     fields: []const RecordExprField,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// In-place mutation of a writable Solana account field.
+pub const AccountFieldSet = struct {
+    account_expr: *const Expr,
+    field_name: []const u8,
+    value: *const Expr,
     ty: Ty,
     layout: layout.Layout,
 };
