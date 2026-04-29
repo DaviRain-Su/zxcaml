@@ -3,7 +3,7 @@
 //! RESPONSIBILITIES:
 //! - Invoke the installed compiler driver on IDL fixtures.
 //! - Verify the emitted bytes parse as JSON.
-//! - Assert the JSON carries instructions, discriminators, accounts, args, types, and errors.
+//! - Assert the JSON carries Anchor 0.30+ metadata, instructions, accounts, args, types, and errors.
 
 const std = @import("std");
 const Io = std.Io;
@@ -50,14 +50,17 @@ test "idl: entrypoint fixture emits valid instruction schema" {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{});
     defer parsed.deinit();
 
-    try expectContains(result.stdout, "\"schema_version\":\"0.1.0\"");
-    try expectContains(result.stdout, "\"program\":{\"name\":\"entrypoint\",\"program_id\":null}");
-    try expectContains(result.stdout, "\"instructions\":[{\"name\":\"entrypoint\",\"discriminator\":[");
-    try expectContains(result.stdout, "\"accounts\":[{\"name\":\"authority\",\"is_signer\":true,\"is_writable\":true}]");
-    try expectContains(result.stdout, "\"args\":[{\"name\":\"amount\",\"type\":\"int\"}]");
-    try expectContains(result.stdout, "\"kind\":\"record\",\"name\":\"vault\"");
-    try expectContains(result.stdout, "\"kind\":\"variant\",\"name\":\"status\"");
+    try expectContains(result.stdout, "\"address\":\"11111111111111111111111111111111\"");
+    try expectContains(result.stdout, "\"metadata\":{\"name\":\"entrypoint\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}");
+    try expectContains(result.stdout, "\"instructions\":[{\"name\":\"entrypoint\",\"discriminator\":[237,127,171,8,17,8,23,233]");
+    try expectContains(result.stdout, "\"accounts\":[{\"name\":\"authority\",\"writable\":true,\"signer\":true}]");
+    try expectContains(result.stdout, "\"args\":[{\"name\":\"amount\",\"type\":\"i64\"}]");
+    try expectContains(result.stdout, "\"accounts\":[{\"name\":\"vault\",\"discriminator\":[222,213,79,124,216,238,238,131]}]");
+    try expectContains(result.stdout, "\"name\":\"vault\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"owner\",\"type\":\"bytes\"},{\"name\":\"balance\",\"type\":\"i64\"}]}");
+    try expectContains(result.stdout, "\"name\":\"status\",\"type\":{\"kind\":\"enum\",\"variants\":[{\"name\":\"Ready\"},{\"name\":\"Frozen\",\"fields\":[{\"name\":\"field0\",\"type\":\"i64\"}]}]}");
+    try expectContains(result.stdout, "\"events\":[]");
     try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_insufficient_funds\",\"code\":65537}]");
+    try expectContains(result.stdout, "\"constants\":[]");
 }
 
 test "idl: no entrypoint emits empty instructions array" {
@@ -76,6 +79,11 @@ test "idl: no entrypoint emits empty instructions array" {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{});
     defer parsed.deinit();
 
-    try expectContains(result.stdout, "\"program\":{\"name\":\"no_entrypoint\",\"program_id\":null}");
+    try expectContains(result.stdout, "\"metadata\":{\"name\":\"no_entrypoint\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}");
     try expectContains(result.stdout, "\"instructions\":[]");
+    try expectContains(result.stdout, "\"accounts\":[]");
+    try expectContains(result.stdout, "\"types\":[]");
+    try expectContains(result.stdout, "\"events\":[]");
+    try expectContains(result.stdout, "\"errors\":[]");
+    try expectContains(result.stdout, "\"constants\":[]");
 }

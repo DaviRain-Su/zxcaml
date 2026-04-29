@@ -3,11 +3,15 @@
 //! RESPONSIBILITIES:
 //! - Describe the public Solana instruction surface discovered in Core IR.
 //! - Emit deterministic JSON for instruction discriminators, account requirements, arguments, types, and errors.
-//! - Keep the schema one-shot and ZxCaml-specific rather than Anchor-compatible.
+//! - Emit Anchor 0.30+ compatible IDL JSON for ecosystem tooling.
 
 const std = @import("std");
 const ir = @import("../core/ir.zig");
 const types = @import("../core/types.zig");
+
+const default_program_id = "11111111111111111111111111111111";
+const anchor_spec_version = "0.1.0";
+const program_version = "0.1.0";
 
 /// Options that control top-level IDL metadata.
 pub const EmitOptions = struct {
@@ -20,23 +24,25 @@ pub fn emitModule(allocator: std.mem.Allocator, module: ir.Module, options: Emit
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
-    const program_id = options.program_id orelse findProgramId(module);
+    const program_id = options.program_id orelse findProgramId(module) orelse default_program_id;
 
-    try append(&out, allocator, "{\"schema_version\":\"0.1.0\",\"program\":{\"name\":");
+    try append(&out, allocator, "{\"address\":");
+    try appendJsonString(&out, allocator, program_id);
+    try append(&out, allocator, ",\"metadata\":{\"name\":");
     try appendJsonString(&out, allocator, options.program_name);
-    try append(&out, allocator, ",\"program_id\":");
-    if (program_id) |value| {
-        try appendJsonString(&out, allocator, value);
-    } else {
-        try append(&out, allocator, "null");
-    }
+    try append(&out, allocator, ",\"version\":");
+    try appendJsonString(&out, allocator, program_version);
+    try append(&out, allocator, ",\"spec\":");
+    try appendJsonString(&out, allocator, anchor_spec_version);
     try append(&out, allocator, "},\"instructions\":[");
     try emitInstructions(&out, allocator, module);
+    try append(&out, allocator, "],\"accounts\":[");
+    try emitAccounts(&out, allocator, module);
     try append(&out, allocator, "],\"types\":[");
     try emitTypes(&out, allocator, module);
-    try append(&out, allocator, "],\"errors\":[");
+    try append(&out, allocator, "],\"events\":[],\"errors\":[");
     try emitErrors(&out, allocator, module);
-    try append(&out, allocator, "]}");
+    try append(&out, allocator, "],\"constants\":[]}");
 
     return out.toOwnedSlice(allocator);
 }
@@ -59,7 +65,7 @@ fn emitInstructions(out: *std.ArrayList(u8), allocator: std.mem.Allocator, modul
         try append(out, allocator, "{\"name\":");
         try appendJsonString(out, allocator, let_decl.name);
         try append(out, allocator, ",\"discriminator\":");
-        try emitDiscriminator(out, allocator, let_decl.name);
+        try emitDiscriminator(out, allocator, "global:", let_decl.name);
         try append(out, allocator, ",\"accounts\":[");
         try emitInstructionAccounts(out, allocator, lambda);
         try append(out, allocator, "],\"args\":[");
@@ -81,10 +87,10 @@ fn emitInstructionAccounts(out: *std.ArrayList(u8), allocator: std.mem.Allocator
 
         try append(out, allocator, "{\"name\":");
         try appendJsonString(out, allocator, param.name);
-        try append(out, allocator, ",\"is_signer\":");
-        try append(out, allocator, if (signer) "true" else "false");
-        try append(out, allocator, ",\"is_writable\":");
+        try append(out, allocator, ",\"writable\":");
         try append(out, allocator, if (writable) "true" else "false");
+        try append(out, allocator, ",\"signer\":");
+        try append(out, allocator, if (signer) "true" else "false");
         try append(out, allocator, "}");
     }
 }
@@ -96,36 +102,42 @@ fn emitInstructionArgs(out: *std.ArrayList(u8), allocator: std.mem.Allocator, la
         if (!first) try append(out, allocator, ",");
         first = false;
 
-        const ty = try formatTy(allocator, param.ty);
-        defer allocator.free(ty);
-
         try append(out, allocator, "{\"name\":");
         try appendJsonString(out, allocator, param.name);
         try append(out, allocator, ",\"type\":");
-        try appendJsonString(out, allocator, ty);
+        try emitAnchorTy(out, allocator, param.ty);
         try append(out, allocator, "}");
     }
 }
 
-fn emitDiscriminator(out: *std.ArrayList(u8), allocator: std.mem.Allocator, instruction_name: []const u8) !void {
-    var hash: u64 = 14695981039346656037;
-    for ("instruction:") |byte| {
-        hash ^= byte;
-        hash *%= 1099511628211;
-    }
-    for (instruction_name) |byte| {
-        hash ^= byte;
-        hash *%= 1099511628211;
-    }
+fn emitDiscriminator(out: *std.ArrayList(u8), allocator: std.mem.Allocator, prefix: []const u8, name: []const u8) !void {
+    var digest: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(prefix);
+    hasher.update(name);
+    hasher.final(&digest);
 
     try append(out, allocator, "[");
-    var value = hash;
     for (0..8) |index| {
         if (index != 0) try append(out, allocator, ",");
-        try appendPrint(out, allocator, "{d}", .{@as(u8, @truncate(value & 0xff))});
-        value >>= 8;
+        try appendPrint(out, allocator, "{d}", .{digest[index]});
     }
     try append(out, allocator, "]");
+}
+
+fn emitAccounts(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.Module) !void {
+    var first = true;
+    for (module.record_type_decls) |type_decl| {
+        if (!shouldEmitRecordType(type_decl.name)) continue;
+        if (!first) try append(out, allocator, ",");
+        first = false;
+
+        try append(out, allocator, "{\"name\":");
+        try appendJsonString(out, allocator, type_decl.name);
+        try append(out, allocator, ",\"discriminator\":");
+        try emitDiscriminator(out, allocator, "account:", type_decl.name);
+        try append(out, allocator, "}");
+    }
 }
 
 fn emitTypes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.Module) !void {
@@ -141,6 +153,7 @@ fn emitTypes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.M
         try emitTupleType(out, allocator, type_decl);
     }
     for (module.record_type_decls) |type_decl| {
+        if (!shouldEmitRecordType(type_decl.name)) continue;
         if (!first) try append(out, allocator, ",");
         first = false;
         try emitRecordType(out, allocator, type_decl);
@@ -148,68 +161,65 @@ fn emitTypes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.M
 }
 
 fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: types.VariantType) !void {
-    try append(out, allocator, "{\"kind\":\"variant\",\"name\":");
+    try append(out, allocator, "{\"name\":");
     try appendJsonString(out, allocator, type_decl.name);
-    try append(out, allocator, ",\"params\":");
-    try emitStringArray(out, allocator, type_decl.params);
-    try append(out, allocator, ",\"variants\":[");
+    try append(out, allocator, ",\"type\":{\"kind\":\"enum\",\"variants\":[");
     for (type_decl.variants, 0..) |variant, index| {
         if (index != 0) try append(out, allocator, ",");
         try append(out, allocator, "{\"name\":");
         try appendJsonString(out, allocator, variant.name);
-        try appendPrint(out, allocator, ",\"tag\":{d},\"payload\":[", .{variant.tag});
+        if (variant.payload_types.len != 0) {
+            try append(out, allocator, ",\"fields\":[");
+        }
         for (variant.payload_types, 0..) |payload_ty, payload_index| {
             if (payload_index != 0) try append(out, allocator, ",");
-            const ty = try formatTypeExpr(allocator, payload_ty);
-            defer allocator.free(ty);
-            try appendJsonString(out, allocator, ty);
+            try append(out, allocator, "{\"name\":");
+            const field_name = try std.fmt.allocPrint(allocator, "field{d}", .{payload_index});
+            defer allocator.free(field_name);
+            try appendJsonString(out, allocator, field_name);
+            try append(out, allocator, ",\"type\":");
+            try emitAnchorTypeExpr(out, allocator, payload_ty);
+            try append(out, allocator, "}");
         }
-        try append(out, allocator, "]}");
+        if (variant.payload_types.len != 0) {
+            try append(out, allocator, "]");
+        }
+        try append(out, allocator, "}");
     }
-    try append(out, allocator, "],\"is_recursive\":");
-    try append(out, allocator, if (type_decl.is_recursive) "true" else "false");
-    try append(out, allocator, "}");
+    try append(out, allocator, "]}}");
 }
 
 fn emitTupleType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: types.TupleType) !void {
-    try append(out, allocator, "{\"kind\":\"tuple\",\"name\":");
+    try append(out, allocator, "{\"name\":");
     try appendJsonString(out, allocator, type_decl.name);
-    try append(out, allocator, ",\"params\":");
-    try emitStringArray(out, allocator, type_decl.params);
-    try append(out, allocator, ",\"items\":[");
+    try append(out, allocator, ",\"type\":{\"kind\":\"struct\",\"fields\":[");
     for (type_decl.items, 0..) |item, index| {
         if (index != 0) try append(out, allocator, ",");
-        const ty = try formatTypeExpr(allocator, item);
-        defer allocator.free(ty);
-        try appendJsonString(out, allocator, ty);
+        try append(out, allocator, "{\"name\":");
+        const field_name = try std.fmt.allocPrint(allocator, "item{d}", .{index});
+        defer allocator.free(field_name);
+        try appendJsonString(out, allocator, field_name);
+        try append(out, allocator, ",\"type\":");
+        try emitAnchorTypeExpr(out, allocator, item);
+        try append(out, allocator, "}");
     }
-    try append(out, allocator, "],\"is_recursive\":");
-    try append(out, allocator, if (type_decl.is_recursive) "true" else "false");
-    try append(out, allocator, "}");
+    try append(out, allocator, "]}}");
 }
 
 fn emitRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: types.RecordType) !void {
-    try append(out, allocator, "{\"kind\":\"record\",\"name\":");
+    try append(out, allocator, "{\"name\":");
     try appendJsonString(out, allocator, type_decl.name);
-    try append(out, allocator, ",\"params\":");
-    try emitStringArray(out, allocator, type_decl.params);
-    try append(out, allocator, ",\"fields\":[");
+    try append(out, allocator, ",\"type\":{\"kind\":\"struct\",\"fields\":[");
     for (type_decl.fields, 0..) |field, index| {
         if (index != 0) try append(out, allocator, ",");
-        const ty = try formatTypeExpr(allocator, field.ty);
-        defer allocator.free(ty);
 
         try append(out, allocator, "{\"name\":");
         try appendJsonString(out, allocator, field.name);
         try append(out, allocator, ",\"type\":");
-        try appendJsonString(out, allocator, ty);
-        try append(out, allocator, ",\"is_mutable\":");
-        try append(out, allocator, if (field.is_mutable) "true" else "false");
+        try emitAnchorTypeExpr(out, allocator, field.ty);
         try append(out, allocator, "}");
     }
-    try append(out, allocator, "],\"is_recursive\":");
-    try append(out, allocator, if (type_decl.is_recursive) "true" else "false");
-    try append(out, allocator, "}");
+    try append(out, allocator, "]}}");
 }
 
 fn emitErrors(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.Module) !void {
@@ -251,96 +261,100 @@ fn findProgramId(module: ir.Module) ?[]const u8 {
     return null;
 }
 
-fn formatTy(allocator: std.mem.Allocator, ty: ir.Ty) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try appendTy(&out, allocator, ty);
-    return out.toOwnedSlice(allocator);
-}
-
-fn appendTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) anyerror!void {
+fn emitAnchorTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) anyerror!void {
     switch (ty) {
-        .Int => try append(out, allocator, "int"),
-        .Bool => try append(out, allocator, "bool"),
-        .Unit => try append(out, allocator, "unit"),
-        .String => try append(out, allocator, "bytes"),
-        .Var => |name| try append(out, allocator, name),
+        .Int => try append(out, allocator, "\"i64\""),
+        .Bool => try append(out, allocator, "\"bool\""),
+        .Unit => try append(out, allocator, "\"unit\""),
+        .String => try append(out, allocator, "\"bytes\""),
+        .Var => |name| try appendJsonString(out, allocator, name),
         .Record => |record| {
-            try append(out, allocator, record.name);
-            try appendTypeArgsFromTy(out, allocator, record.params);
+            try emitDefinedType(out, allocator, record.name);
         },
         .Adt => |adt| {
-            try append(out, allocator, adt.name);
-            try appendTypeArgsFromTy(out, allocator, adt.params);
-        },
-        .Tuple => |items| {
-            try append(out, allocator, "tuple");
-            try appendTypeArgsFromTy(out, allocator, items);
-        },
-        .Arrow => |arrow| {
-            try append(out, allocator, "fn<");
-            for (arrow.params, 0..) |param_ty, index| {
-                if (index != 0) try append(out, allocator, ",");
-                try appendTy(out, allocator, param_ty);
+            if (std.mem.eql(u8, adt.name, "option") and adt.params.len == 1) {
+                try append(out, allocator, "{\"option\":");
+                try emitAnchorTy(out, allocator, adt.params[0]);
+                try append(out, allocator, "}");
+            } else if (std.mem.eql(u8, adt.name, "list") and adt.params.len == 1) {
+                try append(out, allocator, "{\"vec\":");
+                try emitAnchorTy(out, allocator, adt.params[0]);
+                try append(out, allocator, "}");
+            } else {
+                try emitDefinedType(out, allocator, adt.name);
             }
-            if (arrow.params.len != 0) try append(out, allocator, "->");
-            try appendTy(out, allocator, arrow.ret.*);
-            try append(out, allocator, ">");
         },
-    }
-}
-
-fn appendTypeArgsFromTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, args: []const ir.Ty) anyerror!void {
-    if (args.len == 0) return;
-    try append(out, allocator, "<");
-    for (args, 0..) |arg, index| {
-        if (index != 0) try append(out, allocator, ",");
-        try appendTy(out, allocator, arg);
-    }
-    try append(out, allocator, ">");
-}
-
-fn formatTypeExpr(allocator: std.mem.Allocator, expr: types.TypeExpr) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(allocator);
-    try appendTypeExpr(&out, allocator, expr);
-    return out.toOwnedSlice(allocator);
-}
-
-fn appendTypeExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: types.TypeExpr) anyerror!void {
-    switch (expr) {
-        .TypeVar => |name| try append(out, allocator, name),
-        .TypeRef => |ref| try appendTypeRef(out, allocator, ref),
-        .RecursiveRef => |ref| try appendTypeRef(out, allocator, ref),
         .Tuple => |items| {
-            try append(out, allocator, "tuple<");
+            try append(out, allocator, "{\"tuple\":[");
             for (items, 0..) |item, index| {
                 if (index != 0) try append(out, allocator, ",");
-                try appendTypeExpr(out, allocator, item);
+                try emitAnchorTy(out, allocator, item);
             }
-            try append(out, allocator, ">");
+            try append(out, allocator, "]}");
+        },
+        .Arrow => |arrow| {
+            try append(out, allocator, "{\"defined\":{\"name\":\"fn\",\"generics\":[");
+            for (arrow.params, 0..) |param_ty, index| {
+                if (index != 0) try append(out, allocator, ",");
+                try emitAnchorTy(out, allocator, param_ty);
+            }
+            if (arrow.params.len != 0) try append(out, allocator, ",");
+            try emitAnchorTy(out, allocator, arrow.ret.*);
+            try append(out, allocator, "]}}");
         },
     }
 }
 
-fn appendTypeRef(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ref: types.TypeRef) anyerror!void {
-    try append(out, allocator, ref.name);
-    if (ref.args.len == 0) return;
-    try append(out, allocator, "<");
-    for (ref.args, 0..) |arg, index| {
-        if (index != 0) try append(out, allocator, ",");
-        try appendTypeExpr(out, allocator, arg);
+fn emitAnchorTypeExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: types.TypeExpr) anyerror!void {
+    switch (expr) {
+        .TypeVar => |name| try appendJsonString(out, allocator, name),
+        .TypeRef => |ref| try emitAnchorTypeRef(out, allocator, ref),
+        .RecursiveRef => |ref| try emitAnchorTypeRef(out, allocator, ref),
+        .Tuple => |items| {
+            try append(out, allocator, "{\"tuple\":[");
+            for (items, 0..) |item, index| {
+                if (index != 0) try append(out, allocator, ",");
+                try emitAnchorTypeExpr(out, allocator, item);
+            }
+            try append(out, allocator, "]}");
+        },
     }
-    try append(out, allocator, ">");
 }
 
-fn emitStringArray(out: *std.ArrayList(u8), allocator: std.mem.Allocator, values: []const []const u8) !void {
-    try append(out, allocator, "[");
-    for (values, 0..) |value, index| {
-        if (index != 0) try append(out, allocator, ",");
-        try appendJsonString(out, allocator, value);
+fn emitAnchorTypeRef(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ref: types.TypeRef) anyerror!void {
+    if (std.mem.eql(u8, ref.name, "int")) return append(out, allocator, "\"i64\"");
+    if (std.mem.eql(u8, ref.name, "bool")) return append(out, allocator, "\"bool\"");
+    if (std.mem.eql(u8, ref.name, "unit")) return append(out, allocator, "\"unit\"");
+    if (std.mem.eql(u8, ref.name, "bytes") or std.mem.eql(u8, ref.name, "string")) return append(out, allocator, "\"bytes\"");
+    if (std.mem.eql(u8, ref.name, "pubkey") or std.mem.eql(u8, ref.name, "Pubkey.t")) return append(out, allocator, "\"pubkey\"");
+
+    if (std.mem.eql(u8, ref.name, "option") and ref.args.len == 1) {
+        try append(out, allocator, "{\"option\":");
+        try emitAnchorTypeExpr(out, allocator, ref.args[0]);
+        try append(out, allocator, "}");
+        return;
     }
-    try append(out, allocator, "]");
+
+    if ((std.mem.eql(u8, ref.name, "list") or std.mem.eql(u8, ref.name, "array")) and ref.args.len == 1) {
+        try append(out, allocator, "{\"vec\":");
+        try emitAnchorTypeExpr(out, allocator, ref.args[0]);
+        try append(out, allocator, "}");
+        return;
+    }
+
+    try emitDefinedType(out, allocator, ref.name);
+}
+
+fn emitDefinedType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8) !void {
+    try append(out, allocator, "{\"defined\":{\"name\":");
+    try appendJsonString(out, allocator, name);
+    try append(out, allocator, "}}");
+}
+
+fn shouldEmitRecordType(name: []const u8) bool {
+    return !std.mem.eql(u8, name, "account") and
+        !std.mem.eql(u8, name, "account_meta") and
+        !std.mem.eql(u8, name, "instruction");
 }
 
 fn isAccountTy(ty: ir.Ty) bool {
@@ -542,7 +556,50 @@ test "IDL emitter keeps modules without entrypoints valid" {
     }, .{ .program_name = "empty" });
     defer std.testing.allocator.free(json);
 
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"address\":\"11111111111111111111111111111111\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"metadata\":{\"name\":\"empty\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"instructions\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accounts\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"types\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"events\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"errors\":[]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"constants\":[]") != null);
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+}
+
+test "IDL emitter maps records, variants, options, and Anchor discriminators" {
+    const int_ref = types.TypeExpr{ .TypeRef = .{ .name = "int" } };
+    const bool_ref = types.TypeExpr{ .TypeRef = .{ .name = "bool" } };
+    const option_args = [_]types.TypeExpr{bool_ref};
+    const option_ref = types.TypeExpr{ .TypeRef = .{ .name = "option", .args = option_args[0..] } };
+    const variant_payload = [_]types.TypeExpr{int_ref};
+    const variant_ctors = [_]types.VariantCtor{
+        .{ .name = "Ready", .tag = 0 },
+        .{ .name = "Frozen", .tag = 1, .payload_types = variant_payload[0..] },
+    };
+    const record_fields = [_]types.RecordField{
+        .{ .name = "balance", .ty = int_ref },
+        .{ .name = "enabled", .ty = option_ref },
+    };
+    const variant_types = [_]types.VariantType{
+        .{ .name = "status", .variants = variant_ctors[0..] },
+    };
+    const record_types = [_]types.RecordType{
+        .{ .name = "vault", .fields = record_fields[0..] },
+    };
+
+    const json = try emitModule(std.testing.allocator, .{
+        .decls = &.{},
+        .type_decls = variant_types[0..],
+        .tuple_type_decls = &.{},
+        .record_type_decls = record_types[0..],
+    }, .{ .program_name = "typed" });
+    defer std.testing.allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"accounts\":[{\"name\":\"vault\",\"discriminator\":[222,213,79,124,216,238,238,131]}]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"status\",\"type\":{\"kind\":\"enum\",\"variants\":[{\"name\":\"Ready\"},{\"name\":\"Frozen\",\"fields\":[{\"name\":\"field0\",\"type\":\"i64\"}]}]}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"name\":\"vault\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"balance\",\"type\":\"i64\"},{\"name\":\"enabled\",\"type\":{\"option\":\"bool\"}}]}") != null);
     var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
     defer parsed.deinit();
 }
