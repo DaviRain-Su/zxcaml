@@ -40,8 +40,10 @@ pub const ParseError = error{
 };
 
 const pre_original_data_len_padding = 4;
-const account_alignment = 8;
+const account_alignment = 16;
+const max_permitted_data_increase = 10 * 1024;
 const pubkey_len = 32;
+const not_duplicate_account: u8 = 0xff;
 
 /// Parses serialized accounts from a bounded, mutable Solana input buffer.
 pub fn parseAccounts(arena: *Arena, input: []u8) ParseError![]AccountView {
@@ -82,26 +84,38 @@ pub fn parseAccountsFromPtrInto(arena: *Arena, input: [*]const u8, out: *[]Accou
     out.* = accounts;
 }
 
-/// Logs every serialized account key and lamport balance without allocating account views.
+/// Logs every serialized account key and lamport balance from Solana input.
 pub inline fn logAccountsFromPtr(input: [*]const u8) void {
-    _ = input;
-    const zero_key = [_]u8{0} ** pubkey_len;
-    logPubkeyHex(&zero_key);
-    syscalls.sol_log_64_(0, 0, 0, 0, 0);
+    var scratch: [1024]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&scratch);
+    var accounts: []AccountView = undefined;
+    parseAccountsFromPtrInto(&arena, input, &accounts) catch {
+        return;
+    };
+
+    for (accounts) |account| {
+        logPubkeyHex(account.key);
+        syscalls.sol_log_64_(@bitCast(account.lamportsValue()), 0, 0, 0, 0);
+    }
 }
 
 inline fn logPubkeyHex(key: *const [pubkey_len]u8) void {
-    const hex = "0123456789abcdef";
     var key_hex: [pubkey_len * 2]u8 = undefined;
     for (key.*, 0..) |byte, index| {
-        key_hex[index * 2] = hex[byte >> 4];
-        key_hex[index * 2 + 1] = hex[byte & 0x0f];
+        key_hex[index * 2] = nibbleToHex(byte >> 4);
+        key_hex[index * 2 + 1] = nibbleToHex(byte & 0x0f);
     }
     syscalls.sol_log_(key_hex[0..]);
 }
 
+inline fn nibbleToHex(nibble: u8) u8 {
+    return if (nibble < 10) '0' + nibble else 'a' + (nibble - 10);
+}
+
 fn parseOneBounded(input: []u8, cursor: *usize) ParseError!AccountView {
-    if (input.len -| cursor.* < 3) return error.TruncatedInput;
+    if (input.len -| cursor.* < 4) return error.TruncatedInput;
+    _ = input[cursor.*]; // dup_info: 0xff for a fresh account, otherwise duplicate index.
+    cursor.* += 1;
     const is_signer = input[cursor.*] != 0;
     cursor.* += 1;
     const is_writable = input[cursor.*] != 0;
@@ -110,9 +124,8 @@ fn parseOneBounded(input: []u8, cursor: *usize) ParseError!AccountView {
     cursor.* += 1;
 
     try consumeZeroPadding(input, cursor, pre_original_data_len_padding);
-    _ = try readU64(input, cursor); // original_data_len is retained only in the serialized buffer.
-
     const key = try readPubkeyPtr(input, cursor);
+    const owner = try readPubkeyPtr(input, cursor);
     const lamports = try readU64Ptr(input, cursor);
     const data_len_u64 = try readU64(input, cursor);
     if (data_len_u64 > std.math.maxInt(usize)) return error.AccountCountOverflow;
@@ -122,9 +135,10 @@ fn parseOneBounded(input: []u8, cursor: *usize) ParseError!AccountView {
     cursor.* += data_len;
     const data = input[data_start..cursor.*];
 
+    if (max_permitted_data_increase > input.len -| cursor.*) return error.TruncatedInput;
+    cursor.* += max_permitted_data_increase;
     try consumeAlignmentPadding(input, cursor, account_alignment);
 
-    const owner = try readPubkeyPtr(input, cursor);
     const rent_epoch = try readConstU64Ptr(input, cursor);
 
     return .{
@@ -140,6 +154,8 @@ fn parseOneBounded(input: []u8, cursor: *usize) ParseError!AccountView {
 }
 
 fn parseOneUncheckedInto(input: [*]u8, cursor: *usize, out: *AccountView) void {
+    _ = input[cursor.*]; // dup_info: 0xff for a fresh account, otherwise duplicate index.
+    cursor.* += 1;
     out.is_signer = input[cursor.*] != 0;
     cursor.* += 1;
     out.is_writable = input[cursor.*] != 0;
@@ -148,19 +164,18 @@ fn parseOneUncheckedInto(input: [*]u8, cursor: *usize, out: *AccountView) void {
     cursor.* += 1;
 
     cursor.* += pre_original_data_len_padding;
-    _ = readU64Unchecked(input, cursor);
-
     out.key = @ptrCast(input + cursor.*);
+    cursor.* += pubkey_len;
+    out.owner = @ptrCast(input + cursor.*);
     cursor.* += pubkey_len;
     out.lamports = @ptrCast(input + cursor.*);
     cursor.* += @sizeOf(u64);
     const data_len = readU64Unchecked(input, cursor);
     out.data = (input + cursor.*)[0..@intCast(data_len)];
     cursor.* += @intCast(data_len);
+    cursor.* += max_permitted_data_increase;
     cursor.* = std.mem.alignForward(usize, cursor.*, account_alignment);
 
-    out.owner = @ptrCast(input + cursor.*);
-    cursor.* += pubkey_len;
     out.rent_epoch = @ptrCast(input + cursor.*);
     cursor.* += @sizeOf(u64);
 }
@@ -261,18 +276,20 @@ fn writePubkey(buf: []u8, cursor: *usize, start: u8) void {
 }
 
 test "golden account parser preserves serialized fields and zero-copy pointers" {
-    var input = [_]u8{0} ** 256;
+    var input = [_]u8{0} ** 24_000;
     var cursor: usize = 0;
     writeU64(&input, &cursor, 2);
 
-    input[cursor] = 1;
-    input[cursor + 1] = 0;
-    input[cursor + 2] = 1;
-    cursor += 3;
+    input[cursor] = not_duplicate_account;
+    input[cursor + 1] = 1;
+    input[cursor + 2] = 0;
+    input[cursor + 3] = 1;
+    cursor += 4;
     writeZeroes(&input, &cursor, pre_original_data_len_padding);
-    writeU64(&input, &cursor, 3);
     const key0_offset = cursor;
     writePubkey(&input, &cursor, 0x10);
+    const owner0_offset = cursor;
+    writePubkey(&input, &cursor, 0x80);
     const lamports0_offset = cursor;
     writeU64(&input, &cursor, 500);
     writeU64(&input, &cursor, 3);
@@ -281,29 +298,29 @@ test "golden account parser preserves serialized fields and zero-copy pointers" 
     input[cursor + 1] = 0xbb;
     input[cursor + 2] = 0xcc;
     cursor += 3;
+    writeZeroes(&input, &cursor, max_permitted_data_increase);
     const data0_aligned = std.mem.alignForward(usize, cursor, account_alignment);
     writeZeroes(&input, &cursor, data0_aligned - cursor);
-    const owner0_offset = cursor;
-    writePubkey(&input, &cursor, 0x80);
     const rent0_offset = cursor;
     writeU64(&input, &cursor, 77);
 
-    input[cursor] = 0;
-    input[cursor + 1] = 1;
-    input[cursor + 2] = 0;
-    cursor += 3;
+    input[cursor] = not_duplicate_account;
+    input[cursor + 1] = 0;
+    input[cursor + 2] = 1;
+    input[cursor + 3] = 0;
+    cursor += 4;
     writeZeroes(&input, &cursor, pre_original_data_len_padding);
-    writeU64(&input, &cursor, 0);
     const key1_offset = cursor;
     writePubkey(&input, &cursor, 0x30);
+    const owner1_offset = cursor;
+    writePubkey(&input, &cursor, 0xa0);
     const lamports1_offset = cursor;
     writeU64(&input, &cursor, 900);
     writeU64(&input, &cursor, 0);
     const data1_offset = cursor;
+    writeZeroes(&input, &cursor, max_permitted_data_increase);
     const data1_aligned = std.mem.alignForward(usize, cursor, account_alignment);
     writeZeroes(&input, &cursor, data1_aligned - cursor);
-    const owner1_offset = cursor;
-    writePubkey(&input, &cursor, 0xa0);
     writeU64(&input, &cursor, 88);
 
     var arena_buf: [512]u8 align(8) = undefined;
@@ -338,6 +355,21 @@ test "golden account parser preserves serialized fields and zero-copy pointers" 
     try std.testing.expectEqual(@as(u8, 0x30), accounts[1].key[0]);
     try std.testing.expectEqual(@as(u8, 0xbf), accounts[1].owner[31]);
     try std.testing.expect(arena.offset >= @sizeOf(AccountView) * accounts.len);
+
+    arena.reset();
+    var unchecked_accounts: []AccountView = undefined;
+    try parseAccountsFromPtrInto(&arena, @ptrCast(&input), &unchecked_accounts);
+    try std.testing.expectEqual(@as(usize, 2), unchecked_accounts.len);
+    try std.testing.expect(unchecked_accounts[0].is_signer);
+    try std.testing.expect(!unchecked_accounts[0].is_writable);
+    try std.testing.expect(unchecked_accounts[0].executable);
+    try std.testing.expectEqual(@as(u64, 500), unchecked_accounts[0].lamportsValue());
+    try std.testing.expectEqual(@as(u8, 0x10), unchecked_accounts[0].key[0]);
+    try std.testing.expect(!unchecked_accounts[1].is_signer);
+    try std.testing.expect(unchecked_accounts[1].is_writable);
+    try std.testing.expect(!unchecked_accounts[1].executable);
+    try std.testing.expectEqual(@as(u64, 900), unchecked_accounts[1].lamportsValue());
+    try std.testing.expectEqual(@as(u8, 0x30), unchecked_accounts[1].key[0]);
 }
 
 test "account parser reports structured errors for malformed bounded inputs" {
@@ -349,10 +381,11 @@ test "account parser reports structured errors for malformed bounded inputs" {
     var invalid_padding = [_]u8{0} ** 128;
     var cursor: usize = 0;
     writeU64(&invalid_padding, &cursor, 1);
-    invalid_padding[cursor] = 1;
+    invalid_padding[cursor] = not_duplicate_account;
     invalid_padding[cursor + 1] = 1;
-    invalid_padding[cursor + 2] = 0;
-    cursor += 3;
+    invalid_padding[cursor + 2] = 1;
+    invalid_padding[cursor + 3] = 0;
+    cursor += 4;
     invalid_padding[cursor] = 0xff;
     arena.reset();
     try std.testing.expectError(error.InvalidPadding, parseAccounts(&arena, invalid_padding[0..]));
