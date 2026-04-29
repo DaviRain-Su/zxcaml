@@ -67,9 +67,17 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
     const type_decls = try lowerTypeDecls(arena, module.type_decls);
     const tuple_type_decls = try lowerTupleTypeDecls(arena, module.tuple_type_decls);
     const record_type_decls = try lowerRecordTypeDecls(arena, module.record_type_decls);
+    const externals = try lowerExternalDecls(arena, module.externals, record_type_decls);
     ctx.tuple_type_decls = tuple_type_decls;
     ctx.record_type_decls = record_type_decls;
     try indexConstructors(&ctx, type_decls);
+
+    for (externals) |external| {
+        try ctx.scope.put(external.name, .{
+            .ty = external.ty,
+            .layout = layoutForTy(external.ty),
+        });
+    }
 
     for (module.decls) |decl| {
         switch (decl) {
@@ -100,6 +108,7 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
         .type_decls = type_decls,
         .tuple_type_decls = tuple_type_decls,
         .record_type_decls = record_type_decls,
+        .externals = externals,
     };
 }
 
@@ -153,6 +162,22 @@ fn lowerRecordTypeDecls(arena: *std.heap.ArenaAllocator, decls: []const ttree.Re
             .params = try dupeStringSlice(arena, decl.params),
             .fields = fields,
             .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerExternalDecls(
+    arena: *std.heap.ArenaAllocator,
+    decls: []const ttree.ExternalDecl,
+    record_type_decls: []const types.RecordType,
+) LowerError![]const ir.ExternalDecl {
+    const lowered = try arena.allocator().alloc(ir.ExternalDecl, decls.len);
+    for (decls, 0..) |decl, index| {
+        lowered[index] = .{
+            .name = try arena.allocator().dupe(u8, decl.name),
+            .ty = try externalTypeExprToTy(arena, record_type_decls, decl.ty),
+            .symbol = try arena.allocator().dupe(u8, decl.symbol),
         };
     }
     return lowered;
@@ -1945,6 +1970,69 @@ fn typeExprToTy(arena: *std.heap.ArenaAllocator, expr: types.TypeExpr) LowerErro
     return typeExprToTyWithBindings(arena, &.{}, expr, null);
 }
 
+fn externalTypeExprToTy(
+    arena: *std.heap.ArenaAllocator,
+    record_type_decls: []const types.RecordType,
+    expr: ttree.ExternalTypeExpr,
+) LowerError!ir.Ty {
+    switch (expr) {
+        .Arrow => {
+            var params = std.ArrayList(ir.Ty).empty;
+            defer params.deinit(arena.allocator());
+
+            var current = expr;
+            while (true) {
+                switch (current) {
+                    .Arrow => |arrow| {
+                        try params.append(arena.allocator(), try externalTypeExprToTy(arena, record_type_decls, arrow.arg.*));
+                        current = arrow.result.*;
+                    },
+                    else => {
+                        const ret_ty = try externalTypeExprToTy(arena, record_type_decls, current);
+                        return makeArrowTyFromPieces(arena, params.items, ret_ty);
+                    },
+                }
+            }
+        },
+        .Tuple => |items| {
+            const tys = try arena.allocator().alloc(ir.Ty, items.len);
+            for (items, 0..) |item, index| {
+                tys[index] = try externalTypeExprToTy(arena, record_type_decls, item);
+            }
+            return .{ .Tuple = tys };
+        },
+        .TypeRef => |ref| return externalTypeRefToTy(arena, record_type_decls, ref),
+    }
+}
+
+fn externalTypeRefToTy(
+    arena: *std.heap.ArenaAllocator,
+    record_type_decls: []const types.RecordType,
+    ref: ttree.ExternalTypeRef,
+) LowerError!ir.Ty {
+    if (std.mem.eql(u8, ref.name, "int")) return .Int;
+    if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
+    if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
+    if (std.mem.eql(u8, ref.name, "string")) return .String;
+    if (std.mem.eql(u8, ref.name, "bytes")) return .String;
+    if (std.mem.startsWith(u8, ref.name, "'")) return .{ .Var = try arena.allocator().dupe(u8, ref.name) };
+
+    const params = try arena.allocator().alloc(ir.Ty, ref.args.len);
+    for (ref.args, 0..) |arg, index| {
+        params[index] = try externalTypeExprToTy(arena, record_type_decls, arg);
+    }
+    if (findRecordDecl(record_type_decls, ref.name) != null) {
+        return .{ .Record = .{
+            .name = try arena.allocator().dupe(u8, ref.name),
+            .params = params,
+        } };
+    }
+    return .{ .Adt = .{
+        .name = try arena.allocator().dupe(u8, ref.name),
+        .params = params,
+    } };
+}
+
 fn typeExprToTyWithBindings(
     arena: *std.heap.ArenaAllocator,
     record_type_decls: []const types.RecordType,
@@ -2814,6 +2902,50 @@ test "lower Syscall module calls as typed builtin applications" {
     };
     try std.testing.expectEqualStrings("Syscall.sol_remaining_compute_units", remaining_callee.name);
     try std.testing.expectEqual(ir.Ty.Int, remaining_app.ty);
+}
+
+test "lower external declarations into callable Core bindings" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 1.0 (module (external (name \"sol_log\") (type (arrow string unit)) (symbol \"sol_log_\")) (let entrypoint (lambda (_input) (app (var sol_log) (const-string \"hi\"))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    try std.testing.expectEqual(@as(usize, 1), module.externals.len);
+    try std.testing.expectEqualStrings("sol_log", module.externals[0].name);
+    try std.testing.expectEqualStrings("sol_log_", module.externals[0].symbol);
+
+    const external_ty = switch (module.externals[0].ty) {
+        .Arrow => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 1), external_ty.params.len);
+    try std.testing.expectEqual(ir.Ty.String, external_ty.params[0]);
+    try std.testing.expectEqual(ir.Ty.Unit, external_ty.ret.*);
+
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const app = switch (lambda.body.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("sol_log", callee.name);
+    try std.testing.expectEqual(ir.Ty.Unit, app.ty);
 }
 
 test "lower CPI return-data calls as typed builtin applications" {

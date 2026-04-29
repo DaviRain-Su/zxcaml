@@ -98,6 +98,7 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
         .type_decls = try lowerTypeDecls(allocator, module.type_decls),
         .tuple_type_decls = try lowerTupleTypeDecls(allocator, module.tuple_type_decls),
         .record_type_decls = try lowerRecordTypeDecls(allocator, module.record_type_decls),
+        .externals = try lowerExternalDecls(allocator, module.externals),
     };
 }
 
@@ -151,6 +152,18 @@ fn lowerRecordTypeDecls(allocator: std.mem.Allocator, decls: []const core_types.
             .params = try dupeStringSlice(allocator, decl.params),
             .fields = fields,
             .is_recursive = decl.is_recursive,
+        };
+    }
+    return lowered;
+}
+
+fn lowerExternalDecls(allocator: std.mem.Allocator, decls: []const ir.ExternalDecl) LowerError![]const lir.LExternalDecl {
+    const lowered = try allocator.alloc(lir.LExternalDecl, decls.len);
+    for (decls, 0..) |decl, index| {
+        lowered[index] = .{
+            .name = try allocator.dupe(u8, decl.name),
+            .ty = try lowerTy(allocator, decl.ty),
+            .symbol = try allocator.dupe(u8, decl.symbol),
         };
     }
     return lowered;

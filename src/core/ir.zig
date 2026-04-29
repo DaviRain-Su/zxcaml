@@ -47,11 +47,19 @@ pub const Module = struct {
     type_decls: []const types.VariantType = &.{},
     tuple_type_decls: []const types.TupleType = &.{},
     record_type_decls: []const types.RecordType = &.{},
+    externals: []const ExternalDecl = &.{},
 };
 
 /// Top-level Core IR declarations.
 pub const Decl = union(enum) {
     Let: Let,
+};
+
+/// Top-level external function declaration with its direct Zig symbol.
+pub const ExternalDecl = struct {
+    name: []const u8,
+    ty: Ty,
+    symbol: []const u8,
 };
 
 /// Top-level let declaration.

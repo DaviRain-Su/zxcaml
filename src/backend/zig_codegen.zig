@@ -58,10 +58,10 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
     try emitClosureCaptureStructs(&out, allocator, module.functions);
     for (module.functions) |func| {
         if (isCounterHelperName(func.name)) continue;
-        try emitFunction(&out, allocator, func, module.functions, module.type_decls, module.record_type_decls);
+        try emitFunction(&out, allocator, func, module.functions, module.type_decls, module.record_type_decls, module.externals);
         try append(&out, allocator, "\n");
     }
-    try emitFunction(&out, allocator, module.entrypoint, module.functions, module.type_decls, module.record_type_decls);
+    try emitFunction(&out, allocator, module.entrypoint, module.functions, module.type_decls, module.record_type_decls, module.externals);
 
     return out.toOwnedSlice(allocator);
 }
@@ -216,6 +216,7 @@ fn emitFunction(
     functions: []const lir.LFunc,
     type_decls: []const lir.LVariantType,
     record_type_decls: []const lir.LRecordType,
+    externals: []const lir.LExternalDecl,
 ) EmitError!void {
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
     const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
@@ -246,7 +247,7 @@ fn emitFunction(
         try appendPrint(out, allocator, ") {s} {{\n", .{return_ty});
     }
     const entrypoint_needs_account_list = is_entrypoint and paramsNeedEntrypointAccountList(func.params);
-    if (!exprNeedsArena(func.body, type_decls) and !entrypoint_needs_account_list) {
+    if (!exprNeedsArena(func.body, type_decls, externals) and !entrypoint_needs_account_list) {
         try append(out, allocator, "    _ = arena;\n");
     }
     if (is_entrypoint) {
@@ -260,7 +261,7 @@ fn emitFunction(
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
     }
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
-    var ctx: EmitContext = .{ .is_entrypoint = is_entrypoint, .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls };
+    var ctx: EmitContext = .{ .is_entrypoint = is_entrypoint, .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls, .externals = externals };
     try emitExpr(out, allocator, func.body, 1, &ctx);
     try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     try append(out, allocator, "}\n");
@@ -401,6 +402,7 @@ const EmitContext = struct {
     functions: []const lir.LFunc = &.{},
     type_decls: []const lir.LVariantType = &.{},
     record_type_decls: []const lir.LRecordType = &.{},
+    externals: []const lir.LExternalDecl = &.{},
 };
 
 fn emitExpr(
@@ -693,6 +695,10 @@ fn emitAppExpr(
 
     switch (app.callee.*) {
         .Var => |callee| {
+            if (findExternalDecl(ctx.externals, callee.name)) |external| {
+                try emitExternalAppExpr(out, allocator, external, app, indent_level, ctx);
+                return;
+            }
             if (try emitSyscallAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             if (try emitSplTokenAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
             if (try emitCounterAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return;
@@ -709,6 +715,100 @@ fn emitAppExpr(
         try emitExpr(out, allocator, arg.*, indent_level, ctx);
     }
     try append(out, allocator, ")");
+}
+
+fn emitExternalAppExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    external: lir.LExternalDecl,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const wrap_int = externalReturnIsInt(external);
+    if (wrap_int) try append(out, allocator, "@as(i64, @intCast(");
+    try emitExternalSymbolRef(out, allocator, external.symbol);
+    try append(out, allocator, "(");
+    var wrote_arg = false;
+    if (externalNeedsArenaArg(external)) {
+        try append(out, allocator, "arena");
+        wrote_arg = true;
+    }
+
+    const params = switch (external.ty) {
+        .Closure => |closure| closure.params,
+        else => &.{},
+    };
+    for (app.args, 0..) |arg, index| {
+        if (index < params.len and isUnitTy(params[index]) and isUnitExpr(arg.*)) continue;
+        if (wrote_arg) try append(out, allocator, ", ");
+        try emitExpr(out, allocator, arg.*, indent_level, ctx);
+        wrote_arg = true;
+    }
+    try append(out, allocator, ")");
+    if (wrap_int) try append(out, allocator, "))");
+}
+
+fn findExternalDecl(externals: []const lir.LExternalDecl, name: []const u8) ?lir.LExternalDecl {
+    for (externals) |external| {
+        if (std.mem.eql(u8, external.name, name)) return external;
+    }
+    return null;
+}
+
+fn emitExternalSymbolRef(out: *std.ArrayList(u8), allocator: std.mem.Allocator, symbol: []const u8) EmitError!void {
+    if (std.mem.indexOfScalar(u8, symbol, '.') != null) {
+        try append(out, allocator, symbol);
+        return;
+    }
+    if (isSyscallExternalSymbol(symbol)) {
+        try append(out, allocator, "syscalls.");
+    }
+    try append(out, allocator, symbol);
+}
+
+fn isSyscallExternalSymbol(symbol: []const u8) bool {
+    return std.mem.eql(u8, symbol, "sol_log_") or
+        std.mem.eql(u8, symbol, "sol_log_64_") or
+        std.mem.eql(u8, symbol, "sol_log_pubkey") or
+        std.mem.eql(u8, symbol, "sol_sha256") or
+        std.mem.eql(u8, symbol, "sol_sha256_alloc") or
+        std.mem.eql(u8, symbol, "sol_keccak256") or
+        std.mem.eql(u8, symbol, "sol_keccak256_alloc") or
+        std.mem.eql(u8, symbol, "sol_get_clock_sysvar") or
+        std.mem.eql(u8, symbol, "sol_get_rent_sysvar") or
+        std.mem.eql(u8, symbol, "sol_log_compute_units_") or
+        std.mem.eql(u8, symbol, "sol_remaining_compute_units");
+}
+
+fn externalNeedsArenaArg(external: lir.LExternalDecl) bool {
+    return std.mem.eql(u8, external.symbol, "sol_sha256_alloc") or
+        std.mem.eql(u8, external.symbol, "sol_keccak256_alloc");
+}
+
+fn externalReturnIsInt(external: lir.LExternalDecl) bool {
+    const closure = switch (external.ty) {
+        .Closure => |value| value,
+        else => return false,
+    };
+    return switch (closure.ret.*) {
+        .Int => true,
+        else => false,
+    };
+}
+
+fn isUnitExpr(expr: lir.LExpr) bool {
+    return switch (expr) {
+        .Ctor => |ctor| std.mem.eql(u8, ctor.name, "()") and ctor.args.len == 0,
+        else => false,
+    };
+}
+
+fn isUnitTy(ty: lir.LTy) bool {
+    return switch (ty) {
+        .Unit => true,
+        else => false,
+    };
 }
 
 fn emitSyscallAppExpr(
@@ -3129,25 +3229,25 @@ fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
     };
 }
 
-fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
+fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType, externals: []const lir.LExternalDecl) bool {
     return switch (expr) {
         .Constant, .Var => false,
-        .App => |app| appNeedsArena(app),
-        .Let => |let_expr| exprNeedsArena(let_expr.value.*, type_decls) or exprNeedsArena(let_expr.body.*, type_decls),
-        .If => |if_expr| exprNeedsArena(if_expr.cond.*, type_decls) or exprNeedsArena(if_expr.then_branch.*, type_decls) or exprNeedsArena(if_expr.else_branch.*, type_decls),
+        .App => |app| appNeedsArena(app, externals),
+        .Let => |let_expr| exprNeedsArena(let_expr.value.*, type_decls, externals) or exprNeedsArena(let_expr.body.*, type_decls, externals),
+        .If => |if_expr| exprNeedsArena(if_expr.cond.*, type_decls, externals) or exprNeedsArena(if_expr.then_branch.*, type_decls, externals) or exprNeedsArena(if_expr.else_branch.*, type_decls, externals),
         .Prim => |prim| blk: {
             for (prim.args) |arg| {
-                if (exprNeedsArena(arg.*, type_decls)) break :blk true;
+                if (exprNeedsArena(arg.*, type_decls, externals)) break :blk true;
             }
             break :blk false;
         },
         .Match => |match_expr| blk: {
-            if (exprNeedsArena(match_expr.scrutinee.*, type_decls)) break :blk true;
+            if (exprNeedsArena(match_expr.scrutinee.*, type_decls, externals)) break :blk true;
             for (match_expr.arms) |arm| {
                 if (arm.guard) |guard_expr| {
-                    if (exprNeedsArena(guard_expr.*, type_decls)) break :blk true;
+                    if (exprNeedsArena(guard_expr.*, type_decls, externals)) break :blk true;
                 }
-                if (exprNeedsArena(arm.body.*, type_decls)) break :blk true;
+                if (exprNeedsArena(arm.body.*, type_decls, externals)) break :blk true;
             }
             break :blk false;
         },
@@ -3163,41 +3263,42 @@ fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType) bool {
                 break :blk true;
             }
             for (ctor_expr.args) |arg| {
-                if (exprNeedsArena(arg.*, type_decls)) break :blk true;
+                if (exprNeedsArena(arg.*, type_decls, externals)) break :blk true;
             }
             break :blk false;
         },
         .Tuple => |tuple_expr| blk: {
             for (tuple_expr.items) |item| {
-                if (exprNeedsArena(item.*, type_decls)) break :blk true;
+                if (exprNeedsArena(item.*, type_decls, externals)) break :blk true;
             }
             break :blk false;
         },
-        .TupleProj => |tuple_proj| exprNeedsArena(tuple_proj.tuple_expr.*, type_decls),
+        .TupleProj => |tuple_proj| exprNeedsArena(tuple_proj.tuple_expr.*, type_decls, externals),
         .Record => |record_expr| blk: {
             for (record_expr.fields) |field| {
-                if (exprNeedsArena(field.value.*, type_decls)) break :blk true;
+                if (exprNeedsArena(field.value.*, type_decls, externals)) break :blk true;
             }
             break :blk false;
         },
-        .RecordField => |record_field| exprNeedsArena(record_field.record_expr.*, type_decls),
+        .RecordField => |record_field| exprNeedsArena(record_field.record_expr.*, type_decls, externals),
         .RecordUpdate => |record_update| blk: {
-            if (exprNeedsArena(record_update.base_expr.*, type_decls)) break :blk true;
+            if (exprNeedsArena(record_update.base_expr.*, type_decls, externals)) break :blk true;
             for (record_update.fields) |field| {
-                if (exprNeedsArena(field.value.*, type_decls)) break :blk true;
+                if (exprNeedsArena(field.value.*, type_decls, externals)) break :blk true;
             }
             break :blk false;
         },
-        .AccountFieldSet => |field_set| exprNeedsArena(field_set.account_expr.*, type_decls) or exprNeedsArena(field_set.value.*, type_decls),
+        .AccountFieldSet => |field_set| exprNeedsArena(field_set.account_expr.*, type_decls, externals) or exprNeedsArena(field_set.value.*, type_decls, externals),
         .Closure => true,
     };
 }
 
-fn appNeedsArena(app: lir.LApp) bool {
+fn appNeedsArena(app: lir.LApp, externals: []const lir.LExternalDecl) bool {
     const callee = switch (app.callee.*) {
         .Var => |var_ref| var_ref.name,
         else => return true,
     };
+    if (findExternalDecl(externals, callee)) |external| return externalNeedsArenaArg(external);
     if (std.mem.eql(u8, callee, "Syscall.sol_log")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_log_64")) return false;
     if (std.mem.eql(u8, callee, "Syscall.sol_log_pubkey")) return false;
@@ -4420,6 +4521,54 @@ test "ZigBackend emits Syscall module calls through runtime bindings" {
     try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_64_(@as(i64, 1), @as(i64, 2), @as(i64, 3), @as(i64, 4), @as(i64, 5))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Syscall_sol_log") == null);
+}
+
+test "ZigBackend emits external calls as direct Zig symbol references" {
+    const unit_ty: lir.LTy = .Unit;
+    const int_ty: lir.LTy = .Int;
+    const module: lir.LModule = .{
+        .externals = &.{
+            .{
+                .name = "sol_log",
+                .symbol = "sol_log_",
+                .ty = .{ .Closure = .{ .params = &.{.String}, .ret = &unit_ty } },
+            },
+            .{
+                .name = "remaining",
+                .symbol = "sol_remaining_compute_units",
+                .ty = .{ .Closure = .{ .params = &.{.Unit}, .ret = &int_ty } },
+            },
+        },
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .Let = .{
+                .name = "_",
+                .value = &.{ .App = .{
+                    .callee = &.{ .Var = .{ .name = "sol_log" } },
+                    .args = &.{&.{ .Constant = .{ .String = "hi" } }},
+                    .ty = .Unit,
+                } },
+                .body = &.{ .App = .{
+                    .callee = &.{ .Var = .{ .name = "remaining" } },
+                    .args = &.{&.{ .Ctor = .{
+                        .name = "()",
+                        .args = &.{},
+                        .ty = .Unit,
+                        .layout = @import("../core/layout.zig").unitValue(),
+                    } }},
+                    .ty = .Int,
+                } },
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_(\"hi\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_sol_log") == null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_remaining") == null);
 }
 
 test "ZigBackend emits CPI return-data calls through runtime bindings" {

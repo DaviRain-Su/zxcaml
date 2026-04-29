@@ -12,6 +12,7 @@ pub const LModule = struct {
     type_decls: []const LVariantType = &.{},
     tuple_type_decls: []const LTupleType = &.{},
     record_type_decls: []const LRecordType = &.{},
+    externals: []const LExternalDecl = &.{},
 };
 
 /// A lowered function using the P1 arena-threaded calling convention.
@@ -29,6 +30,13 @@ pub const LFunc = struct {
 pub const LParam = struct {
     name: []const u8,
     ty: LTy,
+};
+
+/// Lowered external function declaration with its direct Zig symbol.
+pub const LExternalDecl = struct {
+    name: []const u8,
+    ty: LTy,
+    symbol: []const u8,
 };
 
 /// Calling conventions available to lowered functions.
