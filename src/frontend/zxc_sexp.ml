@@ -157,7 +157,9 @@ let rec pp_decl ppf decl =
       if decl.record_is_recursive then fprintf ppf " (recursive true)";
       fprintf ppf " (fields (";
       pp_record_type_fields ppf decl.record_fields;
-      fprintf ppf ")))"
+      fprintf ppf "))";
+      if decl.record_is_account then fprintf ppf " (account_attr)";
+      fprintf ppf ")"
   | External_decl decl ->
       fprintf ppf "(external (name %S) (type %a) (symbol %S))"
         decl.external_name pp_external_type_expr decl.external_type

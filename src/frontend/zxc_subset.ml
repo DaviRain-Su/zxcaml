@@ -177,6 +177,7 @@ type record_type_decl = {
   record_params : string list;
   record_fields : record_type_field list;
   record_is_recursive : bool;
+  record_is_account : bool;
 }
 
 type external_type_expr =
@@ -283,6 +284,7 @@ let builtin_account_record_decl =
           builtin_record_field "executable" (builtin_type_ref "bool");
         ];
       record_is_recursive = false;
+      record_is_account = false;
     }
 
 let builtin_account_meta_record_decl =
@@ -297,6 +299,7 @@ let builtin_account_meta_record_decl =
           builtin_record_field "is_signer" (builtin_type_ref "bool");
         ];
       record_is_recursive = false;
+      record_is_account = false;
     }
 
 let builtin_instruction_record_decl =
@@ -317,6 +320,7 @@ let builtin_instruction_record_decl =
           builtin_record_field "data" (builtin_type_ref "bytes");
         ];
       record_is_recursive = false;
+      record_is_account = false;
     }
 
 let builtin_error_record_decl =
@@ -330,6 +334,7 @@ let builtin_error_record_decl =
           builtin_record_field "code" (builtin_type_ref "int");
         ];
       record_is_recursive = false;
+      record_is_account = false;
     }
 
 let builtin_clock_record_decl =
@@ -346,6 +351,7 @@ let builtin_clock_record_decl =
           builtin_record_field "unix_timestamp" (builtin_type_ref "int");
         ];
       record_is_recursive = false;
+      record_is_account = false;
     }
 
 let loc_of_location (location : Location.t) =
@@ -852,6 +858,22 @@ let record_field_has_recursive_ref field =
 
 let parse_type_params params = List.map parse_type_param params
 
+let is_account_attribute (attr : Parsetree.attribute) =
+  String.equal attr.attr_name.txt "account"
+
+let has_account_attribute attrs = List.exists is_account_attribute attrs
+
+let validate_account_attributes ~loc attrs =
+  List.iter
+    (fun (attr : Parsetree.attribute) ->
+      if is_account_attribute attr then
+        match attr.attr_payload with
+        | PStr [] -> ()
+        | _ ->
+            unsupported ~node_kind:"account-attribute" ~loc
+              ~message:"[@account] declarations do not take a payload" ())
+    attrs
+
 let validate_error_enum_constructor ~current_type constructor =
   if String.equal current_type "error" then
     match constructor.cd_args with
@@ -925,6 +947,7 @@ let parse_type_declaration (type_decl : type_declaration) =
           is_recursive = List.exists variant_has_recursive_ref variants;
         }
   | Ttype_record fields ->
+      validate_account_attributes ~loc:type_decl.typ_loc type_decl.typ_attributes;
       (match type_decl.typ_manifest with
       | None -> ()
       | Some manifest ->
@@ -949,6 +972,8 @@ let parse_type_declaration (type_decl : type_declaration) =
           record_fields;
           record_is_recursive =
             List.exists record_field_has_recursive_ref record_fields;
+          record_is_account =
+            has_account_attribute type_decl.typ_attributes;
         }
   | Ttype_abstract -> (
       match type_decl.typ_manifest with

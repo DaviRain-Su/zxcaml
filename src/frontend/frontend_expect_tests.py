@@ -159,6 +159,14 @@ CASES: list[tuple[str, str, str]] = [
         "(record (fields ((name (const-string \"alice\")) (age (const-int 30)))))))))\n",
     ),
     (
+        "record account attribute sexp",
+        "type counter = { count : int } [@@account]\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.0 (module "
+        "(record_type_decl (name counter) (params) "
+        "(fields ((count (type-ref int)))) (account_attr)) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
         "record field access",
         "type person = { name : string; age : int }\n"
         "let entrypoint _ = let r = { name = \"alice\"; age = 30 } in r.name\n",
