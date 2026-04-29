@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZxCaml - OCaml to Solana BPF through Zig</title>
+    <meta name="description" content="ZxCaml reuses upstream OCaml's frontend and compiles a practical OCaml subset through Zig toward runtime-free Solana BPF programs." />
+    <link rel="icon" href="./assets/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="ZxCaml home">
+        <img class="brand-mark" src="./assets/logo.svg" alt="" />
+        <span class="wordmark">ZxCaml</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#pipeline">Pipeline</a>
+        <a href="#status">Status</a>
+        <a href="#frontier">Frontier</a>
+        <a href="https://github.com/DaviRain-Su/ZxCaml">GitHub</a>
+      </nav>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">OCaml frontend. Zig backend. Solana BPF.</p>
+          <h1>Write typed Solana programs with an OCaml-shaped compiler path.</h1>
+          <p class="lede">ZxCaml borrows upstream OCaml's parser and type checker, throws away the OCaml runtime, and lowers a growing OCaml subset toward deterministic BPF output through Zig.</p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/DaviRain-Su/ZxCaml">View Source</a>
+            <a class="button secondary" href="#status">See Progress</a>
+          </div>
+        </div>
+        <aside class="terminal" aria-label="Compiler pipeline preview">
+          <div class="terminal-top"><span></span><span></span><span></span></div>
+          <pre><code>.ml source
+  -> ocamlc -bin-annot
+  -> Typedtree / .cmt
+  -> zxc-frontend
+  -> Core IR / ANF
+  -> Zig codegen
+  -> Solana BPF .so</code></pre>
+        </aside>
+      </section>
+      <section id="pipeline" class="band">
+        <p class="eyebrow">Compiler Architecture</p>
+        <h2>Keep OCaml's frontend. Own everything after Typedtree.</h2>
+        <div class="pipeline">
+          <div><span>01</span><h3>Upstream OCaml</h3><p>Parsing and type checking are handled by OCaml compiler-libs, without forking the compiler.</p></div>
+          <div><span>02</span><h3>Core IR</h3><p>A versioned bridge lowers typed OCaml into ANF-shaped Core IR with layout information.</p></div>
+          <div><span>03</span><h3>Zig Lowering</h3><p>The Zig pipeline performs arena-oriented lowering, interpretation, and native code generation.</p></div>
+          <div><span>04</span><h3>Solana BPF</h3><p>The target path emits runtime-free artifacts for Solana's constrained execution environment.</p></div>
+        </div>
+      </section>
+      <section id="status" class="status-grid">
+        <div>
+          <p class="eyebrow">Current State</p>
+          <h2>Working prototype, not production adoption.</h2>
+          <p>ZxCaml is early, but the compiler path is no longer just a sketch: the prototype can check, run, and build real examples across the current subset.</p>
+        </div>
+        <div class="metrics">
+          <div><strong>P2</strong><span>Subset expansion implemented</span></div>
+          <div><strong>0.7</strong><span>Current wire format</span></div>
+          <div><strong>29+</strong><span>Example programs</span></div>
+          <div><strong>3</strong><span>Interpreter, native Zig, BPF paths</span></div>
+        </div>
+      </section>
+      <section id="frontier" class="band frontier">
+        <div>
+          <p class="eyebrow">Colosseum Frontier 2026</p>
+          <h2>Built for developers exploring safer Solana programming models.</h2>
+          <p>ZxCaml is being shaped as an early developer tool for the Frontier hackathon: a functional, type-driven route for Solana programs that need deterministic output without carrying a garbage-collected runtime.</p>
+        </div>
+        <a class="button secondary" href="https://colosseum.com/frontier">Frontier Hackathon</a>
+      </section>
+    </main>
+    <footer>
+      <span>Borrow OCaml's frontend. Throw away its runtime. Land on BPF via Zig.</span>
+      <a href="https://github.com/DaviRain-Su/ZxCaml">GitHub</a>
+    </footer>
+  </body>
+</html>

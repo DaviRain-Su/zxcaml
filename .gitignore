@@ -23,3 +23,6 @@ _opam/
 
 # Generated compiler output
 out/
+
+# Cloudflare / Wrangler local cache
+.wrangler/

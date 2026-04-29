@@ -1,0 +1,8 @@
+<svg width="1600" height="420" viewBox="0 0 1600 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="420" height="420" rx="92" fill="#151414"/>
+  <rect x="116" y="106" width="172" height="38" rx="9" fill="#F7F3EA"/>
+  <path d="M281 118L309 146L147 314L119 286Z" fill="#F7F3EA"/>
+  <rect x="140" y="278" width="168" height="38" rx="9" fill="#F7F3EA"/>
+  <path d="M277 120L291 134L147 312L133 298Z" fill="#C6532F"/>
+  <text x="500" y="268" fill="#151414" font-family="Inter, Arial, Helvetica, sans-serif" font-size="154" font-weight="800" letter-spacing="0">ZxCaml</text>
+</svg>
