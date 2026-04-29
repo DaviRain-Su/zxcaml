@@ -70,7 +70,9 @@ fn isCounterHelperName(name: []const u8) bool {
     return std.mem.eql(u8, name, "read_u8") or
         std.mem.eql(u8, name, "read_u64_le") or
         std.mem.eql(u8, name, "write_u64_le") or
-        std.mem.eql(u8, name, "set_account_data");
+        std.mem.eql(u8, name, "set_account_data") or
+        std.mem.eql(u8, name, "vault_deposit") or
+        std.mem.eql(u8, name, "vault_withdraw");
 }
 
 fn emitVariantType(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: lir.LVariantType) EmitError!void {
@@ -249,8 +251,9 @@ fn emitFunction(
     }
     if (is_entrypoint) {
         const bindings = try emitEntrypointRuntimeBindings(out, allocator, func.params, func.body);
-        if (!exprUsesCpiInvoke(func.body)) try append(out, allocator, "    _ = omlz_runtime_input;\n");
-        if (!bindings.accounts_used) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
+        const uses_runtime_cpi = exprUsesCpiInvoke(func.body);
+        if (!uses_runtime_cpi) try append(out, allocator, "    _ = omlz_runtime_input;\n");
+        if (!bindings.accounts_used and !uses_runtime_cpi) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
         if (!bindings.instruction_data_used) try append(out, allocator, "    _ = omlz_runtime_instruction_data;\n");
     }
     if (func.calling_convention == .Closure) {
@@ -821,6 +824,12 @@ fn emitCounterAppExpr(
     if (std.mem.eql(u8, name, "set_account_data")) {
         if (app.args.len != 2) return error.UnsupportedExpr;
         try emitCounterSetAccountData(out, allocator, app.args[0].*, app.args[1].*, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "vault_deposit") or std.mem.eql(u8, name, "vault_withdraw")) {
+        if (app.args.len != 4) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        try append(out, allocator, "cpi.zxcaml_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
     return false;
@@ -3068,7 +3077,10 @@ fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
         .App => |app| blk: {
             switch (app.callee.*) {
                 .Var => |callee| {
-                    if (std.mem.eql(u8, callee.name, "invoke") or std.mem.eql(u8, callee.name, "invoke_signed")) break :blk true;
+                    if (std.mem.eql(u8, callee.name, "invoke") or
+                        std.mem.eql(u8, callee.name, "invoke_signed") or
+                        std.mem.eql(u8, callee.name, "vault_deposit") or
+                        std.mem.eql(u8, callee.name, "vault_withdraw")) break :blk true;
                 },
                 else => {},
             }

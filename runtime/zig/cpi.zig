@@ -268,6 +268,112 @@ pub inline fn zxcaml_system_transfer_one_lamport_from_views(arena: *Arena, views
     return sol_invoke_signed_c(&instruction, infos, seed_groups[0..]);
 }
 
+/// Processes the vault example's deposit/withdraw instruction against parsed account views.
+pub fn zxcaml_vault_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+    _ = arena;
+    _ = input;
+    if (views.len < 3) return 1;
+    if (instruction_data.len == 0) return 1;
+    if (!views[0].is_signer) return 1;
+
+    const system_program_id: Pubkey = [_]u8{0} ** 32;
+    if (!pubkeyEq(views[2].key, &system_program_id)) return 1;
+    if (!pubkeyEq(views[1].owner, &system_program_id)) return 1;
+
+    return switch (instruction_data[0]) {
+        0 => zxcamlVaultDeposit(views, instruction_data),
+        1 => zxcamlVaultWithdraw(views),
+        else => 1,
+    };
+}
+
+fn zxcamlVaultDeposit(views: []account.AccountView, instruction_data: []const u8) u64 {
+    if (instruction_data.len < 9) return 1;
+    if (views[1].lamportsValue() != 0) return 1;
+    const amount = readU64LeSlice(instruction_data[1..9]);
+    if (amount == 0) return 1;
+
+    var data: [12]u8 = undefined;
+    writeSystemTransferData(data[0..], amount);
+
+    var program_id = views[2].key.*;
+    var metas = [_]SolAccountMeta{
+        .{ .pubkey = views[0].key, .is_writable = 1, .is_signer = 1 },
+        .{ .pubkey = views[1].key, .is_writable = 1, .is_signer = 0 },
+    };
+    const instruction = SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
+    var infos = [_]SolAccountInfo{
+        accountInfoFromView(views[0]),
+        accountInfoFromView(views[1]),
+        accountInfoFromView(views[2]),
+    };
+    return invoke(&instruction, infos[0..]);
+}
+
+fn zxcamlVaultWithdraw(views: []account.AccountView) u64 {
+    const amount = views[1].lamportsValue();
+    if (amount == 0) return 1;
+
+    var data: [12]u8 = undefined;
+    writeSystemTransferData(data[0..], amount);
+
+    var program_id = views[2].key.*;
+    var metas = [_]SolAccountMeta{
+        .{ .pubkey = views[1].key, .is_writable = 1, .is_signer = 1 },
+        .{ .pubkey = views[0].key, .is_writable = 1, .is_signer = 0 },
+    };
+    const instruction = SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
+    var infos = [_]SolAccountInfo{
+        accountInfoFromView(views[1]),
+        accountInfoFromView(views[0]),
+        accountInfoFromView(views[2]),
+    };
+
+    var vault_seed: [5]u8 = undefined;
+    vault_seed[0] = 'v';
+    vault_seed[1] = 'a';
+    vault_seed[2] = 'u';
+    vault_seed[3] = 'l';
+    vault_seed[4] = 't';
+    var owner_seed = views[0].key.*;
+    var c_seeds = [_]SolSignerSeed{
+        SolSignerSeed.fromSlice(vault_seed[0..]),
+        SolSignerSeed.fromSlice(owner_seed[0..]),
+    };
+    var seed_groups = [_]SolSignerSeedsC{.{ .addr = c_seeds[0..].ptr, .len = c_seeds.len }};
+    return sol_invoke_signed_c(&instruction, infos[0..], seed_groups[0..]);
+}
+
+fn readU64LeSlice(bytes: []const u8) u64 {
+    return @as(u64, bytes[0]) |
+        (@as(u64, bytes[1]) << 8) |
+        (@as(u64, bytes[2]) << 16) |
+        (@as(u64, bytes[3]) << 24) |
+        (@as(u64, bytes[4]) << 32) |
+        (@as(u64, bytes[5]) << 40) |
+        (@as(u64, bytes[6]) << 48) |
+        (@as(u64, bytes[7]) << 56);
+}
+
+fn writeSystemTransferData(out: []u8, amount: u64) void {
+    out[0] = 2;
+    out[1] = 0;
+    out[2] = 0;
+    out[3] = 0;
+    out[4] = @intCast(amount & 0xff);
+    out[5] = @intCast((amount >> 8) & 0xff);
+    out[6] = @intCast((amount >> 16) & 0xff);
+    out[7] = @intCast((amount >> 24) & 0xff);
+    out[8] = @intCast((amount >> 32) & 0xff);
+    out[9] = @intCast((amount >> 40) & 0xff);
+    out[10] = @intCast((amount >> 48) & 0xff);
+    out[11] = @intCast((amount >> 56) & 0xff);
+}
+
+fn pubkeyEq(lhs: *const Pubkey, rhs: *const Pubkey) bool {
+    return std.mem.eql(u8, lhs[0..], rhs[0..]);
+}
+
 inline fn readU64Raw(input: [*]const u8, cursor: *usize) u64 {
     const start = cursor.*;
     cursor.* += 8;
