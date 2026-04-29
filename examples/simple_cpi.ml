@@ -11,25 +11,19 @@ let entrypoint accounts input =
   invoke_signed
     {
       (* The native System Program has the all-zero 32-byte program id. *)
-      program_id =
-        Bytes.of_string
-          "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000";
+      program_id = Pubkey.zero;
       (* Account metas describe the privileges forwarded to the callee:
          a writable signer source and a writable non-signer destination. *)
       accounts =
         Array.of_list
           [
             {
-              pubkey =
-                Bytes.of_string
-                  "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000";
+              pubkey = Pubkey.zero;
               is_writable = true;
               is_signer = true;
             };
             {
-              pubkey =
-                Bytes.of_string
-                  "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000";
+              pubkey = Pubkey.zero;
               is_writable = true;
               is_signer = false;
             };

@@ -1,5 +1,5 @@
 (* Demonstrates a P3 SPL Token transfer built as a CPI.
-   The example constructs the Tokenkeg program id, source/destination/authority
+   The example uses the Tokenkeg program id, source/destination/authority
    account metas, the Transfer instruction bytes, and invokes the token program. *)
 
 let entrypoint _accounts _input =
@@ -12,9 +12,7 @@ let entrypoint _accounts _input =
   invoke_signed
     {
       (* Legacy SPL Token program id used by the acceptance harness. *)
-      program_id =
-        Bytes.of_string
-          "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+      program_id = Pubkey.token_program;
       (* SPL Token Transfer accounts:
          source token account (writable), destination token account (writable),
          and authority (signer).  The harness supplies the concrete pubkeys. *)
