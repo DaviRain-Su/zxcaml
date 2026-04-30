@@ -45,3 +45,7 @@ path = "external_demo_test.rs"
 [[test]]
 name = "crypto_demo_test"
 path = "crypto_demo_test.rs"
+
+[[test]]
+name = "region_demo_test"
+path = "region_demo_test.rs"
