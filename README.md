@@ -105,15 +105,15 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**P7 OCaml Subset Expansion is implemented.** P1-P6 deliver the walking skeleton,
+**P8 Compiler Optimizations is implemented.** P1-P7 deliver the walking skeleton,
 subset expansion, Solana runtime integration, Mollusk test infrastructure,
-external declarations, Anchor IDL, functional persistent stdlib, and region
-inference. P7 expands the OCaml language subset with trivial desugars (sequence,
-if-then, function cases), pattern extensions (literal/or/alias patterns), string
-and char operations, and expanded stdlib (List/Option/Result/Fun).
+external declarations, Anchor IDL, functional persistent stdlib, region
+inference, and OCaml subset expansion (desugars, patterns, strings, expanded
+stdlib). P8 adds source-level compiler optimizations: constant folding, dead
+code elimination, self-recursive tail call optimization, and function inlining.
 
 `omlz` works end-to-end: parse/type-check OCaml with upstream
-`compiler-libs` → emit sexp `1.0` → lower through Core IR with escape
+`compiler-libs` → emit sexp `1.0` → lower through Core IR with constant folding, DCE, inlining, escape
 analysis → interpret, build native Zig, build Solana BPF `.so` artifacts,
 or emit Anchor-compatible IDL.
 
@@ -135,11 +135,15 @@ or emit Anchor-compatible IDL.
 - **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
 - **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, closure harness, account/syscall harness, simple CPI harness, and SPL-Token transfer harness
 - **Region inference:** automatic escape analysis marks non-escaping local values for stack allocation, reducing arena pressure and improving BPF compute efficiency
-- **Determinism:** interpreter ≡ Zig native across the P1 + P2 + P3 + P4 + P5 + P6 examples corpus
-- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, and an examples `omlz check` corpus loop
-- **Mollusk SVM tests:** 7 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo)
+- **Constant folding:** compile-time evaluation of arithmetic, comparison, string concatenation, boolean conditions, and known-constructor matches in Core IR
+- **Dead code elimination:** removes unused let bindings (preserving side-effectful and potentially trapping operations) and unreachable if branches
+- **Tail call optimization:** self-recursive tail calls are detected during ANF lowering and emitted as `while (true)` loops in generated Zig, enabling deep recursion (n > 10000) without stack overflow
+- **Function inlining:** small single-expression functions (≤3 Core IR nodes) are inlined at call sites with alpha-renaming, enabling further constant folding; supports all types including String, ADT, Tuple, and Record
+- **Determinism:** interpreter ≡ Zig native across the P1 + P2 + P3 + P4 + P5 + P6 + P7 examples corpus
+- **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, Mollusk tests, and an examples `omlz check` corpus loop
+- **Mollusk SVM tests:** 10 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo)
 - **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
-- **Examples:** 41 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, and string demo programs
+- **Examples:** 42 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, and tail recursion (TCO) programs
 - **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
