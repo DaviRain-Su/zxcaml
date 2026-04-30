@@ -274,6 +274,63 @@ CASES: list[tuple[str, str, str]] = [
         "(let entrypoint (lambda (_) (const-int 0)))))\n",
     ),
     (
+        "general alias sexp - int list",
+        "type int_list = int list\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name int_list) (params) "
+        "(rhs (type-ref list (type-ref int)))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "general alias sexp - parameterized list",
+        "type 'a t = 'a list\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name t) (params 'a) "
+        "(rhs (type-ref list (type-var 'a)))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "tuple alias with multiple params keeps tuple_type_decl",
+        "type ('a, 'b) pair = 'a * 'b\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(tuple_type_decl (name pair) (params 'a 'b) "
+        "(items (type-var 'a) (type-var 'b))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "simple scalar alias sexp",
+        "type t = int\nlet entrypoint _ = 42\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name t) (params) (rhs (type-ref int))) "
+        "(let entrypoint (lambda (_) (const-int 42)))))\n",
+    ),
+    (
+        "type alias chain expands rhs",
+        "type 'a t = 'a list\ntype int_t = int t\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name t) (params 'a) "
+        "(rhs (type-ref list (type-var 'a)))) "
+        "(type_alias_decl (name int_t) (params) "
+        "(rhs (type-ref list (type-ref int)))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "type alias in function signature",
+        "type int_list = int list\nlet len (x : int_list) = List.length x\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name int_list) (params) "
+        "(rhs (type-ref list (type-ref int)))) "
+        "(let len (lambda (x) (app (var List.length) (var x))))))\n",
+    ),
+    (
+        "type alias with result rhs",
+        "type 'a res = ('a, string) result\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name res) (params 'a) "
+        "(rhs (type-ref result (type-var 'a) (type-ref string)))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
         "record construction",
         "type person = { name : string; age : int }\n"
         "let entrypoint _ = { name = \"alice\"; age = 30 }\n",
@@ -282,6 +339,40 @@ CASES: list[tuple[str, str, str]] = [
         "(fields ((name (type-ref string)) (age (type-ref int))))) "
         "(let entrypoint (lambda (_) "
         "(record (fields ((name (const-string \"alice\")) (age (const-int 30)))))))))\n",
+    ),
+    (
+        "type alias in record field expands",
+        "type int_list = int list\ntype rec_t = { data : int_list; count : int }\n"
+        "let entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name int_list) (params) "
+        "(rhs (type-ref list (type-ref int)))) "
+        "(record_type_decl (name rec_t) (params) "
+        "(fields ((data (type-ref list (type-ref int))) (count (type-ref int))))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "type alias in variant payload expands",
+        "type int_list = int list\ntype data = Empty | Items of int_list\n"
+        "let entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name int_list) (params) "
+        "(rhs (type-ref list (type-ref int)))) "
+        "(type_decl (name data) (params) "
+        "(variants ((Empty (payload_types)) "
+        "(Items (payload_types (type-ref list (type-ref int))))))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
+    ),
+    (
+        "type alias coexists with variant declaration",
+        "type color = Red | Green | Blue\ntype color_list = color list\nlet entrypoint _ = 0\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_decl (name color) (params) "
+        "(variants ((Red (payload_types)) (Green (payload_types)) "
+        "(Blue (payload_types))))) "
+        "(type_alias_decl (name color_list) (params) "
+        "(rhs (type-ref list (type-ref color)))) "
+        "(let entrypoint (lambda (_) (const-int 0)))))\n",
     ),
     (
         "record account attribute sexp",
@@ -581,6 +672,16 @@ REJECT_CASES: list[tuple[str, str, str]] = [
         "or pattern rejects incompatible bindings",
         "let entrypoint x = match x with Some a | None -> a\n",
         'Variable \\"a\\" must occur on both sides of this \\"|\\" pattern',
+    ),
+    (
+        "type alias rejects circular abbreviation",
+        "type 'a t = 'a t\nlet entrypoint _ = 0\n",
+        "cyclic",
+    ),
+    (
+        "type alias rejects undefined rhs type",
+        "type t = undefined_type\nlet entrypoint _ = 0\n",
+        'Unbound type constructor \\"undefined_type\\"',
     ),
 ]
 

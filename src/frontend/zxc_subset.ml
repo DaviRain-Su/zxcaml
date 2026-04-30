@@ -8,6 +8,7 @@ open Asttypes
 open Typedtree
 
 module StringSet = Set.Make (String)
+module StringMap = Map.Make (String)
 
 type loc = {
   file : string;
@@ -205,6 +206,12 @@ type record_type_decl = {
   record_is_account : bool;
 }
 
+type type_alias_decl = {
+  alias_type_name : string;
+  alias_params : string list;
+  alias_rhs : type_expr;
+}
+
 type external_type_expr =
   | External_type_constr of external_type_constr
   | External_type_tuple of external_type_expr list
@@ -227,13 +234,22 @@ type decl =
   | Type_decl of type_decl
   | Tuple_type_decl of tuple_type_decl
   | Record_type_decl of record_type_decl
+  | Type_alias_decl of type_alias_decl
   | External_decl of external_decl
 
 type modul = Module of decl list
 
 exception Unsupported of diagnostic
 
-type type_env = { constructors : StringSet.t }
+type alias_binding = {
+  alias_binding_params : string list;
+  alias_binding_rhs : type_expr;
+}
+
+type type_env = {
+  constructors : StringSet.t;
+  aliases : alias_binding StringMap.t;
+}
 
 let builtin_constructor_names =
   [ "None"; "Some"; "Ok"; "Error"; "[]"; "::"; "true"; "false"; "()" ]
@@ -275,18 +291,28 @@ let initial_type_env =
       List.fold_left
         (fun constructors name -> StringSet.add name constructors)
         StringSet.empty builtin_constructor_names;
+    aliases = StringMap.empty;
   }
 
 let type_env_has_constructor env name = StringSet.mem name env.constructors
 
 let type_env_add_variant env variant =
-  { constructors = StringSet.add variant.constr_name env.constructors }
+  { env with constructors = StringSet.add variant.constr_name env.constructors }
 
 let type_env_add_type_decl env type_decl =
   List.fold_left type_env_add_variant env type_decl.variants
 
 let type_env_add_type_decls env type_decls =
   List.fold_left type_env_add_type_decl env type_decls
+
+let type_env_add_alias env name params rhs =
+  {
+    env with
+    aliases =
+      StringMap.add name
+        { alias_binding_params = params; alias_binding_rhs = rhs }
+        env.aliases;
+  }
 
 let builtin_type_ref name =
   Type_constr { type_name = name; args = []; is_recursive_ref = false }
@@ -586,6 +612,7 @@ let parse_param (param : function_param) =
       match pat.pat_desc with
       | Tpat_any -> Anonymous
       | Tpat_var (ident, _, _) -> Param (ident_name ident)
+      | Tpat_alias (_, ident, _, _) -> Param (ident_name ident)
       | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ())
   | _, Tparam_pat pat ->
       unsupported ~node_kind:"labelled-parameter" ~loc:pat.pat_loc ()
@@ -916,26 +943,65 @@ and parse_expr env (expr : expression) =
 
 let type_var_name name = "'" ^ name
 
-let rec parse_type_expr ~current_type (ctyp : core_type) =
+let rec parse_type_expr_raw ~current_type (ctyp : core_type) =
   match ctyp.ctyp_desc with
   | Ttyp_var name -> Type_var (type_var_name name)
   | Ttyp_tuple items ->
-      Type_tuple (List.map (parse_type_expr ~current_type) items)
+      Type_tuple (List.map (parse_type_expr_raw ~current_type) items)
   | Ttyp_constr (_path, lid, args) ->
       let type_name = longident_name lid in
       Type_constr
         {
           type_name;
-          args = List.map (parse_type_expr ~current_type) args;
+          args = List.map (parse_type_expr_raw ~current_type) args;
           is_recursive_ref = String.equal type_name current_type;
         }
-  | Ttyp_poly ([], inner) -> parse_type_expr ~current_type inner
+  | Ttyp_poly ([], inner) -> parse_type_expr_raw ~current_type inner
   | _ ->
       unsupported ~node_kind:(core_type_kind ctyp) ~loc:ctyp.ctyp_loc
         ~message:
           "only type variables, named type references, and tuple type payloads \
            are supported in P2 M0 ADT declarations"
         ()
+
+let rec substitute_type_vars substitutions = function
+  | Type_var name as ty -> (
+      match StringMap.find_opt name substitutions with
+      | Some replacement -> replacement
+      | None -> ty)
+  | Type_tuple items -> Type_tuple (List.map (substitute_type_vars substitutions) items)
+  | Type_constr constr ->
+      Type_constr
+        {
+          constr with
+          args = List.map (substitute_type_vars substitutions) constr.args;
+        }
+
+let instantiate_alias binding args =
+  let substitutions =
+    List.fold_left2
+      (fun substitutions param arg -> StringMap.add param arg substitutions)
+      StringMap.empty binding.alias_binding_params args
+  in
+  substitute_type_vars substitutions binding.alias_binding_rhs
+
+let rec resolve_type_aliases env seen = function
+  | Type_var _ as ty -> ty
+  | Type_tuple items -> Type_tuple (List.map (resolve_type_aliases env seen) items)
+  | Type_constr constr -> (
+      let args = List.map (resolve_type_aliases env seen) constr.args in
+      match StringMap.find_opt constr.type_name env.aliases with
+      | Some binding when not (StringSet.mem constr.type_name seen) ->
+          let expanded =
+            try instantiate_alias binding args
+            with Invalid_argument _ ->
+              Type_constr { constr with args }
+          in
+          resolve_type_aliases env (StringSet.add constr.type_name seen) expanded
+      | _ -> Type_constr { constr with args })
+
+let parse_type_expr env ~current_type ctyp =
+  parse_type_expr_raw ~current_type ctyp |> resolve_type_aliases env StringSet.empty
 
 let parse_type_param (param, _) =
   match param.ctyp_desc with
@@ -994,7 +1060,7 @@ let validate_error_enum_size ~current_type ~loc constructors =
       ~message:"program-specific error enums may define at most 256 codes"
       ()
 
-let parse_constructor_decl ~current_type (constructor : constructor_declaration) =
+let parse_constructor_decl env ~current_type (constructor : constructor_declaration) =
   validate_error_enum_constructor ~current_type constructor;
   (match constructor.cd_res with
   | None -> ()
@@ -1010,7 +1076,7 @@ let parse_constructor_decl ~current_type (constructor : constructor_declaration)
         ());
   let payload_types =
     match constructor.cd_args with
-    | Cstr_tuple args -> List.map (parse_type_expr ~current_type) args
+    | Cstr_tuple args -> List.map (parse_type_expr env ~current_type) args
     | Cstr_record _ ->
         unsupported ~node_kind:"Cstr_record" ~loc:constructor.cd_loc
           ~message:"record constructor payloads are not supported until P2 M2"
@@ -1018,7 +1084,7 @@ let parse_constructor_decl ~current_type (constructor : constructor_declaration)
   in
   { constr_name = constructor.cd_name.txt; payload_types }
 
-let parse_type_declaration (type_decl : type_declaration) =
+let parse_type_declaration env (type_decl : type_declaration) =
   if type_decl.typ_cstrs <> [] then
     unsupported ~node_kind:"type-constraint" ~loc:type_decl.typ_loc
       ~message:"type constraints are not supported in P2 type declarations"
@@ -1041,7 +1107,7 @@ let parse_type_declaration (type_decl : type_declaration) =
             ());
       let current_type = type_decl.typ_name.txt in
       let variants =
-        List.map (parse_constructor_decl ~current_type) constructors
+        List.map (parse_constructor_decl env ~current_type) constructors
       in
       Type_decl
         {
@@ -1064,7 +1130,7 @@ let parse_type_declaration (type_decl : type_declaration) =
           (fun field ->
             {
               record_field_name = field.ld_name.txt;
-              record_field_type = parse_type_expr ~current_type field.ld_type;
+              record_field_type = parse_type_expr env ~current_type field.ld_type;
               record_field_mutable = (field.ld_mutable = Mutable);
             })
           fields
@@ -1083,7 +1149,7 @@ let parse_type_declaration (type_decl : type_declaration) =
       match type_decl.typ_manifest with
       | Some { ctyp_desc = Ttyp_tuple items; _ } ->
           let current_type = type_decl.typ_name.txt in
-          let tuple_items = List.map (parse_type_expr ~current_type) items in
+          let tuple_items = List.map (parse_type_expr env ~current_type) items in
           Tuple_type_decl
             {
               tuple_type_name = current_type;
@@ -1093,9 +1159,13 @@ let parse_type_declaration (type_decl : type_declaration) =
                 List.exists type_expr_has_recursive_ref tuple_items;
             }
       | Some manifest ->
-          unsupported ~node_kind:(core_type_kind manifest) ~loc:manifest.ctyp_loc
-            ~message:"only tuple type aliases are supported in P2 M2"
-            ()
+          let current_type = type_decl.typ_name.txt in
+          Type_alias_decl
+            {
+              alias_type_name = current_type;
+              alias_params = parse_type_params type_decl.typ_params;
+              alias_rhs = parse_type_expr env ~current_type manifest;
+            }
       | None ->
           unsupported ~node_kind:"Ttype_abstract" ~loc:type_decl.typ_loc
             ~message:"abstract type declarations are not supported in P2"
@@ -1252,7 +1322,7 @@ and pattern_uses_record_fields field_names = function
 let decl_defines_record_type type_name = function
   | Record_type_decl decl -> String.equal decl.record_type_name type_name
   | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _
-  | External_decl _ ->
+  | Type_alias_decl _ | External_decl _ ->
       false
 
 let decl_uses_type type_name = function
@@ -1262,6 +1332,7 @@ let decl_uses_type type_name = function
       List.exists (type_expr_uses_type type_name) decl.tuple_items
   | Record_type_decl decl ->
       List.exists (record_type_field_uses_type type_name) decl.record_fields
+  | Type_alias_decl decl -> type_expr_uses_type type_name decl.alias_rhs
   | External_decl decl -> external_type_expr_uses_type type_name decl.external_type
 
 let decl_uses_record_fields field_names = function
@@ -1270,7 +1341,9 @@ let decl_uses_record_fields field_names = function
       List.exists
         (fun binding -> expr_uses_record_fields field_names binding.rec_body)
         bindings
-  | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | External_decl _ -> false
+  | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | Type_alias_decl _
+  | External_decl _ ->
+      false
 
 let decl_defines_record_field field_name = function
   | Record_type_decl decl ->
@@ -1278,7 +1351,7 @@ let decl_defines_record_field field_name = function
         (fun field -> String.equal field.record_field_name field_name)
         decl.record_fields
   | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _
-  | External_decl _ ->
+  | Type_alias_decl _ | External_decl _ ->
       false
 
 let record_field_used_without_source_decl field_names decls =
@@ -1337,6 +1410,48 @@ let parse_value_binding env (binding : value_binding) =
   let body = parse_expr env binding.vb_expr in
   Let_decl { name; body; is_rec = false }
 
+let raw_alias_binding_of_declaration (type_decl : type_declaration) =
+  match (type_decl.typ_kind, type_decl.typ_manifest) with
+  | Ttype_abstract, Some manifest ->
+      Some
+        ( type_decl.typ_name.txt,
+          parse_type_params type_decl.typ_params,
+          parse_type_expr_raw ~current_type:type_decl.typ_name.txt manifest )
+  | _ -> None
+
+let type_env_add_alias_binding env (name, params, rhs) =
+  type_env_add_alias env name params rhs
+
+let decl_alias_binding = function
+  | Type_alias_decl decl ->
+      Some (decl.alias_type_name, decl.alias_params, decl.alias_rhs)
+  | Tuple_type_decl decl ->
+      Some
+        ( decl.tuple_type_name,
+          decl.tuple_params,
+          Type_tuple decl.tuple_items )
+  | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Record_type_decl _
+  | External_decl _ ->
+      None
+
+let parse_type_declarations env declarations =
+  let env_with_group_aliases =
+    List.filter_map raw_alias_binding_of_declaration declarations
+    |> List.fold_left type_env_add_alias_binding env
+  in
+  let decls = List.map (parse_type_declaration env_with_group_aliases) declarations in
+  let type_decls =
+    List.filter_map
+      (function Type_decl type_decl -> Some type_decl | _ -> None)
+      decls
+  in
+  let env_with_type_decls = type_env_add_type_decls env type_decls in
+  let env_with_aliases =
+    List.filter_map decl_alias_binding decls
+    |> List.fold_left type_env_add_alias_binding env_with_type_decls
+  in
+  (env_with_aliases, decls)
+
 let parse_structure_item env (item : structure_item) =
   match item.str_desc with
   | Tstr_value (Nonrecursive, [ binding ]) ->
@@ -1346,20 +1461,14 @@ let parse_structure_item env (item : structure_item) =
         match parse_value_binding env binding with
         | Let_decl decl -> Let_decl { decl with is_rec = true }
         | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _ | Record_type_decl _
-        | External_decl _ ->
+        | Type_alias_decl _ | External_decl _ ->
             assert false
       in
       (env, [ decl ])
   | Tstr_value (Recursive, (_ :: _ :: _ as bindings)) ->
       (env, [ Let_rec_group_decl (List.map (parse_let_rec_binding env) bindings) ])
   | Tstr_type (_, declarations) ->
-      let decls = List.map parse_type_declaration declarations in
-      let type_decls =
-        List.filter_map
-          (function Type_decl type_decl -> Some type_decl | _ -> None)
-          decls
-      in
-      (type_env_add_type_decls env type_decls, decls)
+      parse_type_declarations env declarations
   | Tstr_primitive value -> (env, [ parse_external_decl value ])
   | Tstr_value (_, []) ->
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()

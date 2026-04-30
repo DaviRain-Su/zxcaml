@@ -18,6 +18,7 @@ pub const Module = struct {
     type_decls: []const TypeDecl = &.{},
     tuple_type_decls: []const TupleTypeDecl = &.{},
     record_type_decls: []const RecordTypeDecl = &.{},
+    type_alias_decls: []const TypeAliasDecl = &.{},
     externals: []const ExternalDecl = &.{},
 };
 
@@ -101,6 +102,13 @@ pub const RecordTypeDecl = struct {
     fields: []const RecordTypeField,
     is_recursive: bool = false,
     is_account: bool = false,
+};
+
+/// Top-level erased type alias emitted by sexp v1.1.
+pub const TypeAliasDecl = struct {
+    name: []const u8,
+    params: []const []const u8,
+    rhs: TypeExpr,
 };
 
 /// One record field in a type declaration.
@@ -391,6 +399,8 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
     errdefer tuple_type_decls.deinit(arena.allocator());
     var record_type_decls = std.ArrayList(RecordTypeDecl).empty;
     errdefer record_type_decls.deinit(arena.allocator());
+    var type_alias_decls = std.ArrayList(TypeAliasDecl).empty;
+    errdefer type_alias_decls.deinit(arena.allocator());
     var externals = std.ArrayList(ExternalDecl).empty;
     errdefer externals.deinit(arena.allocator());
 
@@ -404,6 +414,8 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
             try tuple_type_decls.append(arena.allocator(), try parseTupleTypeDecl(arena, decl_items));
         } else if (std.mem.eql(u8, tag, "record_type_decl")) {
             try record_type_decls.append(arena.allocator(), try parseRecordTypeDecl(arena, decl_items));
+        } else if (std.mem.eql(u8, tag, "type_alias_decl")) {
+            try type_alias_decls.append(arena.allocator(), try parseTypeAliasDecl(arena, decl_items));
         } else if (std.mem.eql(u8, tag, "external")) {
             try externals.append(arena.allocator(), try parseExternalDecl(arena, decl_items));
         } else {
@@ -416,6 +428,7 @@ fn parseModuleNode(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeErr
         .type_decls = try type_decls.toOwnedSlice(arena.allocator()),
         .tuple_type_decls = try tuple_type_decls.toOwnedSlice(arena.allocator()),
         .record_type_decls = try record_type_decls.toOwnedSlice(arena.allocator()),
+        .type_alias_decls = try type_alias_decls.toOwnedSlice(arena.allocator()),
         .externals = try externals.toOwnedSlice(arena.allocator()),
     };
 }
@@ -606,6 +619,24 @@ fn parseRecordTypeDecl(arena: *std.heap.ArenaAllocator, items: []const *const Se
         .fields = try parseRecordTypeFields(arena, fields),
         .is_recursive = is_recursive,
         .is_account = is_account,
+    };
+}
+
+fn parseTypeAliasDecl(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!TypeAliasDecl {
+    if (items.len != 4) return error.MalformedTypeDecl;
+
+    const name_items = try expectList(items[1]);
+    if (name_items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(name_items[0], "name");
+
+    const rhs_items = try expectList(items[3]);
+    if (rhs_items.len != 2) return error.MalformedTypeDecl;
+    try expectAtomValue(rhs_items[0], "rhs");
+
+    return .{
+        .name = try dupeAtom(arena, name_items[1]),
+        .params = try parseParams(arena, items[2]),
+        .rhs = try parseTypeExpr(arena, rhs_items[1]),
     };
 }
 
@@ -1524,13 +1555,15 @@ test "parse tuple and record v0.7 sexp nodes" {
 
     const module = try parseModule(
         &arena,
-        "(zxcaml-cir 0.7 (module (record_type_decl (name person) (params) (fields ((name (type-ref string)) (age (type-ref int))))) (tuple_type_decl (name pair) (params) (items (type-ref int) (type-ref bool))) (let t (tuple (items (const-int 1) (ctor true) (const-int 42)))) (let r (record (fields ((name (const-string \"alice\")) (age (const-int 30)))))) (let u (record_update (var r) (fields ((age (tuple_project (var t) (index 0)))))))))",
+        "(zxcaml-cir 1.1 (module (record_type_decl (name person) (params) (fields ((name (type-ref string)) (age (type-ref int))))) (tuple_type_decl (name pair) (params) (items (type-ref int) (type-ref bool))) (type_alias_decl (name int_list) (params) (rhs (type-ref list (type-ref int)))) (let t (tuple (items (const-int 1) (ctor true) (const-int 42)))) (let r (record (fields ((name (const-string \"alice\")) (age (const-int 30)))))) (let u (record_update (var r) (fields ((age (tuple_project (var t) (index 0)))))))))",
     );
 
     try std.testing.expectEqual(@as(usize, 1), module.record_type_decls.len);
     try std.testing.expectEqualStrings("person", module.record_type_decls[0].name);
     try std.testing.expectEqual(@as(usize, 2), module.record_type_decls[0].fields.len);
     try std.testing.expectEqual(@as(usize, 1), module.tuple_type_decls.len);
+    try std.testing.expectEqual(@as(usize, 1), module.type_alias_decls.len);
+    try std.testing.expectEqualStrings("int_list", module.type_alias_decls[0].name);
     try std.testing.expectEqual(@as(usize, 3), module.decls.len);
 
     const tuple_decl = switch (module.decls[0]) {

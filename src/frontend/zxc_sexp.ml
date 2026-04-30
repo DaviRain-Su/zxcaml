@@ -193,6 +193,11 @@ let rec pp_decl ppf decl =
       fprintf ppf "))";
       if decl.record_is_account then fprintf ppf " (account_attr)";
       fprintf ppf ")"
+  | Type_alias_decl decl ->
+      fprintf ppf "(type_alias_decl (name %a)" pp_atom decl.alias_type_name;
+      fprintf ppf " (params";
+      List.iter (fun param -> fprintf ppf " %a" pp_atom param) decl.alias_params;
+      fprintf ppf ") (rhs %a))" pp_type_expr decl.alias_rhs
   | External_decl decl ->
       fprintf ppf "(external (name %S) (type %a) (symbol %S))"
         decl.external_name pp_external_type_expr decl.external_type
