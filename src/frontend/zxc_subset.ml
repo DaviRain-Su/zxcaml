@@ -604,6 +604,7 @@ let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> "_"
   | Tpat_var (ident, _, _) -> ident_name ident
+  | Tpat_alias (_, ident, _, _) -> ident_name ident
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let parse_param (param : function_param) =
@@ -1150,14 +1151,23 @@ let parse_type_declaration env (type_decl : type_declaration) =
       | Some { ctyp_desc = Ttyp_tuple items; _ } ->
           let current_type = type_decl.typ_name.txt in
           let tuple_items = List.map (parse_type_expr env ~current_type) items in
-          Tuple_type_decl
-            {
-              tuple_type_name = current_type;
-              tuple_params = parse_type_params type_decl.typ_params;
-              tuple_items;
-              tuple_is_recursive =
-                List.exists type_expr_has_recursive_ref tuple_items;
-            }
+          let tuple_params = parse_type_params type_decl.typ_params in
+          if tuple_params = [] then
+            Tuple_type_decl
+              {
+                tuple_type_name = current_type;
+                tuple_params;
+                tuple_items;
+                tuple_is_recursive =
+                  List.exists type_expr_has_recursive_ref tuple_items;
+              }
+          else
+            Type_alias_decl
+              {
+                alias_type_name = current_type;
+                alias_params = tuple_params;
+                alias_rhs = Type_tuple tuple_items;
+              }
       | Some manifest ->
           let current_type = type_decl.typ_name.txt in
           Type_alias_decl

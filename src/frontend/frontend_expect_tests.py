@@ -290,11 +290,11 @@ CASES: list[tuple[str, str, str]] = [
         "(let entrypoint (lambda (_) (const-int 0)))))\n",
     ),
     (
-        "tuple alias with multiple params keeps tuple_type_decl",
+        "tuple alias with multiple params emits type_alias_decl",
         "type ('a, 'b) pair = 'a * 'b\nlet entrypoint _ = 0\n",
         "(zxcaml-cir 1.1 (module "
-        "(tuple_type_decl (name pair) (params 'a 'b) "
-        "(items (type-var 'a) (type-var 'b))) "
+        "(type_alias_decl (name pair) (params 'a 'b) "
+        "(rhs (tuple-type (type-var 'a) (type-var 'b)))) "
         "(let entrypoint (lambda (_) (const-int 0)))))\n",
     ),
     (
@@ -321,6 +321,13 @@ CASES: list[tuple[str, str, str]] = [
         "(type_alias_decl (name int_list) (params) "
         "(rhs (type-ref list (type-ref int)))) "
         "(let len (lambda (x) (app (var List.length) (var x))))))\n",
+    ),
+    (
+        "type alias in local binding annotation",
+        "type t = int\nlet entrypoint _ = let x : t = 42 in x\n",
+        "(zxcaml-cir 1.1 (module "
+        "(type_alias_decl (name t) (params) (rhs (type-ref int))) "
+        "(let entrypoint (lambda (_) (let x (const-int 42) (var x))))))\n",
     ),
     (
         "type alias with result rhs",
