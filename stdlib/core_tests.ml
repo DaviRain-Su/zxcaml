@@ -14,6 +14,18 @@ let () =
   assert (List.append [ 1; 2 ] [ 3; 4 ] = [ 1; 2; 3; 4 ]);
   assert (List.hd [ 9; 8; 7 ] = 9);
   assert (List.tl [ 9; 8; 7 ] = [ 8; 7 ]);
+  assert (List.nth [ 1; 2; 3 ] 1 = 2);
+  assert (List.exists (fun x -> x > 2) [ 1; 2; 3 ]);
+  assert (not (List.exists (fun x -> x > 3) [ 1; 2; 3 ]));
+  assert (List.for_all (fun x -> x > 0) [ 1; 2; 3 ]);
+  assert (not (List.for_all (fun x -> x > 1) [ 1; 2; 3 ]));
+  assert (List.find (fun x -> x > 1) [ 1; 2; 3 ] = 2);
+  let int_compare_for_list left right =
+    if left < right then -1 else if left > right then 1 else 0
+  in
+  assert (List.sort int_compare_for_list [ 3; 1; 2; 1 ] = [ 1; 1; 2; 3 ]);
+  assert (List.combine [ 1; 2 ] [ 3; 4 ] = [ (1, 3); (2, 4) ]);
+  assert (List.split [ (1, 3); (2, 4) ] = ([ 1; 2 ], [ 3; 4 ]));
   assert (Option.is_none None);
   assert (not (Option.is_none (Some 1)));
   assert (Option.is_some (Some 1));
@@ -23,6 +35,8 @@ let () =
   assert (Option.get (Some 5) = 5);
   assert (Option.map (fun x -> x + 2) (Some 3) = Some 5);
   assert (Option.bind (Some 3) (fun x -> Some (x + 4)) = Some 7);
+  assert (Option.fold ~none:0 ~some:(fun x -> x + 1) (Some 5) = 6);
+  assert (Option.fold ~none:0 ~some:(fun x -> x + 1) None = 0);
   assert (Result.is_ok (Ok 1));
   assert (not (Result.is_ok (Error 2)));
   assert (Result.is_error (Error 2));
@@ -33,6 +47,9 @@ let () =
   assert (Result.error (Error 12) = Some 12);
   assert (Result.map (fun x -> x + 1) (Ok 4) = Ok 5);
   assert (Result.bind (Ok 4) (fun x -> Ok (x + 1)) = Ok 5);
+  assert (Fun.id 42 = 42);
+  assert (Fun.const 1 2 = 1);
+  assert (Fun.flip (fun x y -> x - y) 1 3 = 2);
   let int_compare left right =
     if left < right then -1 else if left > right then 1 else 0
   in

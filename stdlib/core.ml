@@ -53,6 +53,8 @@ module Option = struct
 
   let bind x f = match x with None -> None | Some v -> f v
 
+  let fold ~none ~some x = match x with None -> none | Some v -> some v
+
   let is_none x = match x with None -> true | Some _ -> false
 
   let is_some x = match x with None -> false | Some _ -> true
@@ -103,6 +105,51 @@ module List = struct
   let hd xs = match xs with [] -> unreachable () | x :: _ -> x
 
   let tl xs = match xs with [] -> unreachable () | _ :: rest -> rest
+
+  let rec nth xs index =
+    if index < 0 then unreachable ()
+    else
+      match xs with
+      | [] -> unreachable ()
+      | x :: rest -> if index = 0 then x else nth rest (index - 1)
+
+  let rec exists predicate xs =
+    match xs with [] -> false | x :: rest -> predicate x || exists predicate rest
+
+  let rec for_all predicate xs =
+    match xs with [] -> true | x :: rest -> predicate x && for_all predicate rest
+
+  let rec find predicate xs =
+    match xs with
+    | [] -> unreachable ()
+    | x :: rest -> if predicate x then x else find predicate rest
+
+  let sort compare xs =
+    let rec insert value sorted =
+      match sorted with
+      | [] -> [ value ]
+      | x :: rest ->
+          if compare value x <= 0 then value :: sorted else x :: insert value rest
+    in
+    let rec sort_rec unsorted =
+      match unsorted with
+      | [] -> []
+      | x :: rest -> insert x (sort_rec rest)
+    in
+    sort_rec xs
+
+  let rec combine left right =
+    match (left, right) with
+    | [], [] -> []
+    | x :: xs, y :: ys -> (x, y) :: combine xs ys
+    | _ -> unreachable ()
+
+  let rec split pairs =
+    match pairs with
+    | [] -> ([], [])
+    | (left, right) :: rest ->
+        let lefts, rights = split rest in
+        (left :: lefts, right :: rights)
 end
 
 module String = struct
@@ -117,6 +164,14 @@ module Char = struct
   external code : char -> int = "%identity"
 
   external chr : int -> char = "%identity"
+end
+
+module Fun = struct
+  let id x = x
+
+  let const x _ = x
+
+  let flip f x y = f y x
 end
 
 let ( ^ ) left right = Stdlib.( ^ ) left right
