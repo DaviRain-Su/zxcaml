@@ -53,6 +53,7 @@ pub const Module = struct {
 /// Top-level Core IR declarations.
 pub const Decl = union(enum) {
     Let: Let,
+    LetGroup: LetGroup,
 };
 
 /// Top-level external function declaration with its direct Zig symbol.
@@ -69,6 +70,19 @@ pub const Let = struct {
     ty: Ty,
     layout: layout.Layout,
     is_rec: bool = false,
+};
+
+/// One function binding in a mutually recursive group.
+pub const LetGroupBinding = struct {
+    name: []const u8,
+    value: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Top-level mutually recursive group.
+pub const LetGroup = struct {
+    bindings: []const LetGroupBinding,
 };
 
 /// Core IR lambda in ANF form.
@@ -91,6 +105,7 @@ pub const Expr = union(enum) {
     Constant: Constant,
     App: App,
     Let: LetExpr,
+    LetGroup: LetGroupExpr,
     If: IfExpr,
     Prim: Prim,
     Var: Var,
@@ -121,6 +136,14 @@ pub const LetExpr = struct {
     ty: Ty,
     layout: layout.Layout,
     is_rec: bool = false,
+};
+
+/// Lexically-scoped mutually recursive group in ANF form.
+pub const LetGroupExpr = struct {
+    bindings: []const LetGroupBinding,
+    body: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
 };
 
 /// Conditional expression.

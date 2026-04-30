@@ -167,6 +167,9 @@ const InlineContext = struct {
                     try self.pushFunction(let_decl.name, function);
                 }
             },
+            .LetGroup => |group| for (group.bindings) |binding| {
+                try self.shadowFunction(binding.name);
+            },
         };
     }
 
@@ -196,6 +199,14 @@ const InlineContext = struct {
                     .is_rec = let_decl.is_rec,
                 } };
             },
+            .LetGroup => |group| blk: {
+                const mark = self.functionMark();
+                for (group.bindings) |binding| try self.shadowFunction(binding.name);
+                const bindings = try self.inlineLetGroupBindings(group.bindings);
+                self.restoreFunctions(mark);
+                for (group.bindings) |binding| try self.shadowFunction(binding.name);
+                break :blk .{ .LetGroup = .{ .bindings = bindings } };
+            },
         };
     }
 
@@ -219,6 +230,7 @@ const InlineContext = struct {
             .Constant => expr,
             .App => |app| try self.inlineApp(app),
             .Let => |let_expr| try self.inlineLet(let_expr),
+            .LetGroup => |group| .{ .LetGroup = try self.inlineLetGroup(group) },
             .If => |if_expr| .{ .If = .{
                 .cond = try self.inlineExprPtr(if_expr.cond.*),
                 .then_branch = try self.inlineExprPtr(if_expr.then_branch.*),
@@ -282,6 +294,33 @@ const InlineContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
             } },
+        };
+    }
+
+    fn inlineLetGroupBindings(self: *InlineContext, bindings: []const ir.LetGroupBinding) InlineError![]const ir.LetGroupBinding {
+        const out = try self.allocator().alloc(ir.LetGroupBinding, bindings.len);
+        for (bindings, 0..) |binding, index| {
+            out[index] = .{
+                .name = binding.name,
+                .value = try self.inlineExprPtr(binding.value.*),
+                .ty = binding.ty,
+                .layout = binding.layout,
+            };
+        }
+        return out;
+    }
+
+    fn inlineLetGroup(self: *InlineContext, group: ir.LetGroupExpr) InlineError!ir.LetGroupExpr {
+        const function_mark = self.functionMark();
+        for (group.bindings) |binding| try self.shadowFunction(binding.name);
+        const bindings = try self.inlineLetGroupBindings(group.bindings);
+        const body = try self.inlineExprPtr(group.body.*);
+        self.restoreFunctions(function_mark);
+        return .{
+            .bindings = bindings,
+            .body = body,
+            .ty = group.ty,
+            .layout = group.layout,
         };
     }
 
@@ -584,6 +623,7 @@ const AlphaContext = struct {
                 .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| try self.cloneLet(let_expr),
+            .LetGroup => expr,
             .If => |if_expr| .{ .If = .{
                 .cond = try self.cloneExprPtr(if_expr.cond.*),
                 .then_branch = try self.cloneExprPtr(if_expr.then_branch.*),
@@ -876,6 +916,13 @@ fn collectFreeNames(
                 restoreNameSet(bound, bound_changes, mark);
             }
         },
+        .LetGroup => |group| {
+            const mark = bound_changes.items.len;
+            for (group.bindings) |binding| try pushNameSet(allocator, bound, bound_changes, binding.name);
+            for (group.bindings) |binding| try collectFreeNames(allocator, binding.value.*, bound, bound_changes, free_names, free_changes);
+            try collectFreeNames(allocator, group.body.*, bound, bound_changes, free_names, free_changes);
+            restoreNameSet(bound, bound_changes, mark);
+        },
         .If => |if_expr| {
             try collectFreeNames(allocator, if_expr.cond.*, bound, bound_changes, free_names, free_changes);
             try collectFreeNames(allocator, if_expr.then_branch.*, bound, bound_changes, free_names, free_changes);
@@ -973,6 +1020,7 @@ fn boundedNodeCount(expr: ir.Expr, max_nodes: usize) ?usize {
             count += boundedNodeCount(let_expr.value.*, max_nodes) orelse return null;
             count += boundedNodeCount(let_expr.body.*, max_nodes) orelse return null;
         },
+        .LetGroup => return null,
         .If => |if_expr| {
             count += boundedNodeCount(if_expr.cond.*, max_nodes) orelse return null;
             count += boundedNodeCount(if_expr.then_branch.*, max_nodes) orelse return null;
@@ -1022,6 +1070,7 @@ fn containsLet(expr: ir.Expr) bool {
         .Constant, .Var => false,
         .App => |app| containsLet(app.callee.*) or anyContainsLet(app.args),
         .Let => true,
+        .LetGroup => true,
         .If => |if_expr| containsLet(if_expr.cond.*) or containsLet(if_expr.then_branch.*) or containsLet(if_expr.else_branch.*),
         .Prim => |prim| anyContainsLet(prim.args),
         .Ctor => |ctor| anyContainsLet(ctor.args),
@@ -1065,6 +1114,7 @@ fn containsAppOrMutation(expr: ir.Expr) bool {
         .App => |app| containsAppOrMutation(app.callee.*) or anyContainsAppOrMutation(app.args),
         .AccountFieldSet => true,
         .Let => |let_expr| containsAppOrMutation(let_expr.value.*) or containsAppOrMutation(let_expr.body.*),
+        .LetGroup => true,
         .If => |if_expr| containsAppOrMutation(if_expr.cond.*) or containsAppOrMutation(if_expr.then_branch.*) or containsAppOrMutation(if_expr.else_branch.*),
         .Prim => |prim| anyContainsAppOrMutation(prim.args),
         .Ctor => |ctor| anyContainsAppOrMutation(ctor.args),
@@ -1122,6 +1172,12 @@ fn containsAppThroughParam(expr: ir.Expr, params: []const ir.Param) bool {
             break :blk false;
         },
         .Let => |let_expr| containsAppThroughParam(let_expr.value.*, params) or containsAppThroughParam(let_expr.body.*, params),
+        .LetGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (containsAppThroughParam(binding.value.*, params)) break :blk true;
+            }
+            break :blk containsAppThroughParam(group.body.*, params);
+        },
         .If => |if_expr| containsAppThroughParam(if_expr.cond.*, params) or containsAppThroughParam(if_expr.then_branch.*, params) or containsAppThroughParam(if_expr.else_branch.*, params),
         .Prim => |prim| anyContainsAppThroughParam(prim.args, params),
         .Ctor => |ctor| anyContainsAppThroughParam(ctor.args, params),
@@ -1254,6 +1310,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .LetGroup => |group| group.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -1274,6 +1331,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

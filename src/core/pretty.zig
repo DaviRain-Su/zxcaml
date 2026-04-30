@@ -85,6 +85,17 @@ fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.De
             try formatExpr(out, allocator, let_decl.value.*);
             try append(out, allocator, ")");
         },
+        .LetGroup => |group| {
+            try append(out, allocator, "(LetGroup");
+            for (group.bindings) |binding| {
+                try append(out, allocator, " (binding ");
+                try append(out, allocator, binding.name);
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, binding.value.*);
+                try append(out, allocator, ")");
+            }
+            try append(out, allocator, ")");
+        },
     }
 }
 
@@ -196,6 +207,23 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatTy(out, allocator, let_expr.ty);
             try append(out, allocator, " :layout ");
             try formatLayout(out, allocator, let_expr.layout);
+            try append(out, allocator, ")");
+        },
+        .LetGroup => |group| {
+            try append(out, allocator, "(LetGroup");
+            for (group.bindings) |binding| {
+                try append(out, allocator, " (binding ");
+                try append(out, allocator, binding.name);
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, binding.value.*);
+                try append(out, allocator, ")");
+            }
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, group.body.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, group.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, group.layout);
             try append(out, allocator, ")");
         },
         .If => |if_expr| {

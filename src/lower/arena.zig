@@ -73,19 +73,29 @@ pub fn lowerModule(allocator: std.mem.Allocator, module: ir.Module) LowerError!l
     var next_closure_id: usize = 0;
     for (module.decls, 0..) |decl, index| {
         if (index == entrypoint_index) continue;
-        const let_decl = switch (decl) {
-            .Let => |value| value,
-        };
-        switch (let_decl.value.*) {
-            .Lambda => |lambda| {
-                try functions.append(allocator, try lowerFunction(allocator, let_decl.name, lambda, &.{}, &functions, &next_closure_id));
-                try collectNestedFunctionsInLambda(allocator, lambda, &functions, &next_closure_id);
+        switch (decl) {
+            .Let => |let_decl| switch (let_decl.value.*) {
+                .Lambda => |lambda| {
+                    try functions.append(allocator, try lowerFunction(allocator, let_decl.name, lambda, &.{}, &functions, &next_closure_id));
+                    try collectNestedFunctionsInLambda(allocator, lambda, &functions, &next_closure_id);
+                },
+                else => {},
             },
-            else => {},
+            .LetGroup => |group| {
+                for (group.bindings) |binding| {
+                    const lambda = switch (binding.value.*) {
+                        .Lambda => |lambda| lambda,
+                        else => continue,
+                    };
+                    try functions.append(allocator, try lowerFunction(allocator, binding.name, lambda, &.{}, &functions, &next_closure_id));
+                    try collectNestedFunctionsInLambda(allocator, lambda, &functions, &next_closure_id);
+                }
+            },
         }
     }
     const entrypoint = switch (module.decls[entrypoint_index]) {
         .Let => |value| value,
+        .LetGroup => return error.UnsupportedEntrypoint,
     };
     const entry_lambda = switch (entrypoint.value.*) {
         .Lambda => |lambda| lambda,
@@ -211,6 +221,7 @@ fn findEntrypointIndex(module: ir.Module) ?usize {
             .Let => |let_decl| {
                 if (std.mem.eql(u8, let_decl.name, "entrypoint")) return index;
             },
+            .LetGroup => {},
         }
     }
     return null;
@@ -225,6 +236,7 @@ fn lowerEntrypointLet(
 ) LowerError!lir.LFunc {
     const let_decl = switch (module.decls[entrypoint_index]) {
         .Let => |value| value,
+        .LetGroup => return error.UnsupportedEntrypoint,
     };
     const lambda = switch (let_decl.value.*) {
         .Lambda => |value| value,
@@ -241,12 +253,12 @@ fn lowerEntrypointLet(
     }
     var top_index: usize = 0;
     while (top_index < entrypoint_index) : (top_index += 1) {
-        const top_level = switch (module.decls[top_index]) {
-            .Let => |value| value,
-        };
-        switch (top_level.value.*) {
-            .Lambda => {},
-            else => try ctx.bound.put(top_level.name, top_level.ty),
+        switch (module.decls[top_index]) {
+            .Let => |top_level| switch (top_level.value.*) {
+                .Lambda => {},
+                else => try ctx.bound.put(top_level.name, top_level.ty),
+            },
+            .LetGroup => {},
         }
     }
 
@@ -256,6 +268,7 @@ fn lowerEntrypointLet(
         index -= 1;
         const top_level = switch (module.decls[index]) {
             .Let => |value| value,
+            .LetGroup => continue,
         };
         switch (top_level.value.*) {
             .Lambda => continue,
@@ -399,6 +412,25 @@ fn collectNestedFunctions(
             defer restoreSingleBound(bound, let_expr.name, previous);
             try collectNestedFunctions(allocator, let_expr.body.*, functions, next_closure_id, bound);
         },
+        .LetGroup => |group| {
+            for (group.bindings) |binding| {
+                const lambda = switch (binding.value.*) {
+                    .Lambda => |lambda| lambda,
+                    else => continue,
+                };
+                const captures = try recursiveCaptures(allocator, binding.name, lambda, bound);
+                try functions.append(allocator, try lowerFunction(allocator, binding.name, lambda, captures, functions, next_closure_id));
+            }
+            for (group.bindings) |binding| {
+                const previous = bound.get(binding.name);
+                try bound.put(binding.name, binding.ty);
+                defer restoreSingleBound(bound, binding.name, previous);
+            }
+            for (group.bindings) |binding| {
+                try collectNestedFunctions(allocator, binding.value.*, functions, next_closure_id, bound);
+            }
+            try collectNestedFunctions(allocator, group.body.*, functions, next_closure_id, bound);
+        },
         .If => |if_expr| {
             try collectNestedFunctions(allocator, if_expr.cond.*, functions, next_closure_id, bound);
             try collectNestedFunctions(allocator, if_expr.then_branch.*, functions, next_closure_id, bound);
@@ -506,6 +538,7 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
                 .is_rec = let_expr.is_rec,
             } };
         },
+        .LetGroup => |group| try lowerLetGroupExpr(allocator, group, ctx),
         .If => |if_expr| .{ .If = .{
             .cond = try lowerExprPtrWithContext(allocator, if_expr.cond.*, ctx),
             .then_branch = try lowerExprPtrWithContext(allocator, if_expr.then_branch.*, ctx),
@@ -602,6 +635,45 @@ fn lowerApp(allocator: std.mem.Allocator, app: ir.App, ctx: *LowerContext) Lower
     } };
 }
 
+fn lowerLetGroupExpr(allocator: std.mem.Allocator, group: ir.LetGroupExpr, ctx: *LowerContext) LowerError!lir.LExpr {
+    const functions = ctx.functions orelse return error.UnsupportedExpr;
+    const next_closure_id = ctx.next_closure_id orelse return error.UnsupportedExpr;
+
+    var captures = std.ArrayList(struct { name: []const u8, captures: CaptureSet }).empty;
+    defer captures.deinit(allocator);
+    for (group.bindings) |binding| {
+        const lambda = switch (binding.value.*) {
+            .Lambda => |lambda| lambda,
+            else => continue,
+        };
+        const binding_captures = try recursiveCaptures(allocator, binding.name, lambda, &ctx.bound);
+        try captures.append(allocator, .{ .name = binding.name, .captures = binding_captures });
+        try functions.append(allocator, try lowerFunction(allocator, binding.name, lambda, binding_captures, functions, next_closure_id));
+    }
+
+    const rec_snapshots = try allocator.alloc(struct { name: []const u8, previous: ?CaptureSet }, captures.items.len);
+    for (captures.items, 0..) |item, index| {
+        rec_snapshots[index] = .{ .name = item.name, .previous = ctx.rec_captures.get(item.name) };
+        try ctx.rec_captures.put(item.name, item.captures);
+    }
+    defer {
+        var index = rec_snapshots.len;
+        while (index > 0) {
+            index -= 1;
+            restoreRecCaptures(&ctx.rec_captures, rec_snapshots[index].name, rec_snapshots[index].previous);
+        }
+    }
+
+    const bound_snapshots = try allocator.alloc(BindingSnapshot, group.bindings.len);
+    for (group.bindings, 0..) |binding, index| {
+        bound_snapshots[index] = .{ .name = binding.name, .previous = ctx.bound.get(binding.name) };
+        try ctx.bound.put(binding.name, binding.ty);
+    }
+    defer restoreBound(&ctx.bound, bound_snapshots);
+
+    return (try lowerExprPtrWithContext(allocator, group.body.*, ctx)).*;
+}
+
 fn lowerAnonymousClosureExpr(allocator: std.mem.Allocator, lambda: ir.Lambda, ctx: *LowerContext) LowerError!*lir.LExpr {
     const functions = ctx.functions orelse return error.UnsupportedExpr;
     const next_closure_id = ctx.next_closure_id orelse return error.UnsupportedExpr;
@@ -692,6 +764,24 @@ fn collectCaptures(
             try excluded.put(let_expr.name, {});
             defer restoreSingleExcluded(excluded, let_expr.name, previous != null);
             try collectCaptures(allocator, let_expr.body.*, bound, excluded, captures);
+        },
+        .LetGroup => |group| {
+            var previous = std.ArrayList(struct { name: []const u8, had: bool }).empty;
+            defer previous.deinit(allocator);
+            for (group.bindings) |binding| {
+                const had = excluded.contains(binding.name);
+                try excluded.put(binding.name, {});
+                try previous.append(allocator, .{ .name = binding.name, .had = had });
+            }
+            defer {
+                var i = previous.items.len;
+                while (i > 0) {
+                    i -= 1;
+                    restoreSingleExcluded(excluded, previous.items[i].name, previous.items[i].had);
+                }
+            }
+            for (group.bindings) |binding| try collectCaptures(allocator, binding.value.*, bound, excluded, captures);
+            try collectCaptures(allocator, group.body.*, bound, excluded, captures);
         },
         .App => |app| {
             try collectCaptures(allocator, app.callee.*, bound, excluded, captures);
@@ -844,6 +934,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .LetGroup => |group| group.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -864,6 +955,7 @@ fn exprLayout(expr: ir.Expr) @import("../core/layout.zig").Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,
@@ -1034,6 +1126,15 @@ fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
         },
         .Let => |let_expr| recBindingEscapes(name, let_expr.value.*) or
             (!std.mem.eql(u8, let_expr.name, name) and recBindingEscapes(name, let_expr.body.*)),
+        .LetGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (!std.mem.eql(u8, binding.name, name) and recBindingEscapes(name, binding.value.*)) break :blk true;
+            }
+            for (group.bindings) |binding| {
+                if (std.mem.eql(u8, binding.name, name)) break :blk false;
+            }
+            break :blk recBindingEscapes(name, group.body.*);
+        },
         .Lambda => |lambda| !paramBindsName(lambda.params, name) and recBindingEscapes(name, lambda.body.*),
         .If => |if_expr| recBindingEscapes(name, if_expr.cond.*) or
             recBindingEscapes(name, if_expr.then_branch.*) or

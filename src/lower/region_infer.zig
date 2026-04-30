@@ -78,6 +78,7 @@ pub fn inferModule(arena: *std.heap.ArenaAllocator, module: ir.Module) InferErro
     for (module.decls, 0..) |decl, index| {
         decls[index] = switch (decl) {
             .Let => |let_decl| .{ .Let = try inferTopLevelLet(arena, let_decl) },
+            .LetGroup => |group| .{ .LetGroup = try inferTopLevelLetGroup(arena, group) },
         };
     }
     return .{
@@ -87,6 +88,19 @@ pub fn inferModule(arena: *std.heap.ArenaAllocator, module: ir.Module) InferErro
         .record_type_decls = module.record_type_decls,
         .externals = module.externals,
     };
+}
+
+fn inferTopLevelLetGroup(arena: *std.heap.ArenaAllocator, group: ir.LetGroup) InferError!ir.LetGroup {
+    const bindings = try arena.allocator().alloc(ir.LetGroupBinding, group.bindings.len);
+    for (group.bindings, 0..) |binding, index| {
+        bindings[index] = .{
+            .name = binding.name,
+            .value = try inferExprPtr(arena, binding.value.*, false),
+            .ty = binding.ty,
+            .layout = binding.layout,
+        };
+    }
+    return .{ .bindings = bindings };
 }
 
 fn inferTopLevelLet(arena: *std.heap.ArenaAllocator, let_decl: ir.Let) InferError!ir.Let {
@@ -138,6 +152,7 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             defer clone.deinit();
             break :blk .{ .Let = try clone.cloneLetExpr(let_expr, escape_context) };
         },
+        .LetGroup => |group| .{ .LetGroup = try inferLetGroupExpr(arena, group, escape_context) },
         .If => |if_expr| .{ .If = .{
             .cond = try inferExprPtr(arena, if_expr.cond.*, false),
             .then_branch = try inferExprPtr(arena, if_expr.then_branch.*, escape_context),
@@ -217,6 +232,25 @@ fn inferLambda(arena: *std.heap.ArenaAllocator, lambda: ir.Lambda) InferError!ir
         .body = try clone.cloneExprPtr(lambda.body.*, true),
         .ty = lambda.ty,
         .layout = lambda.layout,
+    };
+}
+
+fn inferLetGroupExpr(arena: *std.heap.ArenaAllocator, group: ir.LetGroupExpr, escape_context: bool) InferError!ir.LetGroupExpr {
+    const bindings = try arena.allocator().alloc(ir.LetGroupBinding, group.bindings.len);
+    for (group.bindings, 0..) |binding, index| {
+        bindings[index] = .{
+            .name = binding.name,
+            .value = try inferExprPtr(arena, binding.value.*, false),
+            .ty = binding.ty,
+            .layout = binding.layout,
+        };
+    }
+    const body = try inferExprPtr(arena, group.body.*, escape_context);
+    return .{
+        .bindings = bindings,
+        .body = body,
+        .ty = group.ty,
+        .layout = group.layout,
     };
 }
 
@@ -316,6 +350,12 @@ const AnalyzeContext = struct {
                 } else {
                     try self.analyzeExpr(let_expr.value.*, value_escapes);
                 }
+            },
+            .LetGroup => |group| {
+                for (group.bindings) |binding| try self.pushBinding(binding.name, @intFromPtr(binding.value));
+                defer for (group.bindings) |binding| self.popBinding(binding.name);
+                for (group.bindings) |binding| try self.analyzeExpr(binding.value.*, false);
+                try self.analyzeExpr(group.body.*, escape_context);
             },
             .If => |if_expr| {
                 try self.analyzeExpr(if_expr.cond.*, false);
@@ -468,6 +508,18 @@ const FreeVarCollector = struct {
                 try self.pushBinding(let_expr.name, id);
                 defer self.popBinding(let_expr.name);
                 try self.visit(let_expr.body.*);
+            },
+            .LetGroup => |group| {
+                for (group.bindings) |binding| try self.pushBinding(binding.name, @intFromPtr(binding.value));
+                defer {
+                    var index = group.bindings.len;
+                    while (index > 0) {
+                        index -= 1;
+                        self.popBinding(group.bindings[index].name);
+                    }
+                }
+                for (group.bindings) |binding| try self.visit(binding.value.*);
+                try self.visit(group.body.*);
             },
             .If => |if_expr| {
                 try self.visit(if_expr.cond.*);
@@ -638,6 +690,7 @@ const CloneContext = struct {
                 .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| .{ .Let = try self.cloneLetExpr(let_expr, escape_context) },
+            .LetGroup => |group| .{ .LetGroup = try inferLetGroupExprFromClone(self, group, escape_context) },
             .If => |if_expr| .{ .If = .{
                 .cond = try self.cloneExprPtr(if_expr.cond.*, false),
                 .then_branch = try self.cloneExprPtr(if_expr.then_branch.*, escape_context),
@@ -833,6 +886,20 @@ fn inferBindingLayout(value: ir.Expr, original: layout.Layout, escapes: bool) la
     return original;
 }
 
+fn inferLetGroupExprFromClone(self: *CloneContext, group: ir.LetGroupExpr, escape_context: bool) InferError!ir.LetGroupExpr {
+    const bindings = try self.allocator.alloc(ir.LetGroupBinding, group.bindings.len);
+    for (group.bindings, 0..) |binding, index| {
+        bindings[index] = .{
+            .name = binding.name,
+            .value = try self.cloneExprPtr(binding.value.*, false),
+            .ty = binding.ty,
+            .layout = binding.layout,
+        };
+    }
+    const body = try self.cloneExprPtr(group.body.*, escape_context);
+    return .{ .bindings = bindings, .body = body, .ty = group.ty, .layout = group.layout };
+}
+
 fn isPrimitiveStackCandidate(expr: ir.Expr) bool {
     return switch (expr) {
         .Constant => true,
@@ -873,6 +940,7 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .layout = new_layout,
             .is_rec = let_expr.is_rec,
         } },
+        .LetGroup => |group| .{ .LetGroup = .{ .bindings = group.bindings, .body = group.body, .ty = group.ty, .layout = new_layout } },
         .If => |if_expr| .{ .If = .{
             .cond = if_expr.cond,
             .then_branch = if_expr.then_branch,
@@ -949,6 +1017,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,
@@ -969,6 +1038,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .LetGroup => |group| group.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -1089,6 +1159,7 @@ fn inferredEntrypointBody(arena: *std.heap.ArenaAllocator, body: *const ir.Expr)
     const inferred = try inferModule(arena, module);
     const entrypoint = switch (inferred.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,

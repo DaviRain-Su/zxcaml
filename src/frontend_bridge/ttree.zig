@@ -24,6 +24,7 @@ pub const Module = struct {
 /// Typed mirror of an accepted top-level declaration.
 pub const Decl = union(enum) {
     Let: LetDecl,
+    LetRecGroup: LetRecGroupDecl,
 };
 
 /// Top-level `let` declaration.
@@ -31,6 +32,18 @@ pub const LetDecl = struct {
     name: []const u8,
     body: Expr,
     is_rec: bool = false,
+};
+
+/// One binding in a mutually recursive value group.
+pub const LetRecBinding = struct {
+    name: []const u8,
+    params: []const []const u8,
+    body: Expr,
+};
+
+/// Top-level `let rec ... and ...` group.
+pub const LetRecGroupDecl = struct {
+    bindings: []const LetRecBinding,
 };
 
 /// Top-level external declaration emitted by sexp v1.0.
@@ -117,6 +130,7 @@ pub const Expr = union(enum) {
     Constant: Constant,
     App: App,
     Let: LetExpr,
+    LetRecGroup: LetRecGroupExpr,
     If: IfExpr,
     Prim: Prim,
     Var: Var,
@@ -148,6 +162,12 @@ pub const LetExpr = struct {
     value: *const Expr,
     body: *const Expr,
     is_rec: bool = false,
+};
+
+/// Nested `let rec A = ... and B = ... in BODY` expression.
+pub const LetRecGroupExpr = struct {
+    bindings: []const LetRecBinding,
+    body: *const Expr,
 };
 
 /// Conditional expression with an explicit else branch.
@@ -406,8 +426,13 @@ fn parseDecl(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Dec
 }
 
 fn parseDeclItems(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Decl {
-    if (items.len != 3) return error.MalformedDecl;
     const tag = try expectAtom(items[0]);
+    if (std.mem.eql(u8, tag, "Let_rec_group")) {
+        if (items.len != 2) return error.MalformedDecl;
+        return .{ .LetRecGroup = .{ .bindings = try parseLetRecBindings(arena, items[1]) } };
+    }
+
+    if (items.len != 3) return error.MalformedDecl;
     const is_rec = if (std.mem.eql(u8, tag, "let")) false else if (std.mem.eql(u8, tag, "let-rec")) true else return error.MalformedDecl;
 
     const name = try dupeAtom(arena, items[1]);
@@ -708,6 +733,7 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "app")) return .{ .App = try parseApp(arena, items) };
     if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items, false) };
     if (std.mem.eql(u8, tag, "let-rec")) return .{ .Let = try parseLetExpr(arena, items, true) };
+    if (std.mem.eql(u8, tag, "Let_rec_group")) return .{ .LetRecGroup = try parseLetRecGroupExpr(arena, items) };
     if (std.mem.eql(u8, tag, "if")) return .{ .If = try parseIf(arena, items) };
     if (std.mem.eql(u8, tag, "prim")) return .{ .Prim = try parsePrim(arena, items) };
     if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
@@ -720,6 +746,48 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "record_update")) return .{ .RecordUpdate = try parseRecordUpdate(arena, items) };
     if (std.mem.eql(u8, tag, "field_set")) return .{ .FieldSet = try parseFieldSet(arena, items) };
     return error.UnsupportedNode;
+}
+
+fn parseLetRecGroupExpr(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!LetRecGroupExpr {
+    if (items.len != 3) return error.MalformedLet;
+    const body = try arena.allocator().create(Expr);
+    body.* = try parseExpr(arena, items[2]);
+    return .{
+        .bindings = try parseLetRecBindings(arena, items[1]),
+        .body = body,
+    };
+}
+
+fn parseLetRecBindings(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError![]const LetRecBinding {
+    const items = try expectList(node);
+    if (items.len < 2) return error.MalformedLet;
+    try expectAtomValue(items[0], "bindings");
+    var bindings = std.ArrayList(LetRecBinding).empty;
+    errdefer bindings.deinit(arena.allocator());
+    for (items[1..]) |binding_node| {
+        try bindings.append(arena.allocator(), try parseLetRecBinding(arena, binding_node));
+    }
+    return bindings.toOwnedSlice(arena.allocator());
+}
+
+fn parseLetRecBinding(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!LetRecBinding {
+    const items = try expectList(node);
+    if (items.len != 4) return error.MalformedLet;
+    try expectAtomValue(items[0], "binding");
+
+    const name_items = try expectList(items[1]);
+    if (name_items.len != 2) return error.MalformedLet;
+    try expectAtomValue(name_items[0], "name");
+
+    const body_items = try expectList(items[3]);
+    if (body_items.len != 2) return error.MalformedLet;
+    try expectAtomValue(body_items[0], "body");
+
+    return .{
+        .name = try dupeAtom(arena, name_items[1]),
+        .params = try parseParams(arena, items[2]),
+        .body = try parseExpr(arena, body_items[1]),
+    };
 }
 
 fn parseTuple(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Tuple {
@@ -1139,6 +1207,7 @@ test "parse single int constant module" {
 
     const decl = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     try std.testing.expectEqualStrings("entrypoint", decl.name);
 
@@ -1171,6 +1240,7 @@ test "parse top-level and nested let expressions with variable references" {
 
     const top_level = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     try std.testing.expectEqualStrings("x", top_level.name);
     _ = switch (top_level.body) {
@@ -1180,6 +1250,7 @@ test "parse top-level and nested let expressions with variable references" {
 
     const entrypoint = switch (module.decls[1]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const lambda = switch (entrypoint.body) {
         .Lambda => |value| value,
@@ -1293,6 +1364,7 @@ test "parse constructor expressions and string payloads" {
 
     const some_decl = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const some_ctor = switch (some_decl.body) {
         .Ctor => |ctor| ctor,
@@ -1303,6 +1375,7 @@ test "parse constructor expressions and string payloads" {
 
     const error_decl = switch (module.decls[1]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const error_ctor = switch (error_decl.body) {
         .Ctor => |ctor| ctor,
@@ -1329,6 +1402,7 @@ test "parse basic match expressions and patterns" {
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const lambda = switch (entrypoint.body) {
         .Lambda => |value| value,
@@ -1371,6 +1445,7 @@ test "parse quoted list constructor expressions and patterns" {
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const lambda = switch (entrypoint.body) {
         .Lambda => |value| value,
@@ -1415,6 +1490,7 @@ test "parse nested constructor patterns and when guards" {
     );
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const lambda = switch (entrypoint.body) {
         .Lambda => |value| value,
@@ -1459,6 +1535,7 @@ test "parse tuple and record v0.7 sexp nodes" {
 
     const tuple_decl = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const tuple = switch (tuple_decl.body) {
         .Tuple => |value| value,
@@ -1467,6 +1544,7 @@ test "parse tuple and record v0.7 sexp nodes" {
     try std.testing.expectEqual(@as(usize, 3), tuple.items.len);
     const update_decl = switch (module.decls[2]) {
         .Let => |value| value,
+        .LetRecGroup => unreachable,
     };
     const update = switch (update_decl.body) {
         .RecordUpdate => |value| value,
@@ -1511,6 +1589,7 @@ test "parse account type references and syscall apps in v0.8 sexp" {
 
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const lambda = switch (entrypoint.body) {
         .Lambda => |value| value,
@@ -1553,6 +1632,7 @@ test "parse CPI type references and function apps in v0.9 sexp" {
 
     const entrypoint = switch (module.decls[0]) {
         .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
     };
     const lambda = switch (entrypoint.body) {
         .Lambda => |value| value,

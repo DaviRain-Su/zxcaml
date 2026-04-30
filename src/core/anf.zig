@@ -89,6 +89,14 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
                     });
                 }
             },
+            .LetRecGroup => |group| {
+                for (group.bindings) |binding| {
+                    try ctx.scope.put(binding.name, .{
+                        .ty = .Unit,
+                        .layout = layout.topLevelLambda(),
+                    });
+                }
+            },
         }
     }
 
@@ -100,6 +108,12 @@ pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerE
                 .ty = let_decl.ty,
                 .layout = let_decl.layout,
             }),
+            .LetGroup => |group| for (group.bindings) |binding| {
+                try ctx.scope.put(binding.name, .{
+                    .ty = binding.ty,
+                    .layout = binding.layout,
+                });
+            },
         }
     }
 
@@ -243,6 +257,28 @@ fn lowerDecl(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, decl: ttree.De
                 .is_rec = let_decl.is_rec,
             } };
         },
+        .LetRecGroup => |group| blk: {
+            const bindings = try arena.allocator().alloc(ir.LetGroupBinding, group.bindings.len);
+            for (group.bindings, 0..) |binding, index| {
+                bindings[index] = try lowerLetRecGroupBinding(arena, ctx, binding);
+            }
+            break :blk .{ .LetGroup = .{ .bindings = bindings } };
+        },
+    };
+}
+
+fn lowerLetRecGroupBinding(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, binding: ttree.LetRecBinding) LowerError!ir.LetGroupBinding {
+    const lambda: ttree.Lambda = .{
+        .params = binding.params,
+        .body = &binding.body,
+    };
+    var value = try lowerExprPtr(arena, ctx, .{ .Lambda = lambda });
+    value = try markTailCallsInFunction(arena, value, binding.name);
+    return .{
+        .name = try arena.allocator().dupe(u8, binding.name),
+        .value = value,
+        .ty = exprTy(value.*),
+        .layout = exprLayout(value.*),
     };
 }
 
@@ -261,6 +297,8 @@ fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: ttre
             .String
         else if (lambdaParamIsAccount(lambda.body.*, param_name))
             try accountTy(arena)
+        else if (lambdaParamRecordTy(arena, ctx, lambda.body.*, param_name)) |record_ty|
+            record_ty
         else if (try lambdaParamIsList(arena, lambda.body.*, param_name))
             try listTy(arena, .Int)
         else if (lambdaParamIsFunction(lambda.body.*, param_name))
@@ -329,6 +367,7 @@ fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: 
         .Constant => |constant| .{ .Constant = try lowerConstant(arena, constant) },
         .App => |app| try lowerApp(arena, ctx, app),
         .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
+        .LetRecGroup => |group| .{ .LetGroup = try lowerLetRecGroupExpr(arena, ctx, group) },
         .If => |if_expr| try lowerIf(arena, ctx, if_expr),
         .Prim => |prim| try lowerPrim(arena, ctx, prim),
         .Var => |var_ref| try lowerVarExpr(arena, ctx, var_ref, expected_ty),
@@ -441,6 +480,46 @@ fn lowerFieldSet(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, field_set:
         .ty = .Unit,
         .layout = layout.unitValue(),
     } };
+}
+
+fn lowerLetRecGroupExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, group: ttree.LetRecGroupExpr) LowerError!ir.LetGroupExpr {
+    var inserted = std.ArrayList(ScopedBinding).empty;
+    defer inserted.deinit(arena.allocator());
+
+    for (group.bindings) |binding| {
+        const owned_name = try arena.allocator().dupe(u8, binding.name);
+        const previous = ctx.scope.get(owned_name);
+        try ctx.scope.put(owned_name, .{ .ty = .Unit, .layout = layout.topLevelLambda() });
+        try inserted.append(arena.allocator(), .{ .name = owned_name, .previous = previous });
+    }
+
+    const bindings = try arena.allocator().alloc(ir.LetGroupBinding, group.bindings.len);
+    for (group.bindings, 0..) |binding, index| {
+        bindings[index] = try lowerLetRecGroupBinding(arena, ctx, binding);
+    }
+    for (bindings) |binding| {
+        try ctx.scope.put(binding.name, .{ .ty = binding.ty, .layout = binding.layout });
+    }
+
+    const body = try lowerExprPtr(arena, ctx, group.body.*);
+
+    var index = inserted.items.len;
+    while (index > 0) {
+        index -= 1;
+        const item = inserted.items[index];
+        if (item.previous) |previous| {
+            ctx.scope.getPtr(item.name).?.* = previous;
+        } else {
+            _ = ctx.scope.remove(item.name);
+        }
+    }
+
+    return .{
+        .bindings = bindings,
+        .body = body,
+        .ty = exprTy(body.*),
+        .layout = exprLayout(body.*),
+    };
 }
 
 fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: ttree.LetExpr) LowerError!ir.LetExpr {
@@ -579,6 +658,15 @@ fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, scope
             marked_let.body = try markTailPosition(arena, let_expr.body, scope.shadowedByName(let_expr.name));
             const marked = try arena.allocator().create(ir.Expr);
             marked.* = .{ .Let = marked_let };
+            break :blk marked;
+        },
+        .LetGroup => |group| blk: {
+            var marked_group = group;
+            var body_scope = scope;
+            for (group.bindings) |binding| body_scope = body_scope.shadowedByName(binding.name);
+            marked_group.body = try markTailPosition(arena, group.body, body_scope);
+            const marked = try arena.allocator().create(ir.Expr);
+            marked.* = .{ .LetGroup = marked_group };
             break :blk marked;
         },
         .Match => |match_expr| blk: {
@@ -1182,6 +1270,25 @@ fn renameExprValueVars(arena: *std.heap.ArenaAllocator, expr: ir.Expr, renames: 
                 .is_rec = let_expr.is_rec,
             } };
         },
+        .LetGroup => |group| blk: {
+            var group_renames = renames;
+            for (group.bindings) |binding| group_renames = try filterRenamesForName(arena, group_renames, binding.name);
+            const bindings = try arena.allocator().alloc(ir.LetGroupBinding, group.bindings.len);
+            for (group.bindings, 0..) |binding, index| {
+                bindings[index] = .{
+                    .name = binding.name,
+                    .value = try renameExprVars(arena, binding.value, group_renames),
+                    .ty = binding.ty,
+                    .layout = binding.layout,
+                };
+            }
+            break :blk .{ .LetGroup = .{
+                .bindings = bindings,
+                .body = try renameExprVars(arena, group.body, group_renames),
+                .ty = group.ty,
+                .layout = group.layout,
+            } };
+        },
         .If => |if_expr| .{ .If = .{
             .cond = try renameExprVars(arena, if_expr.cond, renames),
             .then_branch = try renameExprVars(arena, if_expr.then_branch, renames),
@@ -1753,6 +1860,7 @@ fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBind
         },
         .Var => |var_ref| pattern_var_tys.get(var_ref.name),
         .Let => |let_expr| try inferSimpleExprTy(arena, pattern_var_tys, let_expr.body.*),
+        .LetRecGroup => |group| try inferSimpleExprTy(arena, pattern_var_tys, group.body.*),
         .Tuple => |tuple_expr| blk: {
             const tys = try arena.allocator().alloc(ir.Ty, tuple_expr.items.len);
             for (tuple_expr.items, 0..) |item, index| {
@@ -1788,6 +1896,10 @@ fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *T
         .Let => |let_expr| {
             try inferExprVarExpectations(arena, pattern_var_tys, let_expr.value.*, null);
             try inferExprVarExpectations(arena, pattern_var_tys, let_expr.body.*, expected_ty);
+        },
+        .LetRecGroup => |group| {
+            for (group.bindings) |binding| try inferExprVarExpectations(arena, pattern_var_tys, binding.body, null);
+            try inferExprVarExpectations(arena, pattern_var_tys, group.body.*, expected_ty);
         },
         .App => |app| {
             try inferExprVarExpectations(arena, pattern_var_tys, app.callee.*, null);
@@ -2591,6 +2703,15 @@ fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
             if (!std.mem.eql(u8, let_expr.name, name) and recBindingEscapes(name, let_expr.body.*)) break :blk true;
             break :blk false;
         },
+        .LetRecGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (!std.mem.eql(u8, binding.name, name) and recBindingEscapes(name, binding.body)) break :blk true;
+            }
+            for (group.bindings) |binding| {
+                if (std.mem.eql(u8, binding.name, name)) break :blk false;
+            }
+            break :blk recBindingEscapes(name, group.body.*);
+        },
         .Lambda => |lambda| lambdaParamShadows(lambda.params, name) == false and recBindingEscapes(name, lambda.body.*),
         .If => |if_expr| recBindingEscapes(name, if_expr.cond.*) or
             recBindingEscapes(name, if_expr.then_branch.*) or
@@ -2699,6 +2820,13 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
         .Lambda => |lambda| !lambdaParamShadows(lambda.params, param_name) and lambdaParamIsFunction(lambda.body.*, param_name),
         .Let => |let_expr| lambdaParamIsFunction(let_expr.value.*, param_name) or
             (!std.mem.eql(u8, let_expr.name, param_name) and lambdaParamIsFunction(let_expr.body.*, param_name)),
+        .LetRecGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (lambdaParamIsFunction(binding.body, param_name)) break :blk true;
+                if (std.mem.eql(u8, binding.name, param_name)) break :blk false;
+            }
+            break :blk lambdaParamIsFunction(group.body.*, param_name);
+        },
         .If => |if_expr| lambdaParamIsFunction(if_expr.cond.*, param_name) or
             lambdaParamIsFunction(if_expr.then_branch.*, param_name) or
             lambdaParamIsFunction(if_expr.else_branch.*, param_name),
@@ -2752,6 +2880,100 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
     };
 }
 
+fn lambdaParamRecordTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr, param_name: []const u8) ?ir.Ty {
+    return switch (expr) {
+        .RecordField => |field_access| blk: {
+            if (exprIsVarNamed(field_access.record_expr.*, param_name)) {
+                if (recordTyContainingField(arena, ctx, field_access.field_name)) |ty| break :blk ty;
+            }
+            break :blk lambdaParamRecordTy(arena, ctx, field_access.record_expr.*, param_name);
+        },
+        .App => |app| blk: {
+            if (lambdaParamRecordTy(arena, ctx, app.callee.*, param_name)) |ty| break :blk ty;
+            for (app.args) |arg| {
+                if (lambdaParamRecordTy(arena, ctx, arg, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .Lambda => |lambda| if (lambdaParamShadows(lambda.params, param_name)) null else lambdaParamRecordTy(arena, ctx, lambda.body.*, param_name),
+        .Let => |let_expr| blk: {
+            if (lambdaParamRecordTy(arena, ctx, let_expr.value.*, param_name)) |ty| break :blk ty;
+            if (!std.mem.eql(u8, let_expr.name, param_name)) break :blk lambdaParamRecordTy(arena, ctx, let_expr.body.*, param_name);
+            break :blk null;
+        },
+        .LetRecGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (lambdaParamRecordTy(arena, ctx, binding.body, param_name)) |ty| break :blk ty;
+                if (std.mem.eql(u8, binding.name, param_name)) break :blk null;
+            }
+            break :blk lambdaParamRecordTy(arena, ctx, group.body.*, param_name);
+        },
+        .If => |if_expr| lambdaParamRecordTy(arena, ctx, if_expr.cond.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, if_expr.then_branch.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, if_expr.else_branch.*, param_name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (lambdaParamRecordTy(arena, ctx, arg, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (lambdaParamRecordTy(arena, ctx, arg, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (lambdaParamRecordTy(arena, ctx, item, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .TupleProj => |tuple_proj| lambdaParamRecordTy(arena, ctx, tuple_proj.tuple_expr.*, param_name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (lambdaParamRecordTy(arena, ctx, field.value, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .RecordUpdate => |record_update| blk: {
+            if (lambdaParamRecordTy(arena, ctx, record_update.base_expr.*, param_name)) |ty| break :blk ty;
+            for (record_update.fields) |field| {
+                if (lambdaParamRecordTy(arena, ctx, field.value, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .FieldSet => |field_set| lambdaParamRecordTy(arena, ctx, field_set.record_expr.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, field_set.value.*, param_name),
+        .Match => |match_expr| blk: {
+            if (lambdaParamRecordTy(arena, ctx, match_expr.scrutinee.*, param_name)) |ty| break :blk ty;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsTtreeName(arm.pattern, param_name)) {
+                    if (arm.guard) |guard_expr| {
+                        if (lambdaParamRecordTy(arena, ctx, guard_expr.*, param_name)) |ty| break :blk ty;
+                    }
+                    if (lambdaParamRecordTy(arena, ctx, arm.body.*, param_name)) |ty| break :blk ty;
+                }
+            }
+            break :blk null;
+        },
+        .Constant, .Var => null,
+    };
+}
+
+fn recordTyContainingField(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, field_name: []const u8) ?ir.Ty {
+    for (ctx.record_type_decls) |decl| {
+        for (decl.fields) |field| {
+            if (std.mem.eql(u8, field.name, field_name)) {
+                const params = arena.allocator().alloc(ir.Ty, decl.params.len) catch return null;
+                for (params) |*param| param.* = .Int;
+                return .{ .Record = .{ .name = decl.name, .params = params } };
+            }
+        }
+    }
+    return null;
+}
+
 fn lambdaParamIsAccount(expr: ttree.Expr, param_name: []const u8) bool {
     return switch (expr) {
         .RecordField => |field_access| (exprIsVarNamed(field_access.record_expr.*, param_name) and isAccountFieldName(field_access.field_name)) or
@@ -2769,6 +2991,13 @@ fn lambdaParamIsAccount(expr: ttree.Expr, param_name: []const u8) bool {
         .Lambda => |lambda| !lambdaParamShadows(lambda.params, param_name) and lambdaParamIsAccount(lambda.body.*, param_name),
         .Let => |let_expr| lambdaParamIsAccount(let_expr.value.*, param_name) or
             (!std.mem.eql(u8, let_expr.name, param_name) and lambdaParamIsAccount(let_expr.body.*, param_name)),
+        .LetRecGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (lambdaParamIsAccount(binding.body, param_name)) break :blk true;
+                if (std.mem.eql(u8, binding.name, param_name)) break :blk false;
+            }
+            break :blk lambdaParamIsAccount(group.body.*, param_name);
+        },
         .If => |if_expr| lambdaParamIsAccount(if_expr.cond.*, param_name) or
             lambdaParamIsAccount(if_expr.then_branch.*, param_name) or
             lambdaParamIsAccount(if_expr.else_branch.*, param_name),
@@ -2875,6 +3104,13 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
         },
         .Let => |let_expr| (try lambdaParamIsList(arena, let_expr.value.*, param_name)) or
             (!std.mem.eql(u8, let_expr.name, param_name) and try lambdaParamIsList(arena, let_expr.body.*, param_name)),
+        .LetRecGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (try lambdaParamIsList(arena, binding.body, param_name)) break :blk true;
+                if (std.mem.eql(u8, binding.name, param_name)) break :blk false;
+            }
+            break :blk try lambdaParamIsList(arena, group.body.*, param_name);
+        },
         .If => |if_expr| (try lambdaParamIsList(arena, if_expr.cond.*, param_name)) or
             (try lambdaParamIsList(arena, if_expr.then_branch.*, param_name)) or
             (try lambdaParamIsList(arena, if_expr.else_branch.*, param_name)),
@@ -2982,6 +3218,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .LetGroup => |group| group.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -3040,6 +3277,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,
@@ -3071,6 +3309,7 @@ test "lower M0 constant module through ANF to Core IR" {
 
     const let_decl = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     try std.testing.expectEqualStrings("entrypoint", let_decl.name);
     const lambda = switch (let_decl.value.*) {
@@ -3116,6 +3355,7 @@ test "lower top-level and nested lets with lexical var references" {
 
     const top_level = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     try std.testing.expectEqualStrings("x", top_level.name);
     try std.testing.expectEqual(ir.Ty.Int, top_level.ty);
@@ -3123,6 +3363,7 @@ test "lower top-level and nested lets with lexical var references" {
 
     const entrypoint = switch (module.decls[1]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3156,6 +3397,7 @@ test "lower max_int and min_int as pinned i64 constants" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3201,6 +3443,7 @@ test "marks only self calls in tail position" {
     const module = try lowerModule(&core_arena, frontend);
     const loop_decl = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const loop_lambda = switch (loop_decl.value.*) {
         .Lambda => |value| value,
@@ -3218,6 +3461,7 @@ test "marks only self calls in tail position" {
 
     const sum_decl = switch (module.decls[1]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const sum_lambda = switch (sum_decl.value.*) {
         .Lambda => |value| value,
@@ -3249,6 +3493,7 @@ test "does not mark shadowed recursive name as self tail call" {
     const module = try lowerModule(&core_arena, frontend);
     const f_decl = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const f_lambda = switch (f_decl.value.*) {
         .Lambda => |value| value,
@@ -3280,6 +3525,7 @@ test "lower Syscall module calls as typed builtin applications" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3340,6 +3586,7 @@ test "lower external declarations into callable Core bindings" {
 
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3372,6 +3619,7 @@ test "lower CPI return-data calls as typed builtin applications" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3420,6 +3668,7 @@ test "lower account field assignment as typed account mutation" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3450,6 +3699,7 @@ test "lower constructor expressions with layout policy" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3488,6 +3738,7 @@ test "lower list constructors and cons patterns with list layout policy" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3541,6 +3792,7 @@ test "lower basic match expressions with top-to-bottom arms" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3592,6 +3844,7 @@ test "lower user-defined ADT constructors with explicit tags" {
 
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3629,6 +3882,7 @@ test "lower user-defined ADT constructor type parameters from payload types" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3684,6 +3938,7 @@ test "lower nullary user ADT constructor type parameters from match context" {
     const module = try lowerModule(&core_arena, frontend);
     const entrypoint = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const lambda = switch (entrypoint.value.*) {
         .Lambda => |value| value,
@@ -3735,6 +3990,7 @@ test "lower nullary user ADT constructor without context stays polymorphic" {
     const module = try lowerModule(&core_arena, frontend);
     const value_decl = switch (module.decls[0]) {
         .Let => |value| value,
+        .LetGroup => unreachable,
     };
     const ctor_expr = switch (value_decl.value.*) {
         .Ctor => |value| value,

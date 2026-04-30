@@ -32,6 +32,9 @@ const DceContext = struct {
                 .layout = let_decl.layout,
                 .is_rec = let_decl.is_rec,
             } },
+            .LetGroup => |group| .{ .LetGroup = .{
+                .bindings = try self.eliminateLetGroupBindings(group.bindings),
+            } },
         };
     }
 
@@ -66,6 +69,7 @@ const DceContext = struct {
                 .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| try self.eliminateLet(let_expr),
+            .LetGroup => |group| .{ .LetGroup = try self.eliminateLetGroup(group) },
             .If => |if_expr| try self.eliminateIf(if_expr),
             .Prim => |prim| .{ .Prim = .{
                 .op = prim.op,
@@ -123,6 +127,30 @@ const DceContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
             } },
+        };
+    }
+
+    fn eliminateLetGroupBindings(self: *DceContext, bindings: []const ir.LetGroupBinding) DceError![]const ir.LetGroupBinding {
+        const out = try self.allocator().alloc(ir.LetGroupBinding, bindings.len);
+        for (bindings, 0..) |binding, index| {
+            out[index] = .{
+                .name = binding.name,
+                .value = try self.eliminateExprPtr(binding.value.*),
+                .ty = binding.ty,
+                .layout = binding.layout,
+            };
+        }
+        return out;
+    }
+
+    fn eliminateLetGroup(self: *DceContext, group: ir.LetGroupExpr) DceError!ir.LetGroupExpr {
+        const bindings = try self.eliminateLetGroupBindings(group.bindings);
+        const body = try self.eliminateExprPtr(group.body.*);
+        return .{
+            .bindings = bindings,
+            .body = body,
+            .ty = exprTy(body.*),
+            .layout = exprLayout(body.*),
         };
     }
 
@@ -266,6 +294,13 @@ fn containsFreeName(expr: ir.Expr, name: []const u8) bool {
             if (std.mem.eql(u8, let_expr.name, name)) break :blk false;
             break :blk containsFreeName(let_expr.body.*, name);
         },
+        .LetGroup => |group| blk: {
+            if (groupBindsName(group.bindings, name)) break :blk false;
+            for (group.bindings) |binding| {
+                if (containsFreeName(binding.value.*, name)) break :blk true;
+            }
+            break :blk containsFreeName(group.body.*, name);
+        },
         .If => |if_expr| containsFreeName(if_expr.cond.*, name) or
             containsFreeName(if_expr.then_branch.*, name) or
             containsFreeName(if_expr.else_branch.*, name),
@@ -292,6 +327,13 @@ fn containsFreeName(expr: ir.Expr, name: []const u8) bool {
         .AccountFieldSet => |field_set| containsFreeName(field_set.account_expr.*, name) or
             containsFreeName(field_set.value.*, name),
     };
+}
+
+fn groupBindsName(bindings: []const ir.LetGroupBinding, name: []const u8) bool {
+    for (bindings) |binding| {
+        if (std.mem.eql(u8, binding.name, name)) return true;
+    }
+    return false;
 }
 
 fn anyExprContainsFreeName(exprs: []const *const ir.Expr, name: []const u8) bool {
@@ -339,6 +381,12 @@ fn hasSideEffects(expr: ir.Expr) bool {
         .Lambda, .Constant, .Var => false,
         .App, .AccountFieldSet => true,
         .Let => |let_expr| hasSideEffects(let_expr.value.*) or hasSideEffects(let_expr.body.*),
+        .LetGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (hasSideEffects(binding.value.*)) break :blk true;
+            }
+            break :blk hasSideEffects(group.body.*);
+        },
         .If => |if_expr| if (boolValue(if_expr.cond.*)) |value|
             hasSideEffects(if_expr.cond.*) or if (value) hasSideEffects(if_expr.then_branch.*) else hasSideEffects(if_expr.else_branch.*)
         else
@@ -403,6 +451,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .LetGroup => |group| group.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -423,6 +472,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

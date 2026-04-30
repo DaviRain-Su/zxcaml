@@ -115,6 +115,16 @@ pub fn evalModule(module: ir.Module) EvalError!u64 {
                 }
                 try env.put(let_decl.name, try evalTopLevelValue(arena.allocator(), let_decl.value.*, &env));
             },
+            .LetGroup => |group| {
+                for (group.bindings) |binding| {
+                    const lambda = switch (binding.value.*) {
+                        .Lambda => |lambda| lambda,
+                        else => return error.UnsupportedTopLevelValue,
+                    };
+                    const closure = try makeClosure(arena.allocator(), lambda, &env, binding.name);
+                    try env.put(binding.name, .{ .Closure = closure });
+                }
+            },
         }
     }
 
@@ -157,7 +167,7 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => evalExpr(allocator, expr, env),
+        .Constant, .Let, .LetGroup, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => evalExpr(allocator, expr, env),
         .App, .If, .Prim => evalExpr(allocator, expr, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
@@ -170,6 +180,7 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
             .String => |value| .{ .String = value },
         },
         .Let => |let_expr| evalLet(allocator, let_expr, env),
+        .LetGroup => |group| evalLetGroup(allocator, group, env),
         .Var => |var_ref| env.get(var_ref.name) orelse error.UnboundVariable,
         .App => |app| evalApp(allocator, app, env),
         .If => |if_expr| evalIf(allocator, if_expr, env),
@@ -684,6 +695,23 @@ fn findRecordValue(record: RecordValue, field_name: []const u8) ?Value {
     return null;
 }
 
+fn evalLetGroup(allocator: std.mem.Allocator, group: ir.LetGroupExpr, env: *std.StringHashMap(Value)) EvalError!Value {
+    var inserted = std.ArrayList(EnvBinding).empty;
+    defer inserted.deinit(allocator);
+
+    for (group.bindings) |binding| {
+        const value = switch (binding.value.*) {
+            .Lambda => |lambda| Value{ .Closure = try makeClosure(allocator, lambda, env, binding.name) },
+            else => try evalExpr(allocator, binding.value.*, env),
+        };
+        const previous = env.get(binding.name);
+        try env.put(binding.name, value);
+        try inserted.append(allocator, .{ .name = binding.name, .previous = previous });
+    }
+    defer restoreEnv(env, inserted.items);
+    return evalExpr(allocator, group.body.*, env);
+}
+
 fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringHashMap(Value)) EvalError!Value {
     const value = switch (let_expr.value.*) {
         .Lambda => |lambda| Value{ .Closure = try makeClosure(allocator, lambda, env, if (let_expr.is_rec) let_expr.name else null) },
@@ -709,6 +737,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

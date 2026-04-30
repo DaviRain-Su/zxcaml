@@ -57,3 +57,7 @@ path = "string_demo_test.rs"
 [[test]]
 name = "tail_rec_test"
 path = "tail_rec_test.rs"
+
+[[test]]
+name = "mutual_rec_test"
+path = "mutual_rec_test.rs"

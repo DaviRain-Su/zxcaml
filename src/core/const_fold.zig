@@ -118,6 +118,9 @@ const FoldContext = struct {
                 .layout = let_decl.layout,
                 .is_rec = let_decl.is_rec,
             } },
+            .LetGroup => |group| .{ .LetGroup = .{
+                .bindings = try self.foldLetGroupBindings(group.bindings),
+            } },
         };
     }
 
@@ -147,6 +150,7 @@ const FoldContext = struct {
                 .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| .{ .Let = try self.foldLetExpr(let_expr) },
+            .LetGroup => |group| .{ .LetGroup = try self.foldLetGroupExpr(group) },
             .If => |if_expr| try self.foldIf(if_expr),
             .Prim => |prim| try self.foldPrim(prim),
             .Var => |var_ref| if (self.env.getInline(var_ref.name)) |known| blk: {
@@ -211,6 +215,49 @@ const FoldContext = struct {
             .ty = lambda.ty,
             .layout = lambda.layout,
         };
+    }
+
+    fn foldLetGroupBindings(self: *FoldContext, bindings: []const ir.LetGroupBinding) FoldError![]const ir.LetGroupBinding {
+        const out = try self.allocator().alloc(ir.LetGroupBinding, bindings.len);
+        const mark_index = self.env.mark();
+        for (bindings) |binding| try self.env.shadow(binding.name);
+        for (bindings, 0..) |binding, index| {
+            out[index] = .{
+                .name = binding.name,
+                .value = try self.foldExprPtr(binding.value.*),
+                .ty = binding.ty,
+                .layout = binding.layout,
+            };
+        }
+        self.env.restore(mark_index);
+        return out;
+    }
+
+    fn foldLetGroupExpr(self: *FoldContext, group: ir.LetGroupExpr) FoldError!ir.LetGroupExpr {
+        const mark_index = self.env.mark();
+        for (group.bindings) |binding| try self.env.shadow(binding.name);
+        const bindings = try self.foldLetGroupBindingsNoScopeRestore(group.bindings);
+        const body = try self.foldExprPtr(group.body.*);
+        self.env.restore(mark_index);
+        return .{
+            .bindings = bindings,
+            .body = body,
+            .ty = exprTy(body.*),
+            .layout = exprLayout(body.*),
+        };
+    }
+
+    fn foldLetGroupBindingsNoScopeRestore(self: *FoldContext, bindings: []const ir.LetGroupBinding) FoldError![]const ir.LetGroupBinding {
+        const out = try self.allocator().alloc(ir.LetGroupBinding, bindings.len);
+        for (bindings, 0..) |binding, index| {
+            out[index] = .{
+                .name = binding.name,
+                .value = try self.foldExprPtr(binding.value.*),
+                .ty = binding.ty,
+                .layout = binding.layout,
+            };
+        }
+        return out;
     }
 
     fn foldLetExpr(self: *FoldContext, let_expr: ir.LetExpr) FoldError!ir.LetExpr {
@@ -662,6 +709,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .Constant => |constant| constant.ty,
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
+        .LetGroup => |group| group.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -682,6 +730,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .Constant => |constant| constant.layout,
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
+        .LetGroup => |group| group.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

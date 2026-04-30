@@ -72,6 +72,7 @@ const Analyzer = struct {
         for (self.module.decls) |*decl| {
             switch (decl.*) {
                 .Let => |*let_decl| try self.top_level.put(let_decl.name, let_decl),
+                .LetGroup => {},
             }
         }
     }
@@ -79,11 +80,17 @@ const Analyzer = struct {
     fn analyzeModule(self: *Analyzer) CheckError!Result {
         try self.buildTopLevelIndex();
         for (self.module.decls) |decl| {
-            const let_decl = switch (decl) {
-                .Let => |value| value,
-            };
-            if (try self.analyzeTopLevel(let_decl.name)) |site| {
-                return .{ .Fail = site };
+            switch (decl) {
+                .Let => |let_decl| if (try self.analyzeTopLevel(let_decl.name)) |site| {
+                    return .{ .Fail = site };
+                },
+                .LetGroup => |group| {
+                    var scope = StringSet.init(self.allocator);
+                    defer scope.deinit();
+                    for (group.bindings) |binding| {
+                        if (try self.checkExpr(binding.name, binding.value.*, &scope)) |site| return .{ .Fail = site };
+                    }
+                },
             }
         }
         return .Pass;
@@ -164,6 +171,16 @@ const Analyzer = struct {
                 try pushBinding(self.allocator, scope, &snapshots, let_expr.name);
                 defer restoreBindings(scope, snapshots.items);
                 return self.checkExpr(function_name, let_expr.body.*, scope);
+            },
+            .LetGroup => |group| {
+                var snapshots = std.ArrayList(BindingSnapshot).empty;
+                defer snapshots.deinit(self.allocator);
+                for (group.bindings) |binding| try pushBinding(self.allocator, scope, &snapshots, binding.name);
+                defer restoreBindings(scope, snapshots.items);
+                for (group.bindings) |binding| {
+                    if (try self.checkExpr(function_name, binding.value.*, scope)) |site| return site;
+                }
+                return self.checkExpr(function_name, group.body.*, scope);
             },
             .If => |if_expr| {
                 if (try self.checkExpr(function_name, if_expr.cond.*, scope)) |site| return site;
@@ -272,6 +289,16 @@ fn exprCapturesAny(allocator: std.mem.Allocator, expr: ir.Expr, visible: *const 
             try pushBinding(allocator, shadowed, &snapshots, let_expr.name);
             defer restoreBindings(shadowed, snapshots.items);
             return exprCapturesAny(allocator, let_expr.body.*, visible, shadowed);
+        },
+        .LetGroup => |group| {
+            var snapshots = std.ArrayList(BindingSnapshot).empty;
+            defer snapshots.deinit(allocator);
+            for (group.bindings) |binding| try pushBinding(allocator, shadowed, &snapshots, binding.name);
+            defer restoreBindings(shadowed, snapshots.items);
+            for (group.bindings) |binding| {
+                if (try exprCapturesAny(allocator, binding.value.*, visible, shadowed)) return true;
+            }
+            return exprCapturesAny(allocator, group.body.*, visible, shadowed);
         },
         .If => |if_expr| {
             return try exprCapturesAny(allocator, if_expr.cond.*, visible, shadowed) or

@@ -67,6 +67,7 @@ fn emitInstructions(out: *std.ArrayList(u8), allocator: std.mem.Allocator, modul
     for (module.decls) |decl| {
         const let_decl = switch (decl) {
             .Let => |value| value,
+            .LetGroup => continue,
         };
         const instruction_name = instructionNameForLet(let_decl.name) orelse continue;
         const lambda = switch (let_decl.value.*) {
@@ -258,6 +259,7 @@ fn emitErrors(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.
     for (module.decls) |decl| {
         const let_decl = switch (decl) {
             .Let => |value| value,
+            .LetGroup => continue,
         };
         if (!std.mem.startsWith(u8, let_decl.name, "error_")) continue;
         const code = switch (let_decl.value.*) {
@@ -279,6 +281,7 @@ fn findProgramId(module: ir.Module) ?[]const u8 {
     for (module.decls) |decl| {
         const let_decl = switch (decl) {
             .Let => |value| value,
+            .LetGroup => continue,
         };
         if (!std.mem.eql(u8, let_decl.name, "program_id")) continue;
         return switch (let_decl.value.*) {
@@ -412,6 +415,12 @@ fn accountFlagReferenced(expr: ir.Expr, param_name: []const u8, flag_name: []con
         .Lambda => |lambda| !paramShadows(lambda.params, param_name) and accountFlagReferenced(lambda.body.*, param_name, flag_name),
         .Let => |let_expr| accountFlagReferenced(let_expr.value.*, param_name, flag_name) or
             (!std.mem.eql(u8, let_expr.name, param_name) and accountFlagReferenced(let_expr.body.*, param_name, flag_name)),
+        .LetGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (accountFlagReferenced(binding.value.*, param_name, flag_name)) break :blk true;
+            }
+            break :blk accountFlagReferenced(group.body.*, param_name, flag_name);
+        },
         .App => |app| exprSliceFlagReferenced(app.args, param_name, flag_name) or accountFlagReferenced(app.callee.*, param_name, flag_name),
         .If => |if_expr| accountFlagReferenced(if_expr.cond.*, param_name, flag_name) or
             accountFlagReferenced(if_expr.then_branch.*, param_name, flag_name) or
@@ -459,6 +468,12 @@ fn accountParamMutated(expr: ir.Expr, param_name: []const u8) bool {
         .Lambda => |lambda| !paramShadows(lambda.params, param_name) and accountParamMutated(lambda.body.*, param_name),
         .Let => |let_expr| accountParamMutated(let_expr.value.*, param_name) or
             (!std.mem.eql(u8, let_expr.name, param_name) and accountParamMutated(let_expr.body.*, param_name)),
+        .LetGroup => |group| blk: {
+            for (group.bindings) |binding| {
+                if (accountParamMutated(binding.value.*, param_name)) break :blk true;
+            }
+            break :blk accountParamMutated(group.body.*, param_name);
+        },
         .App => |app| exprSliceMutatesAccount(app.args, param_name) or accountParamMutated(app.callee.*, param_name),
         .If => |if_expr| accountParamMutated(if_expr.cond.*, param_name) or
             accountParamMutated(if_expr.then_branch.*, param_name) or
