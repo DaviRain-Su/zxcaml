@@ -582,6 +582,7 @@ let parse_param (param : function_param) =
 let rec parse_match_scrutinee env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
+  | Texp_constant (Const_char value) -> Const_int (Char.code value)
   | Texp_constant (Const_string (value, _, _)) -> Const_string value
   | Texp_ident (_, lid, _) -> Var (longident_name lid)
   | Texp_construct (_lid, constructor, args) ->
@@ -780,6 +781,7 @@ and parse_record_fields env fields =
 and parse_expr env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
+  | Texp_constant (Const_char value) -> Const_int (Char.code value)
   | Texp_constant (Const_string (value, _, _)) -> Const_string value
   | Texp_ident (_, lid, _) -> (
       match pubkey_constant_expr (longident_name lid) with

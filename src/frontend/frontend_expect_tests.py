@@ -210,6 +210,49 @@ CASES: list[tuple[str, str, str]] = [
         "(app (var Result.error) (ctor Error (const-int 3)))))))\n",
     ),
     (
+        "stdlib String.length uses bundled function",
+        'let entrypoint _ = String.length "hello"\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(app (var String.length) (const-string "hello"))))))\n',
+    ),
+    (
+        "stdlib String.get uses bundled function",
+        'let entrypoint _ = String.get "hello" 1\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(app (var String.get) (const-string "hello") (const-int 1))))))\n',
+    ),
+    (
+        "stdlib String.sub uses bundled function",
+        'let entrypoint _ = String.sub "hello" 1 3\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(app (var String.sub) (const-string "hello") (const-int 1) '
+        "(const-int 3))))))\n",
+    ),
+    (
+        "string concatenation operator uses bundled function",
+        'let entrypoint _ = "hello" ^ " world"\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(app (var "^") (const-string "hello") (const-string " world"))))))\n',
+    ),
+    (
+        "stdlib Char.code lowers char literal to int",
+        "let entrypoint _ = Char.code 'a'\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        "(app (var Char.code) (const-int 97))))))\n",
+    ),
+    (
+        "stdlib Char.chr uses bundled function",
+        "let entrypoint _ = Char.chr 97\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        "(app (var Char.chr) (const-int 97))))))\n",
+    ),
+    (
+        "char comparison lowers char literals to ints",
+        "let entrypoint _ = 'a' < 'b'\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(prim "<" (const-int 97) (const-int 98))))))\n',
+    ),
+    (
         "tuple construction",
         "let entrypoint _ = (1, true, 42)\n",
         "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "

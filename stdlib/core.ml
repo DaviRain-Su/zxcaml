@@ -105,6 +105,22 @@ module List = struct
   let tl xs = match xs with [] -> unreachable () | _ :: rest -> rest
 end
 
+module String = struct
+  external length : string -> int = "%string_length"
+
+  external get : string -> int -> char = "%string_safe_get"
+
+  let sub value start len = Stdlib.String.sub value start len
+end
+
+module Char = struct
+  external code : char -> int = "%identity"
+
+  external chr : int -> char = "%identity"
+end
+
+let ( ^ ) left right = Stdlib.( ^ ) left right
+
 module Map = struct
   type ('k, 'v) tree =
     | Empty
