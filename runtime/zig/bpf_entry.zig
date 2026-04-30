@@ -14,7 +14,6 @@ const arena_bytes = 32 * 1024;
 const max_entrypoint_accounts = 64;
 
 const loader_log_message linksection(".rodata") = "ZxCaml entrypoint".*;
-var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
 
 /// Solana loader entrypoint; returns the user program's u64 status code.
 export fn entrypoint(input: [*]u8) callconv(.c) u64 {
@@ -23,6 +22,7 @@ export fn entrypoint(input: [*]u8) callconv(.c) u64 {
     // relocation/program-header shape expected by Solana's BPF loader.
     syscalls.sol_log_(loader_log_message[0..]);
 
+    var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
     var account_storage: [max_entrypoint_accounts]AccountRuntime.AccountView = undefined;
     var accounts: []AccountRuntime.AccountView = undefined;
