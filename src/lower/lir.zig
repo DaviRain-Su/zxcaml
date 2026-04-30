@@ -219,9 +219,24 @@ pub const LArm = struct {
 pub const LPattern = union(enum) {
     Wildcard,
     Var: []const u8,
+    Constant: LPatternConstant,
     Ctor: LCtorPattern,
     Tuple: []const LPattern,
     Record: []const LRecordPatternField,
+    Alias: LAliasPattern,
+};
+
+/// Lowered literal constant pattern.
+pub const LPatternConstant = union(enum) {
+    Int: i64,
+    String: []const u8,
+    Char: i64,
+};
+
+/// Lowered alias pattern.
+pub const LAliasPattern = struct {
+    pattern: *const LPattern,
+    name: []const u8,
 };
 
 /// Lowered constructor pattern, including nested constructor payloads.

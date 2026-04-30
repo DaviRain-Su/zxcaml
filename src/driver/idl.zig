@@ -520,6 +520,7 @@ fn paramShadows(params: []const ir.Param, name: []const u8) bool {
 fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
     return switch (pattern) {
         .Var => |var_pattern| std.mem.eql(u8, var_pattern.name, name),
+        .Alias => |alias| std.mem.eql(u8, alias.name, name) or patternBindsName(alias.pattern.*, name),
         .Ctor => |ctor_pattern| blk: {
             for (ctor_pattern.args) |arg| {
                 if (patternBindsName(arg, name)) break :blk true;
@@ -538,7 +539,7 @@ fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
             }
             break :blk false;
         },
-        .Wildcard => false,
+        .Wildcard, .Constant => false,
     };
 }
 

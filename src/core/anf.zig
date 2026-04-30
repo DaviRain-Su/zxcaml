@@ -1121,8 +1121,12 @@ fn filterRenamesForPattern(
 ) LowerError![]const RenameBinding {
     var current = renames;
     switch (pattern) {
-        .Wildcard => {},
+        .Wildcard, .Constant => {},
         .Var => |var_pattern| current = try filterRenamesForName(arena, current, var_pattern.name),
+        .Alias => |alias| {
+            current = try filterRenamesForPattern(arena, current, alias.pattern.*);
+            current = try filterRenamesForName(arena, current, alias.name);
+        },
         .Ctor => |ctor_pattern| {
             for (ctor_pattern.args) |arg| current = try filterRenamesForPattern(arena, current, arg);
         },
@@ -1391,22 +1395,13 @@ fn lowerMatchWithScrutinee(
     errdefer arms.deinit(arena.allocator());
 
     for (match_expr.arms) |arm| {
-        var inserted = std.ArrayList(ScopedBinding).empty;
-        defer inserted.deinit(arena.allocator());
-
-        const lowered_pattern = try lowerPattern(arena, ctx, arm.pattern, exprTy(scrutinee.*), exprLayout(scrutinee.*), &inserted);
-        const guard = if (arm.guard) |guard_expr|
-            try lowerExprPtrExpected(arena, ctx, guard_expr.*, .Bool)
-        else
-            null;
-        const body = try lowerExprPtr(arena, ctx, arm.body.*);
-        try arms.append(arena.allocator(), .{
-            .pattern = lowered_pattern,
-            .guard = guard,
-            .body = body,
-        });
-
-        restoreBindings(ctx, inserted.items);
+        if (arm.pattern == .Or) {
+            for (arm.pattern.Or) |alternative| {
+                try lowerAndAppendMatchArm(arena, ctx, &arms, alternative, arm.guard, arm.body, scrutinee);
+            }
+        } else {
+            try lowerAndAppendMatchArm(arena, ctx, &arms, arm.pattern, arm.guard, arm.body, scrutinee);
+        }
     }
 
     const owned_arms = try arms.toOwnedSlice(arena.allocator());
@@ -1423,6 +1418,33 @@ fn lowerMatchWithScrutinee(
     return ptr;
 }
 
+fn lowerAndAppendMatchArm(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    arms: *std.ArrayList(ir.Arm),
+    pattern: ttree.Pattern,
+    guard_expr: ?*const ttree.Expr,
+    body_expr: *const ttree.Expr,
+    scrutinee: *const ir.Expr,
+) LowerError!void {
+    var inserted = std.ArrayList(ScopedBinding).empty;
+    defer inserted.deinit(arena.allocator());
+
+    const lowered_pattern = try lowerPattern(arena, ctx, pattern, exprTy(scrutinee.*), exprLayout(scrutinee.*), &inserted);
+    const guard = if (guard_expr) |guard|
+        try lowerExprPtrExpected(arena, ctx, guard.*, .Bool)
+    else
+        null;
+    const body = try lowerExprPtr(arena, ctx, body_expr.*);
+    try arms.append(arena.allocator(), .{
+        .pattern = lowered_pattern,
+        .guard = guard,
+        .body = body,
+    });
+
+    restoreBindings(ctx, inserted.items);
+}
+
 fn inferMatchScrutineeExpectedTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, match_expr: ttree.Match) LowerError!?ir.Ty {
     var pattern_var_tys = TypeBindings.init(arena.allocator());
     defer pattern_var_tys.deinit();
@@ -1433,22 +1455,14 @@ fn inferMatchScrutineeExpectedTy(arena: *std.heap.ArenaAllocator, ctx: *LowerCon
         try inferExprVarExpectations(arena, &pattern_var_tys, arm.body.*, result_ty);
     }
 
+    if (inferConstantPatternTy(match_expr.arms)) |ty| return ty;
+
     var type_bindings = TypeBindings.init(arena.allocator());
     defer type_bindings.deinit();
 
     var candidate: ?ConstructorInfo = null;
     for (match_expr.arms) |arm| {
-        const ctor_pattern = switch (arm.pattern) {
-            .Ctor => |ctor| ctor,
-            .Wildcard, .Var, .Tuple, .Record => continue,
-        };
-        const info = ctx.constructors.get(ctor_pattern.name) orelse continue;
-        if (candidate) |existing| {
-            if (!std.mem.eql(u8, existing.type_name, info.type_name)) continue;
-        } else {
-            candidate = info;
-        }
-        try bindTypeParamsFromPatternPayloads(&type_bindings, info.payload_types, ctor_pattern.args, &pattern_var_tys);
+        try inferCtorCandidateFromPattern(ctx, arm.pattern, &candidate, &type_bindings, &pattern_var_tys);
     }
 
     const info = candidate orelse return null;
@@ -1460,6 +1474,61 @@ fn inferMatchScrutineeExpectedTy(arena: *std.heap.ArenaAllocator, ctx: *LowerCon
         .name = info.type_name,
         .params = params,
     } };
+}
+
+fn inferConstantPatternTy(arms: []const ttree.Arm) ?ir.Ty {
+    for (arms) |arm| {
+        if (inferConstantPatternTyFromPattern(arm.pattern)) |ty| return ty;
+    }
+    return null;
+}
+
+fn inferConstantPatternTyFromPattern(pattern: ttree.Pattern) ?ir.Ty {
+    return switch (pattern) {
+        .Const => |constant| switch (constant) {
+            .Int, .Char => .Int,
+            .String => .String,
+        },
+        .Or => |alternatives| blk: {
+            for (alternatives) |alternative| {
+                if (inferConstantPatternTyFromPattern(alternative)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .Alias => |alias| inferConstantPatternTyFromPattern(alias.pattern.*),
+        .Ctor, .Tuple, .Record, .Wildcard, .Var => null,
+    };
+}
+
+fn inferCtorCandidateFromPattern(
+    ctx: *LowerContext,
+    pattern: ttree.Pattern,
+    candidate: *?ConstructorInfo,
+    type_bindings: *TypeBindings,
+    pattern_var_tys: *TypeBindings,
+) LowerError!void {
+    switch (pattern) {
+        .Ctor => |ctor_pattern| {
+            const info = ctx.constructors.get(ctor_pattern.name) orelse return;
+            if (candidate.*) |existing| {
+                if (!std.mem.eql(u8, existing.type_name, info.type_name)) return;
+            } else {
+                candidate.* = info;
+            }
+            try bindTypeParamsFromPatternPayloads(type_bindings, info.payload_types, ctor_pattern.args, pattern_var_tys);
+        },
+        .Or => |alternatives| {
+            for (alternatives) |alternative| try inferCtorCandidateFromPattern(ctx, alternative, candidate, type_bindings, pattern_var_tys);
+        },
+        .Alias => |alias| try inferCtorCandidateFromPattern(ctx, alias.pattern.*, candidate, type_bindings, pattern_var_tys),
+        .Tuple => |items| {
+            for (items) |item| try inferCtorCandidateFromPattern(ctx, item, candidate, type_bindings, pattern_var_tys);
+        },
+        .Record => |fields| {
+            for (fields) |field| try inferCtorCandidateFromPattern(ctx, field.pattern, candidate, type_bindings, pattern_var_tys);
+        },
+        .Wildcard, .Var, .Const => {},
+    }
 }
 
 fn inferMatchResultTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBindings, arms: []const ttree.Arm) LowerError!?ir.Ty {
@@ -1588,7 +1657,16 @@ fn bindTypeParamsFromPattern(
                 try bindTypeParamsFromPayload(bindings, expected, actual);
             }
         },
-        .Wildcard => {},
+        .Wildcard, .Const => {},
+        .Alias => |alias| {
+            try bindTypeParamsFromPattern(bindings, expected, alias.pattern.*, pattern_var_tys);
+            if (pattern_var_tys.get(alias.name)) |actual| {
+                try bindTypeParamsFromPayload(bindings, expected, actual);
+            }
+        },
+        .Or => |alternatives| {
+            for (alternatives) |alternative| try bindTypeParamsFromPattern(bindings, expected, alternative, pattern_var_tys);
+        },
         .Ctor => {},
         .Tuple => |items| switch (expected) {
             .Tuple => |expected_items| {
@@ -1625,6 +1703,23 @@ fn lowerPattern(
                 .layout = matched_layout,
             } };
         },
+        .Const => |constant| .{ .Constant = try lowerPatternConstant(arena, constant, matched_ty) },
+        .Alias => |alias| blk: {
+            const child = try arena.allocator().create(ir.Pattern);
+            child.* = try lowerPattern(arena, ctx, alias.pattern.*, matched_ty, matched_layout, inserted);
+            const owned_name = try arena.allocator().dupe(u8, alias.name);
+            try bindPatternName(arena.allocator(), ctx, inserted, owned_name, .{
+                .ty = matched_ty,
+                .layout = matched_layout,
+            });
+            break :blk .{ .Alias = .{
+                .pattern = child,
+                .name = owned_name,
+                .ty = matched_ty,
+                .layout = matched_layout,
+            } };
+        },
+        .Or => return error.UnsupportedPattern,
         .Ctor => |ctor_pattern| try lowerCtorPattern(arena, ctx, ctor_pattern, matched_ty, inserted),
         .Tuple => |items| blk: {
             const tuple_tys = switch (matched_ty) {
@@ -1653,6 +1748,32 @@ fn lowerPattern(
                 };
             }
             break :blk .{ .Record = lowered_fields };
+        },
+    };
+}
+
+fn lowerPatternConstant(arena: *std.heap.ArenaAllocator, constant: ttree.PatternConstant, matched_ty: ir.Ty) LowerError!ir.PatternConstant {
+    return switch (constant) {
+        .Int => |value| blk: {
+            switch (matched_ty) {
+                .Int => {},
+                else => return error.UnsupportedPattern,
+            }
+            break :blk .{ .Int = value };
+        },
+        .Char => |value| blk: {
+            switch (matched_ty) {
+                .Int => {},
+                else => return error.UnsupportedPattern,
+            }
+            break :blk .{ .Char = value };
+        },
+        .String => |value| blk: {
+            switch (matched_ty) {
+                .String => {},
+                else => return error.UnsupportedPattern,
+            }
+            break :blk .{ .String = try arena.allocator().dupe(u8, value) };
         },
     };
 }
@@ -2362,7 +2483,14 @@ fn patternBindsTtreeName(pattern: ttree.Pattern, name: []const u8) bool {
             }
             break :blk false;
         },
-        .Wildcard => false,
+        .Alias => |alias| std.mem.eql(u8, alias.name, name) or patternBindsTtreeName(alias.pattern.*, name),
+        .Or => |alternatives| blk: {
+            for (alternatives) |alternative| {
+                if (patternBindsTtreeName(alternative, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Wildcard, .Const => false,
     };
 }
 
@@ -2602,7 +2730,14 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
 fn patternIsListCtor(pattern: ttree.Pattern) bool {
     return switch (pattern) {
         .Ctor => |ctor_pattern| std.mem.eql(u8, ctor_pattern.name, "[]") or std.mem.eql(u8, ctor_pattern.name, "::"),
-        .Tuple, .Record, .Wildcard, .Var => false,
+        .Alias => |alias| patternIsListCtor(alias.pattern.*),
+        .Or => |alternatives| blk: {
+            for (alternatives) |alternative| {
+                if (patternIsListCtor(alternative)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple, .Record, .Wildcard, .Var, .Const => false,
     };
 }
 

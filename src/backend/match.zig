@@ -62,7 +62,11 @@ fn compileRows(allocator: std.mem.Allocator, rows: []const Row) !*DecisionTree {
         if (row.patterns.len == 0) continue;
         switch (row.patterns[column]) {
             .Ctor => |ctor| if (!contains(constructors.items, ctor.name)) try constructors.append(allocator, ctor.name),
-            .Tuple, .Record, .Wildcard, .Var => {},
+            .Alias => |alias| switch (alias.pattern.*) {
+                .Ctor => |ctor| if (!contains(constructors.items, ctor.name)) try constructors.append(allocator, ctor.name),
+                else => {},
+            },
+            .Constant, .Tuple, .Record, .Wildcard, .Var => {},
         }
     }
     if (constructors.items.len == 0) {
@@ -89,12 +93,29 @@ fn compileRows(allocator: std.mem.Allocator, rows: []const Row) !*DecisionTree {
 
 fn firstRowIrrefutable(patterns: []const lir.LPattern) bool {
     for (patterns) |pattern| {
-        switch (pattern) {
-            .Tuple, .Record, .Wildcard, .Var => {},
-            .Ctor => return false,
-        }
+        if (!patternIrrefutable(pattern)) return false;
     }
     return true;
+}
+
+fn patternIrrefutable(pattern: lir.LPattern) bool {
+    return switch (pattern) {
+        .Wildcard, .Var => true,
+        .Alias => |alias| patternIrrefutable(alias.pattern.*),
+        .Tuple => |items| blk: {
+            for (items) |item| {
+                if (!patternIrrefutable(item)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Record => |fields| blk: {
+            for (fields) |field| {
+                if (!patternIrrefutable(field.pattern)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Constant, .Ctor => false,
+    };
 }
 
 fn specializeRows(allocator: std.mem.Allocator, rows: []const Row, column: usize, constructor: []const u8) ![]Row {
@@ -120,6 +141,11 @@ fn specializeRows(allocator: std.mem.Allocator, rows: []const Row, column: usize
                 });
                 allocator.free(wildcard_payloads);
             },
+            .Alias => |alias| try out.append(allocator, .{
+                .patterns = try replaceColumnWith(allocator, row.patterns, column, &.{alias.pattern.*}),
+                .action = row.action,
+            }),
+            .Constant => {},
         }
     }
     return out.toOwnedSlice(allocator);
@@ -135,7 +161,11 @@ fn defaultRows(allocator: std.mem.Allocator, rows: []const Row, column: usize) !
                 .patterns = try removeColumn(allocator, row.patterns, column),
                 .action = row.action,
             }),
-            .Ctor => {},
+            .Alias => |alias| try out.append(allocator, .{
+                .patterns = try replaceColumnWith(allocator, row.patterns, column, &.{alias.pattern.*}),
+                .action = row.action,
+            }),
+            .Ctor, .Constant => {},
         }
     }
     return out.toOwnedSlice(allocator);
@@ -170,7 +200,7 @@ fn constructorPayloadArity(rows: []const Row, column: usize, constructor: []cons
             .Ctor => |ctor| {
                 if (std.mem.eql(u8, ctor.name, constructor)) return ctor.args.len;
             },
-            .Tuple, .Record, .Wildcard, .Var => {},
+            .Tuple, .Record, .Wildcard, .Var, .Constant, .Alias => {},
         }
     }
     return null;

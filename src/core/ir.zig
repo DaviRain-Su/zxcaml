@@ -256,9 +256,26 @@ pub const Arm = struct {
 pub const Pattern = union(enum) {
     Wildcard,
     Var: PatternVar,
+    Constant: PatternConstant,
     Ctor: PatternCtor,
     Tuple: []const Pattern,
     Record: []const RecordPatternField,
+    Alias: PatternAlias,
+};
+
+/// Literal constant pattern used by match arms.
+pub const PatternConstant = union(enum) {
+    Int: i64,
+    String: []const u8,
+    Char: i64,
+};
+
+/// Alias pattern that binds the full matched value in addition to nested bindings.
+pub const PatternAlias = struct {
+    pattern: *const Pattern,
+    name: []const u8,
+    ty: Ty,
+    layout: layout.Layout,
 };
 
 /// Variable pattern that binds the matched value into the arm body.

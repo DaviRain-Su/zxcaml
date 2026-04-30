@@ -232,9 +232,25 @@ pub const Arm = struct {
 pub const Pattern = union(enum) {
     Wildcard,
     Var: []const u8,
+    Const: PatternConstant,
     Ctor: CtorPattern,
     Tuple: []const Pattern,
     Record: []const RecordPatternField,
+    Alias: AliasPattern,
+    Or: []const Pattern,
+};
+
+/// Literal constant pattern such as `0`, `"hello"`, or `'a'`.
+pub const PatternConstant = union(enum) {
+    Int: i64,
+    String: []const u8,
+    Char: i64,
+};
+
+/// Alias pattern such as `p as name`.
+pub const AliasPattern = struct {
+    pattern: *const Pattern,
+    name: []const u8,
 };
 
 /// Constructor pattern such as `Some x`, `None`, `[]`, `x :: xs`, or nested constructor payloads.
@@ -962,6 +978,28 @@ fn parsePattern(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!
         if (std.mem.eql(u8, name, "_")) return .Wildcard;
         return .{ .Var = name };
     }
+    if (std.mem.eql(u8, tag, "const-pattern")) {
+        if (items.len != 2) return error.MalformedPattern;
+        return .{ .Const = try parsePatternConstant(arena, items[1]) };
+    }
+    if (std.mem.eql(u8, tag, "or-pattern")) {
+        if (items.len < 2) return error.MalformedPattern;
+        var alternatives = std.ArrayList(Pattern).empty;
+        errdefer alternatives.deinit(arena.allocator());
+        for (items[1..]) |alternative_node| {
+            try alternatives.append(arena.allocator(), try parsePattern(arena, alternative_node));
+        }
+        return .{ .Or = try alternatives.toOwnedSlice(arena.allocator()) };
+    }
+    if (std.mem.eql(u8, tag, "alias-pattern")) {
+        if (items.len != 3) return error.MalformedPattern;
+        const child = try arena.allocator().create(Pattern);
+        child.* = try parsePattern(arena, items[1]);
+        return .{ .Alias = .{
+            .pattern = child,
+            .name = try dupeAtom(arena, items[2]),
+        } };
+    }
     if (std.mem.eql(u8, tag, "ctor")) {
         if (items.len < 2) return error.MalformedPattern;
         var args = std.ArrayList(Pattern).empty;
@@ -1001,6 +1039,16 @@ fn parsePattern(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!
         return .{ .Record = try fields.toOwnedSlice(arena.allocator()) };
     }
     return error.MalformedPattern;
+}
+
+fn parsePatternConstant(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!PatternConstant {
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedConstant;
+    const tag = try expectAtom(items[0]);
+    if (std.mem.eql(u8, tag, "const-int")) return .{ .Int = try expectInteger(items[1]) };
+    if (std.mem.eql(u8, tag, "const-string")) return .{ .String = try arena.allocator().dupe(u8, try expectAtom(items[1])) };
+    if (std.mem.eql(u8, tag, "const-char")) return .{ .Char = try expectInteger(items[1]) };
+    return error.MalformedConstant;
 }
 
 fn parseConstInt(items: []const *const Sexp) BridgeError!i64 {

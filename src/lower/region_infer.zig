@@ -377,8 +377,12 @@ const AnalyzeContext = struct {
 
     fn pushPatternBindings(self: *AnalyzeContext, pattern: *const ir.Pattern) InferError!void {
         switch (pattern.*) {
-            .Wildcard => {},
+            .Wildcard, .Constant => {},
             .Var => |var_pattern| try self.pushBinding(var_pattern.name, patternBindingId(pattern)),
+            .Alias => |alias| {
+                try self.pushPatternBindings(alias.pattern);
+                try self.pushBinding(alias.name, patternBindingId(pattern));
+            },
             .Ctor => |ctor| for (ctor.args) |*arg| try self.pushPatternBindings(arg),
             .Tuple => |items| for (items) |*item| try self.pushPatternBindings(item),
             .Record => |fields| for (fields) |*field| try self.pushPatternBindings(&field.pattern),
@@ -387,8 +391,12 @@ const AnalyzeContext = struct {
 
     fn popPatternBindings(self: *AnalyzeContext, pattern: *const ir.Pattern) void {
         switch (pattern.*) {
-            .Wildcard => {},
+            .Wildcard, .Constant => {},
             .Var => |var_pattern| self.popBinding(var_pattern.name),
+            .Alias => |alias| {
+                self.popBinding(alias.name);
+                self.popPatternBindings(alias.pattern);
+            },
             .Ctor => |ctor| {
                 var index = ctor.args.len;
                 while (index > 0) {
@@ -516,8 +524,12 @@ const FreeVarCollector = struct {
 
     fn pushPatternBindings(self: *FreeVarCollector, pattern: *const ir.Pattern) InferError!void {
         switch (pattern.*) {
-            .Wildcard => {},
+            .Wildcard, .Constant => {},
             .Var => |var_pattern| try self.pushBinding(var_pattern.name, patternBindingId(pattern)),
+            .Alias => |alias| {
+                try self.pushPatternBindings(alias.pattern);
+                try self.pushBinding(alias.name, patternBindingId(pattern));
+            },
             .Ctor => |ctor| for (ctor.args) |*arg| try self.pushPatternBindings(arg),
             .Tuple => |items| for (items) |*item| try self.pushPatternBindings(item),
             .Record => |fields| for (fields) |*field| try self.pushPatternBindings(&field.pattern),
@@ -526,8 +538,12 @@ const FreeVarCollector = struct {
 
     fn popPatternBindings(self: *FreeVarCollector, pattern: *const ir.Pattern) void {
         switch (pattern.*) {
-            .Wildcard => {},
+            .Wildcard, .Constant => {},
             .Var => |var_pattern| self.popBinding(var_pattern.name),
+            .Alias => |alias| {
+                self.popBinding(alias.name);
+                self.popPatternBindings(alias.pattern);
+            },
             .Ctor => |ctor| {
                 var index = ctor.args.len;
                 while (index > 0) {
@@ -764,8 +780,12 @@ const CloneContext = struct {
 
     fn pushPatternBindings(self: *CloneContext, pattern: *const ir.Pattern) InferError!void {
         switch (pattern.*) {
-            .Wildcard => {},
+            .Wildcard, .Constant => {},
             .Var => |var_pattern| try self.pushShadowBinding(var_pattern.name, patternBindingId(pattern)),
+            .Alias => |alias| {
+                try self.pushPatternBindings(alias.pattern);
+                try self.pushShadowBinding(alias.name, patternBindingId(pattern));
+            },
             .Ctor => |ctor| for (ctor.args) |*arg| try self.pushPatternBindings(arg),
             .Tuple => |items| for (items) |*item| try self.pushPatternBindings(item),
             .Record => |fields| for (fields) |*field| try self.pushPatternBindings(&field.pattern),
@@ -774,8 +794,12 @@ const CloneContext = struct {
 
     fn popPatternBindings(self: *CloneContext, pattern: *const ir.Pattern) void {
         switch (pattern.*) {
-            .Wildcard => {},
+            .Wildcard, .Constant => {},
             .Var => |var_pattern| self.popShadowBinding(var_pattern.name),
+            .Alias => |alias| {
+                self.popShadowBinding(alias.name);
+                self.popPatternBindings(alias.pattern);
+            },
             .Ctor => |ctor| {
                 var index = ctor.args.len;
                 while (index > 0) {

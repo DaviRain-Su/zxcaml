@@ -361,8 +361,12 @@ fn pushPatternBindings(
     pattern: ir.Pattern,
 ) CheckError!void {
     switch (pattern) {
-        .Wildcard => {},
+        .Wildcard, .Constant => {},
         .Var => |var_pattern| try pushBinding(allocator, scope, snapshots, var_pattern.name),
+        .Alias => |alias| {
+            try pushPatternBindings(allocator, scope, snapshots, alias.pattern.*);
+            try pushBinding(allocator, scope, snapshots, alias.name);
+        },
         .Ctor => |ctor_pattern| {
             for (ctor_pattern.args) |arg| try pushPatternBindings(allocator, scope, snapshots, arg);
         },

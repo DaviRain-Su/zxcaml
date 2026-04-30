@@ -28,6 +28,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\// any module-scope const array, it must copy that array to a local
         \\// stack slot and take the stack copy's address. Otherwise LLVM may
         \\// place the array at low addresses (0x0/0x20) rejected by Solana.
+        \\const std = @import("std");
         \\const Arena = @import("runtime/arena.zig").Arena;
         \\const AccountRuntime = @import("runtime/account.zig");
         \\const cpi = @import("runtime/cpi.zig");
@@ -2520,7 +2521,7 @@ fn findTopLevelCtorPattern(match_expr: lir.LMatch, constructor: []const u8) ?lir
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (std.mem.eql(u8, ctor.name, constructor)) return ctor,
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return null;
@@ -2566,11 +2567,11 @@ fn emitDecisionCase(
                 try emitSpecializedCtorRow(out, allocator, ctor_pattern, arm.body.*, arm.guard, scrutinee_name, payload_name, block_id, indent_level + 1, ctx);
                 if (arm.guard == null and ctorPayloadsIrrefutable(ctor_pattern.args)) case_covered = true;
             },
-            .Wildcard, .Var, .Tuple, .Record => {
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {
                 const patterns = [_]lir.LPattern{arm.pattern};
                 const sources = [_][]const u8{scrutinee_name};
                 try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level + 1, ctx);
-                if (arm.guard == null) case_covered = true;
+                if (arm.guard == null and patternIsIrrefutable(arm.pattern)) case_covered = true;
             },
         }
     }
@@ -2666,7 +2667,7 @@ fn emitDefaultRows(
 ) EmitError!void {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
-            .Wildcard, .Var, .Tuple, .Record => {
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {
                 const patterns = [_]lir.LPattern{arm.pattern};
                 const sources = [_][]const u8{scrutinee_name};
                 try emitPatternSequence(out, allocator, patterns[0..], sources[0..], arm.body.*, arm.guard, block_id, indent_level, ctx);
@@ -2717,6 +2718,21 @@ fn emitPatternSequence(
             try emitIndent(out, allocator, indent_level);
             try append(out, allocator, "}\n");
         },
+        .Constant => |constant| {
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "if (");
+            try emitConstantPatternCondition(out, allocator, constant, source);
+            try append(out, allocator, ") {\n");
+            try emitPatternSequence(out, allocator, patterns[1..], sources[1..], body, guard, block_id, indent_level + 1, ctx);
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "}\n");
+        },
+        .Alias => |alias| {
+            const alias_bind = lir.LPattern{ .Var = alias.name };
+            const alias_patterns = [_]lir.LPattern{ alias.pattern.*, alias_bind };
+            const alias_sources = [_][]const u8{ source, source };
+            try emitCombinedPatternSequence(out, allocator, alias_patterns[0..], alias_sources[0..], patterns[1..], sources[1..], body, guard, block_id, indent_level, ctx);
+        },
         .Ctor => |ctor_pattern| try emitCtorPatternSequence(out, allocator, ctor_pattern, source, patterns[1..], sources[1..], body, guard, block_id, indent_level, ctx),
         .Tuple => |items| {
             var item_sources = std.ArrayList([]const u8).empty;
@@ -2744,6 +2760,19 @@ fn emitPatternSequence(
             }
             try emitCombinedPatternSequence(out, allocator, field_patterns.items, field_sources.items, patterns[1..], sources[1..], body, guard, block_id, indent_level, ctx);
         },
+    }
+}
+
+fn emitConstantPatternCondition(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    constant: lir.LPatternConstant,
+    source: []const u8,
+) EmitError!void {
+    switch (constant) {
+        .Int => |value| try appendPrint(out, allocator, "{s} == @as(i64, {d})", .{ source, value }),
+        .Char => |value| try appendPrint(out, allocator, "{s} == @as(i64, {d})", .{ source, value }),
+        .String => |value| try appendPrint(out, allocator, "std.mem.eql(u8, {s}, \"{f}\")", .{ source, std.zig.fmtString(value) }),
     }
 }
 
@@ -3450,8 +3479,9 @@ fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
 
 fn patternBindsName(pattern: lir.LPattern, name: []const u8) bool {
     return switch (pattern) {
-        .Wildcard => false,
+        .Wildcard, .Constant => false,
         .Var => |var_name| std.mem.eql(u8, var_name, name),
+        .Alias => |alias| std.mem.eql(u8, alias.name, name) or patternBindsName(alias.pattern.*, name),
         .Ctor => |ctor_pattern| {
             for (ctor_pattern.args) |arg| {
                 if (patternBindsName(arg, name)) return true;
@@ -3491,7 +3521,29 @@ fn patternNeedsSource(pattern: lir.LPattern, body: lir.LExpr, guard: ?*const lir
     return switch (pattern) {
         .Wildcard => false,
         .Var => |name| !std.mem.eql(u8, name, "_") and armUsesName(body, guard, name),
+        .Constant => true,
+        .Alias => |alias| patternNeedsSource(alias.pattern.*, body, guard) or armUsesName(body, guard, alias.name),
         .Ctor, .Tuple, .Record => true,
+    };
+}
+
+fn patternIsIrrefutable(pattern: lir.LPattern) bool {
+    return switch (pattern) {
+        .Wildcard, .Var => true,
+        .Alias => |alias| patternIsIrrefutable(alias.pattern.*),
+        .Tuple => |items| blk: {
+            for (items) |item| {
+                if (!patternIsIrrefutable(item)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Record => |fields| blk: {
+            for (fields) |field| {
+                if (!patternIsIrrefutable(field.pattern)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Constant, .Ctor => false,
     };
 }
 
@@ -3499,7 +3551,7 @@ fn matchHasCtorArm(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => return true,
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return false;
@@ -3509,7 +3561,7 @@ fn matchHasUserCtorArm(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (ctor.type_name != null) return true,
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return false;
@@ -3521,7 +3573,7 @@ fn matchHasBuiltinListCtorArm(match_expr: lir.LMatch) bool {
             .Ctor => |ctor| {
                 if (std.mem.eql(u8, ctor.name, "[]") or std.mem.eql(u8, ctor.name, "::")) return true;
             },
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return false;
@@ -3548,7 +3600,8 @@ fn matchHasDefaultRows(match_expr: lir.LMatch) bool {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
-            .Ctor, .Tuple, .Record => {},
+            .Alias => |alias| if (patternIsIrrefutable(alias.pattern.*)) return true,
+            .Ctor, .Constant, .Tuple, .Record => {},
         }
     }
     return false;
@@ -3666,7 +3719,7 @@ fn builtinMatchFamily(match_expr: lir.LMatch) ?BuiltinFamily {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (builtinFamilyForCtor(ctor.name)) |family| return family,
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return null;
@@ -3690,7 +3743,8 @@ fn matchHasUnguardedCatchAll(match_expr: lir.LMatch) bool {
         if (arm.guard != null) continue;
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
-            .Ctor, .Tuple, .Record => {},
+            .Alias => |alias| if (patternIsIrrefutable(alias.pattern.*)) return true,
+            .Ctor, .Constant, .Tuple, .Record => {},
         }
     }
     return false;
@@ -3701,6 +3755,7 @@ fn constructorUnconditionallyCovered(match_expr: lir.LMatch, type_name: ?[]const
         if (arm.guard != null) continue;
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
+            .Alias => |alias| if (patternIsIrrefutable(alias.pattern.*)) return true,
             .Ctor => |ctor| {
                 const same_type = if (type_name == null and ctor.type_name == null)
                     true
@@ -3710,7 +3765,7 @@ fn constructorUnconditionallyCovered(match_expr: lir.LMatch, type_name: ?[]const
                     false;
                 if (same_type and std.mem.eql(u8, ctor.name, constructor) and ctorPayloadsIrrefutable(ctor.args)) return true;
             },
-            .Tuple, .Record => {},
+            .Constant, .Tuple, .Record => {},
         }
     }
     return false;
@@ -3736,7 +3791,7 @@ fn constructorExhaustivelyCoveredByName(
                 if (ctor.args.len != 1) continue;
                 try payload_patterns.append(allocator, ctor.args[0]);
             },
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
 
@@ -3749,8 +3804,9 @@ fn caseUnconditionallyCovered(match_expr: lir.LMatch, selected_ctor: lir.LCtorPa
         if (arm.guard != null) continue;
         switch (arm.pattern) {
             .Wildcard, .Var => return true,
+            .Alias => |alias| if (patternIsIrrefutable(alias.pattern.*)) return true,
             .Ctor => |ctor| if (sameConstructor(ctor, selected_ctor) and ctorPayloadsIrrefutable(ctor.args)) return true,
-            .Tuple, .Record => {},
+            .Constant, .Tuple, .Record => {},
         }
     }
     return false;
@@ -3775,7 +3831,7 @@ fn caseExhaustivelyCovered(
                 if (ctor.args.len != 1) continue;
                 try payload_patterns.append(allocator, ctor.args[0]);
             },
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
 
@@ -3791,7 +3847,8 @@ fn patternsCoverFamily(
     for (patterns) |pattern| {
         switch (pattern) {
             .Wildcard, .Var => return true,
-            .Ctor, .Tuple, .Record => {},
+            .Alias => |alias| if (patternIsIrrefutable(alias.pattern.*)) return true,
+            .Ctor, .Constant, .Tuple, .Record => {},
         }
     }
 
@@ -3824,13 +3881,14 @@ fn constructorCoveredByPatterns(
     for (patterns) |pattern| {
         switch (pattern) {
             .Wildcard, .Var => return true,
+            .Alias => |alias| if (patternIsIrrefutable(alias.pattern.*)) return true,
             .Ctor => |ctor| {
                 if (!sameConstructorName(ctor, type_name, constructor)) continue;
                 if (ctor.args.len == 0) return true;
                 if (ctorPayloadsIrrefutable(ctor.args)) return true;
                 if (ctor.args.len == 1) try nested_patterns.append(allocator, ctor.args[0]);
             },
-            .Tuple, .Record => {},
+            .Constant, .Tuple, .Record => {},
         }
     }
 
@@ -3842,7 +3900,7 @@ fn firstCtorPattern(patterns: []const lir.LPattern) ?lir.LCtorPattern {
     for (patterns) |pattern| {
         switch (pattern) {
             .Ctor => |ctor| return ctor,
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return null;
@@ -3865,7 +3923,7 @@ fn caseNeedsBuiltinPayload(match_expr: lir.LMatch, selected_ctor: lir.LCtorPatte
             .Ctor => |ctor| {
                 if (sameConstructor(ctor, selected_ctor) and patternsNeedSource(ctor.args, arm.body.*, arm.guard)) return true;
             },
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return false;
@@ -3873,10 +3931,7 @@ fn caseNeedsBuiltinPayload(match_expr: lir.LMatch, selected_ctor: lir.LCtorPatte
 
 fn ctorPayloadsIrrefutable(patterns: []const lir.LPattern) bool {
     for (patterns) |pattern| {
-        switch (pattern) {
-            .Wildcard, .Var, .Tuple, .Record => {},
-            .Ctor => return false,
-        }
+        if (!patternIsIrrefutable(pattern)) return false;
     }
     return true;
 }
@@ -3885,7 +3940,7 @@ fn userMatchTypeName(match_expr: lir.LMatch) ?[]const u8 {
     for (match_expr.arms) |arm| {
         switch (arm.pattern) {
             .Ctor => |ctor| if (ctor.type_name) |type_name| return type_name,
-            .Wildcard, .Var, .Tuple, .Record => {},
+            .Wildcard, .Var, .Constant, .Tuple, .Record, .Alias => {},
         }
     }
     return null;

@@ -664,6 +664,15 @@ fn patternMatches(
 ) EvalError!bool {
     return switch (pattern) {
         .Wildcard => true,
+        .Constant => |constant| constantPatternMatches(constant, value),
+        .Alias => |alias| blk: {
+            if (!try patternMatches(allocator, alias.pattern.*, value, env, inserted)) break :blk false;
+            if (std.mem.eql(u8, alias.name, "_")) break :blk true;
+            const previous = env.get(alias.name);
+            try env.put(alias.name, value);
+            try inserted.append(allocator, .{ .name = alias.name, .previous = previous });
+            break :blk true;
+        },
         .Var => |var_pattern| blk: {
             if (std.mem.eql(u8, var_pattern.name, "_")) break :blk true;
             const previous = env.get(var_pattern.name);
@@ -707,6 +716,23 @@ fn patternMatches(
                 if (!try patternMatches(allocator, field.pattern, field_value, env, inserted)) break :blk false;
             }
             break :blk true;
+        },
+    };
+}
+
+fn constantPatternMatches(pattern: ir.PatternConstant, value: Value) bool {
+    return switch (pattern) {
+        .Int => |expected| switch (value) {
+            .Int => |actual| actual == expected,
+            else => false,
+        },
+        .Char => |expected| switch (value) {
+            .Int => |actual| actual == expected,
+            else => false,
+        },
+        .String => |expected| switch (value) {
+            .String => |actual| std.mem.eql(u8, actual, expected),
+            else => false,
         },
     };
 }

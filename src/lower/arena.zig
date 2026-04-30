@@ -771,10 +771,15 @@ fn pushPatternBindingsInto(
             try snapshots.append(allocator, .{ .name = var_pattern.name, .previous = bound.get(var_pattern.name) });
             try bound.put(var_pattern.name, var_pattern.ty);
         },
+        .Alias => |alias| {
+            try pushPatternBindingsInto(allocator, bound, alias.pattern.*, snapshots);
+            try snapshots.append(allocator, .{ .name = alias.name, .previous = bound.get(alias.name) });
+            try bound.put(alias.name, alias.ty);
+        },
         .Ctor => |ctor_pattern| for (ctor_pattern.args) |arg| try pushPatternBindingsInto(allocator, bound, arg, snapshots),
         .Tuple => |items| for (items) |item| try pushPatternBindingsInto(allocator, bound, item, snapshots),
         .Record => |fields| for (fields) |field| try pushPatternBindingsInto(allocator, bound, field.pattern, snapshots),
-        .Wildcard => {},
+        .Wildcard, .Constant => {},
     }
 }
 
@@ -924,6 +929,15 @@ fn lowerPattern(allocator: std.mem.Allocator, pattern: ir.Pattern) LowerError!li
     return switch (pattern) {
         .Wildcard => .Wildcard,
         .Var => |var_pattern| .{ .Var = try allocator.dupe(u8, var_pattern.name) },
+        .Constant => |constant| .{ .Constant = try lowerPatternConstant(allocator, constant) },
+        .Alias => |alias| blk: {
+            const child = try allocator.create(lir.LPattern);
+            child.* = try lowerPattern(allocator, alias.pattern.*);
+            break :blk .{ .Alias = .{
+                .pattern = child,
+                .name = try allocator.dupe(u8, alias.name),
+            } };
+        },
         .Ctor => |ctor_pattern| .{ .Ctor = .{
             .name = try allocator.dupe(u8, ctor_pattern.name),
             .args = try lowerPatterns(allocator, ctor_pattern.args),
@@ -932,6 +946,14 @@ fn lowerPattern(allocator: std.mem.Allocator, pattern: ir.Pattern) LowerError!li
         } },
         .Tuple => |items| .{ .Tuple = try lowerPatterns(allocator, items) },
         .Record => |fields| .{ .Record = try lowerRecordPatternFields(allocator, fields) },
+    };
+}
+
+fn lowerPatternConstant(allocator: std.mem.Allocator, constant: ir.PatternConstant) LowerError!lir.LPatternConstant {
+    return switch (constant) {
+        .Int => |value| .{ .Int = value },
+        .Char => |value| .{ .Char = value },
+        .String => |value| .{ .String = try allocator.dupe(u8, value) },
     };
 }
 
@@ -1069,6 +1091,7 @@ fn paramBindsName(params: []const ir.Param, name: []const u8) bool {
 fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
     return switch (pattern) {
         .Var => |var_pattern| std.mem.eql(u8, var_pattern.name, name),
+        .Alias => |alias| std.mem.eql(u8, alias.name, name) or patternBindsName(alias.pattern.*, name),
         .Ctor => |ctor_pattern| blk: {
             for (ctor_pattern.args) |arg| {
                 if (patternBindsName(arg, name)) break :blk true;
@@ -1087,7 +1110,7 @@ fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
             }
             break :blk false;
         },
-        .Wildcard => false,
+        .Wildcard, .Constant => false,
     };
 }
 

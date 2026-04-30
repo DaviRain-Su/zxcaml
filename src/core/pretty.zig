@@ -353,6 +353,14 @@ fn formatPattern(out: *std.ArrayList(u8), allocator: std.mem.Allocator, pattern:
             try append(out, allocator, var_pattern.name);
             try append(out, allocator, ")");
         },
+        .Constant => |constant| try formatPatternConstant(out, allocator, constant),
+        .Alias => |alias| {
+            try append(out, allocator, "(alias ");
+            try formatPattern(out, allocator, alias.pattern.*);
+            try append(out, allocator, " ");
+            try append(out, allocator, alias.name);
+            try append(out, allocator, ")");
+        },
         .Ctor => |ctor_pattern| {
             try append(out, allocator, "(ctor ");
             try append(out, allocator, ctor_pattern.name);
@@ -381,6 +389,14 @@ fn formatPattern(out: *std.ArrayList(u8), allocator: std.mem.Allocator, pattern:
             }
             try append(out, allocator, ")");
         },
+    }
+}
+
+fn formatPatternConstant(out: *std.ArrayList(u8), allocator: std.mem.Allocator, constant: ir.PatternConstant) !void {
+    switch (constant) {
+        .Int => |value| try appendPrint(out, allocator, "(const-int {d})", .{value}),
+        .Char => |value| try appendPrint(out, allocator, "(const-char {d})", .{value}),
+        .String => |value| try appendPrint(out, allocator, "(const-string \"{f}\")", .{std.zig.fmtString(value)}),
     }
 }
 
