@@ -22,6 +22,7 @@ const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
 const core_const_fold = @import("core/const_fold.zig");
 const core_dce = @import("core/dce.zig");
+const core_inline = @import("core/inline.zig");
 const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
 const arena_lower = @import("lower/arena.zig");
@@ -267,8 +268,20 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const optimized_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
@@ -324,8 +337,20 @@ fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttre
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const optimized_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
@@ -380,8 +405,20 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const optimized_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
@@ -421,8 +458,20 @@ fn emitIdl(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const optimized_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
@@ -468,8 +517,20 @@ fn buildNative(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const optimized_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
@@ -540,8 +601,20 @@ fn buildBpf(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const optimized_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
@@ -670,6 +743,7 @@ test {
     _ = @import("core/anf.zig");
     _ = @import("core/const_fold.zig");
     _ = @import("core/dce.zig");
+    _ = @import("core/inline.zig");
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");

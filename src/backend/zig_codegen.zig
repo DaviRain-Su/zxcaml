@@ -270,8 +270,7 @@ fn emitFunction(
     }
     try emitExpr(&body_out, allocator, func.body, 1, &ctx);
     const entrypoint_needs_account_list = is_entrypoint and paramsNeedEntrypointAccountList(func.params);
-    const function_uses_arena = std.mem.indexOf(u8, body_out.items, "arena") != null or
-        std.mem.indexOf(u8, hoisted_decls.items, "arena") != null;
+    const function_uses_arena = sourceUsesArena(body_out.items) or sourceUsesArena(hoisted_decls.items);
     if (!function_uses_arena and !entrypoint_needs_account_list) {
         try append(out, allocator, "    _ = arena;\n");
     }
@@ -300,6 +299,13 @@ fn emitFunction(
         try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
     }
     try append(out, allocator, "}\n");
+}
+
+fn sourceUsesArena(source: []const u8) bool {
+    return std.mem.indexOf(u8, source, "arena.") != null or
+        std.mem.indexOf(u8, source, "arena,") != null or
+        std.mem.indexOf(u8, source, "arena)") != null or
+        std.mem.indexOf(u8, source, "arena;") != null;
 }
 
 fn functionHasSelfTailCall(func: lir.LFunc) bool {
