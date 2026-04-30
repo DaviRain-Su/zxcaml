@@ -26,6 +26,12 @@ const EnvChange = struct {
     previous: EnvEntry = .{ .value = null },
 };
 
+const PatternMatchResult = enum {
+    no_match,
+    matched,
+    unsafe,
+};
+
 const FoldEnv = struct {
     allocator: std.mem.Allocator,
     bindings: std.StringHashMap(EnvEntry),
@@ -301,23 +307,30 @@ const FoldContext = struct {
         if (match_value.* == .Ctor and isKnownValue(match_value.*)) {
             for (match_expr.arms) |arm| {
                 const mark_index = self.env.mark();
-                if (try self.patternMatches(arm.pattern, match_value)) {
-                    if (arm.guard) |guard| {
-                        const folded_guard = try self.foldExprPtr(guard.*);
-                        if (boolValue(folded_guard.*)) |guard_value| {
-                            if (!guard_value) {
+                switch (try self.patternMatches(arm.pattern, match_value)) {
+                    .no_match => {},
+                    .unsafe => {
+                        self.env.restore(mark_index);
+                        break;
+                    },
+                    .matched => {
+                        if (arm.guard) |guard| {
+                            const folded_guard = try self.foldExprPtr(guard.*);
+                            if (boolValue(folded_guard.*)) |guard_value| {
+                                if (!guard_value) {
+                                    self.env.restore(mark_index);
+                                    continue;
+                                }
+                            } else {
                                 self.env.restore(mark_index);
-                                continue;
+                                break;
                             }
-                        } else {
-                            self.env.restore(mark_index);
-                            break;
                         }
-                    }
 
-                    const body = try self.foldExprPtr(arm.body.*);
-                    self.env.restore(mark_index);
-                    return body.*;
+                        const body = try self.foldExprPtr(arm.body.*);
+                        self.env.restore(mark_index);
+                        return body.*;
+                    },
                 }
                 self.env.restore(mark_index);
             }
@@ -357,52 +370,70 @@ const FoldContext = struct {
         return out;
     }
 
-    fn patternMatches(self: *FoldContext, pattern: ir.Pattern, value: *const ir.Expr) FoldError!bool {
+    fn patternMatches(self: *FoldContext, pattern: ir.Pattern, value: *const ir.Expr) FoldError!PatternMatchResult {
         return switch (pattern) {
-            .Wildcard => true,
+            .Wildcard => .matched,
             .Var => |var_pattern| blk: {
+                if (!isSimpleConstantValue(value.*)) break :blk .unsafe;
                 try self.env.bindKnown(var_pattern.name, value, true);
-                break :blk true;
+                break :blk .matched;
             },
-            .Constant => |constant| patternConstantMatches(constant, value.*),
+            .Constant => |constant| if (patternConstantMatches(constant, value.*)) .matched else .no_match,
             .Ctor => |ctor_pattern| blk: {
                 const ctor_value = switch (value.*) {
                     .Ctor => |ctor| ctor,
-                    else => break :blk false,
+                    else => break :blk .no_match,
                 };
-                if (!std.mem.eql(u8, ctor_pattern.name, ctor_value.name)) break :blk false;
-                if (ctor_pattern.args.len != ctor_value.args.len) break :blk false;
+                if (!std.mem.eql(u8, ctor_pattern.name, ctor_value.name)) break :blk .no_match;
+                if (ctor_pattern.args.len != ctor_value.args.len) break :blk .no_match;
                 for (ctor_pattern.args, 0..) |arg_pattern, index| {
-                    if (!try self.patternMatches(arg_pattern, ctor_value.args[index])) break :blk false;
+                    switch (try self.patternMatches(arg_pattern, ctor_value.args[index])) {
+                        .matched => {},
+                        .no_match => break :blk .no_match,
+                        .unsafe => break :blk .unsafe,
+                    }
                 }
-                break :blk true;
+                break :blk .matched;
             },
             .Tuple => |patterns| blk: {
                 const tuple_value = switch (value.*) {
                     .Tuple => |tuple_expr| tuple_expr,
-                    else => break :blk false,
+                    else => break :blk .no_match,
                 };
-                if (patterns.len != tuple_value.items.len) break :blk false;
+                if (patterns.len != tuple_value.items.len) break :blk .no_match;
                 for (patterns, 0..) |item_pattern, index| {
-                    if (!try self.patternMatches(item_pattern, tuple_value.items[index])) break :blk false;
+                    switch (try self.patternMatches(item_pattern, tuple_value.items[index])) {
+                        .matched => {},
+                        .no_match => break :blk .no_match,
+                        .unsafe => break :blk .unsafe,
+                    }
                 }
-                break :blk true;
+                break :blk .matched;
             },
             .Record => |fields| blk: {
                 const record_value = switch (value.*) {
                     .Record => |record_expr| record_expr,
-                    else => break :blk false,
+                    else => break :blk .no_match,
                 };
                 for (fields) |field_pattern| {
-                    const field_value = findRecordField(record_value.fields, field_pattern.name) orelse break :blk false;
-                    if (!try self.patternMatches(field_pattern.pattern, field_value)) break :blk false;
+                    const field_value = findRecordField(record_value.fields, field_pattern.name) orelse break :blk .no_match;
+                    switch (try self.patternMatches(field_pattern.pattern, field_value)) {
+                        .matched => {},
+                        .no_match => break :blk .no_match,
+                        .unsafe => break :blk .unsafe,
+                    }
                 }
-                break :blk true;
+                break :blk .matched;
             },
             .Alias => |alias| blk: {
-                if (!try self.patternMatches(alias.pattern.*, value)) break :blk false;
+                switch (try self.patternMatches(alias.pattern.*, value)) {
+                    .matched => {},
+                    .no_match => break :blk .no_match,
+                    .unsafe => break :blk .unsafe,
+                }
+                if (!isSimpleConstantValue(value.*)) break :blk .unsafe;
                 try self.env.bindKnown(alias.name, value, true);
-                break :blk true;
+                break :blk .matched;
             },
         };
     }
@@ -546,6 +577,10 @@ fn isInlineKnownValue(expr: ir.Expr) bool {
         .Ctor => boolValue(expr) != null,
         else => false,
     };
+}
+
+fn isSimpleConstantValue(expr: ir.Expr) bool {
+    return expr == .Constant;
 }
 
 fn patternConstantMatches(pattern: ir.PatternConstant, expr: ir.Expr) bool {
@@ -840,6 +875,92 @@ test "const_fold folds known constructor matches and substitutes payload binding
     } }));
 
     try std.testing.expectEqual(@as(i64, 1), folded.Constant.value.Int);
+}
+
+test "const_fold preserves matches when payload bindings are not simple constants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const option_int_ty = ir.Ty{ .Adt = .{ .name = "option", .params = &.{.Int} } };
+    const option_option_int_ty = ir.Ty{ .Adt = .{ .name = "option", .params = &.{option_int_ty} } };
+
+    const inner_some_args = try arena.allocator().alloc(*const ir.Expr, 1);
+    inner_some_args[0] = try intPtr(&arena, 1);
+    const inner_some = try exprPtr(&arena, .{ .Ctor = .{
+        .name = "Some",
+        .args = inner_some_args,
+        .ty = option_int_ty,
+        .layout = layout.ctor(1),
+        .tag = 1,
+    } });
+
+    const outer_some_args = try arena.allocator().alloc(*const ir.Expr, 1);
+    outer_some_args[0] = inner_some;
+    const outer_some = try exprPtr(&arena, .{ .Ctor = .{
+        .name = "Some",
+        .args = outer_some_args,
+        .ty = option_option_int_ty,
+        .layout = layout.ctor(1),
+        .tag = 1,
+    } });
+
+    const inner_some_pattern_args = try arena.allocator().alloc(ir.Pattern, 1);
+    inner_some_pattern_args[0] = .{ .Var = .{
+        .name = "y",
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } };
+    const inner_arms = try arena.allocator().alloc(ir.Arm, 2);
+    inner_arms[0] = .{
+        .pattern = .{ .Ctor = .{ .name = "Some", .args = inner_some_pattern_args, .tag = 1 } },
+        .body = try exprPtr(&arena, .{ .Var = .{
+            .name = "y",
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } }),
+    };
+    inner_arms[1] = .{
+        .pattern = .{ .Ctor = .{ .name = "None", .args = &.{}, .tag = 0 } },
+        .body = try intPtr(&arena, 0),
+    };
+    const inner_match = try exprPtr(&arena, .{ .Match = .{
+        .scrutinee = try exprPtr(&arena, .{ .Var = .{
+            .name = "x",
+            .ty = option_int_ty,
+            .layout = layout.ctor(1),
+        } }),
+        .arms = inner_arms,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } });
+
+    const outer_some_pattern_args = try arena.allocator().alloc(ir.Pattern, 1);
+    outer_some_pattern_args[0] = .{ .Var = .{
+        .name = "x",
+        .ty = option_int_ty,
+        .layout = layout.ctor(1),
+    } };
+    const outer_arms = try arena.allocator().alloc(ir.Arm, 2);
+    outer_arms[0] = .{
+        .pattern = .{ .Ctor = .{ .name = "Some", .args = outer_some_pattern_args, .tag = 1 } },
+        .body = inner_match,
+    };
+    outer_arms[1] = .{
+        .pattern = .{ .Ctor = .{ .name = "None", .args = &.{}, .tag = 0 } },
+        .body = try intPtr(&arena, 0),
+    };
+
+    const folded = try foldTopExpr(&arena, try exprPtr(&arena, .{ .Match = .{
+        .scrutinee = outer_some,
+        .arms = outer_arms,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } }));
+
+    try std.testing.expect(folded.* == .Match);
+    try std.testing.expect(folded.Match.arms[0].body.* == .Match);
+    try std.testing.expect(folded.Match.arms[0].body.Match.scrutinee.* == .Var);
+    try std.testing.expectEqualStrings("x", folded.Match.arms[0].body.Match.scrutinee.Var.name);
 }
 
 test "const_fold folds string concatenation constants" {
