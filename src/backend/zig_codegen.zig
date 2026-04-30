@@ -2369,9 +2369,29 @@ fn emitPrimExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
-    if (prim.args.len != 2) return error.UnsupportedExpr;
     switch (prim.op) {
+        .StringLength => {
+            if (prim.args.len != 1) return error.UnsupportedExpr;
+            try append(out, allocator, "@as(i64, @intCast((");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, ").len))");
+        },
+        .StringGet => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
+            try append(out, allocator, "@as(i64, @intCast((");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, ")[@as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, "))]))");
+        },
+        .StringSub => try emitStringSubExpr(out, allocator, prim, indent_level, ctx),
+        .StringConcat => try emitStringConcatExpr(out, allocator, prim, indent_level, ctx),
+        .CharCode, .CharChr => {
+            if (prim.args.len != 1) return error.UnsupportedExpr;
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+        },
         .Div => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
             try append(out, allocator, "prelude.intDiv(");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try append(out, allocator, ", ");
@@ -2379,6 +2399,7 @@ fn emitPrimExpr(
             try append(out, allocator, ")");
         },
         .Mod => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
             try append(out, allocator, "prelude.intMod(");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try append(out, allocator, ", ");
@@ -2386,6 +2407,7 @@ fn emitPrimExpr(
             try append(out, allocator, ")");
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
             try append(out, allocator, "prelude.Bool.fromNative((");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
@@ -2393,6 +2415,7 @@ fn emitPrimExpr(
             try append(out, allocator, "))");
         },
         .Add, .Sub, .Mul => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
             try append(out, allocator, "(");
             try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
             try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
@@ -2400,6 +2423,68 @@ fn emitPrimExpr(
             try append(out, allocator, ")");
         },
     }
+}
+
+fn emitStringSubExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    prim: lir.LPrim,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (prim.args.len != 3) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_string_value_{d} = ", .{block_id});
+    try emitExpr(out, allocator, prim.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_string_start_{d}: usize = @intCast(", .{block_id});
+    try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ");\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_string_len_{d}: usize = @intCast(", .{block_id});
+    try emitExpr(out, allocator, prim.args[2].*, indent_level + 1, ctx);
+    try append(out, allocator, ");\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_string_value_{d}[omlz_string_start_{d}..][0..omlz_string_len_{d}];\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitStringConcatExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    prim: lir.LPrim,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (prim.args.len != 2) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_string_left_{d} = ", .{block_id});
+    try emitExpr(out, allocator, prim.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_string_right_{d} = ", .{block_id});
+    try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_string_out_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, omlz_string_left_{d}.len + omlz_string_right_{d}.len, &omlz_string_out_{d});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_string_out_{d}[0..omlz_string_left_{d}.len], omlz_string_left_{d});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_string_out_{d}[omlz_string_left_{d}.len..], omlz_string_right_{d});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_string_out_{d};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 fn emitMatchExpr(
@@ -4424,7 +4509,7 @@ fn primOpToken(op: lir.LPrimOp) []const u8 {
         .Le => "<=",
         .Gt => ">",
         .Ge => ">=",
-        .Div, .Mod => unreachable,
+        .Div, .Mod, .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => unreachable,
     };
 }
 

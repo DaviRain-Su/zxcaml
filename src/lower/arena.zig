@@ -908,6 +908,12 @@ fn lowerPrimOp(op: ir.PrimOp) lir.LPrimOp {
         .Le => .Le,
         .Gt => .Gt,
         .Ge => .Ge,
+        .StringLength => .StringLength,
+        .StringGet => .StringGet,
+        .StringSub => .StringSub,
+        .StringConcat => .StringConcat,
+        .CharCode => .CharCode,
+        .CharChr => .CharChr,
     };
 }
 

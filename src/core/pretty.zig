@@ -459,6 +459,12 @@ fn primOpName(op: ir.PrimOp) []const u8 {
         .Le => "<=",
         .Gt => ">",
         .Ge => ">=",
+        .StringLength => "String.length",
+        .StringGet => "String.get",
+        .StringSub => "String.sub",
+        .StringConcat => "^",
+        .CharCode => "Char.code",
+        .CharChr => "Char.chr",
     };
 }
 

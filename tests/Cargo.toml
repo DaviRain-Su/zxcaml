@@ -49,3 +49,7 @@ path = "crypto_demo_test.rs"
 [[test]]
 name = "region_demo_test"
 path = "region_demo_test.rs"
+
+[[test]]
+name = "string_demo_test"
+path = "string_demo_test.rs"

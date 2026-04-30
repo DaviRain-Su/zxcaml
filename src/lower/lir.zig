@@ -128,6 +128,12 @@ pub const LPrimOp = enum {
     Le,
     Gt,
     Ge,
+    StringLength,
+    StringGet,
+    StringSub,
+    StringConcat,
+    CharCode,
+    CharChr,
 };
 
 /// Lowered variable reference.

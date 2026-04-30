@@ -152,6 +152,12 @@ pub const PrimOp = enum {
     Le,
     Gt,
     Ge,
+    StringLength,
+    StringGet,
+    StringSub,
+    StringConcat,
+    CharCode,
+    CharChr,
 };
 
 /// Integer constant expression with type and layout annotations.

@@ -500,6 +500,9 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
     if (isVarNamed(app.callee.*, "Array.of_list")) {
         return lowerArrayOfListApp(arena, ctx, app);
     }
+    if (builtinCallOp(app.callee.*, app.args.len)) |op| {
+        return lowerBuiltinCallApp(arena, ctx, app, op);
+    }
     if (stdlibCallSignature(arena, app.callee.*, app.args.len)) |signature| {
         return lowerStdlibCallApp(arena, ctx, app, signature);
     }
@@ -517,6 +520,60 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
         .ty = ty,
         .layout = layoutForTy(ty),
     } };
+}
+
+fn lowerBuiltinCallApp(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    app: ttree.App,
+    op: ir.PrimOp,
+) LowerError!ir.Expr {
+    const arg_tys = try builtinCallArgTys(arena, op);
+    var args = std.ArrayList(*const ir.Expr).empty;
+    errdefer args.deinit(arena.allocator());
+    for (app.args, 0..) |arg, index| {
+        try args.append(arena.allocator(), try lowerExprPtrExpected(arena, ctx, arg, arg_tys[index]));
+    }
+    const return_ty = builtinCallReturnTy(op);
+    return .{ .Prim = .{
+        .op = op,
+        .args = try args.toOwnedSlice(arena.allocator()),
+        .ty = return_ty,
+        .layout = layoutForTy(return_ty),
+    } };
+}
+
+fn builtinCallOp(callee: ttree.Expr, arg_count: usize) ?ir.PrimOp {
+    const var_ref = switch (callee) {
+        .Var => |value| value,
+        else => return null,
+    };
+    if (std.mem.eql(u8, var_ref.name, "String.length") and arg_count == 1) return .StringLength;
+    if (std.mem.eql(u8, var_ref.name, "String.get") and arg_count == 2) return .StringGet;
+    if (std.mem.eql(u8, var_ref.name, "String.sub") and arg_count == 3) return .StringSub;
+    if (std.mem.eql(u8, var_ref.name, "^") and arg_count == 2) return .StringConcat;
+    if (std.mem.eql(u8, var_ref.name, "Char.code") and arg_count == 1) return .CharCode;
+    if (std.mem.eql(u8, var_ref.name, "Char.chr") and arg_count == 1) return .CharChr;
+    return null;
+}
+
+fn builtinCallArgTys(arena: *std.heap.ArenaAllocator, op: ir.PrimOp) LowerError![]const ir.Ty {
+    return switch (op) {
+        .StringLength => try tySlice(arena, &.{.String}),
+        .StringGet => try tySlice(arena, &.{ .String, .Int }),
+        .StringSub => try tySlice(arena, &.{ .String, .Int, .Int }),
+        .StringConcat => try tySlice(arena, &.{ .String, .String }),
+        .CharCode, .CharChr => try tySlice(arena, &.{.Int}),
+        else => return error.UnsupportedPrim,
+    };
+}
+
+fn builtinCallReturnTy(op: ir.PrimOp) ir.Ty {
+    return switch (op) {
+        .StringLength, .StringGet, .CharCode, .CharChr => .Int,
+        .StringSub, .StringConcat => .String,
+        else => unreachable,
+    };
 }
 
 const StdlibCallSignature = struct {
@@ -1197,16 +1254,13 @@ fn lowerIf(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, if_expr: ttree.I
 
 fn lowerPrim(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, prim: ttree.Prim) LowerError!ir.Expr {
     const op = try lowerPrimOp(prim.op);
-    if (prim.args.len != 2) return error.UnsupportedPrimArity;
+    if (prim.args.len != primOpArity(op)) return error.UnsupportedPrimArity;
     var args = std.ArrayList(*const ir.Expr).empty;
     errdefer args.deinit(arena.allocator());
     for (prim.args) |arg| {
         try args.append(arena.allocator(), try lowerExprPtr(arena, ctx, arg));
     }
-    const ty: ir.Ty = switch (op) {
-        .Add, .Sub, .Mul, .Div, .Mod => .Int,
-        .Eq, .Ne, .Lt, .Le, .Gt, .Ge => .Bool,
-    };
+    const ty = primOpReturnTy(op);
     return .{ .Prim = .{
         .op = op,
         .args = try args.toOwnedSlice(arena.allocator()),
@@ -1228,6 +1282,22 @@ fn lowerPrimOp(op: []const u8) LowerError!ir.PrimOp {
     if (std.mem.eql(u8, op, ">")) return .Gt;
     if (std.mem.eql(u8, op, ">=")) return .Ge;
     return error.UnsupportedPrim;
+}
+
+fn primOpArity(op: ir.PrimOp) usize {
+    return switch (op) {
+        .StringLength, .CharCode, .CharChr => 1,
+        .Add, .Sub, .Mul, .Div, .Mod, .Eq, .Ne, .Lt, .Le, .Gt, .Ge, .StringGet, .StringConcat => 2,
+        .StringSub => 3,
+    };
+}
+
+fn primOpReturnTy(op: ir.PrimOp) ir.Ty {
+    return switch (op) {
+        .Add, .Sub, .Mul, .Div, .Mod, .StringLength, .StringGet, .CharCode, .CharChr => .Int,
+        .Eq, .Ne, .Lt, .Le, .Gt, .Ge => .Bool,
+        .StringSub, .StringConcat => .String,
+    };
 }
 
 fn lowerVar(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref: ttree.Var) LowerError!ir.Var {
@@ -1546,10 +1616,7 @@ fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBind
         },
         .Prim => |prim| blk: {
             const op = try lowerPrimOp(prim.op);
-            break :blk switch (op) {
-                .Add, .Sub, .Mul, .Div, .Mod => .Int,
-                .Eq, .Ne, .Lt, .Le, .Gt, .Ge => .Bool,
-            };
+            break :blk primOpReturnTy(op);
         },
         .If => |if_expr| blk: {
             try inferExprVarExpectations(arena, pattern_var_tys, if_expr.cond.*, .Bool);
@@ -1592,6 +1659,7 @@ fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *T
             const arg_ty: ?ir.Ty = switch (op) {
                 .Add, .Sub, .Mul, .Div, .Mod, .Lt, .Le, .Gt, .Ge => .Int,
                 .Eq, .Ne => null,
+                .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => null,
             };
             for (prim.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, arg_ty);
         },

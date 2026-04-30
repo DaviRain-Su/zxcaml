@@ -228,6 +228,37 @@ fn evalStdlibApp(
     args: []const *const ir.Expr,
     env: *std.StringHashMap(Value),
 ) EvalError!?Value {
+    if (std.mem.eql(u8, name, "String.length")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = @intCast((try stringValue(try evalExpr(allocator, args[0].*, env))).len) };
+    }
+    if (std.mem.eql(u8, name, "String.get")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const value = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const index: usize = @intCast(try intValue(try evalExpr(allocator, args[1].*, env)));
+        return .{ .Int = @intCast(value[index]) };
+    }
+    if (std.mem.eql(u8, name, "String.sub")) {
+        if (args.len != 3) return error.ArityMismatch;
+        const value = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const start: usize = @intCast(try intValue(try evalExpr(allocator, args[1].*, env)));
+        const len: usize = @intCast(try intValue(try evalExpr(allocator, args[2].*, env)));
+        return .{ .String = value[start..][0..len] };
+    }
+    if (std.mem.eql(u8, name, "^")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const left = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const right = try stringValue(try evalExpr(allocator, args[1].*, env));
+        const out = try allocator.alloc(u8, left.len + right.len);
+        @memcpy(out[0..left.len], left);
+        @memcpy(out[left.len..], right);
+        return .{ .String = out };
+    }
+    if (std.mem.eql(u8, name, "Char.code") or std.mem.eql(u8, name, "Char.chr")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = try intValue(try evalExpr(allocator, args[0].*, env)) };
+    }
+
     if (std.mem.eql(u8, name, "List.length")) {
         if (args.len != 1) return error.ArityMismatch;
         return .{ .Int = try listLength(try evalListArg(allocator, args[0].*, env)) };
@@ -427,21 +458,56 @@ fn evalIf(allocator: std.mem.Allocator, if_expr: ir.IfExpr, env: *std.StringHash
 }
 
 fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap(Value)) EvalError!Value {
-    if (prim.args.len != 2) return error.ArityMismatch;
-    const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
-    const rhs = try intValue(try evalExpr(allocator, prim.args[1].*, env));
     return switch (prim.op) {
-        .Add => .{ .Int = wrappingAdd(lhs, rhs) },
-        .Sub => .{ .Int = wrappingSub(lhs, rhs) },
-        .Mul => .{ .Int = wrappingMul(lhs, rhs) },
-        .Div => .{ .Int = try truncatingDiv(lhs, rhs) },
-        .Mod => .{ .Int = try truncatingMod(lhs, rhs) },
-        .Eq => boolCtor(lhs == rhs),
-        .Ne => boolCtor(lhs != rhs),
-        .Lt => boolCtor(lhs < rhs),
-        .Le => boolCtor(lhs <= rhs),
-        .Gt => boolCtor(lhs > rhs),
-        .Ge => boolCtor(lhs >= rhs),
+        .StringLength => {
+            if (prim.args.len != 1) return error.ArityMismatch;
+            return .{ .Int = @intCast((try stringValue(try evalExpr(allocator, prim.args[0].*, env))).len) };
+        },
+        .StringGet => {
+            if (prim.args.len != 2) return error.ArityMismatch;
+            const value = try stringValue(try evalExpr(allocator, prim.args[0].*, env));
+            const index: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[1].*, env)));
+            return .{ .Int = @intCast(value[index]) };
+        },
+        .StringSub => {
+            if (prim.args.len != 3) return error.ArityMismatch;
+            const value = try stringValue(try evalExpr(allocator, prim.args[0].*, env));
+            const start: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[1].*, env)));
+            const len: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[2].*, env)));
+            return .{ .String = value[start..][0..len] };
+        },
+        .StringConcat => {
+            if (prim.args.len != 2) return error.ArityMismatch;
+            const left = try stringValue(try evalExpr(allocator, prim.args[0].*, env));
+            const right = try stringValue(try evalExpr(allocator, prim.args[1].*, env));
+            const out = try allocator.alloc(u8, left.len + right.len);
+            @memcpy(out[0..left.len], left);
+            @memcpy(out[left.len..], right);
+            return .{ .String = out };
+        },
+        .CharCode, .CharChr => {
+            if (prim.args.len != 1) return error.ArityMismatch;
+            return .{ .Int = try intValue(try evalExpr(allocator, prim.args[0].*, env)) };
+        },
+        else => {
+            if (prim.args.len != 2) return error.ArityMismatch;
+            const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
+            const rhs = try intValue(try evalExpr(allocator, prim.args[1].*, env));
+            return switch (prim.op) {
+                .Add => .{ .Int = wrappingAdd(lhs, rhs) },
+                .Sub => .{ .Int = wrappingSub(lhs, rhs) },
+                .Mul => .{ .Int = wrappingMul(lhs, rhs) },
+                .Div => .{ .Int = try truncatingDiv(lhs, rhs) },
+                .Mod => .{ .Int = try truncatingMod(lhs, rhs) },
+                .Eq => boolCtor(lhs == rhs),
+                .Ne => boolCtor(lhs != rhs),
+                .Lt => boolCtor(lhs < rhs),
+                .Le => boolCtor(lhs <= rhs),
+                .Gt => boolCtor(lhs > rhs),
+                .Ge => boolCtor(lhs >= rhs),
+                .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => unreachable,
+            };
+        },
     };
 }
 
@@ -491,6 +557,13 @@ fn truncatingMod(lhs: i64, rhs: i64) EvalError!i64 {
 fn intValue(value: Value) EvalError!i64 {
     return switch (value) {
         .Int => |int| int,
+        else => error.UnsupportedExpr,
+    };
+}
+
+fn stringValue(value: Value) EvalError![]const u8 {
+    return switch (value) {
+        .String => |string| string,
         else => error.UnsupportedExpr,
     };
 }
