@@ -497,7 +497,11 @@ fn markTailCallsInFunction(arena: *std.heap.ArenaAllocator, value: *const ir.Exp
     return switch (value.*) {
         .Lambda => |lambda| blk: {
             var marked_lambda = lambda;
-            marked_lambda.body = try markTailPosition(arena, lambda.body, function_name);
+            var scope = TailCallScope{ .function_name = function_name };
+            for (lambda.params) |param| {
+                scope = scope.shadowedByName(param.name);
+            }
+            marked_lambda.body = try markTailPosition(arena, lambda.body, scope);
             const marked = try arena.allocator().create(ir.Expr);
             marked.* = .{ .Lambda = marked_lambda };
             break :blk marked;
@@ -506,26 +510,73 @@ fn markTailCallsInFunction(arena: *std.heap.ArenaAllocator, value: *const ir.Exp
     };
 }
 
-fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, function_name: []const u8) LowerError!*const ir.Expr {
+const TailCallScope = struct {
+    function_name: []const u8,
+    self_binding_visible: bool = true,
+
+    fn shadowedByName(self: TailCallScope, name: []const u8) TailCallScope {
+        if (!self.self_binding_visible or !std.mem.eql(u8, name, self.function_name)) return self;
+        return .{
+            .function_name = self.function_name,
+            .self_binding_visible = false,
+        };
+    }
+
+    fn shadowedByPattern(self: TailCallScope, pattern: ir.Pattern) TailCallScope {
+        if (!self.self_binding_visible or !patternBindsName(pattern, self.function_name)) return self;
+        return .{
+            .function_name = self.function_name,
+            .self_binding_visible = false,
+        };
+    }
+};
+
+fn patternBindsName(pattern: ir.Pattern, name: []const u8) bool {
+    return switch (pattern) {
+        .Wildcard, .Constant => false,
+        .Var => |var_pattern| std.mem.eql(u8, var_pattern.name, name),
+        .Ctor => |ctor_pattern| blk: {
+            for (ctor_pattern.args) |arg| {
+                if (patternBindsName(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |items| blk: {
+            for (items) |item| {
+                if (patternBindsName(item, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Record => |fields| blk: {
+            for (fields) |field| {
+                if (patternBindsName(field.pattern, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Alias => |alias| std.mem.eql(u8, alias.name, name) or patternBindsName(alias.pattern.*, name),
+    };
+}
+
+fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, scope: TailCallScope) LowerError!*const ir.Expr {
     return switch (expr.*) {
         .App => |app| blk: {
             var marked_app = app;
-            marked_app.is_tail_call = isSelfCall(app, function_name);
+            marked_app.is_tail_call = isSelfCall(app, scope);
             const marked = try arena.allocator().create(ir.Expr);
             marked.* = .{ .App = marked_app };
             break :blk marked;
         },
         .If => |if_expr| blk: {
             var marked_if = if_expr;
-            marked_if.then_branch = try markTailPosition(arena, if_expr.then_branch, function_name);
-            marked_if.else_branch = try markTailPosition(arena, if_expr.else_branch, function_name);
+            marked_if.then_branch = try markTailPosition(arena, if_expr.then_branch, scope);
+            marked_if.else_branch = try markTailPosition(arena, if_expr.else_branch, scope);
             const marked = try arena.allocator().create(ir.Expr);
             marked.* = .{ .If = marked_if };
             break :blk marked;
         },
         .Let => |let_expr| blk: {
             var marked_let = let_expr;
-            marked_let.body = try markTailPosition(arena, let_expr.body, function_name);
+            marked_let.body = try markTailPosition(arena, let_expr.body, scope.shadowedByName(let_expr.name));
             const marked = try arena.allocator().create(ir.Expr);
             marked.* = .{ .Let = marked_let };
             break :blk marked;
@@ -536,7 +587,7 @@ fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, funct
                 arms[index] = .{
                     .pattern = arm.pattern,
                     .guard = arm.guard,
-                    .body = try markTailPosition(arena, arm.body, function_name),
+                    .body = try markTailPosition(arena, arm.body, scope.shadowedByPattern(arm.pattern)),
                 };
             }
             var marked_match = match_expr;
@@ -549,9 +600,10 @@ fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, funct
     };
 }
 
-fn isSelfCall(app: ir.App, function_name: []const u8) bool {
+fn isSelfCall(app: ir.App, scope: TailCallScope) bool {
+    if (!scope.self_binding_visible) return false;
     return switch (app.callee.*) {
-        .Var => |callee| std.mem.eql(u8, callee.name, function_name),
+        .Var => |callee| std.mem.eql(u8, callee.name, scope.function_name),
         else => false,
     };
 }
@@ -3180,6 +3232,37 @@ test "marks only self calls in tail position" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expect(!non_tail_app.is_tail_call);
+}
+
+test "does not mark shadowed recursive name as self tail call" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.4 (module (let-rec f (lambda (n) (let f (lambda (x) (prim \"+\" (var x) (const-int 1))) (app (var f) (var n)))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const f_decl = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const f_lambda = switch (f_decl.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const shadowing_let = switch (f_lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const shadowed_app = switch (shadowing_let.body.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(!shadowed_app.is_tail_call);
 }
 
 test "lower Syscall module calls as typed builtin applications" {
