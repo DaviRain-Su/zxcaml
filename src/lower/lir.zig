@@ -97,6 +97,8 @@ pub const LLet = struct {
     name: []const u8,
     value: *const LExpr,
     body: *const LExpr,
+    ty: LTy = .Int,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
     is_rec: bool = false,
 };
 

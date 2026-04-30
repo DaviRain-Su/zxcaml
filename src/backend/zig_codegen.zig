@@ -264,8 +264,11 @@ fn emitFunction(
     defer body_out.deinit(allocator);
     var hoisted_decls = std.ArrayList(u8).empty;
     defer hoisted_decls.deinit(allocator);
+    var let_bindings = std.StringHashMap(LetBindingStorage).init(allocator);
+    defer let_bindings.deinit();
     var ctx: EmitContext = .{ .is_entrypoint = is_entrypoint, .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls, .externals = externals };
     ctx.hoisted_decls = &hoisted_decls;
+    ctx.let_bindings = &let_bindings;
     try emitExpr(&body_out, allocator, func.body, 1, &ctx);
     try append(out, allocator, hoisted_decls.items);
     try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
@@ -411,7 +414,43 @@ const EmitContext = struct {
     record_type_decls: []const lir.LRecordType = &.{},
     externals: []const lir.LExternalDecl = &.{},
     hoisted_decls: ?*std.ArrayList(u8) = null,
+    let_bindings: ?*std.StringHashMap(LetBindingStorage) = null,
 };
+
+const LetBindingStorage = enum {
+    Direct,
+    ArenaPointer,
+};
+
+const LetBindingSnapshot = struct {
+    name: []const u8,
+    previous: ?LetBindingStorage,
+};
+
+fn emitVariableValue(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, ctx: *EmitContext) EmitError!void {
+    try emitIdentifier(out, allocator, name);
+    if (ctx.let_bindings) |bindings| {
+        if (bindings.get(name)) |storage| {
+            if (storage == .ArenaPointer) try append(out, allocator, ".*");
+        }
+    }
+}
+
+fn pushLetBinding(ctx: *EmitContext, name: []const u8, storage: LetBindingStorage) EmitError!LetBindingSnapshot {
+    const bindings = ctx.let_bindings orelse return .{ .name = name, .previous = null };
+    const previous = bindings.get(name);
+    try bindings.put(name, storage);
+    return .{ .name = name, .previous = previous };
+}
+
+fn restoreLetBinding(ctx: *EmitContext, snapshot: LetBindingSnapshot) void {
+    const bindings = ctx.let_bindings orelse return;
+    if (snapshot.previous) |previous| {
+        bindings.getPtr(snapshot.name).?.* = previous;
+    } else {
+        _ = bindings.remove(snapshot.name);
+    }
+}
 
 fn emitExpr(
     out: *std.ArrayList(u8),
@@ -434,7 +473,7 @@ fn emitExpr(
             },
             .String => |value| try appendPrint(out, allocator, "\"{f}\"", .{std.zig.fmtString(value)}),
         },
-        .Var => |var_ref| try emitIdentifier(out, allocator, var_ref.name),
+        .Var => |var_ref| try emitVariableValue(out, allocator, var_ref.name, ctx),
         .App => |app| try emitAppExpr(out, allocator, app, indent_level, ctx),
         .Let => |let_expr| try emitLetExpr(out, allocator, let_expr, indent_level, ctx),
         .If => |if_expr| try emitIfExpr(out, allocator, if_expr, indent_level, ctx),
@@ -672,7 +711,7 @@ fn emitAppExpr(
         try appendPrint(out, allocator, "{d}: {{\n", .{block_id});
         try emitIndent(out, allocator, indent_level + 1);
         try append(out, allocator, "switch (");
-        try emitIdentifier(out, allocator, callee.name);
+        try emitVariableValue(out, allocator, callee.name, ctx);
         try append(out, allocator, ".code) {\n");
         var emitted_case = false;
         for (ctx.functions, 0..) |func, index| {
@@ -684,7 +723,7 @@ fn emitAppExpr(
             const function_name = try emittedClosureFunctionName(allocator, func.name);
             defer allocator.free(function_name);
             try appendPrint(out, allocator, "{s}(arena, ", .{function_name});
-            try emitIdentifier(out, allocator, callee.name);
+            try emitVariableValue(out, allocator, callee.name, ctx);
             for (app.args) |arg| {
                 try append(out, allocator, ", ");
                 try emitExpr(out, allocator, arg.*, indent_level + 2, ctx);
@@ -3118,7 +3157,7 @@ fn emitClosureExpr(
             try append(out, allocator, ".");
             try emitIdentifier(out, allocator, capture.name);
             try append(out, allocator, " = ");
-            try emitIdentifier(out, allocator, capture.name);
+            try emitVariableValue(out, allocator, capture.name, ctx);
         }
         try append(out, allocator, " };\n");
     }
@@ -3212,18 +3251,52 @@ fn emitLetExpr(
     try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
     const is_discard = std.mem.eql(u8, let_expr.name, "_");
+    var binding_snapshot: ?LetBindingSnapshot = null;
     if (is_discard) {
         try append(out, allocator, "_ = ");
         try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
         try append(out, allocator, ";\n");
     } else {
-        try append(out, allocator, "const ");
-        try emitIdentifier(out, allocator, let_expr.name);
-        try append(out, allocator, " = ");
-        try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
-        try append(out, allocator, ";\n");
+        const storage: LetBindingStorage = switch (let_expr.layout.region) {
+            .Arena => .ArenaPointer,
+            .Static, .Stack => .Direct,
+        };
+        const ty_name = try zigLetStorageTypeName(allocator, let_expr);
+        defer allocator.free(ty_name);
+        switch (let_expr.layout.region) {
+            .Arena => {
+                try append(out, allocator, "const ");
+                try emitIdentifier(out, allocator, let_expr.name);
+                try appendPrint(out, allocator, " = arena.allocOneOrTrap({s});\n", .{ty_name});
+                try emitIndent(out, allocator, indent_level + 1);
+                try emitIdentifier(out, allocator, let_expr.name);
+                try append(out, allocator, ".* = ");
+                try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+                try append(out, allocator, ";\n");
+            },
+            .Stack => {
+                try append(out, allocator, "var ");
+                try emitIdentifier(out, allocator, let_expr.name);
+                try appendPrint(out, allocator, ": {s} = ", .{ty_name});
+                try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+                try append(out, allocator, ";\n");
+                try emitIndent(out, allocator, indent_level + 1);
+                try append(out, allocator, "_ = &");
+                try emitIdentifier(out, allocator, let_expr.name);
+                try append(out, allocator, ";\n");
+            },
+            .Static => {
+                try append(out, allocator, "const ");
+                try emitIdentifier(out, allocator, let_expr.name);
+                try append(out, allocator, " = ");
+                try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+                try append(out, allocator, ";\n");
+            },
+        }
+        binding_snapshot = try pushLetBinding(ctx, let_expr.name, storage);
     }
-    if (!is_discard and !exprUsesName(let_expr.body.*, let_expr.name)) {
+    defer if (binding_snapshot) |snapshot| restoreLetBinding(ctx, snapshot);
+    if (!is_discard and let_expr.layout.region == .Static and !exprUsesName(let_expr.body.*, let_expr.name)) {
         try emitIndent(out, allocator, indent_level + 1);
         try append(out, allocator, "_ = ");
         try emitIdentifier(out, allocator, let_expr.name);
@@ -3235,6 +3308,16 @@ fn emitLetExpr(
     try append(out, allocator, ";\n");
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
+}
+
+fn zigLetStorageTypeName(allocator: std.mem.Allocator, let_expr: lir.LLet) EmitError![]const u8 {
+    return switch (let_expr.value.*) {
+        .Ctor => |ctor_expr| if (ctor_expr.type_name) |type_name|
+            try zigUserAdtTypeName(allocator, ctor_expr.ty, type_name)
+        else
+            try zigTypeName(allocator, let_expr.ty),
+        else => try zigTypeName(allocator, let_expr.ty),
+    };
 }
 
 fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
@@ -3367,7 +3450,7 @@ fn exprNeedsArena(expr: lir.LExpr, type_decls: []const lir.LVariantType, externa
     return switch (expr) {
         .Constant, .Var => false,
         .App => |app| appNeedsArena(app, externals),
-        .Let => |let_expr| exprNeedsArena(let_expr.value.*, type_decls, externals) or exprNeedsArena(let_expr.body.*, type_decls, externals),
+        .Let => |let_expr| let_expr.layout.region == .Arena or exprNeedsArena(let_expr.value.*, type_decls, externals) or exprNeedsArena(let_expr.body.*, type_decls, externals),
         .If => |if_expr| exprNeedsArena(if_expr.cond.*, type_decls, externals) or exprNeedsArena(if_expr.then_branch.*, type_decls, externals) or exprNeedsArena(if_expr.else_branch.*, type_decls, externals),
         .Prim => |prim| blk: {
             for (prim.args) |arg| {
@@ -4526,6 +4609,46 @@ test "ZigBackend emits let expressions as const declarations inside blocks" {
     try std.testing.expect(std.mem.indexOf(u8, source, "return @intCast(blk0: {") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "const x = @as(i64, 1);") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
+}
+
+test "ZigBackend emits stack-region let expressions as typed stack locals" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "x",
+            .value = &.{ .Constant = .{ .Int = 1 } },
+            .body = &.{ .Var = .{ .name = "x" } },
+            .ty = .Int,
+            .layout = .{ .region = .Stack, .repr = .Flat },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "var x: i64 = @as(i64, 1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "arena.allocOneOrTrap(i64)") == null);
+}
+
+test "ZigBackend emits arena-region let expressions as arena slots" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Let = .{
+            .name = "x",
+            .value = &.{ .Constant = .{ .Int = 1 } },
+            .body = &.{ .Var = .{ .name = "x" } },
+            .ty = .Int,
+            .layout = .{ .region = .Arena, .repr = .Flat },
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "const x = arena.allocOneOrTrap(i64);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "x.* = @as(i64, 1);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "break :blk0 x.*;") != null);
 }
 
 test "ZigBackend emits pinned integer arithmetic operations" {

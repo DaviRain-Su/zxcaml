@@ -268,6 +268,8 @@ fn lowerEntrypointLet(
             .name = try allocator.dupe(u8, top_level.name),
             .value = try lowerExprPtr(allocator, top_level.value.*),
             .body = let_body,
+            .ty = try lowerTy(allocator, top_level.ty),
+            .layout = top_level.layout,
             .is_rec = top_level.is_rec,
         } };
     }
@@ -475,6 +477,8 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
                                 .name = try allocator.dupe(u8, let_expr.name),
                                 .value = closure_expr,
                                 .body = try lowerExprPtrWithContext(allocator, let_expr.body.*, ctx),
+                                .ty = try lowerTy(allocator, exprTy(let_expr.value.*)),
+                                .layout = exprLayout(let_expr.value.*),
                                 .is_rec = true,
                             } };
                         }
@@ -497,6 +501,8 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
                 .name = try allocator.dupe(u8, let_expr.name),
                 .value = value,
                 .body = try lowerExprPtrWithContext(allocator, let_expr.body.*, ctx),
+                .ty = try lowerTy(allocator, exprTy(let_expr.value.*)),
+                .layout = exprLayout(let_expr.value.*),
                 .is_rec = let_expr.is_rec,
             } };
         },
@@ -846,6 +852,26 @@ fn exprTy(expr: ir.Expr) ir.Ty {
     };
 }
 
+fn exprLayout(expr: ir.Expr) @import("../core/layout.zig").Layout {
+    return switch (expr) {
+        .Lambda => |lambda| lambda.layout,
+        .Constant => |constant| constant.layout,
+        .App => |app| app.layout,
+        .Let => |let_expr| let_expr.layout,
+        .If => |if_expr| if_expr.layout,
+        .Prim => |prim| prim.layout,
+        .Var => |var_ref| var_ref.layout,
+        .Ctor => |ctor| ctor.layout,
+        .Match => |match_expr| match_expr.layout,
+        .Tuple => |tuple_expr| tuple_expr.layout,
+        .TupleProj => |tuple_proj| tuple_proj.layout,
+        .Record => |record_expr| record_expr.layout,
+        .RecordField => |record_field| record_field.layout,
+        .RecordUpdate => |record_update| record_update.layout,
+        .AccountFieldSet => |field_set| field_set.layout,
+    };
+}
+
 fn isClosureTy(ty: ir.Ty) bool {
     return switch (ty) {
         .Arrow => true,
@@ -1154,6 +1180,42 @@ test "ArenaStrategy wraps previous top-level lets around entrypoint body" {
         .Var => |value| value,
         else => return error.TestUnexpectedResult,
     };
+}
+
+test "ArenaStrategy preserves Stack-region let storage metadata" {
+    const layout = @import("../core/layout.zig");
+    const decls = [_]ir.Decl{.{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .Let = .{
+                .name = "x",
+                .value = makeExpr(.{ .Constant = .{
+                    .value = .{ .Int = 1 },
+                    .ty = .Int,
+                    .layout = .{ .region = .Stack, .repr = .Flat },
+                } }),
+                .body = makeExpr(.{ .Var = .{ .name = "x", .ty = .Int, .layout = .{ .region = .Stack, .repr = .Flat } } }),
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } }};
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const lowered = try lowerModule(arena.allocator(), .{ .decls = &decls });
+    const stack_let = switch (lowered.entrypoint.body) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@import("../core/layout.zig").Region.Stack, stack_let.layout.region);
+    try std.testing.expectEqual(lir.LTy.Int, stack_let.ty);
 }
 
 test "ArenaStrategy threads captures into nested recursive functions" {

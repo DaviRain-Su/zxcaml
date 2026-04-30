@@ -257,6 +257,20 @@ pub fn build(b: *std.Build) void {
     run_codegen_external_bytes_tests.step.dependOn(b.getInstallStep());
     run_codegen_external_bytes_tests.setCwd(b.path(""));
 
+    const codegen_region_let_storage_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/codegen/region_let_storage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    codegen_region_let_storage_test_module.addOptions("codegen_options", codegen_options);
+    const codegen_region_let_storage_tests = b.addTest(.{
+        .root_module = codegen_region_let_storage_test_module,
+    });
+    const run_codegen_region_let_storage_tests = b.addRunArtifact(codegen_region_let_storage_tests);
+    run_codegen_region_let_storage_tests.step.dependOn(&run_codegen_external_bytes_tests.step);
+    run_codegen_region_let_storage_tests.step.dependOn(b.getInstallStep());
+    run_codegen_region_let_storage_tests.setCwd(b.path(""));
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
@@ -271,4 +285,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
+    test_step.dependOn(&run_codegen_region_let_storage_tests.step);
 }

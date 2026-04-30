@@ -617,7 +617,9 @@ fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringH
         else => try evalExpr(allocator, let_expr.value.*, env),
     };
     const previous = env.get(let_expr.name);
-    try env.put(let_expr.name, value);
+    switch (exprLayout(let_expr.value.*).region) {
+        .Stack, .Static, .Arena => try env.put(let_expr.name, value),
+    }
     defer {
         if (previous) |binding| {
             env.getPtr(let_expr.name).?.* = binding;
@@ -626,6 +628,26 @@ fn evalLet(allocator: std.mem.Allocator, let_expr: ir.LetExpr, env: *std.StringH
         }
     }
     return evalExpr(allocator, let_expr.body.*, env);
+}
+
+fn exprLayout(expr: ir.Expr) layout.Layout {
+    return switch (expr) {
+        .Lambda => |lambda| lambda.layout,
+        .Constant => |constant| constant.layout,
+        .App => |app| app.layout,
+        .Let => |let_expr| let_expr.layout,
+        .If => |if_expr| if_expr.layout,
+        .Prim => |prim| prim.layout,
+        .Var => |var_ref| var_ref.layout,
+        .Ctor => |ctor_expr| ctor_expr.layout,
+        .Match => |match_expr| match_expr.layout,
+        .Tuple => |tuple_expr| tuple_expr.layout,
+        .TupleProj => |tuple_proj| tuple_proj.layout,
+        .Record => |record_expr| record_expr.layout,
+        .RecordField => |record_field| record_field.layout,
+        .RecordUpdate => |record_update| record_update.layout,
+        .AccountFieldSet => |field_set| field_set.layout,
+    };
 }
 
 const EnvBinding = struct {
