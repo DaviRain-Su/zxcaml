@@ -20,6 +20,7 @@ const driver_idl = @import("driver/idl.zig");
 const interp = @import("backend/interp.zig");
 const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
+const core_const_fold = @import("core/const_fold.zig");
 const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
 const arena_lower = @import("lower/arena.zig");
@@ -259,8 +260,14 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 
-    const rendered = core_pretty.formatModule(init.gpa, core_module) catch |err| {
+    const rendered = core_pretty.formatModule(init.gpa, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to pretty-print Core IR: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -304,8 +311,14 @@ fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttre
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 
-    const result = core_no_alloc.checkModule(init.gpa, core_module) catch |err| {
+    const result = core_no_alloc.checkModule(init.gpa, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to run no_alloc analysis: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -348,9 +361,15 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 
     var interpreter: interp.Interpreter = .{};
-    const value = interpreter.backend().evalModule(core_module) catch |err| {
+    const value = interpreter.backend().evalModule(folded_core_module) catch |err| {
         if (interp.panicMarker(err)) |marker| {
             try writeStderr(init.io, marker);
             try writeStderr(init.io, "\n");
@@ -377,11 +396,17 @@ fn emitIdl(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 
     const program_name = try deriveProgramName(init.gpa, input_file);
     defer init.gpa.free(program_name);
 
-    const rendered = driver_idl.emitModuleStdout(init.gpa, core_module, .{ .program_name = program_name }) catch |err| {
+    const rendered = driver_idl.emitModuleStdout(init.gpa, folded_core_module, .{ .program_name = program_name }) catch |err| {
         try writeStderr(init.io, "error: failed to emit IDL: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -412,7 +437,13 @@ fn buildNative(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const inferred_core_module = region_infer.inferModule(&core_arena, core_module) catch |err| {
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inferred_core_module = region_infer.inferModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to infer Core IR regions: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -472,7 +503,13 @@ fn buildBpf(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const inferred_core_module = region_infer.inferModule(&core_arena, core_module) catch |err| {
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inferred_core_module = region_infer.inferModule(&core_arena, folded_core_module) catch |err| {
         try writeStderr(init.io, "error: failed to infer Core IR regions: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -594,6 +631,7 @@ test {
     _ = @import("backend/ocaml_stub.zig");
     _ = @import("backend/zig_codegen.zig");
     _ = @import("core/anf.zig");
+    _ = @import("core/const_fold.zig");
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");
