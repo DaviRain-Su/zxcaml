@@ -105,10 +105,12 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**P6 Region Inference is implemented.** P1-P5 deliver the walking skeleton,
+**P7 OCaml Subset Expansion is implemented.** P1-P6 deliver the walking skeleton,
 subset expansion, Solana runtime integration, Mollusk test infrastructure,
-external declarations, Anchor IDL, and functional persistent stdlib. P6 adds
-escape analysis for automatic stack allocation of non-escaping local values.
+external declarations, Anchor IDL, functional persistent stdlib, and region
+inference. P7 expands the OCaml language subset with trivial desugars (sequence,
+if-then, function cases), pattern extensions (literal/or/alias patterns), string
+and char operations, and expanded stdlib (List/Option/Result/Fun).
 
 `omlz` works end-to-end: parse/type-check OCaml with upstream
 `compiler-libs` → emit sexp `1.0` → lower through Core IR with escape
@@ -119,8 +121,8 @@ or emit Anchor-compatible IDL.
 
 - **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz idl <file>`
 - **Wire format:** version 1.0 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4 added instruction_data; P5 added external declarations; P6 added escape analysis annotations)
-- **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, tuples, records, field access, functional record update, lists (`[]` / `::`), and pattern matching over all of those forms
-- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`), `Option` (`is_none`, `is_some`, `value`, `get`), `Result` (`is_ok`, `is_error`, `ok`, `error`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
+- **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), string operations (`^`, length, get, sub), char operations (code, chr), and pattern matching over all of those forms
+- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Char` (`code`, `chr`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; BPF entry arena is 32 KiB
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
@@ -137,7 +139,7 @@ or emit Anchor-compatible IDL.
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, and an examples `omlz check` corpus loop
 - **Mollusk SVM tests:** 7 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo)
 - **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
-- **Examples:** 40 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, and region allocation demo programs
+- **Examples:** 41 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, and string demo programs
 - **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
