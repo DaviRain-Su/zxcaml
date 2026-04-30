@@ -598,6 +598,7 @@ fn lowerApp(allocator: std.mem.Allocator, app: ir.App, ctx: *LowerContext) Lower
         .ty = try lowerTy(allocator, app.ty),
         .callee_ty = try lowerTy(allocator, exprTy(app.callee.*)),
         .kind = kind,
+        .is_tail_call = app.is_tail_call,
     } };
 }
 

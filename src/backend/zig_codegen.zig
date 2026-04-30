@@ -253,9 +253,21 @@ fn emitFunction(
     defer hoisted_decls.deinit(allocator);
     var let_bindings = std.StringHashMap(LetBindingStorage).init(allocator);
     defer let_bindings.deinit();
+    const uses_tco = functionHasSelfTailCall(func);
+    const tco_params = if (uses_tco) try tailCallParams(allocator, func.params) else &.{};
+    defer {
+        if (uses_tco) {
+            for (tco_params) |param| allocator.free(param.local_name);
+            allocator.free(tco_params);
+        }
+    }
     var ctx: EmitContext = .{ .is_entrypoint = is_entrypoint, .functions = functions, .type_decls = type_decls, .record_type_decls = record_type_decls, .externals = externals };
     ctx.hoisted_decls = &hoisted_decls;
     ctx.let_bindings = &let_bindings;
+    if (uses_tco) {
+        ctx.tco_function_name = func.name;
+        ctx.tco_params = tco_params;
+    }
     try emitExpr(&body_out, allocator, func.body, 1, &ctx);
     const entrypoint_needs_account_list = is_entrypoint and paramsNeedEntrypointAccountList(func.params);
     const function_uses_arena = std.mem.indexOf(u8, body_out.items, "arena") != null or
@@ -274,10 +286,132 @@ fn emitFunction(
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
     }
     try append(out, allocator, hoisted_decls.items);
-    try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
-    try append(out, allocator, body_out.items);
-    try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
+    if (uses_tco) {
+        try emitTailCallParamLocals(out, allocator, func.params, tco_params);
+        try append(out, allocator, "    while (true) {\n");
+        try append(out, allocator, if (is_entrypoint) "        return @intCast(" else "        return ");
+        try append(out, allocator, body_out.items);
+        try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
+        try append(out, allocator, "    }\n");
+        try append(out, allocator, "    unreachable;\n");
+    } else {
+        try append(out, allocator, if (is_entrypoint) "    return @intCast(" else "    return ");
+        try append(out, allocator, body_out.items);
+        try append(out, allocator, if (is_entrypoint) ");\n" else ";\n");
+    }
     try append(out, allocator, "}\n");
+}
+
+fn functionHasSelfTailCall(func: lir.LFunc) bool {
+    return exprHasSelfTailCall(func.body, func.name);
+}
+
+fn exprHasSelfTailCall(expr: lir.LExpr, function_name: []const u8) bool {
+    return switch (expr) {
+        .App => |app| blk: {
+            if (app.is_tail_call) {
+                switch (app.callee.*) {
+                    .Var => |callee| if (std.mem.eql(u8, callee.name, function_name)) break :blk true,
+                    else => {},
+                }
+            }
+            if (exprHasSelfTailCall(app.callee.*, function_name)) break :blk true;
+            for (app.args) |arg| {
+                if (exprHasSelfTailCall(arg.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| exprHasSelfTailCall(let_expr.value.*, function_name) or exprHasSelfTailCall(let_expr.body.*, function_name),
+        .If => |if_expr| exprHasSelfTailCall(if_expr.cond.*, function_name) or
+            exprHasSelfTailCall(if_expr.then_branch.*, function_name) or
+            exprHasSelfTailCall(if_expr.else_branch.*, function_name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| {
+                if (exprHasSelfTailCall(arg.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor| blk: {
+            for (ctor.args) |arg| {
+                if (exprHasSelfTailCall(arg.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Match => |match_expr| blk: {
+            if (exprHasSelfTailCall(match_expr.scrutinee.*, function_name)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (arm.guard) |guard| {
+                    if (exprHasSelfTailCall(guard.*, function_name)) break :blk true;
+                }
+                if (exprHasSelfTailCall(arm.body.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (exprHasSelfTailCall(item.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| exprHasSelfTailCall(tuple_proj.tuple_expr.*, function_name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (exprHasSelfTailCall(field.value.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |record_field| exprHasSelfTailCall(record_field.record_expr.*, function_name),
+        .RecordUpdate => |record_update| blk: {
+            if (exprHasSelfTailCall(record_update.base_expr.*, function_name)) break :blk true;
+            for (record_update.fields) |field| {
+                if (exprHasSelfTailCall(field.value.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .AccountFieldSet => |field_set| exprHasSelfTailCall(field_set.account_expr.*, function_name) or
+            exprHasSelfTailCall(field_set.value.*, function_name),
+        .Constant, .Var, .Closure => false,
+    };
+}
+
+fn tailCallParams(allocator: std.mem.Allocator, params: []const lir.LParam) EmitError![]const TailCallParam {
+    const aliases = try allocator.alloc(TailCallParam, params.len);
+    for (params, 0..) |param, index| {
+        aliases[index] = .{
+            .source_name = param.name,
+            .local_name = try tailCallParamLocalName(allocator, param.name),
+        };
+    }
+    return aliases;
+}
+
+fn tailCallParamLocalName(allocator: std.mem.Allocator, source_name: []const u8) EmitError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, "omlz_tco_");
+    for (source_name) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '_') {
+            try out.append(allocator, ch);
+        } else {
+            try out.append(allocator, '_');
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn emitTailCallParamLocals(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    params: []const lir.LParam,
+    aliases: []const TailCallParam,
+) EmitError!void {
+    for (params, aliases) |param, alias| {
+        const ty_name = try zigTypeName(allocator, param.ty);
+        defer allocator.free(ty_name);
+        try appendPrint(out, allocator, "    var {s}: {s} = ", .{ alias.local_name, ty_name });
+        try emitIdentifier(out, allocator, param.name);
+        try append(out, allocator, ";\n");
+    }
 }
 
 fn emitBuiltinAccountRecordType(out: *std.ArrayList(u8), allocator: std.mem.Allocator) EmitError!void {
@@ -418,6 +552,13 @@ const EmitContext = struct {
     externals: []const lir.LExternalDecl = &.{},
     hoisted_decls: ?*std.ArrayList(u8) = null,
     let_bindings: ?*std.StringHashMap(LetBindingStorage) = null,
+    tco_function_name: ?[]const u8 = null,
+    tco_params: []const TailCallParam = &.{},
+};
+
+const TailCallParam = struct {
+    source_name: []const u8,
+    local_name: []const u8,
 };
 
 const LetBindingStorage = enum {
@@ -431,12 +572,20 @@ const LetBindingSnapshot = struct {
 };
 
 fn emitVariableValue(out: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, ctx: *EmitContext) EmitError!void {
-    try emitIdentifier(out, allocator, name);
     if (ctx.let_bindings) |bindings| {
         if (bindings.get(name)) |storage| {
+            try emitIdentifier(out, allocator, name);
             if (storage == .ArenaPointer) try append(out, allocator, ".*");
+            return;
         }
     }
+    for (ctx.tco_params) |param| {
+        if (std.mem.eql(u8, param.source_name, name)) {
+            try append(out, allocator, param.local_name);
+            return;
+        }
+    }
+    try emitIdentifier(out, allocator, name);
 }
 
 fn pushLetBinding(ctx: *EmitContext, name: []const u8, storage: LetBindingStorage) EmitError!LetBindingSnapshot {
@@ -695,6 +844,9 @@ fn emitAppExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (app.is_tail_call) {
+        if (try emitTailCallContinueExpr(out, allocator, app, indent_level, ctx)) return;
+    }
     switch (app.callee.*) {
         .Var => |callee| if (try emitCounterAppExpr(out, allocator, callee.name, app, indent_level, ctx)) return,
         else => {},
@@ -765,6 +917,46 @@ fn emitAppExpr(
         try emitExpr(out, allocator, arg.*, indent_level, ctx);
     }
     try append(out, allocator, ")");
+}
+
+fn emitTailCallContinueExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!bool {
+    const function_name = ctx.tco_function_name orelse return false;
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, callee.name, function_name)) return false;
+    if (app.kind != .Direct) return false;
+    if (app.args.len != ctx.tco_params.len) return error.UnsupportedExpr;
+
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    const ty_name = try zigTypeName(allocator, app.ty);
+    defer allocator.free(ty_name);
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (@intFromPtr(arena) == 0) break :blk{d} @as({s}, undefined);\n", .{ block_id, ty_name });
+    for (app.args, 0..) |arg, index| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_tco_arg_{d}_{d} = ", .{ block_id, index });
+        try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+    }
+    for (ctx.tco_params, 0..) |param, index| {
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "{s} = omlz_tco_arg_{d}_{d};\n", .{ param.local_name, block_id, index });
+    }
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "continue;\n");
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+    return true;
 }
 
 fn emitExternalAppExpr(
@@ -5462,6 +5654,53 @@ test "ZigBackend emits decision-tree switch for five-constructor user ADTs" {
     try std.testing.expect(std.mem.indexOf(u8, source, "switch (omlz_match_scrutinee_0.tag)") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".E => {") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, ".tag == .") == null);
+}
+
+test "ZigBackend emits while loop for tagged self tail calls" {
+    const n_var = &lir.LExpr{ .Var = .{ .name = "n" } };
+    const acc_var = &lir.LExpr{ .Var = .{ .name = "acc" } };
+    const fact_func: lir.LFunc = .{
+        .name = "fact_loop",
+        .params = &.{
+            .{ .name = "n", .ty = .Int },
+            .{ .name = "acc", .ty = .Int },
+        },
+        .return_ty = .Int,
+        .body = .{ .If = .{
+            .cond = &.{ .Prim = .{ .op = .Eq, .args = &.{ n_var, &.{ .Constant = .{ .Int = 0 } } } } },
+            .then_branch = acc_var,
+            .else_branch = &.{ .App = .{
+                .callee = &.{ .Var = .{ .name = "fact_loop" } },
+                .args = &.{
+                    &.{ .Prim = .{ .op = .Sub, .args = &.{ n_var, &.{ .Constant = .{ .Int = 1 } } } } },
+                    &.{ .Prim = .{ .op = .Mul, .args = &.{ acc_var, n_var } } },
+                },
+                .ty = .Int,
+                .callee_ty = .Int,
+                .is_tail_call = true,
+            } },
+        } },
+    };
+    const module: lir.LModule = .{
+        .functions = &.{fact_func},
+        .entrypoint = .{
+            .name = "entrypoint",
+            .body = .{ .App = .{
+                .callee = &.{ .Var = .{ .name = "fact_loop" } },
+                .args = &.{ &.{ .Constant = .{ .Int = 5 } }, &.{ .Constant = .{ .Int = 1 } } },
+                .ty = .Int,
+                .callee_ty = .Int,
+            } },
+        },
+    };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "while (true)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_tco_n = omlz_tco_arg_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "continue;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "return omlz_user_fact_loop(arena, (omlz_tco_n") == null);
 }
 
 test "DecisionTree compileMatrix specializes first-column constructors" {

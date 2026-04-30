@@ -182,6 +182,7 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatTy(out, allocator, app.ty);
             try append(out, allocator, " :layout ");
             try formatLayout(out, allocator, app.layout);
+            if (app.is_tail_call) try append(out, allocator, " :tail-call true");
             try append(out, allocator, ")");
         },
         .Let => |let_expr| {

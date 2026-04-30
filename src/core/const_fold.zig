@@ -144,6 +144,7 @@ const FoldContext = struct {
                 .args = try self.foldExprPtrs(app.args),
                 .ty = app.ty,
                 .layout = app.layout,
+                .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| .{ .Let = try self.foldLetExpr(let_expr) },
             .If => |if_expr| try self.foldIf(if_expr),

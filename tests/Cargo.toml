@@ -53,3 +53,7 @@ path = "region_demo_test.rs"
 [[test]]
 name = "string_demo_test"
 path = "string_demo_test.rs"
+
+[[test]]
+name = "tail_rec_test"
+path = "tail_rec_test.rs"

@@ -116,6 +116,7 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .args = try inferExprPtrs(arena, app.args, true),
             .ty = app.ty,
             .layout = if (escape_context and app.layout.region == .Stack) arenaLayout(app.layout) else app.layout,
+            .is_tail_call = app.is_tail_call,
         } },
         .Let => |let_expr| blk: {
             var ctx = AnalyzeContext.init(arena.allocator());
@@ -634,6 +635,7 @@ const CloneContext = struct {
                 .args = try self.cloneExprPtrs(app.args, true),
                 .ty = app.ty,
                 .layout = if (escape_context and app.layout.region == .Stack) arenaLayout(app.layout) else app.layout,
+                .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| .{ .Let = try self.cloneLetExpr(let_expr, escape_context) },
             .If => |if_expr| .{ .If = .{
@@ -861,6 +863,7 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .args = app.args,
             .ty = app.ty,
             .layout = new_layout,
+            .is_tail_call = app.is_tail_call,
         } },
         .Let => |let_expr| .{ .Let = .{
             .name = let_expr.name,

@@ -78,6 +78,7 @@ pub const LApp = struct {
     ty: LTy = .Int,
     callee_ty: LTy = .Int,
     kind: LCallKind = .Direct,
+    is_tail_call: bool = false,
 };
 
 /// Whether a lowered application calls a named helper directly or a closure pointer.

@@ -231,7 +231,10 @@ fn indexConstructors(ctx: *LowerContext, type_decls: []const types.VariantType) 
 fn lowerDecl(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, decl: ttree.Decl) LowerError!ir.Decl {
     return switch (decl) {
         .Let => |let_decl| blk: {
-            const value = try lowerExprPtr(arena, ctx, let_decl.body);
+            var value = try lowerExprPtr(arena, ctx, let_decl.body);
+            if (let_decl.is_rec) {
+                value = try markTailCallsInFunction(arena, value, let_decl.name);
+            }
             break :blk .{ .Let = .{
                 .name = try arena.allocator().dupe(u8, let_decl.name),
                 .value = value,
@@ -452,6 +455,9 @@ fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: t
     }
 
     var value = try lowerExprPtr(arena, ctx, let_expr.value.*);
+    if (let_expr.is_rec) {
+        value = try markTailCallsInFunction(arena, value, let_expr.name);
+    }
     if (let_expr.is_rec and recBindingEscapes(let_expr.name, let_expr.body.*)) {
         switch (value.*) {
             .Lambda => |lambda_value| {
@@ -484,6 +490,69 @@ fn lowerLetExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, let_expr: t
         .ty = exprTy(body.*),
         .layout = exprLayout(body.*),
         .is_rec = let_expr.is_rec,
+    };
+}
+
+fn markTailCallsInFunction(arena: *std.heap.ArenaAllocator, value: *const ir.Expr, function_name: []const u8) LowerError!*const ir.Expr {
+    return switch (value.*) {
+        .Lambda => |lambda| blk: {
+            var marked_lambda = lambda;
+            marked_lambda.body = try markTailPosition(arena, lambda.body, function_name);
+            const marked = try arena.allocator().create(ir.Expr);
+            marked.* = .{ .Lambda = marked_lambda };
+            break :blk marked;
+        },
+        else => value,
+    };
+}
+
+fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, function_name: []const u8) LowerError!*const ir.Expr {
+    return switch (expr.*) {
+        .App => |app| blk: {
+            var marked_app = app;
+            marked_app.is_tail_call = isSelfCall(app, function_name);
+            const marked = try arena.allocator().create(ir.Expr);
+            marked.* = .{ .App = marked_app };
+            break :blk marked;
+        },
+        .If => |if_expr| blk: {
+            var marked_if = if_expr;
+            marked_if.then_branch = try markTailPosition(arena, if_expr.then_branch, function_name);
+            marked_if.else_branch = try markTailPosition(arena, if_expr.else_branch, function_name);
+            const marked = try arena.allocator().create(ir.Expr);
+            marked.* = .{ .If = marked_if };
+            break :blk marked;
+        },
+        .Let => |let_expr| blk: {
+            var marked_let = let_expr;
+            marked_let.body = try markTailPosition(arena, let_expr.body, function_name);
+            const marked = try arena.allocator().create(ir.Expr);
+            marked.* = .{ .Let = marked_let };
+            break :blk marked;
+        },
+        .Match => |match_expr| blk: {
+            const arms = try arena.allocator().alloc(ir.Arm, match_expr.arms.len);
+            for (match_expr.arms, 0..) |arm, index| {
+                arms[index] = .{
+                    .pattern = arm.pattern,
+                    .guard = arm.guard,
+                    .body = try markTailPosition(arena, arm.body, function_name),
+                };
+            }
+            var marked_match = match_expr;
+            marked_match.arms = arms;
+            const marked = try arena.allocator().create(ir.Expr);
+            marked.* = .{ .Match = marked_match };
+            break :blk marked;
+        },
+        .Lambda, .Constant, .Prim, .Var, .Ctor, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => expr,
+    };
+}
+
+fn isSelfCall(app: ir.App, function_name: []const u8) bool {
+    return switch (app.callee.*) {
+        .Var => |callee| std.mem.eql(u8, callee.name, function_name),
+        else => false,
     };
 }
 
@@ -1048,6 +1117,7 @@ fn renameExprValueVars(arena: *std.heap.ArenaAllocator, expr: ir.Expr, renames: 
             .args = try renameExprSliceVars(arena, app.args, renames),
             .ty = app.ty,
             .layout = app.layout,
+            .is_tail_call = app.is_tail_call,
         } },
         .Let => |let_expr| blk: {
             const body_renames = try filterRenamesForName(arena, renames, let_expr.name);
@@ -3062,6 +3132,54 @@ test "lower max_int and min_int as pinned i64 constants" {
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(@as(i64, std.math.minInt(i64)), min_const.value.Int);
+}
+
+test "marks only self calls in tail position" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.4 (module (let-rec loop (lambda (n acc) (if (prim \"=\" (var n) (const-int 0)) (var acc) (app (var loop) (prim \"-\" (var n) (const-int 1)) (prim \"+\" (var acc) (var n)))))) (let-rec sum (lambda (n) (prim \"+\" (var n) (app (var sum) (prim \"-\" (var n) (const-int 1))))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const loop_decl = switch (module.decls[0]) {
+        .Let => |value| value,
+    };
+    const loop_lambda = switch (loop_decl.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const loop_if = switch (loop_lambda.body.*) {
+        .If => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const tail_app = switch (loop_if.else_branch.*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(tail_app.is_tail_call);
+
+    const sum_decl = switch (module.decls[1]) {
+        .Let => |value| value,
+    };
+    const sum_lambda = switch (sum_decl.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const non_tail_prim = switch (sum_lambda.body.*) {
+        .Prim => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const non_tail_app = switch (non_tail_prim.args[1].*) {
+        .App => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(!non_tail_app.is_tail_call);
 }
 
 test "lower Syscall module calls as typed builtin applications" {

@@ -110,6 +110,7 @@ pub const App = struct {
     args: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    is_tail_call: bool = false,
 };
 
 /// Lexically-scoped let expression in ANF form.

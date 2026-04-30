@@ -63,6 +63,7 @@ const DceContext = struct {
                 .args = try self.eliminateExprPtrs(app.args),
                 .ty = app.ty,
                 .layout = app.layout,
+                .is_tail_call = app.is_tail_call,
             } },
             .Let => |let_expr| try self.eliminateLet(let_expr),
             .If => |if_expr| try self.eliminateIf(if_expr),
