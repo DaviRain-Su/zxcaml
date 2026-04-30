@@ -618,6 +618,12 @@ let rec parse_match_case env (case : computation case) =
   let body = parse_expr env case.c_rhs in
   { pattern; guard; body }
 
+and parse_value_match_case env (case : value case) =
+  let pattern = parse_match_pattern env case.c_lhs in
+  let guard = Option.map (parse_expr env) case.c_guard in
+  let body = parse_expr env case.c_rhs in
+  { pattern; guard; body }
+
 and parse_apply_args env args =
   let parse_one = function
     | Nolabel, Some arg -> parse_expr env arg
@@ -736,8 +742,16 @@ and parse_expr env (expr : expression) =
       let params = List.map parse_param params in
       let body = parse_expr env body in
       Lambda { params; body }
-  | Texp_function (_params, Tfunction_cases _) ->
-      unsupported ~node_kind:"Tfunction_cases" ~loc:expr.exp_loc ()
+  | Texp_function (params, Tfunction_cases { cases; param; _ }) ->
+      let params = List.map parse_param params @ [ Param (ident_name param) ] in
+      let body =
+        Match
+          {
+            scrutinee = Var (ident_name param);
+            arms = List.map (parse_value_match_case env) cases;
+          }
+      in
+      Lambda { params; body }
   | Texp_let (Nonrecursive, [ binding ], body) ->
       let name = parse_binding_name binding.vb_pat in
       let value = parse_expr env binding.vb_expr in
@@ -802,12 +816,25 @@ and parse_expr env (expr : expression) =
           then_branch = parse_expr env then_branch;
           else_branch = parse_expr env else_branch;
         }
-  | Texp_ifthenelse (_, _, None) ->
-      unsupported ~node_kind:"Texp_ifthenelse(no-else)" ~loc:expr.exp_loc ()
+  | Texp_ifthenelse (cond, then_branch, None) ->
+      If
+        {
+          cond = parse_expr env cond;
+          then_branch = parse_expr env then_branch;
+          else_branch = Ctor { name = "()"; args = [] };
+        }
   | Texp_match (scrutinee, cases, _) ->
       let scrutinee = parse_match_scrutinee env scrutinee in
       let arms = List.map (parse_match_case env) cases in
       Match { scrutinee; arms }
+  | Texp_sequence (first, second) ->
+      Let
+        {
+          name = "_";
+          value = parse_expr env first;
+          body = parse_expr env second;
+          is_rec = false;
+        }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let type_var_name name = "'" ^ name

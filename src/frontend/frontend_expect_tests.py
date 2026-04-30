@@ -95,6 +95,28 @@ CASES: list[tuple[str, str, str]] = [
         "(case (ctor None) (const-int 3)))))))\n",
     ),
     (
+        "sequence expression desugars to let wildcard",
+        'let entrypoint _ = Syscall.sol_log "one"; 2\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(let _ (app (var Syscall.sol_log) (const-string "one")) '
+        "(const-int 2))))))\n",
+    ),
+    (
+        "if then without else desugars to unit else",
+        'let entrypoint _ = if true then Syscall.sol_log "hit"\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
+        '(if (ctor true) (app (var Syscall.sol_log) (const-string "hit")) '
+        '(ctor "()"))))))\n',
+    ),
+    (
+        "function cases desugar to lambda match",
+        "let entrypoint x = (function Some v -> v | None -> 0) x\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (x) "
+        "(app (lambda (param) (match (var param) "
+        "(case (ctor Some (var v)) (var v)) "
+        "(case (ctor None) (const-int 0)))) (var x))))))\n",
+    ),
+    (
         "multi argument function returning closure",
         "let make_op a b = fun x -> (x + a) * b\n",
         "(zxcaml-cir 1.0 (module (let make_op "
