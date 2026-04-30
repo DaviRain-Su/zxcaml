@@ -1,0 +1,1 @@
+(module (let entrypoint (lambda (_ :ty (arrow unit int) :layout (arena flat)) (let x (prim / (const 1 :ty int :layout (static flat)) (const 0 :ty int :layout (static flat)) :ty int :layout (static flat)) (const 42 :ty int :layout (static flat)) :ty int :layout (static flat)))))

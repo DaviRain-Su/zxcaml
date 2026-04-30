@@ -2,8 +2,9 @@
 //!
 //! RESPONSIBILITIES:
 //! - Walk Core IR after constant folding and remove unused pure `let` bindings.
-//! - Preserve bindings whose value may perform side effects, conservatively
-//!   treating every function application and account field mutation as effectful.
+//! - Preserve bindings whose value may perform side effects or observable
+//!   traps, conservatively treating function applications, account field
+//!   mutation, and division/modulo by zero as effectful.
 //! - Eliminate constant-condition `if` branches that remain after earlier passes.
 //! - Clone the optimized tree into the caller-provided arena without mutating
 //!   the original Core IR.
@@ -341,7 +342,7 @@ fn hasSideEffects(expr: ir.Expr) bool {
             hasSideEffects(if_expr.cond.*) or if (value) hasSideEffects(if_expr.then_branch.*) else hasSideEffects(if_expr.else_branch.*)
         else
             hasSideEffects(if_expr.cond.*) or hasSideEffects(if_expr.then_branch.*) or hasSideEffects(if_expr.else_branch.*),
-        .Prim => |prim| anyExprHasSideEffects(prim.args),
+        .Prim => |prim| primMayTrap(prim.op) or anyExprHasSideEffects(prim.args),
         .Ctor => |ctor| anyExprHasSideEffects(ctor.args),
         .Match => |match_expr| hasSideEffects(match_expr.scrutinee.*) or anyArmHasSideEffects(match_expr.arms),
         .Tuple => |tuple_expr| anyExprHasSideEffects(tuple_expr.items),
@@ -374,6 +375,13 @@ fn anyArmHasSideEffects(arms: []const ir.Arm) bool {
         if (hasSideEffects(arm.body.*)) return true;
     }
     return false;
+}
+
+fn primMayTrap(op: ir.PrimOp) bool {
+    return switch (op) {
+        .Div, .Mod => true,
+        else => false,
+    };
 }
 
 fn boolValue(expr: ir.Expr) ?bool {
@@ -471,6 +479,18 @@ fn primAddPtr(arena: *std.heap.ArenaAllocator, lhs: *const ir.Expr, rhs: *const 
     args[1] = rhs;
     return exprPtr(arena, .{ .Prim = .{
         .op = .Add,
+        .args = args,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } });
+}
+
+fn primPtr(arena: *std.heap.ArenaAllocator, op: ir.PrimOp, lhs: *const ir.Expr, rhs: *const ir.Expr) !*const ir.Expr {
+    const args = try arena.allocator().alloc(*const ir.Expr, 2);
+    args[0] = lhs;
+    args[1] = rhs;
+    return exprPtr(arena, .{ .Prim = .{
+        .op = op,
         .args = args,
         .ty = .Int,
         .layout = layout.intConstant(),
@@ -575,6 +595,43 @@ test "dce preserves unused bindings with side-effectful applications" {
     try std.testing.expect(eliminated.* == .Let);
     try std.testing.expect(eliminated.Let.value.* == .App);
     try std.testing.expect(eliminated.Let.body.* == .Constant);
+}
+
+test "dce preserves unused bindings with potentially trapping div and mod" {
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        // Regression for source shape: let x = 1 / 0 in 42
+        const eliminated = try dceTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+            .name = "x",
+            .value = try primPtr(&arena, .Div, try intPtr(&arena, 1), try intPtr(&arena, 0)),
+            .body = try intPtr(&arena, 42),
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } }));
+
+        try std.testing.expect(eliminated.* == .Let);
+        try std.testing.expect(eliminated.Let.value.* == .Prim);
+        try std.testing.expectEqual(ir.PrimOp.Div, eliminated.Let.value.Prim.op);
+    }
+
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        const eliminated = try dceTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+            .name = "x",
+            .value = try primPtr(&arena, .Mod, try intPtr(&arena, 1), try intPtr(&arena, 0)),
+            .body = try intPtr(&arena, 42),
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } }));
+
+        try std.testing.expect(eliminated.* == .Let);
+        try std.testing.expect(eliminated.Let.value.* == .Prim);
+        try std.testing.expectEqual(ir.PrimOp.Mod, eliminated.Let.value.Prim.op);
+    }
 }
 
 test "dce eliminates constant-condition if branches" {
