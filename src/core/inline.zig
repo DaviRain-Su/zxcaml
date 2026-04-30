@@ -163,7 +163,7 @@ const InlineContext = struct {
         for (decls) |decl| switch (decl) {
             .Let => |let_decl| {
                 if (let_decl.is_rec) continue;
-                if (try self.smallFunctionFromExpr(let_decl.value.*)) |function| {
+                if (try self.smallFunctionFromBinding(let_decl.name, let_decl.value.*)) |function| {
                     try self.pushFunction(let_decl.name, function);
                 }
             },
@@ -179,7 +179,7 @@ const InlineContext = struct {
                 self.restoreFunctions(mark);
 
                 if (!let_decl.is_rec) {
-                    if (try self.smallFunctionFromExpr(value.*)) |function| {
+                    if (try self.smallFunctionFromBinding(let_decl.name, value.*)) |function| {
                         try self.pushFunction(let_decl.name, function);
                     } else {
                         try self.shadowFunction(let_decl.name);
@@ -350,7 +350,7 @@ const InlineContext = struct {
         const scope_mark = self.scopeMark();
         const function_mark = self.functionMark();
         _ = try self.pushScopeBinding(let_expr.name);
-        if (try self.smallFunctionFromExpr(value.*)) |function| {
+        if (try self.smallFunctionFromBinding(let_expr.name, value.*)) |function| {
             try self.pushFunction(let_expr.name, function);
         } else {
             try self.shadowFunction(let_expr.name);
@@ -421,6 +421,11 @@ const InlineContext = struct {
         }
     }
 
+    fn smallFunctionFromBinding(self: *InlineContext, name: []const u8, expr: ir.Expr) InlineError!?SmallFunction {
+        if (isBackendIntrinsicFunction(name)) return null;
+        return self.smallFunctionFromExpr(expr);
+    }
+
     fn smallFunctionFromExpr(self: *InlineContext, expr: ir.Expr) InlineError!?SmallFunction {
         const lambda = switch (expr) {
             .Lambda => |lambda| lambda,
@@ -429,6 +434,7 @@ const InlineContext = struct {
         if (!lambdaTypesInlineSafe(lambda)) return null;
         if (containsLet(lambda.body.*)) return null;
         if (containsAppOrMutation(lambda.body.*)) return null;
+        if (containsAppThroughParam(lambda.body.*, lambda.params)) return null;
         const count = boundedNodeCount(lambda.body.*, max_small_body_nodes) orelse return null;
         if (count > max_small_body_nodes) return null;
 
@@ -1056,7 +1062,8 @@ fn containsAppOrMutation(expr: ir.Expr) bool {
     return switch (expr) {
         .Lambda => |lambda| containsAppOrMutation(lambda.body.*),
         .Constant, .Var => false,
-        .App, .AccountFieldSet => true,
+        .App => |app| containsAppOrMutation(app.callee.*) or anyContainsAppOrMutation(app.args),
+        .AccountFieldSet => true,
         .Let => |let_expr| containsAppOrMutation(let_expr.value.*) or containsAppOrMutation(let_expr.body.*),
         .If => |if_expr| containsAppOrMutation(if_expr.cond.*) or containsAppOrMutation(if_expr.then_branch.*) or containsAppOrMutation(if_expr.else_branch.*),
         .Prim => |prim| anyContainsAppOrMutation(prim.args),
@@ -1093,6 +1100,71 @@ fn anyRecordFieldContainsAppOrMutation(fields: []const ir.RecordExprField) bool 
     return false;
 }
 
+fn isBackendIntrinsicFunction(name: []const u8) bool {
+    return std.mem.eql(u8, name, "read_u8") or
+        std.mem.eql(u8, name, "read_u64_le") or
+        std.mem.eql(u8, name, "write_u64_le") or
+        std.mem.eql(u8, name, "set_account_data") or
+        std.mem.eql(u8, name, "vault_deposit") or
+        std.mem.eql(u8, name, "vault_withdraw");
+}
+
+fn containsAppThroughParam(expr: ir.Expr, params: []const ir.Param) bool {
+    return switch (expr) {
+        .Lambda => |lambda| containsAppThroughParam(lambda.body.*, params),
+        .Constant, .Var => false,
+        .App => |app| blk: {
+            if (app.callee.* == .Var and paramNamed(params, app.callee.Var.name)) break :blk true;
+            if (containsAppThroughParam(app.callee.*, params)) break :blk true;
+            for (app.args) |arg| {
+                if (containsAppThroughParam(arg.*, params)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| containsAppThroughParam(let_expr.value.*, params) or containsAppThroughParam(let_expr.body.*, params),
+        .If => |if_expr| containsAppThroughParam(if_expr.cond.*, params) or containsAppThroughParam(if_expr.then_branch.*, params) or containsAppThroughParam(if_expr.else_branch.*, params),
+        .Prim => |prim| anyContainsAppThroughParam(prim.args, params),
+        .Ctor => |ctor| anyContainsAppThroughParam(ctor.args, params),
+        .Match => |match_expr| blk: {
+            if (containsAppThroughParam(match_expr.scrutinee.*, params)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (arm.guard) |guard| {
+                    if (containsAppThroughParam(guard.*, params)) break :blk true;
+                }
+                if (containsAppThroughParam(arm.body.*, params)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| anyContainsAppThroughParam(tuple_expr.items, params),
+        .TupleProj => |tuple_proj| containsAppThroughParam(tuple_proj.tuple_expr.*, params),
+        .Record => |record_expr| anyRecordFieldContainsAppThroughParam(record_expr.fields, params),
+        .RecordField => |record_field| containsAppThroughParam(record_field.record_expr.*, params),
+        .RecordUpdate => |record_update| containsAppThroughParam(record_update.base_expr.*, params) or anyRecordFieldContainsAppThroughParam(record_update.fields, params),
+        .AccountFieldSet => |field_set| containsAppThroughParam(field_set.account_expr.*, params) or containsAppThroughParam(field_set.value.*, params),
+    };
+}
+
+fn anyContainsAppThroughParam(exprs: []const *const ir.Expr, params: []const ir.Param) bool {
+    for (exprs) |expr| {
+        if (containsAppThroughParam(expr.*, params)) return true;
+    }
+    return false;
+}
+
+fn anyRecordFieldContainsAppThroughParam(fields: []const ir.RecordExprField, params: []const ir.Param) bool {
+    for (fields) |field| {
+        if (containsAppThroughParam(field.value.*, params)) return true;
+    }
+    return false;
+}
+
+fn paramNamed(params: []const ir.Param, name: []const u8) bool {
+    for (params) |param| {
+        if (std.mem.eql(u8, param.name, name)) return true;
+    }
+    return false;
+}
+
 fn allInlineArgs(args: []const *const ir.Expr) bool {
     for (args) |arg| {
         if (!isInlineArg(arg.*)) return false;
@@ -1121,14 +1193,13 @@ fn lambdaTypesInlineSafe(lambda: ir.Lambda) bool {
 
 fn tyInlineSafe(ty: ir.Ty) bool {
     return switch (ty) {
-        .Int, .Bool, .Unit => true,
+        .Int, .Bool, .Unit, .String, .Var, .Adt, .Tuple, .Record => true,
         .Arrow => |arrow| blk: {
             for (arrow.params) |param| {
                 if (!tyInlineSafe(param)) break :blk false;
             }
             break :blk tyInlineSafe(arrow.ret.*);
         },
-        .String, .Var, .Adt, .Tuple, .Record => false,
     };
 }
 
@@ -1231,11 +1302,34 @@ fn intPtr(arena: *std.heap.ArenaAllocator, value: i64) !*const ir.Expr {
     } });
 }
 
+fn stringPtr(arena: *std.heap.ArenaAllocator, value: []const u8) !*const ir.Expr {
+    return exprPtr(arena, .{ .Constant = .{
+        .value = .{ .String = value },
+        .ty = .String,
+        .layout = layout.defaultFor(.StringLiteral),
+    } });
+}
+
+fn layoutForTy(ty: ir.Ty) layout.Layout {
+    return switch (ty) {
+        .Int, .Bool => layout.intConstant(),
+        .Unit => layout.unitValue(),
+        .String => layout.defaultFor(.StringLiteral),
+        .Tuple, .Record => layout.structPack(),
+        .Arrow => layout.topLevelLambda(),
+        .Var, .Adt => layout.defaultFor(.Aggregate),
+    };
+}
+
 fn varPtr(arena: *std.heap.ArenaAllocator, name: []const u8) !*const ir.Expr {
+    return typedVarPtr(arena, name, .Int);
+}
+
+fn typedVarPtr(arena: *std.heap.ArenaAllocator, name: []const u8, ty: ir.Ty) !*const ir.Expr {
     return exprPtr(arena, .{ .Var = .{
         .name = name,
-        .ty = .Int,
-        .layout = layout.intConstant(),
+        .ty = ty,
+        .layout = layoutForTy(ty),
     } });
 }
 
@@ -1252,36 +1346,78 @@ fn primAddPtr(arena: *std.heap.ArenaAllocator, lhs: *const ir.Expr, rhs: *const 
 }
 
 fn appPtr(arena: *std.heap.ArenaAllocator, callee_name: []const u8, args: []const *const ir.Expr, ty: ir.Ty) !*const ir.Expr {
+    return appPtrWithReturn(arena, callee_name, args, ty, .Int);
+}
+
+fn appPtrWithReturn(arena: *std.heap.ArenaAllocator, callee_name: []const u8, args: []const *const ir.Expr, callee_ty: ir.Ty, ret_ty: ir.Ty) !*const ir.Expr {
     const owned_args = try arena.allocator().alloc(*const ir.Expr, args.len);
     @memcpy(owned_args, args);
     return exprPtr(arena, .{ .App = .{
         .callee = try exprPtr(arena, .{ .Var = .{
             .name = callee_name,
-            .ty = ty,
+            .ty = callee_ty,
             .layout = layout.topLevelLambda(),
         } }),
         .args = owned_args,
-        .ty = .Int,
-        .layout = layout.intConstant(),
+        .ty = ret_ty,
+        .layout = layoutForTy(ret_ty),
     } });
 }
 
 fn intToIntTy(arena: *std.heap.ArenaAllocator) !ir.Ty {
-    const param_tys = try arena.allocator().alloc(ir.Ty, 1);
-    param_tys[0] = .Int;
+    return arrowTy(arena, &.{.Int}, .Int);
+}
+
+fn arrowTy(arena: *std.heap.ArenaAllocator, params: []const ir.Ty, ret: ir.Ty) !ir.Ty {
+    const param_tys = try arena.allocator().alloc(ir.Ty, params.len);
+    @memcpy(param_tys, params);
     const ret_ty = try arena.allocator().create(ir.Ty);
-    ret_ty.* = .Int;
+    ret_ty.* = ret;
     return .{ .Arrow = .{ .params = param_tys, .ret = ret_ty } };
 }
 
+fn tupleTy(arena: *std.heap.ArenaAllocator, items: []const ir.Ty) !ir.Ty {
+    const item_tys = try arena.allocator().alloc(ir.Ty, items.len);
+    @memcpy(item_tys, items);
+    return .{ .Tuple = item_tys };
+}
+
+fn recordTy(name: []const u8) ir.Ty {
+    return .{ .Record = .{ .name = name, .params = &.{} } };
+}
+
 fn lambdaPtr(arena: *std.heap.ArenaAllocator, param_name: []const u8, body: *const ir.Expr) !*const ir.Expr {
-    const params = try arena.allocator().alloc(ir.Param, 1);
-    params[0] = .{ .name = param_name, .ty = .Int };
+    return lambdaPtrWithTypes(arena, &.{.{ .name = param_name, .ty = .Int }}, try intToIntTy(arena), body);
+}
+
+fn lambdaPtrWithTypes(arena: *std.heap.ArenaAllocator, params: []const ir.Param, ty: ir.Ty, body: *const ir.Expr) !*const ir.Expr {
+    const owned_params = try arena.allocator().alloc(ir.Param, params.len);
+    @memcpy(owned_params, params);
     return exprPtr(arena, .{ .Lambda = .{
-        .params = params,
+        .params = owned_params,
         .body = body,
-        .ty = try intToIntTy(arena),
+        .ty = ty,
         .layout = layout.topLevelLambda(),
+    } });
+}
+
+fn tuplePtr(arena: *std.heap.ArenaAllocator, items: []const *const ir.Expr, ty: ir.Ty) !*const ir.Expr {
+    const owned_items = try arena.allocator().alloc(*const ir.Expr, items.len);
+    @memcpy(owned_items, items);
+    return exprPtr(arena, .{ .Tuple = .{
+        .items = owned_items,
+        .ty = ty,
+        .layout = layout.structPack(),
+    } });
+}
+
+fn recordPtr(arena: *std.heap.ArenaAllocator, fields: []const ir.RecordExprField, ty: ir.Ty) !*const ir.Expr {
+    const owned_fields = try arena.allocator().alloc(ir.RecordExprField, fields.len);
+    @memcpy(owned_fields, fields);
+    return exprPtr(arena, .{ .Record = .{
+        .fields = owned_fields,
+        .ty = ty,
+        .layout = layout.structPack(),
     } });
 }
 
@@ -1419,4 +1555,172 @@ test "inline skips calls when captured variables would be shadowed" {
     const inlined = try inlineTopExpr(&arena, outer_y);
     const app = inlined.Let.body.Let.body.Let.body;
     try std.testing.expect(app.* == .App);
+}
+
+test "inline accepts string-typed function with app body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const string_length_ty = try arrowTy(&arena, &.{.String}, .Int);
+    const f_ty = try arrowTy(&arena, &.{.String}, .Int);
+    const f_body = try appPtrWithReturn(
+        &arena,
+        "String.length",
+        &.{try typedVarPtr(&arena, "x", .String)},
+        string_length_ty,
+        .Int,
+    );
+    const f_lambda = try lambdaPtrWithTypes(&arena, &.{.{ .name = "x", .ty = .String }}, f_ty, f_body);
+    const call = try appPtrWithReturn(&arena, "f", &.{try stringPtr(&arena, "hello")}, f_ty, .Int);
+
+    const inlined = try inlineTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+        .name = "f",
+        .value = f_lambda,
+        .body = call,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } }));
+
+    try std.testing.expect(inlined.* == .Let);
+    try std.testing.expect(inlined.Let.body.* == .App);
+    const app = inlined.Let.body.App;
+    try std.testing.expect(app.callee.* == .Var);
+    try std.testing.expectEqualStrings("String.length", app.callee.Var.name);
+    try std.testing.expect(app.args[0].* == .Constant);
+    try std.testing.expectEqualStrings("hello", app.args[0].Constant.value.String);
+}
+
+test "inline accepts forwarding app body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const g_ty = try intToIntTy(&arena);
+    const f_ty = try intToIntTy(&arena);
+    const f_body = try appPtrWithReturn(&arena, "g", &.{try varPtr(&arena, "x")}, g_ty, .Int);
+    const f_lambda = try lambdaPtrWithTypes(&arena, &.{.{ .name = "x", .ty = .Int }}, f_ty, f_body);
+    const call = try appPtrWithReturn(&arena, "f", &.{try intPtr(&arena, 7)}, f_ty, .Int);
+
+    const inlined = try inlineTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+        .name = "f",
+        .value = f_lambda,
+        .body = call,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } }));
+
+    try std.testing.expect(inlined.* == .Let);
+    try std.testing.expect(inlined.Let.body.* == .App);
+    const app = inlined.Let.body.App;
+    try std.testing.expect(app.callee.* == .Var);
+    try std.testing.expectEqualStrings("g", app.callee.Var.name);
+    try std.testing.expect(app.args[0].* == .Constant);
+    try std.testing.expectEqual(@as(i64, 7), app.args[0].Constant.value.Int);
+}
+
+test "inline skips higher-order calls through function parameters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const h_param_ty = try intToIntTy(&arena);
+    const apply_ty = try arrowTy(&arena, &.{h_param_ty}, .Int);
+    const apply_body = try appPtrWithReturn(&arena, "h", &.{try intPtr(&arena, 3)}, h_param_ty, .Int);
+    const apply_lambda = try lambdaPtrWithTypes(&arena, &.{.{ .name = "h", .ty = h_param_ty }}, apply_ty, apply_body);
+    const g_ty = try intToIntTy(&arena);
+    const call = try appPtrWithReturn(&arena, "apply", &.{try typedVarPtr(&arena, "g", g_ty)}, apply_ty, .Int);
+
+    const inlined = try inlineTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+        .name = "apply",
+        .value = apply_lambda,
+        .body = call,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } }));
+
+    try std.testing.expect(inlined.* == .Let);
+    try std.testing.expect(inlined.Let.body.* == .App);
+    try std.testing.expectEqualStrings("apply", inlined.Let.body.App.callee.Var.name);
+}
+
+test "inline skips backend intrinsic helper bindings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const account_ty = recordTy("account");
+    const helper_ty = try arrowTy(&arena, &.{ account_ty, .String }, .Unit);
+    const helper_lambda = try lambdaPtrWithTypes(
+        &arena,
+        &.{ .{ .name = "account", .ty = account_ty }, .{ .name = "bytes", .ty = .String } },
+        helper_ty,
+        try exprPtr(&arena, .{ .Ctor = .{
+            .name = "()",
+            .args = &.{},
+            .ty = .Unit,
+            .layout = layout.unitValue(),
+            .tag = 0,
+        } }),
+    );
+    const call = try appPtrWithReturn(
+        &arena,
+        "set_account_data",
+        &.{ try typedVarPtr(&arena, "account", account_ty), try stringPtr(&arena, "data") },
+        helper_ty,
+        .Unit,
+    );
+
+    const inlined = try inlineTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+        .name = "set_account_data",
+        .value = helper_lambda,
+        .body = call,
+        .ty = .Unit,
+        .layout = layout.unitValue(),
+    } }));
+
+    try std.testing.expect(inlined.* == .Let);
+    try std.testing.expect(inlined.Let.body.* == .App);
+    try std.testing.expectEqualStrings("set_account_data", inlined.Let.body.App.callee.Var.name);
+}
+
+test "inline accepts tuple and record return types" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const pair_ty = try tupleTy(&arena, &.{ .Int, .Int });
+    const record_ty = recordTy("box");
+    const make_pair_ty = try arrowTy(&arena, &.{.Int}, pair_ty);
+    const make_box_ty = try arrowTy(&arena, &.{.Int}, record_ty);
+
+    const pair_body = try tuplePtr(&arena, &.{ try varPtr(&arena, "x"), try intPtr(&arena, 1) }, pair_ty);
+    const pair_lambda = try lambdaPtrWithTypes(&arena, &.{.{ .name = "x", .ty = .Int }}, make_pair_ty, pair_body);
+    const pair_call = try appPtrWithReturn(&arena, "make_pair", &.{try intPtr(&arena, 41)}, make_pair_ty, pair_ty);
+
+    const box_body = try recordPtr(&arena, &.{.{ .name = "value", .value = try varPtr(&arena, "x") }}, record_ty);
+    const box_lambda = try lambdaPtrWithTypes(&arena, &.{.{ .name = "x", .ty = .Int }}, make_box_ty, box_body);
+    const box_call = try appPtrWithReturn(&arena, "make_box", &.{try intPtr(&arena, 42)}, make_box_ty, record_ty);
+
+    const expr = try exprPtr(&arena, .{ .Let = .{
+        .name = "make_pair",
+        .value = pair_lambda,
+        .body = try exprPtr(&arena, .{ .Let = .{
+            .name = "pair",
+            .value = pair_call,
+            .body = try exprPtr(&arena, .{ .Let = .{
+                .name = "make_box",
+                .value = box_lambda,
+                .body = box_call,
+                .ty = record_ty,
+                .layout = layout.structPack(),
+            } }),
+            .ty = record_ty,
+            .layout = layout.structPack(),
+        } }),
+        .ty = record_ty,
+        .layout = layout.structPack(),
+    } });
+
+    const inlined = try inlineTopExpr(&arena, expr);
+    try std.testing.expect(inlined.* == .Let);
+    try std.testing.expect(inlined.Let.body.* == .Let);
+    try std.testing.expect(inlined.Let.body.Let.value.* == .Tuple);
+    try std.testing.expect(inlined.Let.body.Let.body.* == .Let);
+    try std.testing.expect(inlined.Let.body.Let.body.Let.body.* == .Record);
 }
