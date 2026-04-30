@@ -1,1 +1,1 @@
-(module (let entrypoint (lambda (_input :ty (arrow unit int) :layout (arena flat)) (let x (const 5 :ty int :layout (static flat)) (let y (const 7 :ty int :layout (static flat)) (var x :ty int :layout (static flat)) :ty int :layout (static flat)) :ty int :layout (static flat)))))
+(module (let entrypoint (lambda (_input :ty (arrow unit int) :layout (arena flat)) (let x (const 5 :ty int :layout (static flat)) (var x :ty int :layout (static flat)) :ty int :layout (static flat)))))

@@ -20,4 +20,4 @@ let entrypoint _input =
     | (a, _) as whole -> (match whole with (_, b) -> a + b)
   in
   let _result = int_score + string_score + alias_score in
-  0
+  if _result = 18 then 0 else 1
