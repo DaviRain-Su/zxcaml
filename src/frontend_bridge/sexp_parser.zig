@@ -9,7 +9,7 @@ const std = @import("std");
 const sexp_lexer = @import("sexp_lexer.zig");
 
 /// Current frontend wire-format version accepted by the bridge.
-pub const expected_wire_version = "1.0";
+pub const expected_wire_version = "1.1";
 
 /// Generic S-expression node used before typed ttree decoding.
 pub const Sexp = union(enum) {

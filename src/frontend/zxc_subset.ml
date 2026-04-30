@@ -35,6 +35,7 @@ type expr =
   | Lambda of lambda
   | App of app
   | Let of let_expr
+  | Let_rec_group of let_rec_group
   | If of if_expr
   | Prim of prim
   | Ctor of ctor
@@ -60,6 +61,17 @@ and let_expr = {
   value : expr;
   body : expr;
   is_rec : bool;
+}
+
+and let_rec_group = {
+  bindings : let_rec_binding list;
+  group_body : expr;
+}
+
+and let_rec_binding = {
+  rec_name : string;
+  rec_params : param list;
+  rec_body : expr;
 }
 
 and if_expr = {
@@ -211,6 +223,7 @@ type external_decl = {
 
 type decl =
   | Let_decl of value_decl
+  | Let_rec_group_decl of let_rec_binding list
   | Type_decl of type_decl
   | Tuple_type_decl of tuple_type_decl
   | Record_type_decl of record_type_decl
@@ -778,6 +791,15 @@ and parse_record_fields env fields =
       | None -> acc)
     fields []
 
+and split_rec_binding_body = function
+  | Lambda lambda -> (lambda.params, lambda.body)
+  | body -> ([], body)
+
+and parse_let_rec_binding env (binding : value_binding) =
+  let rec_name = parse_binding_name binding.vb_pat in
+  let rec_params, rec_body = split_rec_binding_body (parse_expr env binding.vb_expr) in
+  { rec_name; rec_params; rec_body }
+
 and parse_expr env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
@@ -811,6 +833,12 @@ and parse_expr env (expr : expression) =
       let value = parse_expr env binding.vb_expr in
       let body = parse_expr env body in
       Let { name; value; body; is_rec = true }
+  | Texp_let (Recursive, (_ :: _ :: _ as bindings), body) ->
+      Let_rec_group
+        {
+          bindings = List.map (parse_let_rec_binding env) bindings;
+          group_body = parse_expr env body;
+        }
   | Texp_let (_, [], _) ->
       unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc ()
   | Texp_let (_, _ :: _ :: _, _) ->
@@ -1165,6 +1193,11 @@ let rec expr_uses_record_fields field_names = function
   | Let let_expr ->
       expr_uses_record_fields field_names let_expr.value
       || expr_uses_record_fields field_names let_expr.body
+  | Let_rec_group group ->
+      List.exists
+        (fun binding -> expr_uses_record_fields field_names binding.rec_body)
+        group.bindings
+      || expr_uses_record_fields field_names group.group_body
   | If if_expr ->
       expr_uses_record_fields field_names if_expr.cond
       || expr_uses_record_fields field_names if_expr.then_branch
@@ -1218,10 +1251,12 @@ and pattern_uses_record_fields field_names = function
 
 let decl_defines_record_type type_name = function
   | Record_type_decl decl -> String.equal decl.record_type_name type_name
-  | Let_decl _ | Type_decl _ | Tuple_type_decl _ | External_decl _ -> false
+  | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _
+  | External_decl _ ->
+      false
 
 let decl_uses_type type_name = function
-  | Let_decl _ -> false
+  | Let_decl _ | Let_rec_group_decl _ -> false
   | Type_decl decl -> List.exists (variant_uses_type type_name) decl.variants
   | Tuple_type_decl decl ->
       List.exists (type_expr_uses_type type_name) decl.tuple_items
@@ -1231,6 +1266,10 @@ let decl_uses_type type_name = function
 
 let decl_uses_record_fields field_names = function
   | Let_decl decl -> expr_uses_record_fields field_names decl.body
+  | Let_rec_group_decl bindings ->
+      List.exists
+        (fun binding -> expr_uses_record_fields field_names binding.rec_body)
+        bindings
   | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | External_decl _ -> false
 
 let decl_defines_record_field field_name = function
@@ -1238,7 +1277,9 @@ let decl_defines_record_field field_name = function
       List.exists
         (fun field -> String.equal field.record_field_name field_name)
         decl.record_fields
-  | Let_decl _ | Type_decl _ | Tuple_type_decl _ | External_decl _ -> false
+  | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _
+  | External_decl _ ->
+      false
 
 let record_field_used_without_source_decl field_names decls =
   StringSet.exists
@@ -1304,10 +1345,13 @@ let parse_structure_item env (item : structure_item) =
       let decl =
         match parse_value_binding env binding with
         | Let_decl decl -> Let_decl { decl with is_rec = true }
-        | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | External_decl _ ->
+        | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _ | Record_type_decl _
+        | External_decl _ ->
             assert false
       in
       (env, [ decl ])
+  | Tstr_value (Recursive, (_ :: _ :: _ as bindings)) ->
+      (env, [ Let_rec_group_decl (List.map (parse_let_rec_binding env) bindings) ])
   | Tstr_type (_, declarations) ->
       let decls = List.map parse_type_declaration declarations in
       let type_decls =
@@ -1319,7 +1363,7 @@ let parse_structure_item env (item : structure_item) =
   | Tstr_primitive value -> (env, [ parse_external_decl value ])
   | Tstr_value (_, []) ->
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()
-  | Tstr_value (_, _ :: _ :: _) ->
+  | Tstr_value (Nonrecursive, _ :: _ :: _) ->
       unsupported ~node_kind:"Tstr_value(and)" ~loc:item.str_loc ()
   | other ->
       unsupported ~node_kind:(structure_item_kind other) ~loc:item.str_loc ()

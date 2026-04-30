@@ -5,11 +5,12 @@
    whitelisted option/result constructor expressions, basic match expressions,
    user-authored ADT type declarations, nested constructor patterns, guarded
    match arms, tuple/record construction/projection forms, and the P3
-   account/syscall/CPI surface, and P5 external declarations. *)
+   account/syscall/CPI surface, P5 external declarations, and P9 mutual
+   recursive binding groups. *)
 open Format
 open Zxc_subset
 
-let version = "1.0"
+let version = "1.1"
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
@@ -40,6 +41,12 @@ let rec pp_expr ppf = function
         (if let_expr.is_rec then "let-rec" else "let")
         pp_atom let_expr.name pp_expr let_expr.value
         pp_expr let_expr.body
+  | Let_rec_group group ->
+      fprintf ppf "(Let_rec_group (bindings";
+      List.iter
+        (fun binding -> fprintf ppf " %a" pp_let_rec_binding binding)
+        group.bindings;
+      fprintf ppf ") %a)" pp_expr group.group_body
   | If if_expr ->
       fprintf ppf "(if %a %a %a)" pp_expr if_expr.cond pp_expr
         if_expr.then_branch pp_expr if_expr.else_branch
@@ -83,6 +90,11 @@ and pp_record_expr_fields ppf = function
 
 and pp_record_expr_field ppf field =
   fprintf ppf "(%a %a)" pp_atom field.field_name pp_expr field.field_value
+
+and pp_let_rec_binding ppf binding =
+  fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
+  List.iter (fun param -> fprintf ppf " %a" pp_param param) binding.rec_params;
+  fprintf ppf ") (body %a))" pp_expr binding.rec_body
 
 and pp_params ppf = function
   | [] -> ()
@@ -146,6 +158,12 @@ let rec pp_decl ppf decl =
       fprintf ppf "(%s %a %a)"
         (if decl.is_rec then "let-rec" else "let")
         pp_atom decl.name pp_expr decl.body
+  | Let_rec_group_decl bindings ->
+      fprintf ppf "(Let_rec_group (bindings";
+      List.iter
+        (fun binding -> fprintf ppf " %a" pp_let_rec_binding binding)
+        bindings;
+      fprintf ppf "))"
   | Type_decl decl ->
       fprintf ppf "(type_decl (name %a)" pp_atom decl.type_name;
       fprintf ppf " (params";

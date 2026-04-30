@@ -1,7 +1,7 @@
 //! Typed Zig mirror for the M1 P3 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 1.0 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 1.1 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -309,6 +309,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
 
     const file_version = try expectAtom(header[1]);
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "1.0") and
         !std.mem.eql(u8, file_version, "0.9") and
         !std.mem.eql(u8, file_version, "0.8") and
         !std.mem.eql(u8, file_version, "0.6") and
@@ -328,7 +329,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=1.0\n");
+            try writeStderr(io, " expected=1.1\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
@@ -337,11 +338,12 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.6") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.7") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.8") or
-                std.mem.eql(u8, extractHeaderVersion(bytes), "0.9"))
+                std.mem.eql(u8, extractHeaderVersion(bytes), "0.9") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "1.0"))
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits instruction-data-aware sexp 1.0.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits mutual-recursion-aware sexp 1.1.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -350,7 +352,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 1.0 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 1.1 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
