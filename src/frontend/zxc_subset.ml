@@ -116,13 +116,26 @@ and match_arm = {
 and match_pattern =
   | Pat_any
   | Pat_var of string
+  | Pat_const of const_pattern
   | Pat_ctor of ctor_pattern
   | Pat_tuple of match_pattern list
   | Pat_record of record_pattern_field list
+  | Pat_or of match_pattern list
+  | Pat_alias of alias_pattern
+
+and const_pattern =
+  | Const_pat_int of int
+  | Const_pat_string of string
+  | Const_pat_char of char
 
 and ctor_pattern = {
   name : string;
   args : match_pattern list;
+}
+
+and alias_pattern = {
+  alias_pattern : match_pattern;
+  alias_name : string;
 }
 
 and record_pattern_field = {
@@ -585,10 +598,32 @@ let rec parse_match_scrutinee env (expr : expression) =
         }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
+let flatten_or_pattern = function
+  | Pat_or alternatives -> alternatives
+  | pattern -> [ pattern ]
+
 let rec parse_match_pattern env (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> Pat_any
   | Tpat_var (ident, _, _) -> Pat_var (ident_name ident)
+  | Tpat_alias (inner, ident, _, _) ->
+      Pat_alias
+        {
+          alias_pattern = parse_match_pattern env (inner :> pattern);
+          alias_name = ident_name ident;
+        }
+  | Tpat_constant (Const_int n) -> Pat_const (Const_pat_int n)
+  | Tpat_constant (Const_string (value, _, _)) ->
+      Pat_const (Const_pat_string value)
+  | Tpat_constant (Const_char value) -> Pat_const (Const_pat_char value)
+  | Tpat_or (left, right, None) ->
+      let left = parse_match_pattern env (left :> pattern) in
+      let right = parse_match_pattern env (right :> pattern) in
+      Pat_or (flatten_or_pattern left @ flatten_or_pattern right)
+  | Tpat_or (_left, _right, Some _) ->
+      unsupported ~node_kind:"Tpat_or(type-pattern)" ~loc:pat.pat_loc
+        ~message:"or-patterns derived from #type patterns are not supported"
+        ()
   | Tpat_tuple items -> Pat_tuple (List.map (parse_match_pattern env) items)
   | Tpat_record (fields, _) ->
       Pat_record
@@ -605,11 +640,23 @@ let rec parse_match_pattern env (pat : pattern) =
       if type_env_has_constructor env name then
         Pat_ctor { name; args = List.map (parse_match_pattern env) args }
       else unsupported ~node_kind:("Tpat_construct(" ^ name ^ ")") ~loc:pat.pat_loc ()
+  | Tpat_constant _ ->
+      unsupported ~node_kind:"Tpat_constant" ~loc:pat.pat_loc
+        ~message:"only int, string, and char literal patterns are supported"
+        ()
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
-let parse_computation_pattern env (pat : computation general_pattern) =
+let rec parse_computation_pattern env (pat : computation general_pattern) =
   match pat.pat_desc with
   | Tpat_value value_pat -> parse_match_pattern env (value_pat :> pattern)
+  | Tpat_or (left, right, None) ->
+      let left = parse_computation_pattern env left in
+      let right = parse_computation_pattern env right in
+      Pat_or (flatten_or_pattern left @ flatten_or_pattern right)
+  | Tpat_or (_left, _right, Some _) ->
+      unsupported ~node_kind:"Tpat_or(type-pattern)" ~loc:pat.pat_loc
+        ~message:"or-patterns derived from #type patterns are not supported"
+        ()
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
 let rec parse_match_case env (case : computation case) =
@@ -1153,7 +1200,7 @@ and match_arm_uses_record_fields field_names arm =
   || expr_uses_record_fields field_names arm.body
 
 and pattern_uses_record_fields field_names = function
-  | Pat_any | Pat_var _ -> false
+  | Pat_any | Pat_var _ | Pat_const _ -> false
   | Pat_ctor ctor -> List.exists (pattern_uses_record_fields field_names) ctor.args
   | Pat_tuple items -> List.exists (pattern_uses_record_fields field_names) items
   | Pat_record fields ->
@@ -1162,6 +1209,10 @@ and pattern_uses_record_fields field_names = function
           StringSet.mem field.pattern_field_name field_names
           || pattern_uses_record_fields field_names field.pattern_field_value)
         fields
+  | Pat_or alternatives ->
+      List.exists (pattern_uses_record_fields field_names) alternatives
+  | Pat_alias alias ->
+      pattern_uses_record_fields field_names alias.alias_pattern
 
 let decl_defines_record_type type_name = function
   | Record_type_decl decl -> String.equal decl.record_type_name type_name

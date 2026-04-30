@@ -95,6 +95,66 @@ CASES: list[tuple[str, str, str]] = [
         "(case (ctor None) (const-int 3)))))))\n",
     ),
     (
+        "integer literal pattern",
+        "let entrypoint x = match x with 0 -> 10 | 1 -> 11 | _ -> 12\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (x) "
+        "(match (var x) "
+        "(case (const-pattern (const-int 0)) (const-int 10)) "
+        "(case (const-pattern (const-int 1)) (const-int 11)) "
+        "(case _ (const-int 12)))))))\n",
+    ),
+    (
+        "string literal pattern",
+        'let entrypoint s = match s with "hello" -> 1 | _ -> 0\n',
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (s) "
+        "(match (var s) "
+        '(case (const-pattern (const-string "hello")) (const-int 1)) '
+        "(case _ (const-int 0)))))))\n",
+    ),
+    (
+        "char literal pattern",
+        "let entrypoint c = match c with 'a' -> 1 | _ -> 0\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (c) "
+        "(match (var c) "
+        "(case (const-pattern (const-char 97)) (const-int 1)) "
+        "(case _ (const-int 0)))))))\n",
+    ),
+    (
+        "or pattern literals",
+        "let entrypoint x = match x with 0 | 1 | 2 -> 1 | _ -> 0\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (x) "
+        "(match (var x) "
+        "(case (or-pattern (const-pattern (const-int 0)) "
+        "(const-pattern (const-int 1)) (const-pattern (const-int 2))) "
+        "(const-int 1)) "
+        "(case _ (const-int 0)))))))\n",
+    ),
+    (
+        "or pattern with shared binding",
+        "type t = A of int | B of int\nlet entrypoint x = match x with A n | B n -> n\n",
+        "(zxcaml-cir 1.0 (module (type_decl (name t) (params) "
+        "(variants ((A (payload_types (type-ref int))) "
+        "(B (payload_types (type-ref int)))))) "
+        "(let entrypoint (lambda (x) (match (var x) "
+        "(case (or-pattern (ctor A (var n)) (ctor B (var n))) (var n)))))))\n",
+    ),
+    (
+        "tuple alias pattern",
+        "let entrypoint pair = match pair with (a, _) as whole -> a\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (pair) "
+        "(match (var pair) "
+        "(case (alias-pattern (tuple_pattern (var a) _) whole) (var a)))))))\n",
+    ),
+    (
+        "nested alias pattern",
+        "let entrypoint x = match x with Some (n as m) -> n + m | None -> 0\n",
+        "(zxcaml-cir 1.0 (module (let entrypoint (lambda (x) "
+        "(match (var x) "
+        "(case (ctor Some (alias-pattern (var n) m)) "
+        "(prim \"+\" (var n) (var m))) "
+        "(case (ctor None) (const-int 0)))))))\n",
+    ),
+    (
         "sequence expression desugars to let wildcard",
         'let entrypoint _ = Syscall.sol_log "one"; 2\n',
         "(zxcaml-cir 1.0 (module (let entrypoint (lambda (_) "
@@ -416,6 +476,11 @@ REJECT_CASES: list[tuple[str, str, str]] = [
         "external rejects empty symbol",
         'external bad : int -> unit = ""\n',
         "external declarations require a non-empty symbol string",
+    ),
+    (
+        "or pattern rejects incompatible bindings",
+        "let entrypoint x = match x with Some a | None -> a\n",
+        'Variable \\"a\\" must occur on both sides of this \\"|\\" pattern',
     ),
 ]
 

@@ -101,6 +101,7 @@ and pp_match_arm ppf arm =
 and pp_match_pattern ppf = function
   | Pat_any -> fprintf ppf "_"
   | Pat_var name -> fprintf ppf "(var %a)" pp_atom name
+  | Pat_const const -> fprintf ppf "(const-pattern %a)" pp_const_pattern const
   | Pat_ctor ctor ->
       fprintf ppf "(ctor %a" pp_atom ctor.name;
       List.iter (fun arg -> fprintf ppf " %a" pp_match_pattern arg) ctor.args;
@@ -113,6 +114,20 @@ and pp_match_pattern ppf = function
       fprintf ppf "(record_pattern (fields (";
       pp_record_pattern_fields ppf fields;
       fprintf ppf ")))"
+  | Pat_or alternatives ->
+      fprintf ppf "(or-pattern";
+      List.iter
+        (fun alternative -> fprintf ppf " %a" pp_match_pattern alternative)
+        alternatives;
+      fprintf ppf ")"
+  | Pat_alias alias ->
+      fprintf ppf "(alias-pattern %a %a)" pp_match_pattern alias.alias_pattern
+        pp_atom alias.alias_name
+
+and pp_const_pattern ppf = function
+  | Const_pat_int n -> fprintf ppf "(const-int %d)" n
+  | Const_pat_string value -> fprintf ppf "(const-string %S)" value
+  | Const_pat_char value -> fprintf ppf "(const-char %d)" (Char.code value)
 
 and pp_record_pattern_fields ppf = function
   | [] -> ()
