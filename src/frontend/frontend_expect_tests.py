@@ -169,6 +169,12 @@ CASES: list[tuple[str, str, str]] = [
         '(ctor "()"))))))\n',
     ),
     (
+        "assert expression sexp",
+        "let entrypoint x = assert (x > 0)\n",
+        "(zxcaml-cir 1.1 (module (let entrypoint (lambda (x) "
+        "(Assert (prim \">\" (var x) (const-int 0)))))))\n",
+    ),
+    (
         "function cases desugar to lambda match",
         "let entrypoint x = (function Some v -> v | None -> 0) x\n",
         "(zxcaml-cir 1.1 (module (let entrypoint (lambda (x) "

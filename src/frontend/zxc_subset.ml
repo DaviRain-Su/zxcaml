@@ -45,6 +45,7 @@ type expr =
   | Record of record_expr
   | Field_access of field_access
   | Record_update of record_update
+  | Assert of expr
   | Match of match_expr
 
 and lambda = {
@@ -940,6 +941,7 @@ and parse_expr env (expr : expression) =
           body = parse_expr env second;
           is_rec = false;
         }
+  | Texp_assert (condition, _) -> Assert (parse_expr env condition)
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let type_var_name name = "'" ^ name
@@ -1303,6 +1305,7 @@ let rec expr_uses_record_fields field_names = function
              StringSet.mem field.field_name field_names
              || expr_uses_record_fields field_names field.field_value)
            record_update.fields
+  | Assert condition -> expr_uses_record_fields field_names condition
   | Match match_expr ->
       expr_uses_record_fields field_names match_expr.scrutinee
       || List.exists (match_arm_uses_record_fields field_names) match_expr.arms

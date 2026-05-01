@@ -6,7 +6,7 @@
    user-authored ADT type declarations, nested constructor patterns, guarded
    match arms, tuple/record construction/projection forms, and the P3
    account/syscall/CPI surface, P5 external declarations, and P9 mutual
-   recursive binding groups. *)
+   recursive binding groups and assert expressions. *)
 open Format
 open Zxc_subset
 
@@ -76,6 +76,7 @@ let rec pp_expr ppf = function
       fprintf ppf "(record_update %a (fields (" pp_expr record_update.base_expr;
       pp_record_expr_fields ppf record_update.fields;
       fprintf ppf ")))"
+  | Assert condition -> fprintf ppf "(Assert %a)" pp_expr condition
   | Match match_expr ->
       fprintf ppf "(match %a" pp_expr match_expr.scrutinee;
       List.iter (fun arm -> fprintf ppf " %a" pp_match_arm arm) match_expr.arms;
