@@ -33,6 +33,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const AccountRuntime = @import("runtime/account.zig");
         \\const cpi = @import("runtime/cpi.zig");
         \\const prelude = @import("runtime/prelude.zig");
+        \\const runtime_panic = @import("runtime/panic.zig");
         \\const spl_token = @import("runtime/spl_token.zig");
         \\const syscalls = @import("runtime/syscalls.zig");
         \\
@@ -328,6 +329,7 @@ fn exprHasSelfTailCall(expr: lir.LExpr, function_name: []const u8) bool {
             break :blk false;
         },
         .Let => |let_expr| exprHasSelfTailCall(let_expr.value.*, function_name) or exprHasSelfTailCall(let_expr.body.*, function_name),
+        .Assert => |assert_expr| exprHasSelfTailCall(assert_expr.condition.*, function_name),
         .If => |if_expr| exprHasSelfTailCall(if_expr.cond.*, function_name) or
             exprHasSelfTailCall(if_expr.then_branch.*, function_name) or
             exprHasSelfTailCall(if_expr.else_branch.*, function_name),
@@ -634,6 +636,7 @@ fn emitExpr(
         .Var => |var_ref| try emitVariableValue(out, allocator, var_ref.name, ctx),
         .App => |app| try emitAppExpr(out, allocator, app, indent_level, ctx),
         .Let => |let_expr| try emitLetExpr(out, allocator, let_expr, indent_level, ctx),
+        .Assert => |assert_expr| try emitAssertExpr(out, allocator, assert_expr, indent_level, ctx),
         .If => |if_expr| try emitIfExpr(out, allocator, if_expr, indent_level, ctx),
         .Prim => |prim| try emitPrimExpr(out, allocator, prim, indent_level, ctx),
         .Ctor => |ctor_expr| try emitCtorExpr(out, allocator, ctor_expr, indent_level, ctx),
@@ -2560,6 +2563,26 @@ fn emitIfExpr(
     try append(out, allocator, "}");
 }
 
+fn emitAssertExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    assert_expr: lir.LAssert,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "if (!prelude.Bool.toNative(");
+    try emitExpr(out, allocator, assert_expr.condition.*, indent_level + 1, ctx);
+    try append(out, allocator, ")) runtime_panic.assertFailure();\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
 fn emitPrimExpr(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -3647,6 +3670,7 @@ fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
         },
         .Let => |let_expr| exprUsesName(let_expr.value.*, name) or
             (!std.mem.eql(u8, let_expr.name, name) and exprUsesName(let_expr.body.*, name)),
+        .Assert => |assert_expr| exprUsesName(assert_expr.condition.*, name),
         .If => |if_expr| exprUsesName(if_expr.cond.*, name) or exprUsesName(if_expr.then_branch.*, name) or exprUsesName(if_expr.else_branch.*, name),
         .Prim => |prim| blk: {
             for (prim.args) |arg| {
@@ -3722,6 +3746,7 @@ fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
             break :blk false;
         },
         .Let => |let_expr| exprUsesCpiInvoke(let_expr.value.*) or exprUsesCpiInvoke(let_expr.body.*),
+        .Assert => |assert_expr| exprUsesCpiInvoke(assert_expr.condition.*),
         .If => |if_expr| exprUsesCpiInvoke(if_expr.cond.*) or exprUsesCpiInvoke(if_expr.then_branch.*) or exprUsesCpiInvoke(if_expr.else_branch.*),
         .Prim => |prim| blk: {
             for (prim.args) |arg| if (exprUsesCpiInvoke(arg.*)) break :blk true;

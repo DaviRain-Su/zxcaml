@@ -57,6 +57,7 @@ pub const LExpr = union(enum) {
     Constant: LConstant,
     App: LApp,
     Let: LLet,
+    Assert: LAssert,
     If: LIf,
     Prim: LPrim,
     Var: LVar,
@@ -101,6 +102,11 @@ pub const LLet = struct {
     ty: LTy = .Int,
     layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
     is_rec: bool = false,
+};
+
+/// Lowered runtime assertion that traps if condition evaluates false.
+pub const LAssert = struct {
+    condition: *const LExpr,
 };
 
 /// Lowered conditional expression.

@@ -151,6 +151,7 @@ const FoldContext = struct {
             } },
             .Let => |let_expr| .{ .Let = try self.foldLetExpr(let_expr) },
             .LetGroup => |group| .{ .LetGroup = try self.foldLetGroupExpr(group) },
+            .Assert => |assert_expr| try self.foldAssert(assert_expr),
             .If => |if_expr| try self.foldIf(if_expr),
             .Prim => |prim| try self.foldPrim(prim),
             .Var => |var_ref| if (self.env.getInline(var_ref.name)) |known| blk: {
@@ -202,6 +203,18 @@ const FoldContext = struct {
                 .layout = field_set.layout,
             } },
         };
+    }
+
+    fn foldAssert(self: *FoldContext, assert_expr: ir.AssertExpr) FoldError!ir.Expr {
+        const condition = try self.foldExprPtr(assert_expr.condition.*);
+        if (boolValue(condition.*)) |value| {
+            if (value) return unitExpr();
+        }
+        return .{ .Assert = .{
+            .condition = condition,
+            .ty = assert_expr.ty,
+            .layout = assert_expr.layout,
+        } };
     }
 
     fn foldLambda(self: *FoldContext, lambda: ir.Lambda) FoldError!ir.Lambda {
@@ -678,6 +691,17 @@ fn boolExpr(value: bool) ir.Expr {
     } };
 }
 
+fn unitExpr() ir.Expr {
+    return .{ .Ctor = .{
+        .name = "()",
+        .args = &.{},
+        .ty = .Unit,
+        .layout = layout.unitValue(),
+        .tag = 0,
+        .type_name = null,
+    } };
+}
+
 fn wrappingAdd(lhs: i64, rhs: i64) i64 {
     const result = @addWithOverflow(lhs, rhs);
     return result[0];
@@ -710,6 +734,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
         .LetGroup => |group| group.ty,
+        .Assert => |assert_expr| assert_expr.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -731,6 +756,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

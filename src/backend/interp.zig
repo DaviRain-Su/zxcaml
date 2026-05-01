@@ -11,6 +11,7 @@ const ir = @import("../core/ir.zig");
 const layout = @import("../core/layout.zig");
 
 const division_by_zero_marker = "ZXCAML_PANIC:division_by_zero";
+const assert_failure_marker = "ZXCAML_PANIC:assert_failure";
 
 /// Stateless M0 interpreter backend.
 pub const Interpreter = struct {
@@ -39,6 +40,7 @@ pub const EvalError = error{
     MatchFailure,
     ArityMismatch,
     DivisionByZero,
+    AssertFailure,
     OutOfMemory,
 };
 
@@ -148,6 +150,7 @@ pub fn errorMessage(err: anyerror) []const u8 {
         error.MatchFailure => "interpreter pattern match was non-exhaustive",
         error.ArityMismatch => "interpreter function application arity mismatch",
         error.DivisionByZero => division_by_zero_marker,
+        error.AssertFailure => assert_failure_marker,
         error.NotImplemented => "interpreter does not yet implement source emission",
         else => "interpreter failed",
     };
@@ -157,6 +160,7 @@ pub fn errorMessage(err: anyerror) []const u8 {
 pub fn panicMarker(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.DivisionByZero => division_by_zero_marker,
+        error.AssertFailure => assert_failure_marker,
         else => null,
     };
 }
@@ -167,7 +171,7 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .LetGroup, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => evalExpr(allocator, expr, env),
+        .Constant, .Let, .LetGroup, .Assert, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => evalExpr(allocator, expr, env),
         .App, .If, .Prim => evalExpr(allocator, expr, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
@@ -181,6 +185,7 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         },
         .Let => |let_expr| evalLet(allocator, let_expr, env),
         .LetGroup => |group| evalLetGroup(allocator, group, env),
+        .Assert => |assert_expr| evalAssert(allocator, assert_expr, env),
         .Var => |var_ref| env.get(var_ref.name) orelse error.UnboundVariable,
         .App => |app| evalApp(allocator, app, env),
         .If => |if_expr| evalIf(allocator, if_expr, env),
@@ -468,6 +473,12 @@ fn evalIf(allocator: std.mem.Allocator, if_expr: ir.IfExpr, env: *std.StringHash
         evalExpr(allocator, if_expr.else_branch.*, env);
 }
 
+fn evalAssert(allocator: std.mem.Allocator, assert_expr: ir.AssertExpr, env: *std.StringHashMap(Value)) EvalError!Value {
+    const cond = try evalExpr(allocator, assert_expr.condition.*, env);
+    if (!try boolValue(cond)) return error.AssertFailure;
+    return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+}
+
 fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (prim.op) {
         .StringLength => {
@@ -738,6 +749,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

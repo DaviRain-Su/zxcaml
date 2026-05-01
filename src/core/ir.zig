@@ -106,6 +106,7 @@ pub const Expr = union(enum) {
     App: App,
     Let: LetExpr,
     LetGroup: LetGroupExpr,
+    Assert: AssertExpr,
     If: IfExpr,
     Prim: Prim,
     Var: Var,
@@ -142,6 +143,13 @@ pub const LetExpr = struct {
 pub const LetGroupExpr = struct {
     bindings: []const LetGroupBinding,
     body: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+};
+
+/// Runtime assertion that traps when its boolean condition is false.
+pub const AssertExpr = struct {
+    condition: *const Expr,
     ty: Ty,
     layout: layout.Layout,
 };

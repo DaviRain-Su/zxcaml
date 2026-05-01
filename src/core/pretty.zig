@@ -226,6 +226,15 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, group.layout);
             try append(out, allocator, ")");
         },
+        .Assert => |assert_expr| {
+            try append(out, allocator, "(assert ");
+            try formatExpr(out, allocator, assert_expr.condition.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, assert_expr.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, assert_expr.layout);
+            try append(out, allocator, ")");
+        },
         .If => |if_expr| {
             try append(out, allocator, "(if ");
             try formatExpr(out, allocator, if_expr.cond.*);

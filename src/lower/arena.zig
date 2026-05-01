@@ -431,6 +431,7 @@ fn collectNestedFunctions(
             }
             try collectNestedFunctions(allocator, group.body.*, functions, next_closure_id, bound);
         },
+        .Assert => |assert_expr| try collectNestedFunctions(allocator, assert_expr.condition.*, functions, next_closure_id, bound),
         .If => |if_expr| {
             try collectNestedFunctions(allocator, if_expr.cond.*, functions, next_closure_id, bound);
             try collectNestedFunctions(allocator, if_expr.then_branch.*, functions, next_closure_id, bound);
@@ -539,6 +540,9 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
             } };
         },
         .LetGroup => |group| try lowerLetGroupExpr(allocator, group, ctx),
+        .Assert => |assert_expr| .{ .Assert = .{
+            .condition = try lowerExprPtrWithContext(allocator, assert_expr.condition.*, ctx),
+        } },
         .If => |if_expr| .{ .If = .{
             .cond = try lowerExprPtrWithContext(allocator, if_expr.cond.*, ctx),
             .then_branch = try lowerExprPtrWithContext(allocator, if_expr.then_branch.*, ctx),
@@ -783,6 +787,7 @@ fn collectCaptures(
             for (group.bindings) |binding| try collectCaptures(allocator, binding.value.*, bound, excluded, captures);
             try collectCaptures(allocator, group.body.*, bound, excluded, captures);
         },
+        .Assert => |assert_expr| try collectCaptures(allocator, assert_expr.condition.*, bound, excluded, captures),
         .App => |app| {
             try collectCaptures(allocator, app.callee.*, bound, excluded, captures);
             for (app.args) |arg| try collectCaptures(allocator, arg.*, bound, excluded, captures);
@@ -935,6 +940,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
         .LetGroup => |group| group.ty,
+        .Assert => |assert_expr| assert_expr.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -956,6 +962,7 @@ fn exprLayout(expr: ir.Expr) @import("../core/layout.zig").Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,
@@ -1135,6 +1142,7 @@ fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
             }
             break :blk recBindingEscapes(name, group.body.*);
         },
+        .Assert => |assert_expr| recBindingEscapes(name, assert_expr.condition.*),
         .Lambda => |lambda| !paramBindsName(lambda.params, name) and recBindingEscapes(name, lambda.body.*),
         .If => |if_expr| recBindingEscapes(name, if_expr.cond.*) or
             recBindingEscapes(name, if_expr.then_branch.*) or

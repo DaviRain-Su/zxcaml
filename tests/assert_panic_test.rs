@@ -1,0 +1,190 @@
+//! SVM-level integration test for failed OCaml assert expressions.
+//!
+//! The setup step writes a tiny `assert false` program, compiles it to BPF,
+//! verifies the generated Zig uses the assert panic path, then confirms Mollusk
+//! reports a program failure instead of a successful return.
+
+use mollusk_svm::Mollusk;
+use solana_instruction::Instruction;
+use solana_pubkey::Pubkey;
+use std::{
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+    time::Duration,
+};
+
+const PROGRAM_ID_BYTES: [u8; 32] = [12u8; 32];
+
+fn program_id() -> Pubkey {
+    Pubkey::new_from_array(PROGRAM_ID_BYTES)
+}
+
+struct BuildLock {
+    path: PathBuf,
+}
+
+impl Drop for BuildLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+struct CompiledProgram {
+    elf_path: PathBuf,
+    generated_source: String,
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("tests/ must live under the repository root")
+        .to_path_buf()
+}
+
+fn acquire_build_lock(root: &Path) -> BuildLock {
+    let build_dir = root.join("build");
+    fs::create_dir_all(&build_dir).expect("failed to create build/ output directory");
+    let path = build_dir.join(".omlz-build.lock");
+
+    for _ in 0..600 {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return BuildLock { path },
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!("failed to create build lock at {}: {error}", path.display()),
+        }
+    }
+
+    panic!("timed out waiting for build lock at {}", path.display());
+}
+
+fn llvm20_lib_dir() -> Option<PathBuf> {
+    for candidate in [
+        PathBuf::from("/opt/homebrew/opt/llvm@20/lib"),
+        PathBuf::from("/usr/local/opt/llvm@20/lib"),
+    ] {
+        if candidate.join("libLLVM.dylib").exists() {
+            return Some(candidate);
+        }
+    }
+
+    let output = Command::new("brew")
+        .args(["--prefix", "llvm@20"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let prefix = String::from_utf8(output.stdout).ok()?;
+    let lib = PathBuf::from(prefix.trim()).join("lib");
+    lib.join("libLLVM.dylib").exists().then_some(lib)
+}
+
+fn apply_platform_env(command: &mut Command) {
+    if cfg!(target_os = "macos") {
+        if let Some(lib) = llvm20_lib_dir() {
+            let mut value = OsString::from(lib);
+            if let Some(existing) = std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH") {
+                value.push(":");
+                value.push(existing);
+            }
+            command.env("DYLD_FALLBACK_LIBRARY_PATH", value);
+        }
+    }
+}
+
+fn compile_program() -> CompiledProgram {
+    let root = repo_root();
+    let _lock = acquire_build_lock(&root);
+    let source_path = root.join("build").join("assert_false.ml");
+    let output_path = root.join("build").join("assert_false.so");
+
+    fs::write(&source_path, "let entrypoint _ =\n  assert false;\n  0\n").unwrap_or_else(|error| {
+        panic!(
+            "failed to write assert source at {}: {error}",
+            source_path.display()
+        )
+    });
+
+    let mut command = Command::new(root.join("zig-out").join("bin").join("omlz"));
+    command.current_dir(&root).args([
+        "build",
+        "--target=bpf",
+        "build/assert_false.ml",
+        "-o",
+        "build/assert_false.so",
+    ]);
+    apply_platform_env(&mut command);
+
+    let result = command.output().unwrap_or_else(|error| {
+        panic!("failed to spawn `zig-out/bin/omlz build --target=bpf build/assert_false.ml -o build/assert_false.so`: {error}")
+    });
+    assert!(
+        result.status.success(),
+        "`zig-out/bin/omlz build --target=bpf build/assert_false.ml -o build/assert_false.so` failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        output_path.exists(),
+        "expected BPF artifact at {}",
+        output_path.display()
+    );
+
+    let generated_path = root.join("out").join("program.zig");
+    let generated_source = fs::read_to_string(&generated_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read generated Zig source at {}: {error}",
+            generated_path.display()
+        )
+    });
+
+    CompiledProgram {
+        elf_path: output_path,
+        generated_source,
+    }
+}
+
+fn setup_mollusk() -> (Mollusk, String) {
+    let compiled = compile_program();
+    let elf = fs::read(&compiled.elf_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to read sBPF artifact at {}: {}",
+            compiled.elf_path.display(),
+            error
+        )
+    });
+    let pid = program_id();
+    let loader_v3 = solana_pubkey::pubkey!("BPFLoaderUpgradeab1e11111111111111111111111");
+    let mut mollusk = Mollusk::default();
+    mollusk.add_program_with_loader_and_elf(&pid, &loader_v3, &elf);
+    (mollusk, compiled.generated_source)
+}
+
+#[test]
+fn test_assert_false_aborts_bpf() {
+    let (mollusk, generated_source) = setup_mollusk();
+
+    assert!(
+        generated_source.contains("runtime_panic.assertFailure()"),
+        "generated source should call the assert panic helper:\n{generated_source}"
+    );
+
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![],
+        data: vec![],
+    };
+
+    let result = mollusk.process_instruction(&ix, &[]);
+    assert!(
+        result.program_result.is_err(),
+        "assert false should abort on BPF, got {:?}",
+        result.program_result
+    );
+}

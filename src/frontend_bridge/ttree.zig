@@ -139,6 +139,7 @@ pub const Expr = union(enum) {
     App: App,
     Let: LetExpr,
     LetRecGroup: LetRecGroupExpr,
+    Assert: AssertExpr,
     If: IfExpr,
     Prim: Prim,
     Var: Var,
@@ -176,6 +177,11 @@ pub const LetExpr = struct {
 pub const LetRecGroupExpr = struct {
     bindings: []const LetRecBinding,
     body: *const Expr,
+};
+
+/// Assert expression whose condition must evaluate to true.
+pub const AssertExpr = struct {
+    condition: *const Expr,
 };
 
 /// Conditional expression with an explicit else branch.
@@ -319,6 +325,7 @@ pub const BridgeError = sexp_parser.ParseError || error{
     MalformedLambda,
     MalformedApp,
     MalformedLet,
+    MalformedAssert,
     MalformedIf,
     MalformedPrim,
     MalformedVar,
@@ -765,6 +772,7 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items, false) };
     if (std.mem.eql(u8, tag, "let-rec")) return .{ .Let = try parseLetExpr(arena, items, true) };
     if (std.mem.eql(u8, tag, "Let_rec_group")) return .{ .LetRecGroup = try parseLetRecGroupExpr(arena, items) };
+    if (std.mem.eql(u8, tag, "Assert")) return .{ .Assert = try parseAssert(arena, items) };
     if (std.mem.eql(u8, tag, "if")) return .{ .If = try parseIf(arena, items) };
     if (std.mem.eql(u8, tag, "prim")) return .{ .Prim = try parsePrim(arena, items) };
     if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
@@ -777,6 +785,13 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (std.mem.eql(u8, tag, "record_update")) return .{ .RecordUpdate = try parseRecordUpdate(arena, items) };
     if (std.mem.eql(u8, tag, "field_set")) return .{ .FieldSet = try parseFieldSet(arena, items) };
     return error.UnsupportedNode;
+}
+
+fn parseAssert(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!AssertExpr {
+    if (items.len != 2) return error.MalformedAssert;
+    const condition = try arena.allocator().create(Expr);
+    condition.* = try parseExpr(arena, items[1]);
+    return .{ .condition = condition };
 }
 
 fn parseLetRecGroupExpr(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!LetRecGroupExpr {

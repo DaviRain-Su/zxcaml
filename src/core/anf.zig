@@ -368,6 +368,7 @@ fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: 
         .App => |app| try lowerApp(arena, ctx, app),
         .Let => |let_expr| .{ .Let = try lowerLetExpr(arena, ctx, let_expr) },
         .LetRecGroup => |group| .{ .LetGroup = try lowerLetRecGroupExpr(arena, ctx, group) },
+        .Assert => |assert_expr| .{ .Assert = try lowerAssert(arena, ctx, assert_expr) },
         .If => |if_expr| try lowerIf(arena, ctx, if_expr),
         .Prim => |prim| try lowerPrim(arena, ctx, prim),
         .Var => |var_ref| try lowerVarExpr(arena, ctx, var_ref, expected_ty),
@@ -379,6 +380,14 @@ fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: 
         .RecordField => |field_access| try lowerRecordField(arena, ctx, field_access),
         .RecordUpdate => |record_update| try lowerRecordUpdate(arena, ctx, record_update),
         .FieldSet => |field_set| try lowerFieldSet(arena, ctx, field_set),
+    };
+}
+
+fn lowerAssert(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, assert_expr: ttree.AssertExpr) LowerError!ir.AssertExpr {
+    return .{
+        .condition = try lowerExprPtrExpected(arena, ctx, assert_expr.condition.*, .Bool),
+        .ty = .Unit,
+        .layout = layout.unitValue(),
     };
 }
 
@@ -669,6 +678,7 @@ fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, scope
             marked.* = .{ .LetGroup = marked_group };
             break :blk marked;
         },
+        .Assert => expr,
         .Match => |match_expr| blk: {
             const arms = try arena.allocator().alloc(ir.Arm, match_expr.arms.len);
             for (match_expr.arms, 0..) |arm, index| {
@@ -709,6 +719,12 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
     if (isVarNamed(app.callee.*, "Array.of_list")) {
         return lowerArrayOfListApp(arena, ctx, app);
     }
+    if (isVarNamed(app.callee.*, "&&") and app.args.len == 2) {
+        return lowerLogicalAnd(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "||") and app.args.len == 2) {
+        return lowerLogicalOr(arena, ctx, app);
+    }
     if (builtinCallOp(app.callee.*, app.args.len)) |op| {
         return lowerBuiltinCallApp(arena, ctx, app, op);
     }
@@ -729,6 +745,45 @@ fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App)
         .ty = ty,
         .layout = layoutForTy(ty),
     } };
+}
+
+fn lowerLogicalAnd(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    const cond = try lowerExprPtrExpected(arena, ctx, app.args[0], .Bool);
+    const then_branch = try lowerExprPtrExpected(arena, ctx, app.args[1], .Bool);
+    const else_branch = try boolCoreExpr(arena, false);
+    return .{ .If = .{
+        .cond = cond,
+        .then_branch = then_branch,
+        .else_branch = else_branch,
+        .ty = .Bool,
+        .layout = layoutForTy(.Bool),
+    } };
+}
+
+fn lowerLogicalOr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    const cond = try lowerExprPtrExpected(arena, ctx, app.args[0], .Bool);
+    const then_branch = try boolCoreExpr(arena, true);
+    const else_branch = try lowerExprPtrExpected(arena, ctx, app.args[1], .Bool);
+    return .{ .If = .{
+        .cond = cond,
+        .then_branch = then_branch,
+        .else_branch = else_branch,
+        .ty = .Bool,
+        .layout = layoutForTy(.Bool),
+    } };
+}
+
+fn boolCoreExpr(arena: *std.heap.ArenaAllocator, value: bool) LowerError!*const ir.Expr {
+    const ptr = try arena.allocator().create(ir.Expr);
+    ptr.* = .{ .Ctor = .{
+        .name = if (value) "true" else "false",
+        .args = &.{},
+        .ty = .Bool,
+        .layout = layout.ctor(0),
+        .tag = if (value) 1 else 0,
+        .type_name = null,
+    } };
+    return ptr;
 }
 
 fn lowerBuiltinCallApp(
@@ -1289,6 +1344,11 @@ fn renameExprValueVars(arena: *std.heap.ArenaAllocator, expr: ir.Expr, renames: 
                 .layout = group.layout,
             } };
         },
+        .Assert => |assert_expr| .{ .Assert = .{
+            .condition = try renameExprVars(arena, assert_expr.condition, renames),
+            .ty = assert_expr.ty,
+            .layout = assert_expr.layout,
+        } },
         .If => |if_expr| .{ .If = .{
             .cond = try renameExprVars(arena, if_expr.cond, renames),
             .then_branch = try renameExprVars(arena, if_expr.then_branch, renames),
@@ -1861,6 +1921,7 @@ fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *TypeBind
         .Var => |var_ref| pattern_var_tys.get(var_ref.name),
         .Let => |let_expr| try inferSimpleExprTy(arena, pattern_var_tys, let_expr.body.*),
         .LetRecGroup => |group| try inferSimpleExprTy(arena, pattern_var_tys, group.body.*),
+        .Assert => .Unit,
         .Tuple => |tuple_expr| blk: {
             const tys = try arena.allocator().alloc(ir.Ty, tuple_expr.items.len);
             for (tuple_expr.items, 0..) |item, index| {
@@ -1901,6 +1962,7 @@ fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys: *T
             for (group.bindings) |binding| try inferExprVarExpectations(arena, pattern_var_tys, binding.body, null);
             try inferExprVarExpectations(arena, pattern_var_tys, group.body.*, expected_ty);
         },
+        .Assert => |assert_expr| try inferExprVarExpectations(arena, pattern_var_tys, assert_expr.condition.*, .Bool),
         .App => |app| {
             try inferExprVarExpectations(arena, pattern_var_tys, app.callee.*, null);
             for (app.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, null);
@@ -2712,6 +2774,7 @@ fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
             }
             break :blk recBindingEscapes(name, group.body.*);
         },
+        .Assert => |assert_expr| recBindingEscapes(name, assert_expr.condition.*),
         .Lambda => |lambda| lambdaParamShadows(lambda.params, name) == false and recBindingEscapes(name, lambda.body.*),
         .If => |if_expr| recBindingEscapes(name, if_expr.cond.*) or
             recBindingEscapes(name, if_expr.then_branch.*) or
@@ -2827,6 +2890,7 @@ fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
             }
             break :blk lambdaParamIsFunction(group.body.*, param_name);
         },
+        .Assert => |assert_expr| lambdaParamIsFunction(assert_expr.condition.*, param_name),
         .If => |if_expr| lambdaParamIsFunction(if_expr.cond.*, param_name) or
             lambdaParamIsFunction(if_expr.then_branch.*, param_name) or
             lambdaParamIsFunction(if_expr.else_branch.*, param_name),
@@ -2908,6 +2972,7 @@ fn lambdaParamRecordTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr
             }
             break :blk lambdaParamRecordTy(arena, ctx, group.body.*, param_name);
         },
+        .Assert => |assert_expr| lambdaParamRecordTy(arena, ctx, assert_expr.condition.*, param_name),
         .If => |if_expr| lambdaParamRecordTy(arena, ctx, if_expr.cond.*, param_name) orelse
             lambdaParamRecordTy(arena, ctx, if_expr.then_branch.*, param_name) orelse
             lambdaParamRecordTy(arena, ctx, if_expr.else_branch.*, param_name),
@@ -2998,6 +3063,7 @@ fn lambdaParamIsAccount(expr: ttree.Expr, param_name: []const u8) bool {
             }
             break :blk lambdaParamIsAccount(group.body.*, param_name);
         },
+        .Assert => |assert_expr| lambdaParamIsAccount(assert_expr.condition.*, param_name),
         .If => |if_expr| lambdaParamIsAccount(if_expr.cond.*, param_name) or
             lambdaParamIsAccount(if_expr.then_branch.*, param_name) or
             lambdaParamIsAccount(if_expr.else_branch.*, param_name),
@@ -3111,6 +3177,7 @@ fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, param_na
             }
             break :blk try lambdaParamIsList(arena, group.body.*, param_name);
         },
+        .Assert => |assert_expr| try lambdaParamIsList(arena, assert_expr.condition.*, param_name),
         .If => |if_expr| (try lambdaParamIsList(arena, if_expr.cond.*, param_name)) or
             (try lambdaParamIsList(arena, if_expr.then_branch.*, param_name)) or
             (try lambdaParamIsList(arena, if_expr.else_branch.*, param_name)),
@@ -3219,6 +3286,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
         .LetGroup => |group| group.ty,
+        .Assert => |assert_expr| assert_expr.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -3278,6 +3346,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

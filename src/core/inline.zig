@@ -231,6 +231,11 @@ const InlineContext = struct {
             .App => |app| try self.inlineApp(app),
             .Let => |let_expr| try self.inlineLet(let_expr),
             .LetGroup => |group| .{ .LetGroup = try self.inlineLetGroup(group) },
+            .Assert => |assert_expr| .{ .Assert = .{
+                .condition = try self.inlineExprPtr(assert_expr.condition.*),
+                .ty = assert_expr.ty,
+                .layout = assert_expr.layout,
+            } },
             .If => |if_expr| .{ .If = .{
                 .cond = try self.inlineExprPtr(if_expr.cond.*),
                 .then_branch = try self.inlineExprPtr(if_expr.then_branch.*),
@@ -624,6 +629,11 @@ const AlphaContext = struct {
             } },
             .Let => |let_expr| try self.cloneLet(let_expr),
             .LetGroup => expr,
+            .Assert => |assert_expr| .{ .Assert = .{
+                .condition = try self.cloneExprPtr(assert_expr.condition.*),
+                .ty = assert_expr.ty,
+                .layout = assert_expr.layout,
+            } },
             .If => |if_expr| .{ .If = .{
                 .cond = try self.cloneExprPtr(if_expr.cond.*),
                 .then_branch = try self.cloneExprPtr(if_expr.then_branch.*),
@@ -923,6 +933,7 @@ fn collectFreeNames(
             try collectFreeNames(allocator, group.body.*, bound, bound_changes, free_names, free_changes);
             restoreNameSet(bound, bound_changes, mark);
         },
+        .Assert => |assert_expr| try collectFreeNames(allocator, assert_expr.condition.*, bound, bound_changes, free_names, free_changes),
         .If => |if_expr| {
             try collectFreeNames(allocator, if_expr.cond.*, bound, bound_changes, free_names, free_changes);
             try collectFreeNames(allocator, if_expr.then_branch.*, bound, bound_changes, free_names, free_changes);
@@ -1021,6 +1032,7 @@ fn boundedNodeCount(expr: ir.Expr, max_nodes: usize) ?usize {
             count += boundedNodeCount(let_expr.body.*, max_nodes) orelse return null;
         },
         .LetGroup => return null,
+        .Assert => return null,
         .If => |if_expr| {
             count += boundedNodeCount(if_expr.cond.*, max_nodes) orelse return null;
             count += boundedNodeCount(if_expr.then_branch.*, max_nodes) orelse return null;
@@ -1071,6 +1083,7 @@ fn containsLet(expr: ir.Expr) bool {
         .App => |app| containsLet(app.callee.*) or anyContainsLet(app.args),
         .Let => true,
         .LetGroup => true,
+        .Assert => |assert_expr| containsLet(assert_expr.condition.*),
         .If => |if_expr| containsLet(if_expr.cond.*) or containsLet(if_expr.then_branch.*) or containsLet(if_expr.else_branch.*),
         .Prim => |prim| anyContainsLet(prim.args),
         .Ctor => |ctor| anyContainsLet(ctor.args),
@@ -1115,6 +1128,7 @@ fn containsAppOrMutation(expr: ir.Expr) bool {
         .AccountFieldSet => true,
         .Let => |let_expr| containsAppOrMutation(let_expr.value.*) or containsAppOrMutation(let_expr.body.*),
         .LetGroup => true,
+        .Assert => true,
         .If => |if_expr| containsAppOrMutation(if_expr.cond.*) or containsAppOrMutation(if_expr.then_branch.*) or containsAppOrMutation(if_expr.else_branch.*),
         .Prim => |prim| anyContainsAppOrMutation(prim.args),
         .Ctor => |ctor| anyContainsAppOrMutation(ctor.args),
@@ -1178,6 +1192,7 @@ fn containsAppThroughParam(expr: ir.Expr, params: []const ir.Param) bool {
             }
             break :blk containsAppThroughParam(group.body.*, params);
         },
+        .Assert => |assert_expr| containsAppThroughParam(assert_expr.condition.*, params),
         .If => |if_expr| containsAppThroughParam(if_expr.cond.*, params) or containsAppThroughParam(if_expr.then_branch.*, params) or containsAppThroughParam(if_expr.else_branch.*, params),
         .Prim => |prim| anyContainsAppThroughParam(prim.args, params),
         .Ctor => |ctor| anyContainsAppThroughParam(ctor.args, params),
@@ -1311,6 +1326,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
         .LetGroup => |group| group.ty,
+        .Assert => |assert_expr| assert_expr.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -1332,6 +1348,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

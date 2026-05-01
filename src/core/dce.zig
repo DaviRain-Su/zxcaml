@@ -70,6 +70,11 @@ const DceContext = struct {
             } },
             .Let => |let_expr| try self.eliminateLet(let_expr),
             .LetGroup => |group| .{ .LetGroup = try self.eliminateLetGroup(group) },
+            .Assert => |assert_expr| .{ .Assert = .{
+                .condition = try self.eliminateExprPtr(assert_expr.condition.*),
+                .ty = assert_expr.ty,
+                .layout = assert_expr.layout,
+            } },
             .If => |if_expr| try self.eliminateIf(if_expr),
             .Prim => |prim| .{ .Prim = .{
                 .op = prim.op,
@@ -301,6 +306,7 @@ fn containsFreeName(expr: ir.Expr, name: []const u8) bool {
             }
             break :blk containsFreeName(group.body.*, name);
         },
+        .Assert => |assert_expr| containsFreeName(assert_expr.condition.*, name),
         .If => |if_expr| containsFreeName(if_expr.cond.*, name) or
             containsFreeName(if_expr.then_branch.*, name) or
             containsFreeName(if_expr.else_branch.*, name),
@@ -387,6 +393,7 @@ fn hasSideEffects(expr: ir.Expr) bool {
             }
             break :blk hasSideEffects(group.body.*);
         },
+        .Assert => true,
         .If => |if_expr| if (boolValue(if_expr.cond.*)) |value|
             hasSideEffects(if_expr.cond.*) or if (value) hasSideEffects(if_expr.then_branch.*) else hasSideEffects(if_expr.else_branch.*)
         else
@@ -452,6 +459,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
         .LetGroup => |group| group.ty,
+        .Assert => |assert_expr| assert_expr.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,
@@ -473,6 +481,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,

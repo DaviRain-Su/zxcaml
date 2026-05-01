@@ -421,6 +421,7 @@ fn accountFlagReferenced(expr: ir.Expr, param_name: []const u8, flag_name: []con
             }
             break :blk accountFlagReferenced(group.body.*, param_name, flag_name);
         },
+        .Assert => |assert_expr| accountFlagReferenced(assert_expr.condition.*, param_name, flag_name),
         .App => |app| exprSliceFlagReferenced(app.args, param_name, flag_name) or accountFlagReferenced(app.callee.*, param_name, flag_name),
         .If => |if_expr| accountFlagReferenced(if_expr.cond.*, param_name, flag_name) or
             accountFlagReferenced(if_expr.then_branch.*, param_name, flag_name) or
@@ -474,6 +475,7 @@ fn accountParamMutated(expr: ir.Expr, param_name: []const u8) bool {
             }
             break :blk accountParamMutated(group.body.*, param_name);
         },
+        .Assert => |assert_expr| accountParamMutated(assert_expr.condition.*, param_name),
         .App => |app| exprSliceMutatesAccount(app.args, param_name) or accountParamMutated(app.callee.*, param_name),
         .If => |if_expr| accountParamMutated(if_expr.cond.*, param_name) or
             accountParamMutated(if_expr.then_branch.*, param_name) or

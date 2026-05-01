@@ -153,6 +153,11 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             break :blk .{ .Let = try clone.cloneLetExpr(let_expr, escape_context) };
         },
         .LetGroup => |group| .{ .LetGroup = try inferLetGroupExpr(arena, group, escape_context) },
+        .Assert => |assert_expr| .{ .Assert = .{
+            .condition = try inferExprPtr(arena, assert_expr.condition.*, false),
+            .ty = assert_expr.ty,
+            .layout = assert_expr.layout,
+        } },
         .If => |if_expr| .{ .If = .{
             .cond = try inferExprPtr(arena, if_expr.cond.*, false),
             .then_branch = try inferExprPtr(arena, if_expr.then_branch.*, escape_context),
@@ -357,6 +362,7 @@ const AnalyzeContext = struct {
                 for (group.bindings) |binding| try self.analyzeExpr(binding.value.*, false);
                 try self.analyzeExpr(group.body.*, escape_context);
             },
+            .Assert => |assert_expr| try self.analyzeExpr(assert_expr.condition.*, false),
             .If => |if_expr| {
                 try self.analyzeExpr(if_expr.cond.*, false);
                 try self.analyzeExpr(if_expr.then_branch.*, escape_context);
@@ -521,6 +527,7 @@ const FreeVarCollector = struct {
                 for (group.bindings) |binding| try self.visit(binding.value.*);
                 try self.visit(group.body.*);
             },
+            .Assert => |assert_expr| try self.visit(assert_expr.condition.*),
             .If => |if_expr| {
                 try self.visit(if_expr.cond.*);
                 try self.visit(if_expr.then_branch.*);
@@ -691,6 +698,11 @@ const CloneContext = struct {
             } },
             .Let => |let_expr| .{ .Let = try self.cloneLetExpr(let_expr, escape_context) },
             .LetGroup => |group| .{ .LetGroup = try inferLetGroupExprFromClone(self, group, escape_context) },
+            .Assert => |assert_expr| .{ .Assert = .{
+                .condition = try self.cloneExprPtr(assert_expr.condition.*, false),
+                .ty = assert_expr.ty,
+                .layout = assert_expr.layout,
+            } },
             .If => |if_expr| .{ .If = .{
                 .cond = try self.cloneExprPtr(if_expr.cond.*, false),
                 .then_branch = try self.cloneExprPtr(if_expr.then_branch.*, escape_context),
@@ -941,6 +953,11 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .is_rec = let_expr.is_rec,
         } },
         .LetGroup => |group| .{ .LetGroup = .{ .bindings = group.bindings, .body = group.body, .ty = group.ty, .layout = new_layout } },
+        .Assert => |assert_expr| .{ .Assert = .{
+            .condition = assert_expr.condition,
+            .ty = assert_expr.ty,
+            .layout = new_layout,
+        } },
         .If => |if_expr| .{ .If = .{
             .cond = if_expr.cond,
             .then_branch = if_expr.then_branch,
@@ -1018,6 +1035,7 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .App => |app| app.layout,
         .Let => |let_expr| let_expr.layout,
         .LetGroup => |group| group.layout,
+        .Assert => |assert_expr| assert_expr.layout,
         .If => |if_expr| if_expr.layout,
         .Prim => |prim| prim.layout,
         .Var => |var_ref| var_ref.layout,
@@ -1039,6 +1057,7 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .App => |app| app.ty,
         .Let => |let_expr| let_expr.ty,
         .LetGroup => |group| group.ty,
+        .Assert => |assert_expr| assert_expr.ty,
         .If => |if_expr| if_expr.ty,
         .Prim => |prim| prim.ty,
         .Var => |var_ref| var_ref.ty,

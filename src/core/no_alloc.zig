@@ -182,6 +182,7 @@ const Analyzer = struct {
                 }
                 return self.checkExpr(function_name, group.body.*, scope);
             },
+            .Assert => |assert_expr| return self.checkExpr(function_name, assert_expr.condition.*, scope),
             .If => |if_expr| {
                 if (try self.checkExpr(function_name, if_expr.cond.*, scope)) |site| return site;
                 if (try self.checkExpr(function_name, if_expr.then_branch.*, scope)) |site| return site;
@@ -300,6 +301,7 @@ fn exprCapturesAny(allocator: std.mem.Allocator, expr: ir.Expr, visible: *const 
             }
             return exprCapturesAny(allocator, group.body.*, visible, shadowed);
         },
+        .Assert => |assert_expr| return exprCapturesAny(allocator, assert_expr.condition.*, visible, shadowed),
         .If => |if_expr| {
             return try exprCapturesAny(allocator, if_expr.cond.*, visible, shadowed) or
                 try exprCapturesAny(allocator, if_expr.then_branch.*, visible, shadowed) or
