@@ -49,3 +49,7 @@ site/CONTENT.md
 
 # Mission-internal docs drift source-of-truth notes
 mission-internal/
+
+# Rust
+target
+Cargo.lock
