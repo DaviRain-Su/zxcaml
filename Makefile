@@ -7,7 +7,11 @@ demo-record-prep:
 	@if command -v opam >/dev/null 2>&1; then eval "$$(opam env --switch=zxcaml-p1)"; fi; zig build
 	./scripts/demo/00_setup.sh
 	./scripts/demo/01_build.sh
+	$(MAKE) slides-export-pdf
 	@printf 'READY TO RECORD\n'
+	@printf 'Slide PDFs:\n'
+	@printf '  out/slides/zh.pdf\n'
+	@printf '  out/slides/en.pdf\n'
 
 demo-clean:
 	./scripts/demo/05_teardown.sh

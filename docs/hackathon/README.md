@@ -15,6 +15,7 @@ Surfpool scripts that reproduce the live localnet segment.
 | [`demo-script.zh.md`](./demo-script.zh.md) | 简体中文 10-minute demo narration. |
 | [`pitch.en.md`](./pitch.en.md) | English 60-second elevator pitch. |
 | [`pitch.zh.md`](./pitch.zh.md) | 简体中文 60-second elevator pitch. |
+| [`recording-checklist.md`](./recording-checklist.md) | Recording-day workflow checklist with slide, terminal, OBS scene, and fallback cues. |
 | [`shot-list.md`](./shot-list.md) | Recording shot list mapped to the timeline. |
 | [`timeline.md`](./timeline.md) | Authoritative 10-minute demo timeline. |
 
