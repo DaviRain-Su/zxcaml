@@ -87,6 +87,30 @@ test "idl: multi-instruction example emits all marked instructions" {
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"instruction_reset\"") == null);
 }
 
+test "idl: hackathon greet emits init and greet instructions" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const result = try runIdl(allocator, io, "examples/hackathon_greet.ml");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.exit_code != 0) {
+        std.debug.print("omlz idl failed with stderr:\n{s}\n", .{result.stderr});
+    }
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{});
+    defer parsed.deinit();
+
+    try expectContains(result.stdout, "\"metadata\":{\"name\":\"hackathon_greet\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}");
+    try expectContains(result.stdout, "\"name\":\"init\",\"discriminator\":[220,59,207,236,108,250,47,100]");
+    try expectContains(result.stdout, "\"name\":\"greet\",\"discriminator\":[203,194,3,150,228,58,181,62]");
+    try expectContains(result.stdout, "\"accounts\":[{\"name\":\"greeting_account\",\"writable\":true,\"signer\":false},{\"name\":\"maker\",\"writable\":false,\"signer\":true}]");
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"instruction_init\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"instruction_greet\"") == null);
+}
+
 test "idl: no entrypoint emits empty instructions array" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
