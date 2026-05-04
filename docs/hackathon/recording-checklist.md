@@ -28,6 +28,7 @@ instead of changing the frozen timeline during the take.
 | 7:20 – 8:30 | S10 / `## 7:20–8:30 Invoke on localnet and inspect state` | `./scripts/demo/04_invoke.sh` | OBS Scene 09 — terminal invoke | If live invoke fails, show `scripts/demo/run_log.expected.txt` and explain the expected counter readback. |
 | 8:30 – 9:20 | S11 / `## 8:30–9:20 Anchor comparison` | `./scripts/demo/compare.sh && open docs/hackathon/anchor-comparison.md` | OBS Scene 10 — comparison doc | If the generated comparison is already current, skip rerun and open `docs/hackathon/anchor-comparison.md` directly. |
 | 9:20 – 10:00 | S12 / `## 9:20–10:00 Close and call to action` | `no terminal` | OBS Scene 11 — closing card | If the deck navigation misses the closing slide, use the exported PDF and keep `./scripts/demo/run_full_demo.sh` visible. |
+| 10:00 – 10:30 | Budget cap (10:30) / hold S12 closing card | `no terminal` | OBS Scene 11 — closing card | If the recording overruns after 10:00, do not add new material: hold the closing card, finish the call to action in one sentence, and cut before the 10:30 upper bound. |
 
 ## Post-Take Cleanup
 
