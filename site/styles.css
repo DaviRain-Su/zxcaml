@@ -268,6 +268,58 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   color: var(--accent-dark);
   text-decoration: underline;
 }
+.live-code {
+  background: #151414;
+  color: var(--paper);
+}
+.live-code .section-heading p:not(.eyebrow) {
+  max-width: 760px;
+  color: #c7c1b7;
+  font-size: 18px;
+  line-height: 1.6;
+}
+.live-code .eyebrow {
+  color: var(--code-line);
+}
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(20px, 4vw, 34px);
+  margin-top: 34px;
+}
+.code-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(127, 240, 197, .22);
+  border-radius: 8px;
+  background: var(--code);
+  box-shadow: 10px 10px 0 rgba(127, 240, 197, .08);
+}
+.code-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(127, 240, 197, .18);
+  color: #c7c1b7;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+.code-card-header span:last-child {
+  color: var(--code-line);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.code-card pre {
+  max-height: 620px;
+  overflow: auto;
+  padding: 18px;
+  white-space: pre;
+  color: #d5f6e9;
+  font-size: 13px;
+  line-height: 1.6;
+}
 .frontier {
   display: flex;
   align-items: end;
@@ -294,6 +346,7 @@ footer a { color: var(--ink); font-weight: 700; }
   .hero { min-height: auto; }
   .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hackathon-grid { grid-template-columns: 1fr; }
+  .preview-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
   h1 { font-size: 42px; }
