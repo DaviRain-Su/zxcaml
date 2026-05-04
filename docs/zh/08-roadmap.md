@@ -2,290 +2,104 @@
 
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
-## 1. 各阶段
+这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.1`，examples 语料包含 54 个 `.ml` 程序，Mollusk SVM 套件包含 21 个集成测试，并且 P1-P8 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
 
-| 阶段 | 主题 | 完成标志 |
-|---|---|---|
-| **P1** | MVP：OCaml 子集 → BPF `.so` | `examples/solana_hello.ml` 部署成功并返回 0 |
-| **P2** | 子集扩展 + match 优化 | 用户 ADT、嵌套/guarded pattern、tuple、record、stdlib 和 BPF closure |
-| **P3** | Solana 形态子集 | account 视图、syscall、CPI、SPL-Token 示例、no-alloc 分析和 IDL |
-| P4 | 区域推断 | 逃逸分析、`Region::Region(id)`、可选栈分配 |
-| P5 | 生态接入 | Zig FFI 声明、更大的原生 stdlib 子集 |
-| P6（可选） | 自举 | 把 `src/core/anf.zig`（及伙伴）用我们的子集重写 |
-| P7（可选） | 形式化 | Core IR 语义、面向 LLM / verifier 的接口 |
+## 已完成阶段（P1–P8）
 
-阶段不按时间盒，按范围盒。
+| 阶段 | 状态 | 一句话摘要 | Changelog 引用 |
+|---|---|---|---|
+| P1 | ✅ | MVP OCaml 子集到 Solana BPF：`omlz` 骨架、OCaml frontend bridge、Core IR、解释器、native 构建路径，以及 BPF `.so` 构建路径。 | [`[P1]`](../../CHANGELOG.md#p1-mvp-ocaml-subset-to-solana-bpf---2026-04-28) |
+| P2 | ✅ | 子集扩展与 match 优化：用户 ADT、嵌套/guarded pattern、tuple、record、stdlib 扩展，以及加固后的 BPF closure。 | [`[P2]`](../../CHANGELOG.md#p2-subset-expansion-and-match-optimization---2026-04-29) |
+| P3 | ✅ | Solana 形态子集：零拷贝 account 视图、syscall、CPI helper、SPL-Token 支持、`omlz check --no-alloc` 与 IDL 输出。 | [`[P3]`](../../CHANGELOG.md#p3-solana-shaped-subset---2026-04-29) |
+| P4 | ✅ | Mollusk 验收与 instruction data：交易输入 dispatch、进程内 SVM 测试，以及 Pubkey helper 的易用性改进。 | [`[P4]`](../../CHANGELOG.md#p4-mollusk-acceptance-and-instruction-data---2026-04-30) |
+| P5 | ✅ | 生态接入：类型化 `external` 声明、Zig runtime 绑定、Anchor 兼容 IDL、Map/Set 与 crypto wrapper。 | [`[P5]`](../../CHANGELOG.md#p5-ecosystem-reach---2026-04-30) |
+| P6 | ✅ | Region inference：逃逸分析、符合条件局部值的 stack-region codegen，以及 region allocation 示例。 | [`[P6]`](../../CHANGELOG.md#p6-region-inference---2026-04-30) |
+| P7 | ✅ | OCaml 子集扩展：更多 surface desugar、更丰富的 pattern、string/char 支持，以及更宽的 stdlib 工具面。 | [`[P7]`](../../CHANGELOG.md#p7-ocaml-subset-expansion---2026-04-30) |
+| P8 | ✅ | 编译器优化：常量折叠、死代码删除、自递归尾调用优化、函数内联，以及 mutual recursion groups。 | [`[P8]`](../../CHANGELOG.md#p8-compiler-optimizations---2026-05-01) |
 
-## 2. Phase 1 — MVP
+阶段在这里不是按时间盒划分，而是按范围划定。只有当对应的 changelog section 已经存在，一个阶段才会进入这张已完成表。
 
-### 2.1 范围（必须）
+## Hackathon 工作（P8 之后）
 
-- `zxc-frontend`（OCaml 胶水）：驱动 `compiler-libs`，遍历 `Typedtree`，
-  强制 P1 子集（`10-frontend-bridge.md` §4），发出 `.cir.sexp`。
-- `frontend_bridge`（Zig）：parse `.cir.sexp` 到 `ttree` 镜像。
-- ANF lowering 到 Core IR，附 `Layout` 标注。
-- `ArenaStrategy` lowering 到 Lowered IR。
-- `ZigBackend` 发 `.zig` 源码。
-- 树遍历解释器消费 Core IR。
-- Runtime：`arena.zig`、`panic.zig`、`prelude.zig`、`bpf_entry.zig`。
-- Stdlib：`option`、`result`、`list`。
-- CLI：`omlz check / build / run`（见 §2.3）。
-- 确定性属性：example 语料上 解释器 ≡ Zig 后端。
-- 验收：`solana_hello.ml` 在 `solana-test-validator` 上部署成功并返回 `0`。
+- 已冻结的 hackathon package 由 [`docs/hackathon/README.md`](../hackathon/README.md) 建索引：timeline、双语 demo scripts、shot list、Colosseum submission copy、Anchor comparison artifacts、Slidev recording checklist，以及相关 demo script 链接。
+- 一键复现入口是从仓库根目录运行 `make demo`；同一个 hackathon 索引也指向 `make demo-clean` 以及 `scripts/demo/` 下的组件脚本。
+- 当前 demo 叙事的公开落地页是 [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/)。它呈现 P1-P8 的编译器状态和 P8 之后的 hackathon 资产，但不会把 demo 包装成新的编译器阶段。
 
-我们刻意 **不** 把"自己写 lexer / parser / HM"放进 P1。
-按 ADR-010，那部分由上游 OCaml 完成。
+## P9 — 开发者体验（预览）
 
-### 2.2 范围之外（必须不做）
+**状态：** 预览，非承诺范围。P9 只是下一轮可能的产品质量提升方向标记；下面的内容并不表示这些工作已经排期，也不表示它们已被接受为阶段范围。
 
-- functor / 在普通 `let` 之外的模块语法
-- GADT、多态变体、effect
-- 可变性、异常、引用
-- LSP / formatter / debugger
-- IDL / Anchor / CPI / 入口之外的 syscall
-- 多文件模块（一个 `.ml` 源 + 内置 stdlib）
-- 把"非 BPF 平台"作为交付物
+预览目标：
 
-### 2.3 CLI 接口
+- 改进诊断信息：frontend、Core IR 和 BPF lowering 的失败仍保持现有 `path:line:col: severity: message` 形态，同时给出更可操作的提示。
+- 勾勒 LSP-friendly 输出，让编辑器集成可以消费稳定的 diagnostics 和 ranges，而不是抓取面向人的终端文本。
+- 提升 unsupported OCaml forms、no-allocation proof 失败，以及 runtime shape mismatch 的错误消息质量。
+- 保持 source map fidelity：从 OCaml 位置，经 sexp `1.1`、Core IR、ANF/lowering，到生成的 Zig，都尽量能回指原始 `.ml` span。
+- 让 `omlz check` 成为更有用的快速反馈路径：摘要清晰、顺序确定，并为 CI 日志和本地编辑器使用提供足够上下文。
 
-```
-omlz check <file>                  -- parse + 类型检查，发出诊断
-omlz check --emit=core-ir <file>   -- 打印 Core IR 到 stdout（golden 测试）
-omlz run   <file>                  -- 前端 → 解释器；打印结果
-omlz build <file>
-            [--target=bpf|native]  -- 默认：bpf
-            [--backend=zig|...]    -- 默认：zig
-            [-o <path>]            -- 输出 object/exe
-            [--arena-bytes=N]      -- runtime arena 大小
-            [--keep-zig]           -- 在 out/ 下保留生成的 .zig
-omlz version
-```
+## 未来 / 可选
 
-### 2.4 内部里程碑（建议的 PR 边界）
+下面的内容保留给已封存 P1-P8 编译器范围之外、也不属于 P8 之后 hackathon/demo 工作的可选方向。
 
-```
-P1.0  骨架               build.zig（Zig 0.16）同时驱动 OCaml 和 Zig 步骤；
-                         `omlz --version`；arena util；diagnostics util。
-P1.1  zxc-frontend MVP   能加载 .cmt 并输出 "ok" 的最小 OCaml 程序；
-                         通过 build.zig + ocamlfind 接入。
-P1.2  子集 walker        `zxc_subset.ml` 拒绝所有 §4 白名单之外的 Typedtree
-                         节点，并附带位置。
-P1.3  Sexp 序列化器      接受子集的 `.cir.sexp`，版本 0.1。
-P1.4  Sexp parser (Zig)  `frontend_bridge` 把 0.1 解析进 `ttree`。
-P1.5  ANF lowering       ttree → Core IR + Layout 字段。
-P1.6  IR pretty-printer  在 `omlz check --emit=core-ir` 上做 golden 测试。
-P1.7  解释器             `omlz run hello.ml` 输出 Some 1。
-P1.8  ArenaStrategy      Lowered IR。
-P1.9  ZigBackend         生成 native 下 `zig build-exe` 能接受的 `.zig`。
-P1.10 Runtime + 入口     BPF shim、arena、panic。
-P1.11 BPF driver         `omlz build --target=bpf` 产出 Solana 可加载的 .so。
-P1.12 Solana 骨架        在 solana-test-validator 上部署 + 调用。
-P1.13 确定性套件         解释器 ≡ Zig native；BPF acceptance 单独验证。
-```
+### PX — 多目标扩展（可选，有门槛）
 
-形态相比上一稿有变：原本的 P1.1–P1.4 是"Lexer / Parser / Name resolution /
-Type inference"，全用 Zig 写。按 ADR-010，那些现在是上游 OCaml + 一小段胶水。
+**状态：** 未排期。不在关键路径上。本阶段存在的唯一目的，是给“那其它目标呢？”这个问题一个明确形态，避免它渗透到更早阶段。
 
-### 2.5 P1 验收语料
+#### 上下文
 
-```
-examples/hello.ml             - 列表 head、ADT、match
-examples/option_chain.ml      - 串联 Option.map / Option.bind
-examples/result_basic.ml      - Result 构造与模式
-examples/list_sum.ml          - 列表递归求和
-examples/solana_hello.ml      - BPF entrypoint 返回 0
-```
+因为 Zig backend 发出的是 `.zig` 源码，Zig 工具链原则上可以 lower 到它支持的任何目标（`aarch64`、`x86_64`、`riscv*`、`wasm32`、`nvptx*`、`amdgcn` 等；长列表和配套冷水见 `06-bpf-target.md` §10）。
 
-前四个走解释器和 Zig 后端（native）。最后一个走 Zig BPF 和 `solana-test-validator`。
+这**不**等于那些目标已经被支持。PX 的角色，是把某个目标从“工具链技术上能到达”推进到“ZxCaml 正式支持它”。
 
-### 2.6 P1 release notes（2026-04-28）
+#### 激活门槛
 
-P1 交付了 ADR 集合（[ADR 列表](./09-decisions.md)）描述的 walking skeleton：
-上游 OCaml `compiler-libs` 产出版本化 sexp（`0.4`），Zig 将其解析成 Core IR，
-解释器和 native Zig 后端执行 acceptance corpus，BPF 路径通过
-`zig build-lib -femit-llvm-bc` 加 `sbpf-linker --cpu v2` 把
-`examples/solana_hello.ml` 构建成 Solana 可加载的 `.so`。
+PX 只在某个具体目标**同时满足**下面四条时激活：
 
-| 领域 | Worker commits |
-|---|---|
-| Skeleton、frontend subprocess、sexp bridge、Core IR、interpreter、native 与 BPF build path | [39fabc0](https://github.com/DaviRain-Su/zxcaml/commit/39fabc0), [eb5ca12](https://github.com/DaviRain-Su/zxcaml/commit/eb5ca12), [a1f139e](https://github.com/DaviRain-Su/zxcaml/commit/a1f139e), [b29f437](https://github.com/DaviRain-Su/zxcaml/commit/b29f437), [f1725e5](https://github.com/DaviRain-Su/zxcaml/commit/f1725e5), [e3f781f](https://github.com/DaviRain-Su/zxcaml/commit/e3f781f), [010289b](https://github.com/DaviRain-Su/zxcaml/commit/010289b), [c1014bb](https://github.com/DaviRain-Su/zxcaml/commit/c1014bb), [2fad318](https://github.com/DaviRain-Su/zxcaml/commit/2fad318) |
-| Let、option/result constructor、match、recursion/closure、list、arithmetic、conditional | [451ecca](https://github.com/DaviRain-Su/zxcaml/commit/451ecca), [e3dd63a](https://github.com/DaviRain-Su/zxcaml/commit/e3dd63a), [86f995d](https://github.com/DaviRain-Su/zxcaml/commit/86f995d), [287c093](https://github.com/DaviRain-Su/zxcaml/commit/287c093), [d9875be](https://github.com/DaviRain-Su/zxcaml/commit/d9875be), [9bb39ab](https://github.com/DaviRain-Su/zxcaml/commit/9bb39ab), [a52574c](https://github.com/DaviRain-Su/zxcaml/commit/a52574c), [bce8251](https://github.com/DaviRain-Su/zxcaml/commit/bce8251), [65cbce5](https://github.com/DaviRain-Su/zxcaml/commit/65cbce5), [4c715c2](https://github.com/DaviRain-Su/zxcaml/commit/4c715c2), [792c152](https://github.com/DaviRain-Su/zxcaml/commit/792c152), [382969c](https://github.com/DaviRain-Su/zxcaml/commit/382969c), [6b706de](https://github.com/DaviRain-Su/zxcaml/commit/6b706de), [31c044e](https://github.com/DaviRain-Su/zxcaml/commit/31c044e) |
-| Determinism、golden tests、UI tests、Solana harness、diagnostics | [3e40be5](https://github.com/DaviRain-Su/zxcaml/commit/3e40be5), [cb817dc](https://github.com/DaviRain-Su/zxcaml/commit/cb817dc), [187f67b](https://github.com/DaviRain-Su/zxcaml/commit/187f67b), [afaa896](https://github.com/DaviRain-Su/zxcaml/commit/afaa896), [fca5bb5](https://github.com/DaviRain-Su/zxcaml/commit/fca5bb5), [2e61aa8](https://github.com/DaviRain-Su/zxcaml/commit/2e61aa8) |
-| Acceptance corpus、CI、安装文档、最终 docs sweep | [4ae4153](https://github.com/DaviRain-Su/zxcaml/commit/4ae4153), [533ef81](https://github.com/DaviRain-Su/zxcaml/commit/533ef81), [18c065e](https://github.com/DaviRain-Su/zxcaml/commit/18c065e), [e8b1124](https://github.com/DaviRain-Su/zxcaml/commit/e8b1124) |
+1. **存在具体用例**，并且该用例被写下来，至少有一位 champion 会实际使用产出。
+2. **存在 owner**，负责该目标的 runtime shim 工作（entrypoint、panic、内存方案、到用户代码的 calling convention）。
+3. **BPF 形态的语言约束适合该用例**；或者有人以新 ADR 的形式提出放宽约束（例如“WASM 目标可以使用宿主 allocator，而不是单一 arena”）。
+4. **同一次变更加入 CI lane 和验收 example。**
 
-P1 已实现：
+四条缺一不可。缺任何一条，目标都留在门外。投机式多目标支持是泄漏，不是功能。
 
-- CLI：`omlz check`、`omlz run`、`omlz build --target=native|bpf`。
-- 用户子集：single-binding `let` / `let rec`、单参数 lambda、应用、`if`、
-  `match`、整数/字符串常量、算术/比较原语，以及内置 option/result/list 构造器。
-- Runtime：static-buffer bump arena、panic/prelude helpers、native 与 BPF entry shim。
-- 质量门槛：corpus 上 interpreter ≡ native determinism、Core IR golden tests、UI tests、
-  Solana deploy/invoke harness、CI，以及 `06-bpf-target.md` §7 中记录为 PASS 的
-  G13 BPF 字节可复现性。
+#### 可能候选（仅举例，未承诺）
 
-当 P1 发布时延期到 P2+ 的内容：
+- **`wasm32-freestanding`** —— 用于浏览器内 Solana 程序模拟器。门槛：用户是谁？什么工具会消费这个输出？
+- **`x86_64-linux`** —— 给希望获得 native 速度和 crash dump 的 fuzzing / property testing harness。门槛：真实存在的 fuzzing harness，而不是“有的话挺好”。
+- **`riscv64-linux` / embedded BPF（Linux kernel eBPF）** —— 不属于 Solana BPF flavor，但相邻。门槛：有人需要交付一个具体 eBPF 程序。
 
-- 用户自定义 ADT、records、tuples、嵌套构造器模式、guarded match arms、
-  exceptions-as-result helpers、mutation/ref、modules/functors；
-- 把一等 closure 作为受支持的 BPF acceptance 形状（当时 native 和 interpreter 路径已存在，
-  但 BPF code-pointer relocation 需要后续设计选择）；
-- entrypoint 之外的 Solana-shaped API：account decoding、syscalls、CPI、IDL generation、
-  no-allocation analysis；
-- region inference / multi-arena ownership 工作，以及任何非 BPF 交付目标。
+#### 注意：x86 / arm native **不是** PX 候选
 
-## 3. Phase 2 — 子集扩展 + match 优化（2026-04-29）
+如果你的目标是“我想在 x86 / arm 上运行 ZxCaml 程序做本地测试或 fuzzing”，你**不需要** PX。因为每个 ZxCaml 程序按构造都是合法 OCaml 程序（ADR-001），而开发者机器为了 `omlz` 的 frontend bridge（ADR-010）已经装有 OCaml 工具链。直接用 `ocaml`（或 OxCaml）编译同一份 `.ml` 并运行即可。完整讨论见 README 的 “Native execution comes for free” 一节，以及 `docs/oxcaml-relationship.md`。
 
-**状态：** P2 milestone 已实现。P2 扩大了接受的 OCaml 子集，并保持 P1 BPF
-管线不变。
+PX 留给那些不适用上述技巧的目标：也就是今天上游 OCaml 和 `omlz` 都不会产出可运行二进制，而又有人有具体理由让 `omlz` 产出一个的场景。
 
-P2 已实现：
+#### PX **不是** 什么
 
-- 用户自定义 ADT 声明，包括参数化和递归 ADT；
-- 嵌套构造器 pattern 和带 `when` 的 match arm；
-- decision-tree match 编译，包含构造器 dispatch 和 guard fallthrough；
-- tuple 构造、tuple pattern，以及 `fst` / `snd` 投影 helper；
-- record 声明、构造、字段访问、record pattern、嵌套 record、参数化 record 和函数式 record update；
-- `List`、`Option`、`Result` 的 stdlib 扩展；
-- BPF 路径的一等 closure hardening；
-- 覆盖 ADT、pattern、tuple、record、stdlib 和 closure 的 examples。
+- 不是“支持所有 Zig 目标”。工具链覆盖广度并不等于 ZxCaml 支持广度。
+- 不是“把语言变成通用语言”。除非 ADR 明确按目标放宽，否则 BPF 形态约束（无 GC、无 syscall、无线程、无异常）继续成立。
+- 不是已封存 P1-P8 交付集合的一部分。它被刻意放在主编号阶段之后，并且自身也是可选项。
 
-P2 **没有** 增加新的外部工具链依赖。当前 wire 格式是 **sexp `0.7`**：`0.5`
-加入类型声明，`0.6` 加入嵌套 pattern 和 guard，`0.7` 加入 tuple/record 节点。
+#### 与既有阶段的关系
 
-延期到 P3+：
+PX **不阻塞任何更早阶段**。P1-P8 已经以 BPF 作为唯一验证目标封存。PX 的意义是：当真正的第二个目标出现时，它通过定义好的流程进入项目，而不是自然生长、逐步模糊项目焦点。
 
-- entrypoint 之外的 Solana-shaped API：account decoding、syscall、CPI、IDL generation、no-allocation analysis；
-- module/functor、exception、mutable state、array、object、GADT、多态变体、effect；
-- region inference / multi-arena ownership 工作，以及任何非 BPF 交付目标。
-
-## 4. Phase 3 — Solana 形态子集（2026-04-29）
-
-**状态：** P3 milestone 已实现。P3 把项目从"能编译到 BPF 的语言子集"推进为
-一个具备 Solana runtime awareness 的编译器切片。
-
-P3 已实现：
-
-- 内置 `account` 值，背后是 Solana BPF 输入 buffer 上的零拷贝视图；
-- 使用 MurmurHash3-32 dispatch 地址的 runtime syscall 绑定；
-- CPI records 和 helpers（`instruction`、`account_meta`、`invoke`、
-  `invoke_signed`）、PDA helpers，以及 return-data 绑定；
-- 通过零拷贝 account buffer 支持 account data/lamports mutation；
-- SPL-Token transfer instruction 编码，以及 Tokenkeg transfer acceptance 示例；
-- 结构化错误码约定；
-- `omlz check --no-alloc`，一项保守的 Core IR 分配分析；
-- `omlz idl`，一次性的 ZxCaml JSON IDL 发出器；
-- BPF entry arena 从 1 KiB 增加到 32 KiB；
-- account/syscall、syscall-only、simple CPI 和 SPL-Token 流程示例；
-- CI 中的 `no_alloc` 和 IDL JSON emission smoke check。
-
-当前 wire format 是 **sexp `0.9`**：`0.8` 增加 account/syscall 引用，
-`0.9` 增加 CPI 类型/函数引用。
-
-操作指南见 [`11-solana-p3.md`](./11-solana-p3.md)。
-
-## 5. Phase 4 — 区域推断
-
-- 在 IR 中引入 `Region::Region(id)`。
-- Core IR 上的逃逸分析 pass。
-- `RegionStrategy`（仍基于 arena，但 per region）。
-- 对可证明不逃逸的局部做可选栈分配。
-- P4 不引入用户面的语法变更；这纯粹是优化。
-
-## 6. Phase 5 — 生态接入
-
-- 绑定到 Zig 函数的 `external` 声明。
-- 把 Zig 包 vendor 成 `omlz` 依赖的工具链。
-- 更大的原生 stdlib（`Map`、`Set`、基础 crypto wrapper）。
-- Anchor 风格的 IDL 发出。
-
-## 7. Phase 6 — 自举（可选）
+### 自举（原 P6，可选）
 
 - 用我们的子集重写 `src/core/anf.zig` 和 `src/core/pretty.zig`。
-- 把重写后的代码穿过 `omlz`，把产出 object 链回编译器自身。
-- 这是 dogfood 门槛；项目不必通过它就能交付。
+- 让重写后的代码穿过 `omlz`，并把产出的 object 链回编译器自身。
+- 这是 dogfooding 门槛；项目不需要通过它才能交付。
 
-## 8. Phase 7 — 形式化（可选）
+### 形式化（原 P7，可选）
 
 - Core IR 的小步语义（论文或 Lean / Coq）。
-- 给 LLM / verifier 用的 Core IR 接口
-  （S-expression 序列化？确定性 JSON？）。
+- 给 LLM / verifier 消费的 Core IR 表面（S-expression serialisation？确定性 JSON？）。
 - 属性测试：Core IR 与 Lowered IR 之间的 refinement。
 
-## 8a. Phase PX — 多目标扩展（可选，有门槛）
+### 反目标（全部属于未来工作）
 
-**状态：** 未排期。不在主路径上。
-本阶段存在的唯一目的，是给"那其它目标呢？"这个问题一个明确的形态，
-免得它渗透到更早的阶段里。
-
-### 上下文
-
-因为 Zig 后端发的是 `.zig` 源码，Zig 工具链在原理上能 lower 到它支持的任何目标
-（`aarch64`、`x86_64`、`riscv*`、`wasm32`、`nvptx*`、`amdgcn` …… 详见
-`06-bpf-target.md` §10 的完整列表和配套冷水）。
-
-这 **并不** 等于那些目标被支持。
-PX 就是把一个目标从"工具链技术上能到"切换到"ZxCaml 支持"的那道门。
-
-### 激活门槛
-
-PX 仅在某个具体目标 **同时满足** 下述四条时激活：
-
-1. **有具体用例**，写下来，至少有一个 champion 会真的用产出。
-2. **有 owner**，负责这个目标的 runtime shim 工作
-   （entrypoint、panic、内存方案、与用户代码的调用约定）。
-3. **BPF 形态的语言约束适配这个用例**，
-   或者把松绑作为新 ADR 提出
-   （比如"WASM 目标可以用宿主 allocator 代替单 arena"）。
-4. **同一次变更里加入一条 CI lane 和一个验收 example。**
-
-四条少一条，目标就不进。投机性的多目标支持是漏洞，不是特性。
-
-### 可能的候选（仅举例，未承诺）
-
-- **`wasm32-freestanding`** —— 浏览器内 Solana 程序模拟器。
-  门槛：用户是谁？什么工具消费输出？
-- **`x86_64-linux`** —— 想要原生速度和 crash dump 的 fuzzing / 属性测试骨架。
-  门槛：得有真实的 fuzzing 骨架，不是"如果有就好了"。
-- **`riscv64-linux` / 嵌入式 BPF（Linux 内核 eBPF）** ——
-  在 Solana BPF 之外，但相邻。
-  门槛：有个具体的 eBPF 程序需要交付。
-
-### 注意：x86 / arm native **不是** PX 候选
-
-如果你的目标是"我想在 x86 / arm 上跑我的 ZxCaml 程序做本地测试或 fuzzing"，
-你**不需要** PX —— 因为每个 ZxCaml 程序按构造都是合法 OCaml 程序（ADR-001），
-而开发者机器为了 `omlz` 的前端桥接（ADR-010）已经装了 OCaml 工具链。
-直接用 `ocaml`（或 OxCaml）编同一份 `.ml` 然后运行即可。
-详见 README 里 "Native 执行是顺带免费的" 一节，以及
-`docs/oxcaml-relationship.md` 的完整讨论。
-
-PX 留给的目标是那些**不**适用上面这个技巧的：
-也就是说，今天上游 OCaml 和 `omlz` 都不会产出可运行二进制，
-而又有人有具体理由让 `omlz` 去产一个。
-
-### PX **不是** 什么
-
-- 不是"支持每一个 Zig 目标"。工具链广度不等于 ZxCaml 广度。
-- 不是"把语言变成通用语言"。
-  BPF 形态的约束（无 GC、无 syscall、无线程、无异常）继续成立，
-  除非有 ADR 明确按目标松绑。
-- 不是 P1 / P2 / P3 的交付物。
-  它特意放在主编号阶段之后，并且本身可选。
-
-### 与既有阶段的关系
-
-PX **不阻塞任何更早的阶段**。
-P1–P5 按计划进行，BPF 是唯一被验证的目标。
-PX 存在的意义是：当真正的第二个目标出现时，它通过定义好的流程进入项目，
-而不是有机地稀释项目焦点。
-
-## 9. 反目标（每个 phase 都不能违反）
-
-- 我们绝不在产出里接受 OCaml C runtime。
+- 我们绝不在编译产物中接受 OCaml C runtime。
 - 我们绝不采纳需要 GC 的特性。
 - 我们绝不 fork OCaml 编译器（ADR-009）。
-- 我们绝不悄悄漂出 OCaml 子集；
-  ADR-010 让漂移在结构上不可能 ——
-  上游编译器就是 parser / 类型检查器。
-- 我们 **不** 依赖任何 `opam` 包，**除了** OCaml 发行版自带的
-  `compiler-libs.common`。前端胶水的第三方 opam 依赖数量是零。
+- 我们绝不悄悄漂出 OCaml 子集；ADR-010 让漂移在结构上不可能，因为上游编译器就是 parser/type-checker。
+- 我们**不**依赖 OCaml 发行版自带 `compiler-libs.common` 之外的 `opam` 包。frontend bridge 的第三方 `opam` 依赖数量是零。
