@@ -43,6 +43,10 @@ name = "counter_v2_test"
 path = "counter_v2_test.rs"
 
 [[test]]
+name = "hackathon_greet_test"
+path = "hackathon_greet_test.rs"
+
+[[test]]
 name = "demo_test"
 path = "demo_test.rs"
 

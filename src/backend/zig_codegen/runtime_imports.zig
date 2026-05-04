@@ -440,6 +440,18 @@ pub fn emitCounterAppExpr(
         try append(out, allocator, "}");
         return true;
     }
+    if (std.mem.eql(u8, name, "hackathon_greet_process")) {
+        if (app.args.len != 3) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} cpi.zxcaml_hackathon_greet_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return true;
+    }
     if (std.mem.eql(u8, name, "token_vault_process")) {
         if (app.args.len != 7) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
