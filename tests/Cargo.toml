@@ -23,6 +23,10 @@ name = "hello_test"
 path = "hello_test.rs"
 
 [[test]]
+name = "noop_test"
+path = "noop_test.rs"
+
+[[test]]
 name = "demo_test"
 path = "demo_test.rs"
 
