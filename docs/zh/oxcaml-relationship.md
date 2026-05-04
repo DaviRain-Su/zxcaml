@@ -102,7 +102,7 @@ fork oxcaml/oxcaml
 ### 方式 C —— 当 PX 为某个新目标（wasm32、x86_64-linux …）激活时，借鉴 OxCaml 在该目标上的做法
 
 ```
-ZxCaml P1–P5 按计划交付（仅 BPF）。
+ZxCaml 已封存 P1-P8，并以 BPF 作为验证目标。
 PX 为某目标激活，比如 wasm32，且有真实用例。
   → 看 OxCaml 怎么把 Lambda 映射到那个目标的 ABI
   → 把 *做法*（不是代码）抄进 ZxCaml 的管线

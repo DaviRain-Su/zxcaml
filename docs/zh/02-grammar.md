@@ -1,4 +1,4 @@
-# 02 — 语法（截至 P2 的 OCaml 子集）
+# 02 — 语法（当前 OCaml 子集）
 
 > **Languages / 语言**: [English](../02-grammar.md) · **简体中文**
 
@@ -7,16 +7,18 @@
 ZxCaml 接受 **OCaml 的严格子集**。每个被接受的程序都会先由上游 OCaml
 解析并完成类型检查；随后 ZxCaml 遍历 `Typedtree`，拒绝当前子集之外的节点。
 
-截至 P2，用户程序子集包含顶层 `let` 和 `type` 声明、整数、字符串、布尔值、
-函数、`let`、`if`、`match`、函数应用、整数/比较原语、用户自定义 ADT、嵌套和
-带 guard 的模式、tuple、record、字段访问、函数式 record update，以及内置的
-`Option`、`Result`、`List` stdlib 表面。
+截至已封存的 P8，用户程序子集包含顶层 `let`、mutually recursive `let rec ... and ...`
+组、`external` 声明和 `type` 声明；整数、字符串、char、布尔值、unit、函数、`let`、
+`if`、`match`、sequence expression、函数应用、整数 / 比较 / 字符串原语、`assert`、
+用户自定义 ADT、嵌套 / guarded / or / alias / literal patterns、tuple、record、
+字段访问、函数式 record update，以及内置 `Option`、`Result`、`List`、`Map`、
+`Set`、`String`、`Char`、`Crypto`、`Pubkey` stdlib 表面。
 
 权威实现是 `src/frontend/zxc_subset.ml`；当前前端发出的 wire contract 是 sexp
-**版本 `0.7`**。仓库中的 `src/frontend/zxc_sexp_format.md` 仍需 OCaml lane 把旧的
-`0.5` 示例刷新到当前形态。
+**版本 `1.1`**。`src/frontend/zxc_sexp_format.md` 是更底层的 wire-contract 参考；
+本文描述用户可见的子集。
 
-文件扩展名是 `.ml`。P2 不支持 `.mli` 或多文件模块。
+文件扩展名是 `.ml`。已封存的 P1-P8 编译器不支持 `.mli` 或多文件模块。
 
 ## 2. 词法规则
 
@@ -29,7 +31,7 @@ ZxCaml 接受 **OCaml 的严格子集**。每个被接受的程序都会先由�
 - 内置 stdlib 构造器（`None`、`Some`、`Ok`、`Error`、`[]`、`::`），以及由已接受
   `type` 声明引入的用户 ADT 构造器。
 
-## 3. 截至 P2 接受的表层形式
+## 3. 已封存 P1-P8 编译器接受的表层形式
 
 ```ocaml
 (* 用户自定义 ADT *)
@@ -52,17 +54,17 @@ let entrypoint _input =
 
 | 表层形式 | 说明 |
 |---|---|
-| `let x = e` / `let rec f x = e` | 顶层和嵌套均可；不支持多 binding 的 `and` group |
+| `let x = e` / `let rec f x = e` / recursive `and` groups | 顶层和嵌套均可；mutually recursive groups 会保留在 wire `1.1` 中 |
 | `fun x -> e` / 函数语法糖 let | curried 多参数函数表示为嵌套 lambda / 多参数 arrow |
 | 变量引用 | OCaml 在序列化前完成解析；`List.map` 等 stdlib 路径保持 qualified |
-| 整数、字符串、布尔、unit 常量 | 其他常量拒绝 |
-| 函数应用 | 无 label 应用；partial/labeled/optional application 仍在范围外 |
+| 整数、字符串、char、布尔、unit 常量 | 其他常量拒绝 |
+| 函数应用 | 无 label 应用，以及已接受的 stdlib / external 调用；partial/labeled/optional application 仍在范围外 |
 | `if c then a else b` | `else` 必须存在 |
 | `match e with ...` | 支持嵌套构造器/tuple/record pattern 和 `when` guard |
 | 构造器 | 内置 stdlib 构造器 + 用户 ADT 构造器 |
 | tuple | 构造、模式解构，以及 `fst`/`snd` 投影 helper |
 | record | 类型声明、构造、字段访问（`r.x`）、模式解构、函数式更新（`{ r with x = v }`） |
-| 原语运算 | `+`、`-`、`*`、`/`、`mod`、`=`、`<>`、`<`、`<=`、`>`、`>=` |
+| 原语运算 | `+`、`-`、`*`、`/`、`mod`、`=`、`<>`、`<`、`<=`、`>`、`>=`、字符串拼接 `^`，以及已支持的 string/char helper |
 
 接受的模式：
 
@@ -74,8 +76,9 @@ let entrypoint _input =
 | tuple pattern | 固定 arity 的 tuple 解构 |
 | record pattern | 命名字段，按 OCaml 接受的任意源码顺序 |
 | guarded arm | `pattern when expr -> body`；guard 为 false 时落到后续 arm |
+| literal/or/alias patterns | 整数 / 字符串 / char 常量、`p1 | p2`，以及前端接受的 `p as name` |
 
-## 4. 截至 P2 接受的类型声明
+## 4. 接受的类型和 external 声明
 
 接受：
 
@@ -93,7 +96,9 @@ type pair = int * bool
 - 不支持 GADT、多态变体、private type、type constraint 或 module signature；
 - variant 声明中不支持 record constructor payload；
 - 不支持 mutation 表达式（`r.x <- v`），即使 OCaml `Typedtree` 中能看到 record 字段可变性；
-- P2 examples 覆盖的递归 ADT 受支持，但完整的一般递归类型推断仍刻意保持很窄。
+- recursive ADT 和 erased type aliases 在前端接受的范围内受支持；完整的一般递归类型推断仍刻意保持很窄。
+
+顶层 `external name : type = "zig_symbol"` 声明受支持，用于把 Zig runtime 符号绑定成带类型的值。
 
 ## 5. 保留但拒绝的形式
 
@@ -104,20 +109,25 @@ module  sig  struct  functor  open  include
 exception  try  raise
 mutable writes  ref  while  for  do  done
 class  object  method  inherit  initializer
-lazy  assert  external
+lazy
 arrays  labelled arguments  optional arguments  local opens
 ```
 
 ## 6. 程序可见的标准库
 
-内置 stdlib（`stdlib/core.ml`）定义 `Option`、`Result`、`List` 模块。P2 包含常用函数：
+内置 stdlib（`stdlib/core.ml`）定义 `Option`、`Result`、`List`、`Map`、`Set`、`String`、
+`Char`、`Crypto`、`Pubkey` 和面向 Solana 的 helper 模块。核心函数式表面包含常用函数：
 
 - `List.length`、`List.map`、`List.filter`、`List.fold_left`、`List.rev`、
   `List.append`、`List.hd`、`List.tl`；
 - `Option.map`、`Option.bind`、`Option.value`、`Option.get`、
   `Option.is_none`、`Option.is_some`；
 - `Result.map`、`Result.bind`、`Result.is_ok`、`Result.is_error`、
-  `Result.ok`、`Result.error`。
+  `Result.ok`、`Result.error`；
+- `Map` / `Set` 构造和查找 helper；
+- `String.length`、`String.get`、`String.sub`；
+- `Char.code`、`Char.chr`；
+- `Crypto.sha256`、`Crypto.keccak256`，以及 `Pubkey` 常量 / helper。
 
 这些函数都是普通 OCaml 子集代码，由上游 OCaml 类型检查，并由同一条管线编译。
 

@@ -15,7 +15,7 @@ ZxCaml/
 │   │   ├── zxc_frontend.ml
 │   │   ├── zxc_subset.ml
 │   │   ├── zxc_sexp.ml
-│   │   └── zxc_sexp_format.md  -- wire 契约
+│   │   └── zxc_sexp_format.md  -- wire 契约（当前 1.1）
 │   ├── frontend_bridge/        -- Zig 端 sexp 消费者
 │   │   ├── sexp_lexer.zig
 │   │   ├── sexp_parser.zig
@@ -72,7 +72,7 @@ src/
 │   ├── zxc_frontend.ml         -- 主程序；驱动 compiler-libs
 │   ├── zxc_subset.ml           -- Typedtree 子集白名单 + walker
 │   ├── zxc_sexp.ml             -- S-expression 序列化器
-│   └── zxc_sexp_format.md      -- 有版本的 wire 契约
+│   └── zxc_sexp_format.md      -- 有版本的 wire 契约（当前 1.1）
 │
 ├── frontend_bridge/            -- Zig 端 sexp 消费者
 │   ├── sexp_lexer.zig
@@ -109,7 +109,7 @@ src/
 
 ### 2.1 标记为 **EXTENSION POINT** 的文件
 
-未来 phase（P3+ 内存模型，P5+ 后端）应该只在这几个地方扩展。
+已封存的 region-inference 工作和可选的未来后端 / 内存模型工作，预期都只在这几个地方扩展。
 为了加新后端或新内存模型而去动其它地方，那是设计味道有问题。
 
 - `src/core/layout.zig`
@@ -212,9 +212,9 @@ zig-out/bin/omlz check examples/*.ml   # 跳过 m0_unsupported.ml
 tests/solana/hello/invoke.sh          # SOLANA_BPF=1 时
 ```
 
-P2 使用与 P1 相同的 build/test 命令。Examples corpus loop 基于 glob，因此新增 P2 examples
-无需结构性 CI 改动就会被检查。Solana BPF harness 仍由环境变量 opt-in；closure 验收可本地通过
-`SOLANA_BPF=1 tests/solana/closures/invoke.sh` 运行。
+Examples corpus loop 基于 glob，因此新增 `.ml` examples 无需结构性 CI 改动就会被检查。
+Solana BPF harness 仍由环境变量 opt-in；closure、account/CPI 等验收可本地通过文档中的
+`SOLANA_BPF=1` harness 运行。
 
 ## 8. 约定
 

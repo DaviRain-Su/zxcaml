@@ -16,7 +16,7 @@ SPL-Token transfer，请 `omlz` 证明某个源文件不分配，并通过 `omlz
 - arena 模型仍对 OCaml 用户隐藏，但 BPF entry arena 已从旧的 P1/P2 1 KiB
   buffer 增加到 **32 KiB**；
 - `no_alloc` 是保守的 Core IR 分析，不是新的类型系统模式；
-- IDL 输出是 ZxCaml JSON，尚不兼容 Anchor。
+- 当前 IDL 输出是 Anchor-compatible JSON：最初 P3 的 smoke schema 已在已封存 P5 工作中扩展。
 
 ## 1. Account 处理
 
@@ -192,13 +192,12 @@ no_alloc: PASS
 
 ## 6. IDL 发出
 
-`omlz idl <file.ml>` 会发出一个 JSON 文档，描述发现的程序形态：
+`omlz idl <file.ml>` 会发出一个 Anchor-compatible JSON 文档，描述发现的程序形态：
 
-- `schema_version`；
 - program name 和可选 program id；
-- 带 name、discriminator、accounts、arguments 的 instructions；
+- Anchor 0.30+ instruction entries，包含 name、discriminator、accounts 和 arguments；
 - 用户定义的 record 和 variant 类型；
-- 结构化错误常量。
+- source 暴露出的 events、errors 和 constants。
 
 示例：
 
@@ -207,8 +206,8 @@ zig build
 zig-out/bin/omlz idl tests/idl/entrypoint.ml | python3 -m json.tool
 ```
 
-该 schema 有意保持小而且 ZxCaml 专用。它适合 smoke test 和 client-code 实验，
-但**尚不**兼容 Anchor。
+最初的 P3 schema 有意保持小而且 ZxCaml 专用。当前已封存的 P5/P8 toolchain 会发出
+Anchor-compatible IDL JSON，同时仍以 `.ml` 程序作为事实源。
 
 ## 7. CI 覆盖
 

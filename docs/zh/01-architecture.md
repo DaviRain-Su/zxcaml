@@ -15,7 +15,7 @@
    │   .cmt（二进制 Typedtree）
    ▼
 [ zxc-frontend (OCaml 胶水) ]        ◀── 遍历 Typedtree，强制子集白名单
-   │   .cir.sexp（带版本的 wire 格式）
+   │   .cir.sexp（带版本的 wire 格式；当前 `1.1`）
    ▼
 [ frontend_bridge (Zig) ]            ◀── 把 sexp 解析成 Zig 镜像类型
    │   ttree.Module（Zig）
@@ -49,7 +49,7 @@ Solana BPF .so
                   我们不拥有这个格式；我们消费它的一个 *子集*
                  （见 10-frontend-bridge.md §4）。
 
-.cir.sexp       — 我们的 wire 格式：
+.cir.sexp       — 我们的 wire 格式（当前 `1.1`）：
                   对所接受 Typedtree 子集的有版本、无损 S-expression 序列化。
                   每个节点都带 `ty` 和 `span`。
 
@@ -68,11 +68,11 @@ Lowered IR      — Core IR 加上显式的分配计划和闭包表示。
 **不变量：** Core IR 是唯一稳定契约。后端**绝不**回头看 `.cmt`、`.cir.sexp`、
 `ttree`。Lowered IR 允许因策略而异 —— 这正是它存在的意义。
 
-为什么要走"sexp wire + Zig 镜像"，而不是直接从 Zig 读 `.cmt`？
+为什么要走当前 `1.1` 的 sexp wire + Zig 镜像，而不是直接从 Zig 读 `.cmt`？
 因为 `.cmt` 是 OCaml 的 marshal 格式，跨发行版不稳定。
 sexp 是 **我们的**，由我们定版本，把上游 OCaml 的二进制格式和我们的消费者解耦。
 
-## 3. 扩展点（设计上留好，**不**在 P1 实现）
+## 3. 扩展点（设计时预留，已被封存阶段复用）
 
 我们隔离三个 trait 形状的接口面。其它所有东西都是实现细节，可以自由重写。
 
@@ -92,9 +92,8 @@ Region = Arena
        -- 未来：Rc | Gc | Region(id)
 ```
 
-P1 阶段，推断 pass 在所有地方写 `Region::Arena`（对明显不逃逸的情况，
-也可以写 `Stack`）。**字段的存在** —— 而不是 **取值的多样性** —— 才是让未来扩展
-低成本的关键。
+最初的 P1 推断 pass 默认写入 `Region::Arena`。已经封存的 P6 region-inference pass
+复用同一字段，把符合条件的不逃逸值标记为 `Stack`；这个扩展没有改变 Core IR 契约。
 
 ### 3.2 `LoweringStrategy`
 
@@ -108,8 +107,9 @@ LoweringStrategy:
   call_convention(callee_ty)   -> calling_convention
 ```
 
-P1 只有一个实现：`ArenaStrategy`。它假设有一个隐式的单 arena，作为每个函数的
+主要实现仍是 `ArenaStrategy`。它假设有一个隐式的单 arena，作为每个函数的
 首参数贯穿全程；闭包和 ADT payload 在 arena 上分配；原始类型按值拷贝。
+已经封存的 P6 region inference 会在这个计划上继续细化，给可上栈的局部值避开 arena 分配。
 
 ### 3.3 `Backend`
 
@@ -125,14 +125,14 @@ Backend:
 P1 实现：
 
 - `ZigBackend` —— 产出 `.zig` 源码，再驱动 `zig build-lib -femit-llvm-bc`
-  与 `sbpf-linker` 产出 Solana BPF `.so`。
+  与 `sbpf-linker` 产出 Solana BPF `.so`；也可为 native developer builds 产出 hosted Zig。
 - `Interpreter` —— 直接执行 Core IR（**不**走 Lowered IR）。
   用于 `omlz run`、REPL、以及在测试中作为语义参考。
 
 只有 stub 的（签名存在，实现为空）：
 
 - `OCamlBackend` —— 仅作为 stdlib 的**非发布**正确性参考。不在主路径上。
-- `LlvmBackend` —— 占位；P5+ 之前不要实现。
+- `LlvmBackend` —— 占位；属于 P1-P8 之外未封存的可选后端工作。
 
 ## 4. 架构图
 
@@ -179,7 +179,7 @@ flowchart TD
 ## 6. 这一架构里我们刻意 **不做** 的事
 
 - **后端不重新做类型检查。** 类型住在 Core IR 上；后端无条件信任它们。
-- **P1 不做多 pass 优化。** Core IR 已经够小，Zig 后端可以依靠 `zig` 的优化器。
-  常量折叠、死代码删除等只在某个测试用例需要时才考虑。
+- **优化显式属于 Core IR。** 已封存的 P8 在 lowering/codegen 之前加入了
+  constant folding、dead-code elimination、自递归 TCO 和小函数 inlining。
 - **P1 不做增量编译。** 每次都是整程序编译。
 - **没有包管理器。** 一个程序 = 一个文件 + 内置 stdlib。多文件模块是 P3 的事。

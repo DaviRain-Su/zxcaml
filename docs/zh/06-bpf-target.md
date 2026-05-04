@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-Phase 1 必须以下面这条命令链在开发者机器上端到端跑通收尾：
+最初的 Phase 1 BPF 验收目标，是下面这条命令链能在开发者机器上端到端跑通：
 
 ```sh
 omlz build examples/solana_hello.ml --target=bpf -o solana_hello.so
@@ -108,12 +108,9 @@ runtime shim 才是 Solana 实际加载的东西。
 | `bpf_entry.zig` | 上面那个 `entrypoint` shim。 |
 | `prelude.zig` | 助手：整数绕回、ADT 判别符助手、列表 cons。 |
 
-P1 **明确不** 包含：
-
-- syscall wrapper（`sol_log_`、`sol_invoke_signed`、…）—— P3
-- account 解析 —— P3
-- CPI helper —— P3
-- 超出"返回 `u64`"之外的错误码约定 —— P3
+最初的 P1 runtime 刻意 **不** 包含 syscall wrapper、account 解析、CPI helper 或更丰富的错误约定。
+这些面向 Solana 的表面后来由已封存的 P3/P5 工作补上，并记录在 `11-solana-p3.md`；
+本文的 BPF target 契约仍聚焦在工具链、entrypoint 和 ELF 形态上。
 
 ## 6. Build flag
 
@@ -221,16 +218,12 @@ zig build-exe -O Debug out/program.zig
 | `zig build test` 打印 `zxc-frontend not found ...` | negative subprocess-path test 刻意测试该诊断 | 只要测试命令 exit 0，就视为预期输出 |
 | macOS 上 `ocamlc -c ... -o /dev/null` 失败 | OCaml 会尝试创建 `/dev/null.cmi.tmp` | 使用 `ocamlfind ocamlc -i stdlib/core.ml > /dev/null`，或把 artifact 写到 `/tmp` |
 
-## 9. 范围之外（P1）
+## 9. 最初 P1 target contract 的范围之外
 
-- IDL 生成（Anchor 风格）
-- BPF 端日志
-- Program-derived address（PDA）
-- Cross-program invocation（CPI）
-- Compute-unit 预算分析
-- Upgrade authority / multisig 流程
-
-这些都明确属于 P3+。
+最初的 BPF target contract 排除了 IDL 生成、BPF 端日志、Program-derived address（PDA）、
+cross-program invocation（CPI）、compute-unit 预算分析，以及 upgrade-authority / multisig 流程。
+已封存的 P3/P5 工作后来加入了 logging、PDA/CPI helpers、no-allocation checks 和
+Anchor-compatible IDL；upgrade-authority 和 multisig 流程仍在 compiler target contract 之外。
 
 ## 10. 为什么不"凡是 Zig 能产出的目标都支持"？
 

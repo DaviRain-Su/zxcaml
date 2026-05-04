@@ -80,20 +80,20 @@ effect、`Obj.magic`、ctypes 形式的 C stub，以及具体的 tagged-pointer 
 OCaml `ocaml` / `dune` 工具链仍可在 **离线** 阶段用作正确性参考
 （比如人工验证 stdlib 是否仍是合法 OCaml）。
 
-### 4.2 多后端 / 多内存模型 **设计上**留好接口，**P1 阶段**只实现一种
+### 4.2 多后端 / 多内存模型是先设计好，而不是事后补丁
 
 我们设计成 **trait 形状的扩展点**（lowering strategy、backend），
-这样未来要加新内存模型（RC、GC、region）和新后端时不用重新设计。
-**P1 阶段每个扩展点都只实现一个**：arena lowering、Zig 后端，外加一个开发用的
-树遍历解释器。
+这样新增内存模型或后端时不必重做架构。最初的 P1 实现从 arena lowering、
+Zig 后端，以及开发用树遍历解释器起步；已经封存的 P6 随后复用同一设计，
+为不逃逸的局部值加入 region inference。
 
 ### 4.3 "可插拔内存模型"是研究级难题
 
 真正可插拔的内存模型（arena / RC / GC / stack-only）会牵动调用约定、
 闭包表示、ADT 布局、类型系统。P1 只做 **一种**：
-**arena，完全推断，对用户隐藏**。Core IR 上确实带 `Layout` 字段，但目前只允许
-`Region::Arena`。这个字段的存在 —— 而非它的取值范围 —— 是 P4+ 区域 / 所有权工作的
-扩展点。
+**arena，完全推断，对用户隐藏**。Core IR 上带有 `Layout` 字段；已经封存的 P6
+region-inference 工作在原本 arena 默认值之外，进一步细化不逃逸局部值。
+RC / ownership 一类机制仍是已封存 P4-P8 之外的可选研究方向。
 
 ## 5. 已锁定的 Phase 1 决策
 
@@ -116,5 +116,6 @@ OCaml `ocaml` / `dune` 工具链仍可在 **离线** 阶段用作正确性参考
 - effect handler（OCaml 5.x）
 - OCaml C runtime、`Obj.magic`、ctypes
 - 垃圾回收
-- LSP、formatter、debugger
+- formatter、debugger
+- LSP integration 不属于已封存的编译器阶段；它只是 P9 Developer Experience 预览项
 - 把"非 BPF 平台"作为目标（顺带能跑可以，不是目标）

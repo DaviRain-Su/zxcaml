@@ -85,11 +85,11 @@ zxc-frontend --emit=sexp <input.ml>
 
 ### 3.1 顶层形态
 
-当前 wire grammar 是 sexp **版本 `0.7`**。Header 携带版本，使 `omlz` 能对过期
+当前 wire grammar 是 sexp **版本 `1.1`**。Header 携带版本，使 `omlz` 能对过期
 前端输出给出 upgrade hint：
 
 ```text
-(zxcaml-cir 0.7
+(zxcaml-cir 1.1
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -105,7 +105,7 @@ zxc-frontend --emit=sexp <input.ml>
             (case (tuple_pattern (ctor Red) (var n)) (var n))))))))
 ```
 
-P2 版本历史：
+Wire-format history：
 
 | 版本 | 新增表面 |
 |---|---|
@@ -113,6 +113,10 @@ P2 版本历史：
 | `0.5` | 用户自定义 variant `type_decl` 节点 |
 | `0.6` | 嵌套 pattern payload 和 `when_guard` 节点 |
 | `0.7` | tuple 节点、tuple pattern/projection、record 类型声明、record 表达式、字段访问、record update、record pattern |
+| `0.8` | account / syscall references，用于 Solana-shaped programs |
+| `0.9` | CPI-shaped type references 和 function applications |
+| `1.0` | external declarations、instruction-data/account attributes，以及 P4/P5 Solana/IDL metadata |
+| `1.1` | mutual-recursion groups 和 erased type aliases |
 
 诊断位置仍通过 stderr 上的诊断单独携带；普通注释和格式 trivia 不会序列化。
 
@@ -143,20 +147,21 @@ sexp 的形式语法住在 `src/frontend/zxc_sexp_format.md`，是 wire 契约�
 - 子集外特性产生的节点（这些在序列化前已被拒绝）。
 
 
-## 4. 接受的子集（截至 P2）
+## 4. 接受的子集（当前 P1-P8 表面）
 
-当前 `zxc-frontend` 接受的 `Typedtree` constructor 权威列表在
-`src/frontend/zxc_subset.ml`。本节概述 P2 as-built 表面。
+当前 `zxc-frontend` 接受的 `Typedtree` constructor **权威列表**在
+`src/frontend/zxc_subset.ml`。本节概述已封存 P1-P8 的 as-built 表面。
 
 ### 4.1 顶层
 
 接受：
 
-- `Tstr_value`，且恰好一个 binding，可递归或非递归。
-- `Tstr_type`，用于子集内的 variant、tuple alias 和 record 声明。
+- `Tstr_value`，用于已接受的 value binding，包括 mutually recursive groups。
+- `Tstr_type`，用于子集内的 variant、tuple alias、record 声明和 erased type alias。
+- `Tstr_primitive`，用于带类型的 `external name : type = "zig_symbol"` 声明。
 
-拒绝：module、module type、class、open/include、exception、`external`、attribute、递归 module、
-private/constraint-heavy type，以及多 binding 的 `and` value group。
+拒绝：module、module type、class、open/include、exception、attribute、递归 module、
+private/constraint-heavy type。
 
 ### 4.2 表达式
 
@@ -173,9 +178,11 @@ private/constraint-heavy type，以及多 binding 的 `and` value group。
 - `Texp_tuple`
 - 用于构造和函数式更新的 `Texp_record`
 - 用于 record 字段访问的 `Texp_field`
+- `Texp_sequence`，当它能 desugar 成有序 Core IR effects
+- `Texp_assert`，用于受支持的 assertion expressions
 
-拒绝：array、sequence、loop、object、多态 variant、`letop`、local open/module、`try`、
-`assert`、`lazy`、label/optional argument，以及 mutation primitive（`ref`、`:=`、`!`、
+拒绝：array、loop、object、多态 variant、`letop`、local open/module、`try`、
+`lazy`、label/optional argument，以及 mutation primitive（`ref`、`:=`、`!`、
 `Texp_setfield`；可用处有专门诊断）。
 
 白名单 primop：
@@ -193,15 +200,16 @@ private/constraint-heavy type，以及多 binding 的 `and` value group。
 - 内置和用户自定义构造器的 `Tpat_construct`，包括嵌套构造器 payload
 - `Tpat_tuple`
 - `Tpat_record`
+- 支持的 literal constant patterns
+- or-patterns 和 alias patterns（绑定合法时）
 
-拒绝：alias、支持构造器形式之外的 constant、array、lazy pattern、多态 variant、
-exception pattern，以及 mutation 相关 pattern。
+拒绝：array、lazy pattern、多态 variant、exception pattern，以及 mutation 相关 pattern。
 
 ### 4.4 类型
 
 接受子集内的用户 type declaration。类型语言覆盖变量、命名引用、tuple type payload、
-variant 声明、tuple alias 和 record 声明。GADT、private type、variant 内的 record constructor
-payload，以及 type constraint 仍会被拒绝。
+variant 声明、tuple alias、record 声明和 erased type aliases。External declaration types 使用同一套子集类型语言。
+GADT、private type、variant 内的 record constructor payload，以及 type constraint 仍会被拒绝。
 
 ## 5. 诊断
 
@@ -264,8 +272,8 @@ src/frontend_bridge/
 
 ## 9. 这份文档 **不覆盖** 的内容
 
-- 多文件模块（P3）。
-- `.mli` 签名（P3+）。
+- 多文件模块（P1-P8 之外的可选未封存工作）。
+- `.mli` 签名（P1-P8 之外的可选未封存工作）。
 - functor 支持（按 ADR-001，范围之外）。
 - 任何要求理解 OCaml C runtime 布局的事。
 

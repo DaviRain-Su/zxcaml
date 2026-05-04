@@ -37,7 +37,7 @@ Stub（仅签名，必须能编译，被调用时返回"未实现"诊断）：
 ### 2.1 输入
 
 由 `ArenaStrategy` 产出的 `Lowered IR`。
-后端 **不允许** 回头读上游 `Typedtree`、sexp wire 格式、Zig 的 `ttree` 镜像，
+后端 **不允许** 回头读上游 `Typedtree`、当前 `1.1` 的 sexp wire 格式、Zig 的 `ttree` 镜像，
 也不允许直接读 Core IR。
 
 ### 2.2 输出
@@ -47,6 +47,7 @@ Stub（仅签名，必须能编译，被调用时返回"未实现"诊断）：
 `zig build-lib -target bpfel-freestanding -femit-llvm-bc`
 然后 `sbpf-linker --cpu v2 --export entrypoint`，
 产出 `program.so`（详见 `06-bpf-target.md` §2 / §6、ADR-012、ADR-013）。
+`--target=native` 时，发出的 Zig 会构建成 hosted developer binary。
 
 ```text
 out/
@@ -95,9 +96,9 @@ P1 发 `i64`，算术用 Zig 的 `+%`、`-%`、`*%`（绕回）。
 
 ### 2.7 它 **不做** 的事
 
-- 不做优化 pass。信任 `zig`（BPF 用 `-O ReleaseSmall`）。
+- 后端本地优化保持最小；语义优化 pass 属于 Core IR（已封存 P8：constant folding、DCE、自递归 TCO 和小函数 inlining）。
 - 不做增量输出。每次都整模块。
-- P1 不带源码映射 / 调试信息。
+- source-map fidelity 是 P9 Developer Experience 预览主题，不属于已封存 P1-P8 范围。
 
 ## 3. 解释器
 
@@ -157,7 +158,7 @@ omlz run   foo.ml                                     # 始终走解释器
 
 ## 6. 确定性要求
 
-对于已接受的 P1 + P2 子集中任何程序和任何输入：
+对于已封存 P1-P8 examples corpus 中任何程序和受支持输入：
 
 ```
 Interpreter(P)  ≡  ZigBackend(P)   （在可观察输出上）
@@ -166,7 +167,19 @@ Interpreter(P)  ≡  ZigBackend(P)   （在可观察输出上）
 这是一个 **强制不变量**，由属性测试套件保证 —— 跑一组 `.ml` 文件穿过两条路径，
 diff 结果。出现分歧就是 P0 bug。
 
-**固定整数语义（F14）**：ZxCaml 的 `int` 在 P1 固定为有符号 64 位
-`i64`，这刻意不同于上游 OCaml 的 63 位立即整数；`+`/`-`/`*`
-按 `+%`/`-%`/`*%` 绕回，`/` 向零截断，`mod` 使用 remainder 语义，
-除零或 `mod 0` 统一以 `ZXCAML_PANIC:division_by_zero` 标记 panic。
+### Pinned integer semantics (ADR-008 / F14)
+
+ZxCaml `int` 被刻意固定为 **有符号 64 位 `i64`**。这不同于 64-bit host 上的上游
+OCaml；后者的 `int` 是 63-bit immediate（`max_int = 4611686018427387903`）。
+在 ZxCaml 中，`max_int = 9223372036854775807`，`min_int = -9223372036854775808`。
+
+解释器和 ZigBackend 必须在这些规则上字节级一致：
+
+- `+`、`-`、`*` 的 overflow 与 Zig `+%`、`-%`、`*%` 完全一样绕回
+  （`max_int + 1 = min_int`、`min_int - 1 = max_int`、`min_int * -1 = min_int`）。
+- `/` 向零截断。`min_int / -1` 被固定成 `min_int`，所以这个 overflow 边界也绕回，
+  而不是由某个后端 trap。
+- `mod` 使用 Zig / OCaml 风格的 remainder 语义。`min_int mod -1` 固定为 `0`。
+- 除零或 `mod 0` 是用户程序 panic，并带稳定 marker `ZXCAML_PANIC:division_by_zero`；
+  解释器打印该 marker 后非零退出，生成的 hosted binary 在非零退出前打印相同 marker。
+  BPF / freestanding builds 使用 `runtime/zig/panic.zig` 里的 no-return panic path。

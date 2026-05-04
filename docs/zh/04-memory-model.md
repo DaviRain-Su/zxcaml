@@ -4,15 +4,15 @@
 
 ## 1. 定位
 
-P1 阶段，ZxCaml 只有 **一种** 内存模型：
+ZxCaml 在 Phase 1 从 **一种** 基础内存模型起步：
 
 > 整个程序使用一个 arena，启动时分配好，所有堆上的值都从这里来。
 > 没有 GC，没有引用计数，没有逐值的生命周期。
 > 用户**看不到**这个模型 —— 他们写的是 OCaml。
 
-Core IR 上的 `Layout` 字段是一个 **向前兼容的描述符**，
-不是用户层的旋钮。它存在的意义是让未来阶段
-（区域推断、RC、所有权）能不改架构地引入更复杂的模型。
+Core IR allocation 上的 `Layout` 字段是一个 **编译器侧描述符**，
+不是用户层的旋钮。已封存的 P6 用它做 region inference，并把不逃逸局部值放到栈上。
+RC / ownership 一类机制仍是已封存 P4-P8 之外的可选研究方向。
 
 ## 2. 为什么用 arena？
 
@@ -58,7 +58,7 @@ buffer 耗尽时返回 `error.OutOfMemory`。`reset` 在程序退出时把 bump 
 | 带 payload 构造器 / list cons cell | Arena | Boxed |
 | 顶层 lambda | Arena | Flat |
 | 一等 closure record | Arena | Boxed |
-| 保留给未来的不逃逸值 | Stack | Boxed |
+| 已证明不逃逸的 lowered values | Stack | Boxed |
 
 这些规则住在 `Typed AST → Core IR` lowering 中（见 `03-core-ir.md` §4）。
 这是前端控制的 **唯一** 旋钮。
@@ -94,15 +94,11 @@ buffer 耗尽时返回 `error.OutOfMemory`。`reset` 在程序退出时把 bump 
 
 用户仍然看不到这些机制；他们只写普通的 `let` / `let rec` / `fun` OCaml 子集代码。
 
-## 7. 字符串（P1）
+## 7. 字符串
 
-字符串在 P1 只存在于：
-
-- 字符串字面量（interned，住 `Static`）。
-- 字符串相等和长度（解释器和 stdlib 诊断内部用）。
-
-P1 **没有** runtime 字符串拼接、格式化、分配。
-这是有意为之 —— 字符串是任何 BPF 项目里的"诱人麻烦源"。
+字符串最初只覆盖只读字面量，以及相等 / length 支持。已封存的 P7/P8 编译器表面现在也覆盖
+字符串拼接、`String.length`、`String.get`、`String.sub` 等操作，同时仍然避免引入完整
+OCaml runtime 或 GC。面向 BPF 的程序里，格式化能力仍然刻意保持很窄。
 
 ## 8. **不允许** 的事
 
@@ -119,18 +115,19 @@ BPF 有固定的调用栈。前端在 P1 不静态约束递归，因此：
 - runtime arena 大小在编译期通过 build 时常量决定（默认 32 KiB；可由 CLI 覆盖）。
 - BPF 程序里栈溢出由 Solana 报告，不是我们。
 
-P3 引入可选的"无分配"标注，并加上一个分析来验证。
+已封存的 P3 Solana 工作引入了 `omlz check --no-alloc`：这是一道面向 hot path 的保守分析，
+用于验证 Core IR graph 不包含 arena 分配点。
 
 ## 10. 向前兼容
 
-从"P1 单 arena"到"P4 区域推断"的路径：
+从"P1 单 arena"到已封存 P6 region inference 的路径是：
 
-1. 保留每个分配点上的 `Layout` 字段。✅（P1 已经做到）
-2. 加 `Region::Region(id)` 和一道区域推断 pass，把 `Arena` 细化成具体 region。
-3. 升级 `ArenaStrategy`（或加 `RegionStrategy`），按 region 发不同 arena。
-4. 后端消费新的 region id；Core IR 形态不变。
+1. 保留每个分配点上的 `Layout` 字段。✅
+2. 加 escape analysis，识别不逃逸的局部值。✅
+3. 细化 lowering/codegen，让可上栈的局部值避开 arena 分配。✅
+4. 保持 Core IR contract 不变，让后端消费细化后的 layout。✅
 
-到"P4+ 所有权 / RC"的路径：
+一条可选的 ownership / RC 路径仍然可能是：
 
 1. 加 `Region::Rc` 和借用 / move 分析。
 2. lowering 在 `Boxed` 且 region 为 `Rc` 的值周围发 `inc_ref` / `dec_ref`。
