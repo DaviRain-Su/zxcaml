@@ -1,0 +1,8 @@
+[workspace]
+members = ["programs/hackathon_greet_anchor"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+overflow-checks = true

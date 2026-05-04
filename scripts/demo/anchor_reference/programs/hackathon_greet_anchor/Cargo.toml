@@ -1,0 +1,21 @@
+[package]
+name = "hackathon-greet-anchor"
+version = "0.1.0"
+description = "Reference-only Anchor counterpart for the ZxCaml hackathon_greet demo"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "hackathon_greet_anchor"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = "0.32.1"
