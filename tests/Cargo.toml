@@ -39,6 +39,10 @@ name = "pda_storage_test"
 path = "pda_storage_test.rs"
 
 [[test]]
+name = "counter_v2_test"
+path = "counter_v2_test.rs"
+
+[[test]]
 name = "demo_test"
 path = "demo_test.rs"
 
