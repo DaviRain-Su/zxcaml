@@ -349,6 +349,22 @@ pub fn emitCounterAppExpr(
         try emitCounterSetAccountData(out, allocator, app.args[0].*, app.args[1].*, indent_level, ctx);
         return true;
     }
+    if (std.mem.eql(u8, name, "transfer_sol")) {
+        if (app.args.len != 4) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "_ = omlz_runtime_accounts;\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} cpi.zxcaml_transfer_sol_process(arena, omlz_runtime_input, ", .{block_id});
+        try emitExpr(out, allocator, app.args[3].*, indent_level, ctx);
+        try append(out, allocator, ");\n");
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return true;
+    }
     if (std.mem.eql(u8, name, "vault_deposit") or std.mem.eql(u8, name, "vault_withdraw")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;

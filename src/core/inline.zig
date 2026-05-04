@@ -1170,6 +1170,7 @@ fn isBackendIntrinsicFunction(name: []const u8) bool {
         std.mem.eql(u8, name, "read_u64_le") or
         std.mem.eql(u8, name, "write_u64_le") or
         std.mem.eql(u8, name, "set_account_data") or
+        std.mem.eql(u8, name, "transfer_sol") or
         std.mem.eql(u8, name, "vault_deposit") or
         std.mem.eql(u8, name, "vault_withdraw");
 }

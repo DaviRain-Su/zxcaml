@@ -31,6 +31,10 @@ name = "logonly_test"
 path = "logonly_test.rs"
 
 [[test]]
+name = "transfer_sol_test"
+path = "transfer_sol_test.rs"
+
+[[test]]
 name = "demo_test"
 path = "demo_test.rs"
 

@@ -153,6 +153,7 @@ pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
                 .Var => |callee| {
                     if (std.mem.eql(u8, callee.name, "invoke") or
                         std.mem.eql(u8, callee.name, "invoke_signed") or
+                        std.mem.eql(u8, callee.name, "transfer_sol") or
                         std.mem.eql(u8, callee.name, "vault_deposit") or
                         std.mem.eql(u8, callee.name, "vault_withdraw")) break :blk true;
                 },
