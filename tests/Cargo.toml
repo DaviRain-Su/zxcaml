@@ -27,6 +27,10 @@ name = "noop_test"
 path = "noop_test.rs"
 
 [[test]]
+name = "logonly_test"
+path = "logonly_test.rs"
+
+[[test]]
 name = "demo_test"
 path = "demo_test.rs"
 
