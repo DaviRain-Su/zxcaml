@@ -31,6 +31,51 @@ No unreleased user-visible changes are documented yet.
   aliases, and `assert` expressions (`46514a9`, `ae3b567`, `635b86c`,
   `82ba02a`, `57f80dc`, `f57dddf`).
 
+## [Hackathon Demo + Site] - 2026-05-05
+
+### Operational / Demo
+
+This section records post-P8 operational hardening, real-world example
+coverage, demo packaging, and public-site work. It is **not** a new compiler
+feature phase.
+
+- **Health & Real-World Examples (M-A through M-F):** hardened the build and
+  source tree around the sealed compiler by fixing the build graph so
+  `zxc-frontend` is installed before exe tests (`19151fe`), deriving frontend
+  cleanup artifacts instead of hand-listing them (`42c8933`), splitting
+  oversized Zig files to preserve the file-size budget (`d6700a6`, `91c9ef3`),
+  documenting the AccountFieldSet mutation rule and backend-stub/inline-threshold
+  maintenance points (`c2dc405`, `25cf0ec`, `19c12be`), removing the transient
+  escrow placeholder before the real port landed (placeholder was untracked; the
+  real `examples/escrow_full.ml` port is `38d8a4d`), creating this
+  `CHANGELOG.md` (`e3b73bf`), and documenting the resulting example corpus with
+  the capability matrix and real-world mapping guide (`7430921`, `a8c810e`).
+- **Health & Real-World Examples (M-E / M-F corpus):** ported the zignocchio
+  real-world set as eight example programs plus their Mollusk registrations:
+  `noop`, `logonly`, `transfer_sol`, `pda_storage`, `counter_v2`, `vault_v2`,
+  `token_vault`, and `escrow_full` (`7c59ec6`, `3f0668f`, `fb7f1cc`,
+  `4206a4e`, `b617117`, `07db019`, `acd2f19`, `38d8a4d`).
+- **Hackathon Demo (H-A through H-E):** packaged a recordable Colosseum demo
+  with the bilingual storyboard under `docs/hackathon/` (`5416618`, `b7bc0c3`,
+  `9611376`, `668af58`), the PDA-backed `examples/hackathon_greet.ml` example
+  and IDL artifact (`d2fa541`, `d164650`), Surfpool deploy/invoke scripts under
+  `scripts/demo/` plus the captured dry-run transcript (`e14a1a9`, `25cf003`),
+  an isolated Anchor reference and generated comparison artifact (`1bc718a`,
+  `621660c`), Colosseum submission and bilingual pitch copy (`ef86b00`,
+  `6bb7160`), and the top-level `make demo`, `make demo-clean`, and
+  `make demo-record-prep` entry points (`5f594be`).
+- **Slidev Decks (Milestone S):** scaffolded the Slidev project, authored
+  bilingual `slides/slides.{zh,en}.md` decks, added the PDF export pipeline, and
+  tied `docs/hackathon/recording-checklist.md` into recording prep (`8128050`,
+  `619e5df`, `811d994`, `2631e8b`, `2cae5e6`, `372fecf`).
+- **Site refresh (Milestone W):** refreshed the static site with the
+  `Functional Solana, today.` hero, current P8 / wire `1.1` / examples /
+  backend / test metrics, the Anchor comparison card, a hackathon section that
+  links every `docs/hackathon/*` file, a live code preview for
+  `hackathon_greet`, and the deployed Cloudflare Pages URL
+  [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/) (`f94e89f`,
+  `d96bf70`, `573ca24`, `e0bc7f9`).
+
 ## [P7] OCaml Subset Expansion - 2026-04-30
 
 ### Added
