@@ -9,6 +9,44 @@
 const std = @import("std");
 const manifest = @import("build.zig.zon");
 
+const frontend_sources = [_][]const u8{
+    "src/frontend/zxc_subset.ml",
+    "src/frontend/zxc_sexp.ml",
+    "src/frontend/zxc_frontend.ml",
+};
+
+const frontend_artifact_extensions = [_][]const u8{
+    ".cmi",
+    ".cmx",
+    ".o",
+};
+
+fn appendArg(args: *std.ArrayList([]const u8), allocator: std.mem.Allocator, arg: []const u8) void {
+    args.append(allocator, arg) catch @panic("out of memory while constructing build command");
+}
+
+fn appendArgs(args: *std.ArrayList([]const u8), allocator: std.mem.Allocator, more_args: []const []const u8) void {
+    args.appendSlice(allocator, more_args) catch @panic("out of memory while constructing build command");
+}
+
+fn appendFrontendArtifactCleanupArgs(args: *std.ArrayList([]const u8), allocator: std.mem.Allocator) void {
+    for (frontend_sources) |source| {
+        if (!std.mem.endsWith(u8, source, ".ml")) {
+            @panic("frontend source paths must end in .ml");
+        }
+
+        const source_without_ext = source[0 .. source.len - ".ml".len];
+        for (frontend_artifact_extensions) |extension| {
+            const artifact = std.fmt.allocPrint(
+                allocator,
+                "{s}{s}",
+                .{ source_without_ext, extension },
+            ) catch @panic("out of memory while constructing frontend cleanup command");
+            appendArg(args, allocator, artifact);
+        }
+    }
+}
+
 /// Defines the build graph for the `omlz` compiler driver.
 pub fn build(b: *std.Build) void {
     const target = b.graph.host;
@@ -34,7 +72,9 @@ pub fn build(b: *std.Build) void {
     const frontend_output = b.getInstallPath(.bin, "zxc-frontend");
     const install_bin_dir = std.fs.path.dirname(frontend_output).?;
     const make_install_bin = b.addSystemCommand(&.{ "mkdir", "-p", install_bin_dir });
-    const frontend = b.addSystemCommand(&.{
+
+    var frontend_args = std.ArrayList([]const u8).empty;
+    appendArgs(&frontend_args, b.allocator, &.{
         "opam",
         "exec",
         "--switch=zxcaml-p1",
@@ -46,26 +86,19 @@ pub fn build(b: *std.Build) void {
         "-linkpkg",
         "-I",
         "src/frontend",
-        "src/frontend/zxc_subset.ml",
-        "src/frontend/zxc_sexp.ml",
-        "src/frontend/zxc_frontend.ml",
+    });
+    appendArgs(&frontend_args, b.allocator, &frontend_sources);
+    appendArgs(&frontend_args, b.allocator, &.{
         "-o",
         frontend_output,
     });
+    const frontend = b.addSystemCommand(frontend_args.items);
     frontend.step.dependOn(&make_install_bin.step);
-    const cleanup_frontend = b.addSystemCommand(&.{
-        "rm",
-        "-f",
-        "src/frontend/zxc_subset.cmi",
-        "src/frontend/zxc_subset.cmx",
-        "src/frontend/zxc_subset.o",
-        "src/frontend/zxc_sexp.cmi",
-        "src/frontend/zxc_sexp.cmx",
-        "src/frontend/zxc_sexp.o",
-        "src/frontend/zxc_frontend.cmi",
-        "src/frontend/zxc_frontend.cmx",
-        "src/frontend/zxc_frontend.o",
-    });
+
+    var cleanup_frontend_args = std.ArrayList([]const u8).empty;
+    appendArgs(&cleanup_frontend_args, b.allocator, &.{ "rm", "-f" });
+    appendFrontendArtifactCleanupArgs(&cleanup_frontend_args, b.allocator);
+    const cleanup_frontend = b.addSystemCommand(cleanup_frontend_args.items);
     cleanup_frontend.step.dependOn(&frontend.step);
     b.getInstallStep().dependOn(&cleanup_frontend.step);
 
