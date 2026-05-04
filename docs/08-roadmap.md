@@ -2,249 +2,76 @@
 
 > **Languages / 语言**: **English** · [简体中文](./zh/08-roadmap.md)
 
-## 1. Phases
+This roadmap now separates sealed compiler phases from demo/operational work and
+future optional ideas. Current canonical facts for the user-facing docs: the
+frontend bridge accepts sexp wire format `1.1`, the examples corpus contains 54
+`.ml` programs, the Mollusk SVM suite contains 21 integration tests, and P1-P8
+are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 
-| Phase | Theme | Done when… |
-|---|---|---|
-| **P1** | MVP: OCaml subset → BPF `.so` | `examples/solana_hello.ml` deploys and returns 0 |
-| **P2** | Subset expansion + match optimization | user ADTs, nested/guarded patterns, tuples, records, stdlib, and BPF closures |
-| **P3** | Solana-shaped subset | account views, syscalls, CPI, SPL-Token example, no-alloc analysis, and IDL |
-| P4 | Region inference | escape analysis, `Region::Region(id)`, optional stack allocation |
-| P5 | Ecosystem reach | Zig FFI declarations, larger native stdlib subset |
-| P6 (opt) | Self-hosting | rewrite `src/core/anf.zig` (and friends) in our subset |
-| P7 (opt) | Formalisation | Core IR semantics, LLM/verifier surface |
+## Completed phases (P1–P8)
 
-Phases are **not** time-boxed in this document. They are scope-boxed.
+| Phase | Status | One-line summary | Changelog citation |
+|---|---|---|---|
+| P1 | ✅ | MVP OCaml subset to Solana BPF: `omlz` scaffold, OCaml frontend bridge, Core IR, interpreter, native build path, and BPF `.so` build path. | [`[P1]`](../CHANGELOG.md#p1-mvp-ocaml-subset-to-solana-bpf---2026-04-28) |
+| P2 | ✅ | Subset expansion and match optimization: user ADTs, nested/guarded patterns, tuples, records, stdlib expansion, and hardened BPF closures. | [`[P2]`](../CHANGELOG.md#p2-subset-expansion-and-match-optimization---2026-04-29) |
+| P3 | ✅ | Solana-shaped subset: zero-copy account views, syscalls, CPI helpers, SPL-Token support, `omlz check --no-alloc`, and IDL output. | [`[P3]`](../CHANGELOG.md#p3-solana-shaped-subset---2026-04-29) |
+| P4 | ✅ | Mollusk acceptance and instruction data: transaction input dispatch, in-process SVM tests, and Pubkey helper ergonomics. | [`[P4]`](../CHANGELOG.md#p4-mollusk-acceptance-and-instruction-data---2026-04-30) |
+| P5 | ✅ | Ecosystem reach: typed `external` declarations, Zig runtime bindings, Anchor-compatible IDL emission, Map/Set, and crypto wrappers. | [`[P5]`](../CHANGELOG.md#p5-ecosystem-reach---2026-04-30) |
+| P6 | ✅ | Region inference: escape analysis, stack-region codegen for eligible locals, and region allocation examples. | [`[P6]`](../CHANGELOG.md#p6-region-inference---2026-04-30) |
+| P7 | ✅ | OCaml subset expansion: desugared surface forms, richer patterns, string/char support, and broader stdlib utilities. | [`[P7]`](../CHANGELOG.md#p7-ocaml-subset-expansion---2026-04-30) |
+| P8 | ✅ | Compiler optimizations: constant folding, dead-code elimination, self-recursive tail call optimization, function inlining, and mutual recursion groups. | [`[P8]`](../CHANGELOG.md#p8-compiler-optimizations---2026-05-01) |
 
-## 2. Phase 1 — MVP
+Phases are **not** time-boxed in this document. They are scope-boxed, and a
+phase only moves into this table after the corresponding changelog section is
+present.
 
-### 2.1 Scope (must)
+## Hackathon work (post-P8)
 
-- `zxc-frontend` (OCaml glue): drives `compiler-libs`, walks
-  `Typedtree`, enforces the P1 subset
-  (`10-frontend-bridge.md` §4), emits `.cir.sexp`.
-- `frontend_bridge` (Zig): parses `.cir.sexp` into the `ttree`
-  mirror.
-- ANF lowering to Core IR with `Layout` annotations.
-- `ArenaStrategy` lowering to Lowered IR.
-- `ZigBackend` emitting `.zig` source.
-- Tree-walk interpreter consuming Core IR.
-- Runtime: `arena.zig`, `panic.zig`, `prelude.zig`,
-  `bpf_entry.zig`.
-- Stdlib: `option`, `result`, `list`.
-- CLI: `omlz check / build / run` (see §2.3).
-- Determinism property: interpreter ≡ Zig backend on the example
-  corpus.
-- Acceptance: `solana_hello.ml` deploys and returns `0` on
-  `solana-test-validator`.
+- The frozen hackathon package is indexed in
+  [`docs/hackathon/README.md`](./hackathon/README.md): timeline, bilingual demo
+  scripts, shot list, Colosseum submission copy, Anchor comparison artifacts,
+  Slidev recording checklist, and related demo script links.
+- The one-shot reproducibility entry point is `make demo` from the repository
+  root; the same hackathon index also points at `make demo-clean` and the
+  component scripts under `scripts/demo/`.
+- The public landing page for the current demo narrative is
+  [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/), which presents the
+  P1-P8 compiler state and post-P8 hackathon assets without treating the demo as
+  a new compiler phase.
 
-We deliberately do **not** include "write our own lexer / parser /
-HM" in P1. Per ADR-010, that work is done by upstream OCaml.
+## P9 — Developer Experience (preview)
 
-### 2.2 Out of scope (must not)
+**Status:** preview, not committed scope. P9 is a direction marker for the next
+possible product-quality pass; it is not a promise that the work below is
+scheduled or accepted as phase scope.
 
-- functor / module syntax beyond plain `let`s
-- GADTs, polymorphic variants, effects
-- mutation, exceptions, references
-- LSP / formatter / debugger
-- IDL / Anchor / CPI / syscalls beyond the entrypoint
-- multi-file modules (one `.ml` source + bundled stdlib)
-- non-BPF targets as a deliverable
+Preview goals:
 
-### 2.3 CLI surface
+- Improve diagnostics so frontend, Core IR, and BPF-lowering failures keep the
+  existing `path:line:col: severity: message` shape while adding more actionable
+  hints.
+- Sketch LSP-friendly output so editor integrations can consume stable
+  diagnostics and ranges without scraping human terminal text.
+- Raise error message quality for unsupported OCaml forms, no-allocation proof
+  failures, and runtime-shape mismatches.
+- Preserve source map fidelity from OCaml locations through sexp `1.1`, Core IR,
+  ANF/lowering, and generated Zig so later diagnostics can point back to the
+  original `.ml` span.
+- Make the `omlz check` UX more useful as the fast feedback path: clear summary,
+  deterministic ordering, and enough context for CI logs and local editor use.
 
-```
-omlz check <file>                  -- parse + typecheck, emit diagnostics
-omlz check --emit=core-ir <file>   -- print Core IR to stdout (golden tests)
-omlz run   <file>                  -- frontend → interpreter; print result
-omlz build <file>
-            [--target=bpf|native]  -- default: bpf
-            [--backend=zig|...]    -- default: zig
-            [-o <path>]            -- output object/exe
-            [--arena-bytes=N]      -- runtime arena size
-            [--keep-zig]           -- keep generated .zig under out/
-omlz version
-```
+## Future / optional
 
-### 2.4 Internal milestones (suggested PR boundaries)
+The prose below is retained for optional ideas that are outside the sealed P1-P8
+compiler scope and outside the post-P8 hackathon/demo work.
 
-```
-P1.0  Skeleton              build.zig (Zig 0.16) drives both OCaml and Zig steps;
-                            `omlz --version`; arena util; diagnostics util.
-P1.1  zxc-frontend MVP      Smallest OCaml program that loads a .cmt and prints
-                            "ok"; wired into build.zig via ocamlfind.
-P1.2  Subset walker         `zxc_subset.ml` rejects every Typedtree node
-                            outside the §4 whitelist, with locations.
-P1.3  Sexp serialiser       `.cir.sexp` for the accepted subset, version 0.1.
-P1.4  Sexp parser (Zig)     `frontend_bridge` parses 0.1 into `ttree`.
-P1.5  ANF lowering          ttree → Core IR with Layout fields.
-P1.6  IR pretty-printer     Golden tests on `omlz check --emit=core-ir`.
-P1.7  Interpreter           `omlz run hello.ml` returns Some 1.
-P1.8  ArenaStrategy         Lowered IR.
-P1.9  ZigBackend            Generates `.zig` that `zig build-exe` accepts natively.
-P1.10 Runtime + entrypoint  BPF shim, arena, panic.
-P1.11 BPF driver            `omlz build --target=bpf` produces a Solana-loadable .so.
-P1.12 Solana harness        Deploy + invoke on solana-test-validator.
-P1.13 Determinism suite     interpreter ≡ Zig native; BPF acceptance is separate.
-```
-
-The shape changed from the previous draft: P1.1–P1.4 used to be
-"Lexer / Parser / Name resolution / Type inference" written in
-Zig. Per ADR-010 those are now upstream OCaml plus a small glue.
-
-Each milestone has at least one test (UI, golden, or integration).
-
-### 2.5 P1 acceptance corpus
-
-```
-examples/hello.ml             - list head, ADT, match
-examples/option_chain.ml      - chained Option.map / Option.bind
-examples/result_basic.ml      - Result construction and pattern
-examples/list_sum.ml          - recursive sum over a list
-examples/solana_hello.ml      - BPF entrypoint returning 0
-```
-
-The first four run through the interpreter and the Zig backend
-(native). The fifth runs through Zig BPF and `solana-test-validator`.
-
-### 2.6 P1 release notes (2026-04-28)
-
-P1 shipped the walking skeleton described by the ADR set
-([ADR list](./09-decisions.md)): upstream OCaml `compiler-libs` produce
-a versioned sexp (`0.4`), Zig parses that into Core IR, the interpreter
-and native Zig backend execute the acceptance corpus, and the BPF path
-builds `examples/solana_hello.ml` into a Solana-loadable `.so` via
-`zig build-lib -femit-llvm-bc` plus `sbpf-linker --cpu v2`.
-
-| Area | Worker commits |
-|---|---|
-| Skeleton, frontend subprocess, sexp bridge, Core IR, interpreter, native and BPF build path | [39fabc0](https://github.com/DaviRain-Su/zxcaml/commit/39fabc0), [eb5ca12](https://github.com/DaviRain-Su/zxcaml/commit/eb5ca12), [a1f139e](https://github.com/DaviRain-Su/zxcaml/commit/a1f139e), [b29f437](https://github.com/DaviRain-Su/zxcaml/commit/b29f437), [f1725e5](https://github.com/DaviRain-Su/zxcaml/commit/f1725e5), [e3f781f](https://github.com/DaviRain-Su/zxcaml/commit/e3f781f), [010289b](https://github.com/DaviRain-Su/zxcaml/commit/010289b), [c1014bb](https://github.com/DaviRain-Su/zxcaml/commit/c1014bb), [2fad318](https://github.com/DaviRain-Su/zxcaml/commit/2fad318) |
-| Let bindings, option/result constructors, match, recursion/closures, lists, arithmetic, conditionals | [451ecca](https://github.com/DaviRain-Su/zxcaml/commit/451ecca), [e3dd63a](https://github.com/DaviRain-Su/zxcaml/commit/e3dd63a), [86f995d](https://github.com/DaviRain-Su/zxcaml/commit/86f995d), [287c093](https://github.com/DaviRain-Su/zxcaml/commit/287c093), [d9875be](https://github.com/DaviRain-Su/zxcaml/commit/d9875be), [9bb39ab](https://github.com/DaviRain-Su/zxcaml/commit/9bb39ab), [a52574c](https://github.com/DaviRain-Su/zxcaml/commit/a52574c), [bce8251](https://github.com/DaviRain-Su/zxcaml/commit/bce8251), [65cbce5](https://github.com/DaviRain-Su/zxcaml/commit/65cbce5), [4c715c2](https://github.com/DaviRain-Su/zxcaml/commit/4c715c2), [792c152](https://github.com/DaviRain-Su/zxcaml/commit/792c152), [382969c](https://github.com/DaviRain-Su/zxcaml/commit/382969c), [6b706de](https://github.com/DaviRain-Su/zxcaml/commit/6b706de), [31c044e](https://github.com/DaviRain-Su/zxcaml/commit/31c044e) |
-| Determinism, golden tests, UI tests, Solana harness, diagnostics | [3e40be5](https://github.com/DaviRain-Su/zxcaml/commit/3e40be5), [cb817dc](https://github.com/DaviRain-Su/zxcaml/commit/cb817dc), [187f67b](https://github.com/DaviRain-Su/zxcaml/commit/187f67b), [afaa896](https://github.com/DaviRain-Su/zxcaml/commit/afaa896), [fca5bb5](https://github.com/DaviRain-Su/zxcaml/commit/fca5bb5), [2e61aa8](https://github.com/DaviRain-Su/zxcaml/commit/2e61aa8) |
-| Acceptance corpus, CI, install docs, final docs sweep | [4ae4153](https://github.com/DaviRain-Su/zxcaml/commit/4ae4153), [533ef81](https://github.com/DaviRain-Su/zxcaml/commit/533ef81), [18c065e](https://github.com/DaviRain-Su/zxcaml/commit/18c065e), [e8b1124](https://github.com/DaviRain-Su/zxcaml/commit/e8b1124) |
-
-Implemented in P1:
-
-- CLI: `omlz check`, `omlz run`, and `omlz build --target=native|bpf`.
-- Accepted user subset: single-binding `let` / `let rec`, one-argument
-  lambdas, applications, `if`, `match`, integer/string constants,
-  arithmetic/comparison primops, and the bundled option/result/list
-  constructors.
-- Runtime: static-buffer bump arena, panic/prelude helpers, native and
-  BPF entry shims.
-- Quality gates: interpreter ≡ native determinism over the corpus,
-  Core IR golden tests, UI tests, Solana deploy/invoke harness, CI,
-  and G13 BPF byte reproducibility documented as PASS in
-  `06-bpf-target.md` §7.
-
-Deferred to P2+ at the time of the P1 release:
-
-- user-defined ADTs, records, tuples, nested constructor patterns,
-  guarded match arms, exceptions-as-result helpers, mutation/ref, and
-  modules/functors;
-- first-class closures as a supported BPF acceptance shape (native and
-  interpreter paths existed, but BPF code-pointer relocations needed a later
-  design choice);
-- Solana-shaped APIs beyond the entrypoint: account decoding, syscalls,
-  CPI, IDL generation, and no-allocation analysis;
-- region inference / multi-arena ownership work and any non-BPF
-  deliverable target.
-
-## 3. Phase 2 — Subset expansion + match optimization (2026-04-29)
-
-**Status:** Implemented for the P2 milestone. P2 expanded the accepted OCaml
-subset and kept the P1 BPF pipeline intact.
-
-Implemented in P2:
-
-- user-defined ADT declarations, including parameterized and recursive ADTs;
-- nested constructor patterns and guarded `when` match arms;
-- decision-tree match compilation with constructor dispatch and guard fallthrough;
-- tuple construction, tuple patterns, and `fst` / `snd` projection helpers;
-- record declarations, construction, field access, record patterns, nested
-  records, parameterized records, and functional record update;
-- stdlib expansion for `List`, `Option`, and `Result`;
-- first-class closure hardening for the BPF path;
-- examples covering ADTs, patterns, tuples, records, stdlib use, and closures.
-
-P2 did **not** add new external toolchain dependencies. The wire format is
-currently **sexp `0.7`**: `0.5` added type declarations, `0.6` added nested
-patterns and guards, and `0.7` added tuple/record nodes.
-
-Deferred to P3+:
-
-- Solana-shaped APIs beyond the entrypoint: account decoding, syscalls, CPI,
-  IDL generation, and no-allocation analysis;
-- modules/functors, exceptions, mutable state, arrays, objects, GADTs,
-  polymorphic variants, and effects;
-- region inference / multi-arena ownership work and any non-BPF deliverable
-  target.
-
-## 4. Phase 3 — Solana-shaped subset (2026-04-29)
-
-**Status:** Implemented for the P3 milestone. P3 shifted the project from a
-language subset that can compile to BPF into a Solana runtime-aware compiler
-slice.
-
-Implemented in P3:
-
-- built-in `account` values backed by zero-copy views over the Solana BPF input
-  buffer;
-- runtime syscall bindings using MurmurHash3-32 dispatch addresses;
-- CPI records and helpers (`instruction`, `account_meta`, `invoke`,
-  `invoke_signed`), PDA helpers, and return-data bindings;
-- account data/lamports mutation support through the zero-copy account buffer;
-- SPL-Token transfer instruction encoding and a Tokenkeg transfer acceptance
-  example;
-- structured error-code conventions;
-- `omlz check --no-alloc`, a conservative Core IR allocation analysis;
-- `omlz idl`, a one-shot ZxCaml JSON IDL emitter;
-- BPF entry arena increased from 1 KiB to 32 KiB;
-- examples for account/syscall, syscall-only, simple CPI, and SPL-Token flows;
-- CI smoke checks for `no_alloc` and IDL JSON emission.
-
-The wire format is currently **sexp `0.9`**: `0.8` added account/syscall
-references, and `0.9` added CPI type/function references.
-
-For the operational guide, see [`11-solana-p3.md`](./11-solana-p3.md).
-
-## 5. Phase 4 — Region inference
-
-- Add `Region::Region(id)` to the IR.
-- Escape analysis pass on Core IR.
-- `RegionStrategy` (still arena-based, but per-region).
-- Optional stack allocation for proven-non-escaping locals.
-- No user-facing syntax change in P4; this is purely an
-  optimisation.
-
-## 6. Phase 5 — Ecosystem reach
-
-- `external` declarations bound to Zig functions.
-- Tooling to vendor a Zig package as an `omlz` dependency.
-- Larger native stdlib (`Map`, `Set`, basic crypto wrappers).
-- Anchor-style IDL emission.
-
-## 7. Phase 6 — Self-hosting (optional)
-
-- Rewrite `src/core/anf.zig` and `src/core/pretty.zig` in our subset.
-- Run the rewritten code through `omlz` and link the resulting object
-  back into the compiler.
-- This is the dogfooding gate; not required for the project to ship.
-
-## 8. Phase 7 — Formalisation (optional)
-
-- A small-step semantics for Core IR (paper or Lean / Coq).
-- A surface for LLMs / verifiers to consume Core IR (S-expression
-  serialisation? deterministic JSON?).
-- Property tests: refinement between Core IR and Lowered IR.
-
-## 8a. Phase PX — Multi-target expansion (optional, gated)
+### PX — Multi-target expansion (optional, gated)
 
 **Status:** Not scheduled. Not on the critical path. This phase
 exists only to give "what about other targets?" a defined shape so
 it does not creep into earlier phases.
 
-### Context
+#### Context
 
 Because the Zig backend emits `.zig` source, the Zig toolchain can in
 principle lower to any of its supported targets (`aarch64`, `x86_64`,
@@ -255,7 +82,7 @@ This does **not** mean those targets are supported. PX is the place
 where a target moves from "the toolchain can technically reach it" to
 "ZxCaml supports it".
 
-### Activation gate
+#### Activation gate
 
 PX activates only when **all** of the following are true for a
 specific target:
@@ -274,7 +101,7 @@ specific target:
 If any of the four is missing, the target stays out. Speculative
 multi-target support is a leak, not a feature.
 
-### Plausible candidates (illustrative, not committed)
+#### Plausible candidates (illustrative, not committed)
 
 - **`wasm32-freestanding`** — for an in-browser Solana program
   simulator. Gate: who is the user? what tool consumes the output?
@@ -285,7 +112,7 @@ multi-target support is a leak, not a feature.
   Solana's BPF flavour but adjacent. Gate: a specific eBPF program
   someone needs to ship.
 
-### Note: x86 / arm native is **not** a PX candidate
+#### Note: x86 / arm native is **not** a PX candidate
 
 If your goal is "I want to run my ZxCaml program on x86 / arm for
 local testing or fuzzing", you do **not** need PX, because every
@@ -301,24 +128,38 @@ i.e., targets where neither upstream OCaml nor `omlz` produces a
 runnable binary today, and where someone has a concrete reason to
 make `omlz` produce one.
 
-### What PX is **not**
+#### What PX is **not**
 
 - Not "support every Zig target". The toolchain breadth does not
   imply ZxCaml breadth.
 - Not "make the language general-purpose". The BPF-shaped
   constraints (no GC, no syscalls, no threads, no exceptions) stay
   in place unless an ADR explicitly relaxes them per target.
-- Not a P1 / P2 / P3 deliverable. It is intentionally placed after
+- Not part of the sealed P1-P8 deliverable set. It is intentionally placed after
   the main numbered phases, and is itself optional.
 
-### Relationship to existing phases
+#### Relationship to existing phases
 
-PX **does not block any earlier phase**. P1–P5 happen as planned
-with BPF as the only validated target. PX exists so that, when a
-real second target eventually shows up, it lands through a defined
-process instead of organically blurring the project's focus.
+PX **does not block any earlier phase**. P1–P8 are sealed with BPF as
+the only validated target. PX exists so that, when a real second target
+eventually shows up, it lands through a defined process instead of
+organically blurring the project's focus.
 
-## 9. Anti-goals (every phase)
+### Self-hosting (was P6, optional)
+
+- Rewrite `src/core/anf.zig` and `src/core/pretty.zig` in our subset.
+- Run the rewritten code through `omlz` and link the resulting object
+  back into the compiler.
+- This is the dogfooding gate; not required for the project to ship.
+
+### Formalisation (was P7, optional)
+
+- A small-step semantics for Core IR (paper or Lean / Coq).
+- A surface for LLMs / verifiers to consume Core IR (S-expression
+  serialisation? deterministic JSON?).
+- Property tests: refinement between Core IR and Lowered IR.
+
+### Anti-goals (all future work)
 
 - We never accept the OCaml C runtime in compiled output.
 - We never adopt a feature that requires GC.
