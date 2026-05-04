@@ -73,6 +73,7 @@ pub fn build(b: *std.Build) void {
         .root_module = exe.root_module,
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
+    run_exe_tests.step.dependOn(b.getInstallStep());
 
     const runtime_arena_test_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/arena.zig"),

@@ -25,6 +25,7 @@ const diag = @import("../util/diag.zig");
 
 pub const default_frontend_path = "zig-out/bin/zxc-frontend";
 pub const frontend_name = "zxc-frontend";
+pub const frontend_not_found_diagnostic = "zxc-frontend not found at zig-out/bin/zxc-frontend or on PATH; see INSTALLING.md\n";
 
 /// Arena-owned result of a successful frontend bridge parse.
 pub const ParsedFrontend = struct {
@@ -77,6 +78,8 @@ pub const FrontendConfig = struct {
     sibling_path: []const u8 = default_frontend_path,
     /// PATH contents to search. `null` means skip PATH lookup.
     path_env: ?[]const u8 = null,
+    /// Emit the user-facing lookup diagnostic on failure.
+    emit_not_found_diagnostic: bool = true,
 };
 
 /// Locates and runs `zxc-frontend --emit=sexp <input_file>`.
@@ -223,7 +226,9 @@ fn findFrontendExecutable(
         }
     }
 
-    try writeStderr(io, "zxc-frontend not found at zig-out/bin/zxc-frontend or on PATH; see INSTALLING.md\n");
+    if (config.emit_not_found_diagnostic) {
+        try writeStderr(io, frontend_not_found_diagnostic);
+    }
     return error.FrontendNotFound;
 }
 
@@ -286,9 +291,11 @@ test "missing zxc-frontend reports the documented lookup diagnostic" {
     const result = runFrontendWithConfig(std.testing.allocator, std.testing.io, "missing.ml", .{
         .sibling_path = "zig-out/bin/definitely-not-zxc-frontend",
         .path_env = "",
+        .emit_not_found_diagnostic = false,
     });
 
     try std.testing.expectError(error.FrontendNotFound, result);
+    try std.testing.expect(std.mem.indexOf(u8, frontend_not_found_diagnostic, "INSTALLING.md") != null);
 }
 
 test "non-zero frontend exit becomes a failed frontend result" {
