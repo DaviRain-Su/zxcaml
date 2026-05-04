@@ -32,7 +32,8 @@ pnpm export
 pnpm exec slidev export slides.en.md --output ../out/slides/en.pdf
 ```
 
-Export writes PDFs under `../out/slides/`. Slidev export may install or use Playwright Chromium on first run.
+Export writes PDFs under `../out/slides/`. Slidev export uses Playwright Chromium.
+On a fresh machine, the first install/export path downloads Playwright Chromium if it is not already cached; expect roughly a 150 MB one-time download.
 
 ## Clean
 
