@@ -27,6 +27,12 @@ build/*.bc
 build/*.so
 !build/.gitkeep
 
+# Hackathon Surfpool demo local state
+.surfpool/
+scripts/demo/.keypairs/
+scripts/demo/.program_id
+scripts/demo/.surfpool.pid
+
 # Rust Mollusk test harness
 tests/target/
 tests/Cargo.lock
