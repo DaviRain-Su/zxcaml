@@ -43,3 +43,6 @@ tests/Cargo.lock
 
 # Cloudflare / Wrangler local cache
 .wrangler/
+
+# Mission-internal site source-of-truth note (not published to Cloudflare)
+site/CONTENT.md
