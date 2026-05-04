@@ -25,8 +25,8 @@
       <section class="hero">
         <div class="hero-copy">
           <p class="eyebrow">OCaml frontend. Zig backend. Solana BPF.</p>
-          <h1>Write typed Solana programs with an OCaml-shaped compiler path.</h1>
-          <p class="lede">ZxCaml borrows upstream OCaml's parser and type checker, throws away the OCaml runtime, and lowers a growing OCaml subset toward deterministic BPF output through Zig.</p>
+          <h1>Functional Solana, today.</h1>
+          <p class="lede">ZxCaml borrows upstream OCaml's parser and type checker, throws away the OCaml runtime, and lowers a practical `.ml` subset through Core IR and ANF into deterministic BPF output through Zig.</p>
           <div class="actions">
             <a class="button primary" href="https://github.com/DaviRain-Su/ZxCaml">View Source</a>
             <a class="button secondary" href="#status">See Progress</a>
@@ -48,22 +48,24 @@
         <h2>Keep OCaml's frontend. Own everything after Typedtree.</h2>
         <div class="pipeline">
           <div><span>01</span><h3>Upstream OCaml</h3><p>Parsing and type checking are handled by OCaml compiler-libs, without forking the compiler.</p></div>
-          <div><span>02</span><h3>Core IR</h3><p>A versioned bridge lowers typed OCaml into ANF-shaped Core IR with layout information.</p></div>
-          <div><span>03</span><h3>Zig Lowering</h3><p>The Zig pipeline performs arena-oriented lowering, interpretation, and native code generation.</p></div>
-          <div><span>04</span><h3>Solana BPF</h3><p>The target path emits runtime-free artifacts for Solana's constrained execution environment.</p></div>
+          <div><span>02</span><h3>Wire 1.1 to Core IR</h3><p>The current bridge lowers typed OCaml into ANF-shaped Core IR with layout information.</p></div>
+          <div><span>03</span><h3>Zig Pipeline</h3><p>Shared lowering feeds three backends: tree-walk interpreter, native Zig codegen, and Solana BPF artifacts.</p></div>
+          <div><span>04</span><h3>Demo-Ready BPF</h3><p>The target path emits runtime-free `.so` programs, Anchor-compatible IDL, and artifacts exercised through Mollusk and Surfpool demo flows.</p></div>
         </div>
       </section>
       <section id="status" class="status-grid">
         <div>
           <p class="eyebrow">Current State</p>
-          <h2>Working prototype, not production adoption.</h2>
-          <p>ZxCaml is early, but the compiler path is no longer just a sketch: the prototype can check, run, and build real examples across the current subset.</p>
+          <h2>A current compiler path with clear boundaries.</h2>
+          <p>ZxCaml is an active hackathon-stage compiler: P8 optimizations are implemented, real examples check, run, emit IDL, and build BPF artifacts, and the Solana path is validated through Mollusk and Surfpool demo scripts. It remains a deliberately scoped OCaml subset rather than a claim of full OCaml compatibility.</p>
         </div>
         <div class="metrics">
-          <div><strong>P2</strong><span>Subset expansion implemented</span></div>
-          <div><strong>0.7</strong><span>Current wire format</span></div>
-          <div><strong>29+</strong><span>Example programs</span></div>
+          <div><strong>P8</strong><span>Compiler optimizations implemented</span></div>
+          <div><strong>1.1</strong><span>Current frontend wire format</span></div>
+          <div><strong>54+</strong><span>Example programs across the OCaml subset</span></div>
           <div><strong>3</strong><span>Interpreter, native Zig, BPF paths</span></div>
+          <div><strong>223/224</strong><span>Zig tests passed, with one skipped</span></div>
+          <div><strong>107s</strong><span>End-to-end Surfpool demo runtime</span></div>
         </div>
       </section>
       <section id="frontier" class="band frontier">
