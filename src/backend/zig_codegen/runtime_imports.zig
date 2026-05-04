@@ -440,6 +440,12 @@ pub fn emitCounterAppExpr(
         try append(out, allocator, "}");
         return true;
     }
+    if (std.mem.eql(u8, name, "token_vault_process")) {
+        if (app.args.len != 7) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        try append(out, allocator, "cpi.zxcaml_token_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        return true;
+    }
     return false;
 }
 
