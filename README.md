@@ -105,22 +105,29 @@ The command sequence uses the same `init.sh` setup script as CI.
 
 ## Status
 
-**P8 Compiler Optimizations is implemented.** P1-P7 deliver the walking skeleton,
-subset expansion, Solana runtime integration, Mollusk test infrastructure,
-external declarations, Anchor IDL, functional persistent stdlib, region
-inference, and OCaml subset expansion (desugars, patterns, strings, expanded
-stdlib). P8 adds source-level compiler optimizations: constant folding, dead
-code elimination, self-recursive tail call optimization, and function inlining.
+**P8 Compiler Optimizations is sealed.** P1-P8 now deliver the walking
+skeleton, subset expansion, Solana runtime integration, Mollusk test
+infrastructure, external declarations, Anchor IDL, functional persistent stdlib,
+region inference, OCaml subset expansion (desugars, patterns, strings, expanded
+stdlib), and source-level compiler optimizations: constant folding, dead code
+elimination, self-recursive tail call optimization, and function inlining.
+
+Recent hackathon work packages that compiler state into a recordable demo:
+a Surfpool localnet deploy/invoke flow, a fairness-oriented Anchor comparison,
+bilingual Slidev decks, and a live Cloudflare Pages site at
+[`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/). See the
+[`docs/hackathon/` index](./docs/hackathon/README.md) for the storyboard,
+scripts, comparison artifacts, and recording checklist.
 
 `omlz` works end-to-end: parse/type-check OCaml with upstream
-`compiler-libs` → emit sexp `1.0` → lower through Core IR with constant folding, DCE, inlining, escape
+`compiler-libs` → emit sexp `1.1` → lower through Core IR with constant folding, DCE, inlining, escape
 analysis → interpret, build native Zig, build Solana BPF `.so` artifacts,
 or emit Anchor-compatible IDL.
 
 ### Current features
 
 - **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz idl <file>`
-- **Wire format:** version 1.0 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4 added instruction_data; P5 added external declarations; P6 added escape analysis annotations)
+- **Wire format:** version 1.1 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4/P5 moved the wire through `1.0` for instruction data and external declarations; P8 moved to `1.1` for mutual-recursion groups)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), string operations (`^`, length, get, sub), char operations (code, chr), and pattern matching over all of those forms
 - **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Char` (`code`, `chr`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; BPF entry arena is 32 KiB
@@ -139,11 +146,11 @@ or emit Anchor-compatible IDL.
 - **Dead code elimination:** removes unused let bindings (preserving side-effectful and potentially trapping operations) and unreachable if branches
 - **Tail call optimization:** self-recursive tail calls are detected during ANF lowering and emitted as `while (true)` loops in generated Zig, enabling deep recursion (n > 10000) without stack overflow
 - **Function inlining:** small single-expression functions (≤3 Core IR nodes) are inlined at call sites with alpha-renaming, enabling further constant folding; supports all types including String, ADT, Tuple, and Record
-- **Determinism:** interpreter ≡ Zig native across the P1 + P2 + P3 + P4 + P5 + P6 + P7 examples corpus
+- **Determinism:** interpreter ≡ Zig native across the sealed P1-P8 examples corpus
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, Mollusk tests, and an examples `omlz check` corpus loop
-- **Mollusk SVM tests:** 10 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo)
+- **Mollusk SVM tests:** 21 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, and real-world zignocchio ports)
 - **Diagnostics:** human-friendly `path:line:col: severity: message` rendering
-- **Examples:** 42 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, and tail recursion (TCO) programs
+- **Examples:** 54 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, and zignocchio-port programs
 - **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
@@ -164,10 +171,12 @@ Read in order:
 | 05 | [Backends](./docs/05-backends.md) | Zig codegen, tree-walk interpreter, backend trait |
 | 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.so` (zig + sbpf-linker) |
 | 07 | [Repo layout](./docs/07-repo-layout.md) | Directory contract, who owns what |
-| 08 | [Roadmap](./docs/08-roadmap.md) | Phases P1–P7, with P1/P2 release notes |
+| 08 | [Roadmap](./docs/08-roadmap.md) | P1-P8 sealed; P9 Developer Experience preview |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | 11 | [Solana P3 guide](./docs/11-solana-p3.md) | Account layout, syscalls, CPI, SPL-Token, no_alloc, IDL, and CI coverage |
+| —  | [Hackathon assets](./docs/hackathon/README.md) | Surfpool demo, Anchor comparison, Slidev decks, recording checklist, and submission copy |
+| —  | [Live site](https://zxcaml.pages.dev/) | Current public project landing page |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |
 | —  | [OxCaml relationship](./docs/oxcaml-relationship.md) | What OxCaml is, four ways to "use" it, which to pick |
 | —  | [zignocchio relationship](./docs/zignocchio-relationship.md) | The Zig→Solana SDK we read for ideas, what we learned, what we did not import (ADR-014) |
