@@ -158,7 +158,8 @@ pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
                         std.mem.eql(u8, callee.name, "vault_withdraw") or
                         std.mem.eql(u8, callee.name, "vault_v2_deposit") or
                         std.mem.eql(u8, callee.name, "vault_v2_withdraw") or
-                        std.mem.eql(u8, callee.name, "token_vault_process")) break :blk true;
+                        std.mem.eql(u8, callee.name, "token_vault_process") or
+                        std.mem.eql(u8, callee.name, "escrow_full_process")) break :blk true;
                 },
                 else => {},
             }

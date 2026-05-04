@@ -446,6 +446,30 @@ pub fn emitCounterAppExpr(
         try append(out, allocator, "cpi.zxcaml_token_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
+    if (std.mem.eql(u8, name, "escrow_full_process")) {
+        if (app.args.len != 2) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_escrow_account_witness_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "_ = omlz_escrow_account_witness_{d};\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_escrow_instruction_data_witness_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "_ = omlz_escrow_instruction_data_witness_{d};\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} cpi.zxcaml_escrow_full_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return true;
+    }
     return false;
 }
 

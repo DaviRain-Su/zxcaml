@@ -67,6 +67,10 @@ name = "token_vault_test"
 path = "token_vault_test.rs"
 
 [[test]]
+name = "escrow_full_test"
+path = "escrow_full_test.rs"
+
+[[test]]
 name = "external_demo_test"
 path = "external_demo_test.rs"
 
