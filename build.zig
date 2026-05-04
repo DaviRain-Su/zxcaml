@@ -319,8 +319,30 @@ pub fn build(b: *std.Build) void {
     run_codegen_pattern_extensions_tests.step.dependOn(b.getInstallStep());
     run_codegen_pattern_extensions_tests.setCwd(b.path(""));
 
+    const anf_test_module = b.createModule(.{
+        .root_source_file = b.path("anf_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const anf_tests = b.addTest(.{
+        .root_module = anf_test_module,
+    });
+    const run_anf_tests = b.addRunArtifact(anf_tests);
+
+    const inline_test_module = b.createModule(.{
+        .root_source_file = b.path("inline_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const inline_tests = b.addTest(.{
+        .root_module = inline_test_module,
+    });
+    const run_inline_tests = b.addRunArtifact(inline_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_anf_tests.step);
+    test_step.dependOn(&run_inline_tests.step);
     test_step.dependOn(&run_runtime_arena_tests.step);
     test_step.dependOn(&run_runtime_account_tests.step);
     test_step.dependOn(&run_runtime_syscalls_tests.step);
