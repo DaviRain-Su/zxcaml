@@ -194,6 +194,80 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   color: var(--muted);
   line-height: 1.4;
 }
+.section-heading {
+  max-width: 850px;
+}
+.hackathon {
+  background: #f0eadf;
+}
+.hackathon-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, .78fr) minmax(320px, 1.22fr);
+  gap: clamp(24px, 4vw, 42px);
+  align-items: start;
+  margin-top: 34px;
+}
+.comparison-card, .doc-links {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.comparison-card {
+  padding: 24px;
+}
+.comparison-card h3, .doc-links h3 {
+  margin-top: 0;
+}
+.comparison-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 24px 0 0;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+.comparison-stats div {
+  min-height: 120px;
+  padding: 18px;
+  background: #fffdf7;
+}
+.comparison-stats dt {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.comparison-stats dd {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  line-height: 1;
+}
+.doc-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  overflow: hidden;
+}
+.doc-links h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 22px;
+  background: var(--panel);
+}
+.doc-links a {
+  padding: 16px 18px;
+  background: #fffdf7;
+  color: var(--green);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.doc-links a:hover {
+  color: var(--accent-dark);
+  text-decoration: underline;
+}
 .frontier {
   display: flex;
   align-items: end;
@@ -219,10 +293,11 @@ footer a { color: var(--ink); font-weight: 700; }
   .hero, .status-grid { grid-template-columns: 1fr; }
   .hero { min-height: auto; }
   .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hackathon-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
   h1 { font-size: 42px; }
-  .pipeline, .metrics { grid-template-columns: 1fr; }
+  .pipeline, .metrics, .comparison-stats, .doc-links { grid-template-columns: 1fr; }
   .frontier, footer { align-items: flex-start; flex-direction: column; }
   .button { width: 100%; }
   .terminal { box-shadow: 10px 10px 0 #dfd5c3; }

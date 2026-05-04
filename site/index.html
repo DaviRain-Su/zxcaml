@@ -17,6 +17,7 @@
       <nav aria-label="Primary navigation">
         <a href="#pipeline">Pipeline</a>
         <a href="#status">Status</a>
+        <a href="#hackathon">Hackathon</a>
         <a href="#frontier">Frontier</a>
         <a href="https://github.com/DaviRain-Su/ZxCaml">GitHub</a>
       </nav>
@@ -66,6 +67,39 @@
           <div><strong>3</strong><span>Interpreter, native Zig, BPF paths</span></div>
           <div><strong>223/224</strong><span>Zig tests passed, with one skipped</span></div>
           <div><strong>107s</strong><span>End-to-end Surfpool demo runtime</span></div>
+        </div>
+      </section>
+      <section id="hackathon" class="band hackathon">
+        <div class="section-heading">
+          <p class="eyebrow">Colosseum Hackathon</p>
+          <h2>Demo artifacts, scripts, and Anchor comparison in one place.</h2>
+          <p>OCaml on Solana should not mean a toy VM; with ZxCaml, an ordinary `.ml` file can become a real deployable BPF program. In the demo, ZxCaml compiles `hackathon_greet.ml`, a PDA-backed greeting counter, into a `.so` and Anchor-compatible IDL, proves init plus two greet calls in Mollusk, then deploys to Surfpool and reads back real account state.</p>
+        </div>
+        <div class="hackathon-grid">
+          <article class="comparison-card" aria-labelledby="anchor-comparison-title">
+            <p class="eyebrow">Anchor Comparison</p>
+            <h3 id="anchor-comparison-title">Smaller source and BPF output for the same greeting demo.</h3>
+            <dl class="comparison-stats">
+              <div><dt>ZxCaml source</dt><dd>39 lines</dd></div>
+              <div><dt>Anchor source</dt><dd>105 lines</dd></div>
+              <div><dt>ZxCaml BPF</dt><dd>6.5 KB</dd></div>
+              <div><dt>Anchor BPF</dt><dd>183.5 KB</dd></div>
+            </dl>
+          </article>
+          <div class="doc-links" aria-label="Hackathon documentation links">
+            <h3>Hackathon document set</h3>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/anchor-comparison.generated.md">anchor-comparison.generated.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/anchor-comparison.md">anchor-comparison.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/colosseum-submission.md">colosseum-submission.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/demo-script.en.md">demo-script.en.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/demo-script.zh.md">demo-script.zh.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/pitch.en.md">pitch.en.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/pitch.zh.md">pitch.zh.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/README.md">README.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/recording-checklist.md">recording-checklist.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/shot-list.md">shot-list.md</a>
+            <a href="https://github.com/DaviRain-Su/ZxCaml/blob/main/docs/hackathon/timeline.md">timeline.md</a>
+          </div>
         </div>
       </section>
       <section id="frontier" class="band frontier">
