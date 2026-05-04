@@ -51,9 +51,15 @@ fn appendFrontendArtifactCleanupArgs(args: *std.ArrayList([]const u8), allocator
 pub fn build(b: *std.Build) void {
     const target = b.graph.host;
     const optimize = b.standardOptimizeOption(.{});
+    const inline_max_nodes = b.option(
+        usize,
+        "inline_max_nodes",
+        "Maximum Core IR nodes in a function body eligible for inlining",
+    ) orelse 3;
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", manifest.version);
+    build_options.addOption(usize, "inline_max_nodes", inline_max_nodes);
 
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -334,6 +340,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    inline_test_module.addOptions("build_options", build_options);
     const inline_tests = b.addTest(.{
         .root_module = inline_test_module,
     });

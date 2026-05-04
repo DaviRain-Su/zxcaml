@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const ir = @import("../../src/core/ir.zig");
 const layout = @import("../../src/core/layout.zig");
 const inline_pass = @import("../../src/core/inline.zig");
@@ -224,6 +225,29 @@ test "inline inlines small functions and enables constant folding" {
     const folded = try const_fold.foldModule(&arena, inlined);
     try std.testing.expect(folded.decls[1].Let.value.* == .Constant);
     try std.testing.expectEqual(@as(i64, 6), folded.decls[1].Let.value.Constant.value.Int);
+}
+
+test "inline honors configured max body node threshold" {
+    if (build_options.inline_max_nodes < 5) return error.SkipZigTest;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const nested_add = try primAddPtr(&arena, try varPtr(&arena, "x"), try intPtr(&arena, 1));
+    const body = try primAddPtr(&arena, nested_add, try intPtr(&arena, 2));
+    const function = try lambdaPtr(&arena, "x", body);
+    const call = try appPtr(&arena, "f", &.{try intPtr(&arena, 5)}, try intToIntTy(&arena));
+
+    const inlined = try inlineTopExpr(&arena, try exprPtr(&arena, .{ .Let = .{
+        .name = "f",
+        .value = function,
+        .body = call,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } }));
+
+    try std.testing.expect(inlined.* == .Let);
+    try std.testing.expect(inlined.Let.body.* == .Prim);
 }
 
 test "inline does not inline multiple-expression functions" {

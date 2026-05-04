@@ -1,4 +1,6 @@
-let id n = (n + 0) + 0
+let id n =
+  let value = n in
+  value
 
 let entrypoint _input =
   let stack_local = 1 + 2 in

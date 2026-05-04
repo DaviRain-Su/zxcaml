@@ -9,13 +9,14 @@
 //! - Leave recursive and multi-expression functions untouched.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const ir = @import("ir.zig");
 const layout = @import("layout.zig");
 
 /// Errors produced by the Core IR function inlining pass.
 pub const InlineError = std.mem.Allocator.Error;
 
-const max_small_body_nodes = 3;
+pub const max_small_body_nodes = build_options.inline_max_nodes;
 
 const Capture = struct {
     name: []const u8,
