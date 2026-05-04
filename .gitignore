@@ -23,9 +23,13 @@ _opam/
 
 # Generated compiler output
 out/
+out/slides/
 build/*.bc
 build/*.so
 !build/.gitkeep
+
+# Slidev local dependencies
+slides/node_modules/
 
 # Hackathon Surfpool demo local state
 .surfpool/
