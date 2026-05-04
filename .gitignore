@@ -46,3 +46,6 @@ tests/Cargo.lock
 
 # Mission-internal site source-of-truth note (not published to Cloudflare)
 site/CONTENT.md
+
+# Mission-internal docs drift source-of-truth notes
+mission-internal/
