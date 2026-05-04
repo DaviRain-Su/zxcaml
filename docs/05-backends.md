@@ -23,7 +23,7 @@ Returned objects are POD; backends are stateless w.r.t. each call.
 
 Current implementations:
 
-- `ZigBackend`        — main path, produces `.zig` source.
+- `ZigBackend`        — main path, produces `.zig` source for native or BPF targets.
 - `Interpreter`       — dev-only, executes Core IR.
 
 Stubs (signatures only, must compile, must return "not implemented"
@@ -40,8 +40,8 @@ diagnostics if invoked):
 ### 2.1 Inputs
 
 `Lowered IR` produced by `ArenaStrategy`. The backend is **not**
-allowed to read upstream `Typedtree`, the sexp wire format, the
-Zig `ttree` mirror, or Core IR directly.
+allowed to read upstream `Typedtree`, the sexp wire format (currently
+`1.1`), the Zig `ttree` mirror, or Core IR directly.
 
 ### 2.2 Output
 
@@ -49,7 +49,8 @@ A single `.zig` source file plus a `build.zig` snippet that drives
 the toolchain for the requested target. For `--target=bpf` the
 chain is `zig build-lib -target bpfel-freestanding -femit-llvm-bc`
 followed by `sbpf-linker --cpu v2 --export entrypoint`, producing
-`program.so` (see `06-bpf-target.md` §2 / §6, ADR-012, ADR-013).
+`program.so` (see `06-bpf-target.md` §2 / §6, ADR-012, ADR-013). For
+`--target=native`, the emitted Zig is built as a hosted developer binary.
 
 ```text
 out/
@@ -102,9 +103,12 @@ name collisions.
 
 ### 2.7 What it does **not** do
 
-- No optimisation passes. Trust `zig` (`-O ReleaseSmall` for BPF).
+- Backend-local optimisations stay minimal; the semantic optimisation passes
+  live over Core IR (sealed P8: constant folding, DCE, self-recursive TCO,
+  and small-function inlining).
 - No incremental output. Whole module per invocation.
-- No source-mapping debug info in P1.
+- Source-map fidelity is a P9 Developer Experience preview topic, not sealed
+  P1-P8 scope.
 
 ## 3. Interpreter
 
@@ -170,7 +174,7 @@ Driver logic:
 
 ## 6. Determinism requirement
 
-For any program in the accepted P1 + P2 subset and any input:
+For any program in the sealed P1-P8 examples corpus and any supported input:
 
 ```
 Interpreter(P)  ≡  ZigBackend(P)  (mod observable outputs)
@@ -182,7 +186,7 @@ Failures are P0 bugs.
 
 ### Pinned integer semantics (ADR-008 / F14)
 
-ZxCaml `int` is deliberately pinned to **signed 64-bit `i64`** in P1.
+ZxCaml `int` is deliberately pinned to **signed 64-bit `i64`**.
 This diverges from upstream OCaml on 64-bit hosts, where `int` is a
 63-bit immediate (`max_int = 4611686018427387903`). In ZxCaml,
 `max_int = 9223372036854775807` and `min_int = -9223372036854775808`.

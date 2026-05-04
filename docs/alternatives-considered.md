@@ -85,7 +85,7 @@ stability becomes a chronic problem.
 ### Mitigations
 - ADR-011 keeps the build single-driver (`build.zig`) so the
   bilingual nature is invisible to anyone running `zig build`.
-- The `.cir.sexp` wire format is versioned (see
+- The `.cir.sexp` wire format is versioned (current `1.1`; see
   `10-frontend-bridge.md` §3.2). Major bumps update both sides
   in one PR.
 - A "single OCaml version per phase" policy is documented in

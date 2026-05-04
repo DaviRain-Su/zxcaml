@@ -93,11 +93,11 @@ The serialised form is an S-expression because:
 
 ### 3.1 Top-level shape
 
-The current wire grammar is sexp **version `0.7`**. The header carries the
+The current wire grammar is sexp **version `1.1`**. The header carries the
 version so `omlz` can reject stale frontend output with an upgrade hint:
 
 ```text
-(zxcaml-cir 0.7
+(zxcaml-cir 1.1
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -113,7 +113,7 @@ version so `omlz` can reject stale frontend output with an upgrade hint:
             (case (tuple_pattern (ctor Red) (var n)) (var n))))))))
 ```
 
-P2 version history:
+Wire-format history:
 
 | Version | Added surface |
 |---|---|
@@ -121,6 +121,10 @@ P2 version history:
 | `0.5` | user-defined variant `type_decl` nodes |
 | `0.6` | nested pattern payloads and `when_guard` nodes |
 | `0.7` | tuple nodes, tuple patterns/projection, record type declarations, record expressions, field access, record update, record patterns |
+| `0.8` | account/syscall references for Solana-shaped programs |
+| `0.9` | CPI-shaped type references and function applications |
+| `1.0` | external declarations, instruction-data/account attributes, and P4/P5 Solana/IDL metadata |
+| `1.1` | mutual-recursion groups and erased type aliases |
 
 Diagnostics carry locations separately on stderr; ordinary comments and
 formatting trivia are not serialized.
@@ -158,22 +162,25 @@ Out:
   upstream of serialisation).
 
 
-## 4. The accepted subset (through P2)
+## 4. The accepted subset (current P1-P8 surface)
 
 The **definitive** list of `Typedtree` constructors accepted by the current
 `zxc-frontend` is the implementation in `src/frontend/zxc_subset.ml`. This
-section summarizes the as-built P2 surface.
+section summarizes the as-built sealed P1-P8 surface.
 
 ### 4.1 Top-level
 
 Accepted:
 
-- `Tstr_value` with exactly one binding, recursive or non-recursive.
-- `Tstr_type` for subset variant, tuple-alias, and record declarations.
+- `Tstr_value` for accepted value bindings, including mutually recursive
+  groups.
+- `Tstr_type` for subset variant, tuple-alias, record, and erased type-alias
+  declarations.
+- `Tstr_primitive` for typed `external name : type = "zig_symbol"`
+  declarations.
 
 Rejected: modules, module types, classes, opens/includes, exceptions,
-`external`, attributes, recursive modules, private/constraint-heavy types,
-and multi-binding `and` value groups.
+attributes, recursive modules, and private/constraint-heavy types.
 
 ### 4.2 Expressions
 
@@ -191,9 +198,11 @@ Accepted:
 - `Texp_tuple`
 - `Texp_record` for construction and functional update
 - `Texp_field` for record field access
+- `Texp_sequence` where it desugars to ordered Core IR effects
+- `Texp_assert` for supported assertion expressions
 
-Rejected: arrays, sequences, loops, objects, polymorphic variants, `letop`,
-local opens/modules, `try`, `assert`, `lazy`, labels/optional arguments, and
+Rejected: arrays, loops, objects, polymorphic variants, `letop`,
+local opens/modules, `try`, `lazy`, labels/optional arguments, and
 mutation primitives (`ref`, `:=`, `!`, `Texp_setfield`) with dedicated
 diagnostics where available.
 
@@ -213,17 +222,19 @@ Accepted:
   nested constructor payloads
 - `Tpat_tuple`
 - `Tpat_record`
+- literal constant patterns where supported
+- or-patterns and alias patterns where the bindings are valid
 
-Rejected: aliases, constants beyond supported constructor forms, arrays, lazy
-patterns, polymorphic variants, exception patterns, and mutation-related
-patterns.
+Rejected: arrays, lazy patterns, polymorphic variants, exception patterns, and
+mutation-related patterns.
 
 ### 4.4 Types
 
 User-authored subset type declarations are accepted. The type language covers
 variables, named references, tuple type payloads, variant declarations, tuple
-aliases, and record declarations. GADTs, private types, record constructor
-payloads inside variants, and type constraints remain rejected.
+aliases, record declarations, and erased type aliases. External declaration
+types use the same subset type language. GADTs, private types, record
+constructor payloads inside variants, and type constraints remain rejected.
 
 ## 5. Diagnostics
 
@@ -294,8 +305,8 @@ its backend or its runtime model.
 
 ## 9. What this document does **not** cover
 
-- Multi-file modules (P3).
-- `.mli` signatures (P3+).
+- Multi-file modules (optional unsealed work outside P1-P8 scope).
+- `.mli` signatures (optional unsealed work outside P1-P8 scope).
 - Functor support (out of scope per ADR-001).
 - Anything that requires reading OCaml's C runtime layout.
 

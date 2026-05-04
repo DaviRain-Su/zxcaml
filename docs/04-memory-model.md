@@ -4,16 +4,16 @@
 
 ## 1. Position
 
-In Phase 1, ZxCaml has **one** memory model:
+ZxCaml started in Phase 1 with **one** base memory model:
 
 > A single arena per program, allocated up-front, used for every
 > heap value. No GC, no reference counting, no per-value lifetime.
 > The user does **not** see the model — they write OCaml.
 
-The `Layout` field on Core IR allocations is a **forward-compatible
-descriptor**, not a user-facing knob. It is there so that future
-phases can introduce more sophisticated regimes (region inference,
-RC, ownership) without re-architecting.
+The `Layout` field on Core IR allocations is a **compiler-facing
+descriptor**, not a user-facing knob. Sealed P6 uses it for region inference
+and stack placement of non-escaping locals. RC/ownership regimes remain
+optional research outside the sealed P4-P8 phases.
 
 ## 2. Why arena?
 
@@ -64,7 +64,7 @@ and returns `error.OutOfMemory` when the static buffer is exhausted.
 | payload constructors / list cons cells | Arena | Boxed |
 | top-level lambdas | Arena | Flat |
 | first-class closure records | Arena | Boxed |
-| reserved future non-escaping values | Stack | Boxed |
+| proven non-escaping lowered values | Stack | Boxed |
 
 These rules live in `Typed AST → Core IR` lowering (see
 `03-core-ir.md` §4). They are the **only** knob the frontend
@@ -108,17 +108,13 @@ The current pipeline has three as-built cases:
 The user still sees none of this machinery; they write ordinary `let` /
 `let rec` / `fun` OCaml subset code.
 
-## 7. Strings (P1)
+## 7. Strings
 
-Strings exist only at the granularity of:
-
-- string literals (interned, in `Static`),
-- equality and length on strings (used by the interpreter and stdlib
-  diagnostics).
-
-There is **no** string concatenation, formatting, or allocation at
-runtime in P1. This is intentional: strings are an attractive
-nuisance for anything BPF-bound.
+Strings started as read-only literals plus equality/length support. The sealed
+P7/P8 compiler surface now also covers string operations such as concatenation,
+`String.length`, `String.get`, and `String.sub`, while still avoiding a general
+OCaml runtime or GC. Formatting remains intentionally narrow for BPF-bound
+programs.
 
 ## 8. What is **not** allowed
 
@@ -139,21 +135,20 @@ bound recursion in P1, so:
 - Stack overflow inside a BPF program is reported by Solana, not
   by us.
 
-P3 introduces an optional "no-allocation" attribute for hot paths
-and runs an analysis to verify it.
+The sealed P3 Solana work introduced `omlz check --no-alloc`, a conservative
+analysis for hot paths that verifies a Core IR graph has no arena-allocation
+sites.
 
 ## 10. Forward compatibility
 
-The path from "P1 single arena" to "P4 region inference" is:
+The path from "P1 single arena" to sealed P6 region inference was:
 
-1. Keep the `Layout` field on every allocation. ✅ (already in P1)
-2. Add `Region::Region(id)` and a region inference pass that
-   refines `Arena` into specific regions.
-3. Update `ArenaStrategy` (or add `RegionStrategy`) to emit per-region
-   arenas instead of a single global one.
-4. Backends consume the new region ids; no Core IR shape change.
+1. Keep the `Layout` field on every allocation. ✅
+2. Add escape analysis that identifies non-escaping local values. ✅
+3. Refine lowering/codegen so stack-eligible locals avoid arena allocation. ✅
+4. Preserve the Core IR contract while backends consume the refined layout. ✅
 
-The path to "P4+ ownership / RC":
+A possible optional path to ownership / RC remains:
 
 1. Introduce `Region::Rc` and a borrow / move analysis.
 2. Update lowering to emit `inc_ref` / `dec_ref` calls around

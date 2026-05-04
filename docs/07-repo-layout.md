@@ -15,7 +15,7 @@ ZxCaml/
 │   │   ├── zxc_frontend.ml
 │   │   ├── zxc_subset.ml
 │   │   ├── zxc_sexp.ml
-│   │   └── zxc_sexp_format.md  -- the wire contract
+│   │   └── zxc_sexp_format.md  -- the wire contract (current 1.1)
 │   ├── frontend_bridge/        -- Zig sexp consumer
 │   │   ├── sexp_lexer.zig
 │   │   ├── sexp_parser.zig
@@ -73,7 +73,7 @@ src/
 │   ├── zxc_frontend.ml         -- main; drives compiler-libs
 │   ├── zxc_subset.ml           -- Typedtree subset whitelist + walker
 │   ├── zxc_sexp.ml             -- S-expression serialiser
-│   └── zxc_sexp_format.md      -- the versioned wire contract
+│   └── zxc_sexp_format.md      -- the versioned wire contract (current 1.1)
 │
 ├── frontend_bridge/            -- Zig consumer of the sexp
 │   ├── sexp_lexer.zig
@@ -111,9 +111,9 @@ realisation of ADR-010.
 
 ### 2.1 Files marked **EXTENSION POINT**
 
-These are the only places that future phases (P3+ memory models, P5+
-backends) are expected to extend. Touching anything else to add a new
-backend or memory model is a smell.
+These are the only places that sealed region-inference work and optional
+future backend/memory-model work are expected to extend. Touching anything else
+to add a new backend or memory model is a smell.
 
 - `src/core/layout.zig`
 - `src/lower/strategy.zig`
@@ -221,10 +221,10 @@ zig-out/bin/omlz check examples/*.ml   # skipping m0_unsupported.ml
 tests/solana/hello/invoke.sh          # when SOLANA_BPF=1
 ```
 
-P2 uses the same build/test commands as P1. The examples corpus loop is
-glob-based, so new P2 examples are checked without structural CI changes. The
-Solana BPF harness remains opt-in by environment variable; closure acceptance
-can be run locally with `SOLANA_BPF=1 tests/solana/closures/invoke.sh`.
+The examples corpus loop is glob-based, so new `.ml` examples are checked
+without structural CI changes. The Solana BPF harness remains opt-in by
+environment variable; closure and account/CPI acceptance can be run locally
+with the documented `SOLANA_BPF=1` harnesses.
 
 ## 8. Conventions
 

@@ -113,7 +113,7 @@ read oxcaml/backend/cfg/* and middle_end/flambda2/*
 ### Way C — When PX activates for some other target (wasm32, x86_64-linux, …), borrow OxCaml's approach to that target
 
 ```
-ZxCaml ships P1-P5 as planned (BPF only).
+ZxCaml has sealed P1-P8 with BPF as the validated target.
 PX activates for, e.g., wasm32 with a real use case.
   → look at how OxCaml maps Lambda → that target's ABI
   → copy the *approach* (not the code) into ZxCaml's pipeline

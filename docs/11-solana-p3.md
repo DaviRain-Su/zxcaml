@@ -17,7 +17,8 @@ The implementation remains runtime-light:
 - the arena model is still hidden from user OCaml, but the BPF entry arena is
   now **32 KiB** instead of the old P1/P2 1 KiB buffer;
 - `no_alloc` is a conservative Core IR analysis, not a new type-system mode;
-- the IDL output is ZxCaml JSON, not Anchor-compatible.
+- the current IDL output is Anchor-compatible JSON, expanded after the original
+  P3 smoke schema by sealed P5 work.
 
 ## 1. Account handling
 
@@ -199,14 +200,14 @@ allocation" is reported as failure rather than silently accepting the program.
 
 ## 6. IDL emission
 
-`omlz idl <file.ml>` emits a single JSON document describing the discovered
-program shape:
+`omlz idl <file.ml>` emits an Anchor-compatible JSON document describing the
+discovered program shape:
 
-- `schema_version`;
 - program name and optional program id;
-- instructions with names, discriminators, accounts, and arguments;
+- Anchor 0.30+ instruction entries with names, discriminators, accounts, and
+  arguments;
 - user record and variant types;
-- structured error constants.
+- events, errors, and constants where the source exposes them.
 
 Example:
 
@@ -215,8 +216,9 @@ zig build
 zig-out/bin/omlz idl tests/idl/entrypoint.ml | python3 -m json.tool
 ```
 
-The schema is intentionally small and ZxCaml-specific. It is useful for smoke
-tests and client-code experiments, but it is **not** Anchor-compatible yet.
+The original P3 schema was intentionally small and ZxCaml-specific. The
+current sealed P5/P8 toolchain emits Anchor-compatible IDL JSON while keeping
+the source of truth in the `.ml` program.
 
 ## 7. CI coverage
 

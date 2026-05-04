@@ -4,8 +4,8 @@
 
 ## 1. Goal
 
-Phase 1 must end with this command sequence succeeding end-to-end on
-a developer's machine:
+The original Phase 1 BPF acceptance goal was this command sequence succeeding
+end-to-end on a developer's machine:
 
 ```sh
 omlz build examples/solana_hello.ml --target=bpf -o solana_hello.so
@@ -116,12 +116,11 @@ correct signature. The runtime shim is what Solana actually loads.
 | `bpf_entry.zig` | The `entrypoint` shim above. |
 | `prelude.zig` | Helpers: integer wrap, ADT discriminator helpers, list cons. |
 
-P1 explicitly does **not** include:
-
-- syscall wrappers (`sol_log_`, `sol_invoke_signed`, …) — P3
-- account parsing — P3
-- CPI helpers — P3
-- error-code conventions beyond returning a `u64` — P3
+The original P1 runtime deliberately did **not** include syscalls, account
+parsing, CPI helpers, or richer error conventions. Those Solana-facing surfaces
+were added by sealed P3/P5 work and are documented in `11-solana-p3.md`; the
+BPF target contract here remains the toolchain, entrypoint, and ELF-shape
+contract.
 
 ## 6. Build flags
 
@@ -215,8 +214,8 @@ Solana harness is enabled.
 
 ## 8. What can go wrong (and how we respond)
 
-This table is the P1 mission bug/landmine log distilled into BPF and
-release-engineering guidance for P2+ workers.
+This table is the early mission bug/landmine log distilled into BPF and
+release-engineering guidance for later workers.
 
 | Symptom | Likely cause / observed source | Response |
 |---|---|---|
@@ -238,16 +237,14 @@ release-engineering guidance for P2+ workers.
 | `zig build test` prints `zxc-frontend not found ...` | Negative subprocess-path test intentionally exercises the diagnostic | Treat as expected if the test command exits 0 |
 | `ocamlc -c ... -o /dev/null` fails on macOS | OCaml tries to create `/dev/null.cmi.tmp` | Use `ocamlfind ocamlc -i stdlib/core.ml > /dev/null` or write artifacts to `/tmp` |
 
-## 9. Out of scope (P1)
+## 9. Out of scope for the original P1 target contract
 
-- IDL generation (Anchor-style)
-- BPF-side logging
-- Program-derived addresses
-- Cross-program invocation
-- Compute-unit budgeting analysis
-- Upgrade authority / multisig flows
-
-These are explicitly P3+ work.
+The original BPF target contract excluded IDL generation, BPF-side logging,
+program-derived addresses, cross-program invocation, compute-unit budgeting,
+and upgrade-authority / multisig flows. Sealed P3/P5 work has since added
+logging, PDA/CPI helpers, no-allocation checks, and Anchor-compatible IDL;
+upgrade-authority and multisig flows remain outside the compiler target
+contract.
 
 ## 10. Why not "every target Zig can produce"?
 
@@ -284,7 +281,7 @@ Any reasonable target accepts it.
   bare metal may halt or reboot.
 - A **memory plan**. BPF gets a static buffer arena; native could
   in principle support `malloc`-backed regions; freestanding ARM has
-  to be told where RAM begins. P1 only knows the static-buffer plan.
+  to be told where RAM begins. The sealed BPF path still uses the static-buffer arena plan.
 - An **agreed calling convention to user code**. Implicit
   `arena: *Arena` first parameter is the BPF / freestanding rule;
   hosted targets may want to skip it.
@@ -312,8 +309,8 @@ on a per-target basis, which is real design work.
 - `omlz build --target=native` is documented for **developer
   convenience only**: it lets you run the compiled program locally to
   spot integration bugs faster than going through
-  `solana-test-validator`. It is not a supported deliverable; we do
-  not promise stability, performance, or feature parity.
+  `solana-test-validator`. It is not the primary deployment target;
+  Solana BPF remains the validated target.
 
 ### When a new target becomes a real goal
 

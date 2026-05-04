@@ -93,22 +93,24 @@ The OCaml `ocaml` / `dune` toolchain may still be used **off-line** to
 type-check our stdlib as a sanity oracle, since our subset is a true
 subset.
 
-### 4.2 Multiple backends and memory models are designed in, **not** built in P1
+### 4.2 Multiple backends and memory models are designed in, **not** bolted on later
 
 We design **trait-shaped** extension points (lowering strategy,
-backend) so that future memory models (RC, GC, region) and future
-backends do not require re-architecting. **In P1 only one of each is
-implemented**: arena lowering, Zig backend, plus a tree-walk
-interpreter for development.
+backend) so that additional memory models and backends do not require
+re-architecting. The original P1 implementation started with arena
+lowering, Zig backend, and a tree-walk interpreter for development;
+sealed P6 then used the same design to add region inference for
+non-escaping local values.
 
 ### 4.3 "Pluggable memory model" is research-grade
 
 Truly pluggable memory (arena / RC / GC / stack-only) interacts with
 calling convention, closure representation, ADT layout, and the type
 system. P1 does **one** model: **arena, fully inferred, hidden from
-the user**. The Core IR carries a `Layout` field that today only
-admits `Region::Arena`, but its presence is the extension point for
-P4+ work on regions and ownership.
+the user**. The Core IR carries a `Layout` field. The sealed P6 region-inference
+work refines non-escaping locals beyond the original arena default, while
+RC/ownership-style regimes remain optional research outside the sealed
+P4-P8 phases.
 
 ## 5. Locked Phase 1 decisions
 
@@ -131,5 +133,6 @@ P4+ work on regions and ownership.
 - effect handlers (OCaml 5.x)
 - the OCaml C runtime, `Obj.magic`, ctypes
 - garbage collection
-- LSP, formatter, debugger
+- formatter, debugger
+- LSP integration is not in the sealed compiler phases; it is only a P9 Developer Experience preview item
 - non-BPF targets as a goal (they may incidentally work)

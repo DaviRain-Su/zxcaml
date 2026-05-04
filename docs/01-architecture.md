@@ -15,7 +15,7 @@ The frontend is borrowed from upstream OCaml; everything from
    │   .cmt (binary Typedtree)
    ▼
 [ zxc-frontend (OCaml glue) ]        ◀── walks Typedtree, enforces subset
-   │   .cir.sexp (versioned wire format)
+   │   .cir.sexp (versioned wire format; current `1.1`)
    ▼
 [ frontend_bridge (Zig) ]            ◀── parses sexp into Zig mirror types
    │   ttree.Module (Zig)
@@ -50,7 +50,7 @@ small. Above the bar is OCaml; below it is Zig.
                   type-checked AST. We do not own this format; we
                   consume a *subset* of it (see 10-frontend-bridge.md §4).
 
-.cir.sexp       — our wire format: a versioned, lossless
+.cir.sexp       — our wire format (current `1.1`): a versioned, lossless
                   serialisation of the accepted Typedtree subset.
                   Carries `ty` and `span` on every node.
 
@@ -73,12 +73,12 @@ Lowered IR      — Core IR with explicit allocation plans and closure
 look at `.cmt`, `.cir.sexp`, or `ttree`. Lowered IR is allowed to
 differ per strategy — that is the whole point of having it.
 
-Why a sexp wire format and a Zig mirror, instead of consuming
+Why a sexp wire format (currently `1.1`) and a Zig mirror, instead of consuming
 `.cmt` directly from Zig? Because `.cmt` is OCaml's marshal format
 and is unstable across releases. The sexp is **ours**, versioned by
 us, and decouples upstream OCaml's binary format from our consumer.
 
-## 3. Extension points (designed in, not built)
+## 3. Extension points (designed in, reused by sealed phases)
 
 We isolate three trait-shaped surfaces. Everything else is
 implementation detail and may be rewritten freely.
@@ -100,10 +100,10 @@ Region = Arena
        -- future: Rc, Gc, Region(id)
 ```
 
-In P1 the inference pass writes `Region::Arena` everywhere (with
-`Stack` for obvious non-escaping cases if trivial). The presence of
-the field — not the variety of values — is what keeps future regions
-cheap to add.
+The original P1 inference pass wrote `Region::Arena` by default. The
+sealed P6 region-inference pass now uses the same field to mark eligible
+non-escaping values as `Stack`; that extension landed without changing
+the Core IR contract.
 
 ### 3.2 `LoweringStrategy`
 
@@ -117,10 +117,11 @@ LoweringStrategy:
   call_convention(callee_ty)   -> calling_convention
 ```
 
-P1 has exactly one implementation: `ArenaStrategy`. It assumes a
+The primary implementation is still `ArenaStrategy`. It assumes a
 single arena threaded through every function as an implicit
 parameter, allocates closures and ADT payloads in it, and emits
-copy-by-value for primitives.
+copy-by-value for primitives; sealed P6 region inference refines that
+plan for stack-eligible locals.
 
 ### 3.3 `Backend`
 
@@ -136,16 +137,17 @@ Backend:
 P1 implementations:
 
 - `ZigBackend` — emits `.zig` source, then drives `zig build-lib
-  -femit-llvm-bc` and `sbpf-linker` to produce the Solana BPF `.so`.
+  -femit-llvm-bc` and `sbpf-linker` to produce the Solana BPF `.so`,
+  or hosted Zig for native developer builds.
 - `Interpreter` — executes Core IR directly (does **not** go through
-  Lowered IR). Used for `omlz run`, REPL, and as a semantic oracle in
+  Lowered IR). Used for `omlz run` and as a semantic oracle in
   tests.
 
 Stub-only (signatures present, implementations empty):
 
 - `OCamlBackend` — kept only as a **non-shipping** sanity oracle for
   the stdlib. Not on the main path.
-- `LlvmBackend` — placeholder; do not implement until P5+.
+- `LlvmBackend` — placeholder for unsealed optional backend work outside P1-P8.
 
 ## 4. Architectural diagram
 
@@ -193,9 +195,9 @@ flowchart TD
 
 - **No re-typing inside the backend.** Types live on Core IR; backends
   trust them.
-- **No multi-pass optimisation in P1.** The Core IR is small enough
-  that the Zig backend can rely on `zig`'s optimiser. Constant-fold
-  and dead-code-elim only if a test case demands it.
-- **No incremental compilation in P1.** Whole-program every time.
+- **Optimisation is explicit and Core-IR-owned.** Sealed P8 added
+  constant folding, dead-code elimination, self-recursive TCO, and
+  small-function inlining ahead of lowering/codegen.
+- **No incremental compilation yet.** Whole-program every time.
 - **No package manager.** A program is a single file plus the bundled
   stdlib. Multi-file modules are P3.
