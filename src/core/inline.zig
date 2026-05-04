@@ -1172,7 +1172,8 @@ fn isBackendIntrinsicFunction(name: []const u8) bool {
         std.mem.eql(u8, name, "set_account_data") or
         std.mem.eql(u8, name, "transfer_sol") or
         std.mem.eql(u8, name, "vault_deposit") or
-        std.mem.eql(u8, name, "vault_withdraw");
+        std.mem.eql(u8, name, "vault_withdraw") or
+        std.mem.eql(u8, name, "pda_storage_process");
 }
 
 fn containsAppThroughParam(expr: ir.Expr, params: []const ir.Param) bool {

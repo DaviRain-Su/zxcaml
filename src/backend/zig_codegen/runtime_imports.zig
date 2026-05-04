@@ -371,6 +371,69 @@ pub fn emitCounterAppExpr(
         try append(out, allocator, "cpi.zxcaml_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
+    if (std.mem.eql(u8, name, "pda_storage_process")) {
+        if (app.args.len != 2) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_pda_accounts_witness_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "_ = omlz_pda_accounts_witness_{d};\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_pda_instruction_data_witness_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "_ = omlz_pda_instruction_data_witness_{d};\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "if (omlz_runtime_instruction_data.len < 9) break :blk");
+        try appendPrint(out, allocator, "{d} @as(i64, 1);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "if (omlz_runtime_instruction_data[0] == 0) {\n");
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "if (omlz_runtime_accounts.len < 4) break :blk{d} @as(i64, 1);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "const omlz_storage_{d} = omlz_runtime_accounts[1];\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "const omlz_user_{d} = omlz_runtime_accounts[2];\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "if (omlz_storage_{d}.data.len < 40) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "@memcpy(omlz_storage_{d}.data[0..32], omlz_user_{d}.key[0..]);\n", .{ block_id, block_id });
+        for (0..8) |index| {
+            try emitIndent(out, allocator, indent_level + 2);
+            try appendPrint(out, allocator, "omlz_storage_{d}.data[{d}] = omlz_runtime_instruction_data[{d}];\n", .{ block_id, 32 + index, 1 + index });
+        }
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "break :blk{d} @as(i64, 0);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try append(out, allocator, "} else if (omlz_runtime_instruction_data[0] == 1) {\n");
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "if (omlz_runtime_accounts.len < 2) break :blk{d} @as(i64, 1);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "const omlz_storage_{d} = omlz_runtime_accounts[0];\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "const omlz_user_{d} = omlz_runtime_accounts[1];\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "if (omlz_storage_{d}.data.len < 40) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "if (!std.mem.eql(u8, omlz_storage_{d}.data[0..32], omlz_user_{d}.key[0..])) break :blk{d} @as(i64, 1);\n", .{ block_id, block_id, block_id });
+        for (0..8) |index| {
+            try emitIndent(out, allocator, indent_level + 2);
+            try appendPrint(out, allocator, "omlz_storage_{d}.data[{d}] = omlz_runtime_instruction_data[{d}];\n", .{ block_id, 32 + index, 1 + index });
+        }
+        try emitIndent(out, allocator, indent_level + 2);
+        try appendPrint(out, allocator, "break :blk{d} @as(i64, 0);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "}} else break :blk{d} @as(i64, 1);\n", .{block_id});
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return true;
+    }
     return false;
 }
 
