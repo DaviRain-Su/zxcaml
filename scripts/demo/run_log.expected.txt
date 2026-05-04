@@ -1,0 +1,67 @@
+[2026-05-04T20:29:20+0800] START 00 setup
+==> ZxCaml Surfpool demo setup check
+repo: /Users/davirian/dev/active/ZxCaml
+OK: surfpool -> /Users/davirian/.cargo/bin/surfpool
+surfpool 0.10.8
+
+OK: solana -> /Users/davirian/.local/share/solana/install/active_release/bin/solana
+solana-cli 3.1.12 (src:6c1ba346; feat:4140108451, client:Agave)
+OK: solana-keygen -> /Users/davirian/.local/share/solana/install/active_release/bin/solana-keygen
+solana-keygen 3.1.12 (src:6c1ba346; feat:4140108451, client:Agave)
+OK: curl -> /usr/bin/curl
+curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.68.0
+Release-Date: 2024-03-27
+Protocols: dict file ftp ftps gopher gophers http https imap imaps ipfs ipns ldap ldaps mqtt pop3 pop3s rtsp smb smbs smtp smtps telnet tftp
+Features: alt-svc AsynchDNS GSS-API HSTS HTTP2 HTTPS-proxy IPv6 Kerberos Largefile libz MultiSSL NTLM SPNEGO SSL threadsafe UnixSockets
+OK: python3 -> /opt/homebrew/bin/python3
+Python 3.14.3
+OK: openssl -> /opt/homebrew/bin/openssl
+OpenSSL 3.6.2 7 Apr 2026 (Library: OpenSSL 3.6.2 7 Apr 2026)
+OK: omlz -> /Users/davirian/dev/active/ZxCaml/zig-out/bin/omlz
+READY: all demo prerequisites are available.
+[2026-05-04T20:29:20+0800] DONE  00 setup (0s)
+
+[2026-05-04T20:29:20+0800] START 01 build
+Built out/hackathon_greet.so
+Regenerated out/hackathon_greet.json
+[2026-05-04T20:29:21+0800] DONE  01 build (1s)
+
+[2026-05-04T20:29:21+0800] START 02 surfpool up
+Starting Surfpool on RPC http://127.0.0.1:8899 (log: /Users/davirian/dev/active/ZxCaml/.surfpool/logs/surfpool.log)
+Surfpool PID: 66906
+RPC ready at http://127.0.0.1:8899
+[2026-05-04T20:29:22+0800] DONE  02 surfpool up (1s)
+
+[2026-05-04T20:29:22+0800] START 03 deploy
+Payer: vYbeaJmtuXfyHNEsN3Fytp5A8pHtFiKk6faQwNZKGwD
+Program keypair: 79XC3VEDG9oxfoL7Y4ZPK96sUujf3dXzZ7LhWexkeyxx
+Funding payer on http://127.0.0.1:8899...
+Deploying /Users/davirian/dev/active/ZxCaml/out/hackathon_greet.so...
+Program Id: 79XC3VEDG9oxfoL7Y4ZPK96sUujf3dXzZ7LhWexkeyxx
+
+Signature: 3LvWbkvvNgiiGuA9aQqSwVmHWbTedJmjFVzHUMaVwjdrKohDopzDXrDCNUD49fTBbuh3669Cuf1zDDADecBHw2up
+Deployed program id: 79XC3VEDG9oxfoL7Y4ZPK96sUujf3dXzZ7LhWexkeyxx
+[2026-05-04T20:30:13+0800] DONE  03 deploy (51s)
+
+[2026-05-04T20:30:13+0800] START 04 invoke
+Program: 79XC3VEDG9oxfoL7Y4ZPK96sUujf3dXzZ7LhWexkeyxx
+Maker: DJaWQ2LJRe6omres1LrkVPYFcMaJDZdAySR2CjgSon52
+Greeting PDA: CHWXyG5xromm5sBfyA8F5vastbNRnPsy1oBsJVCJLzrL (bump=255, seeds=['greet', maker])
+Preparing Surfpool PDA account with surfnet_setAccount...
+Funding maker signer...
+init signature: 4WE1dxXDto8qVpW91gKMjf7XpsnycvN4dzf7WCtzogzv93TmpqgNHS4cHbmpJzvdqxuUEy1XuVeKeydvbpbNebU4
+greet 1 signature: 5p6XDYyXh7omwnSM7H4XGYNumQCh6bbWGbue5QpdWUjfdzGmbSpkmoFnycGTdwQL2M3ZrcVUNU4Jx2piHCAYw313
+greet 2 signature: 2DxLgUx1nC6uhFNpL2aZiysbEJctTbxZTZoyrNrBjPpdNag4tGRRwhGEn6yFmjRte9faLGUbBPSoQTypEBegKBZ4
+decoded maker: DJaWQ2LJRe6omres1LrkVPYFcMaJDZdAySR2CjgSon52
+decoded counter: 2
+SUCCESS: hackathon_greet counter=2
+[2026-05-04T20:31:04+0800] DONE  04 invoke (51s)
+
+[2026-05-04T20:31:04+0800] START 05 teardown
+Stopping Surfpool PID 66906...
+Surfpool PID 66906 still alive after 3s; sending SIGKILL.
+Removed /Users/davirian/dev/active/ZxCaml/.surfpool
+CLEAN: no surfpool processes remain.
+[2026-05-04T20:31:07+0800] DONE  05 teardown (3s)
+
+[2026-05-04T20:31:07+0800] SUCCESS: full demo completed in 107s.
