@@ -266,7 +266,11 @@ pub const RecordUpdate = struct {
     layout: layout.Layout,
 };
 
-/// In-place mutation of a writable Solana account field.
+/// AccountFieldSet is the sole mutating Core/ANF expression.
+/// It preserves ANF because account-field writes are effects threaded through
+/// let/program order, not nested as operands inside other expressions.
+/// The ANF lowering pass in src/core/anf/module.zig emits it from writable
+/// Solana account-field updates.
 pub const AccountFieldSet = struct {
     account_expr: *const Expr,
     field_name: []const u8,
