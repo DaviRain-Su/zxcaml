@@ -113,16 +113,38 @@ let parse_ocamlc_location ~input stderr =
         { Zxc_subset.file = input; line = 1; col = 0; end_line = 1; end_col = 0 })
 
 let parse_ocamlc_message stderr =
-  match
-    find_line
-      (fun line -> starts_with ~prefix:"Error:" (String.trim line))
-      stderr
-  with
-  | Some line ->
-      let trimmed = String.trim line in
-      String.trim
-        (String.sub trimmed (String.length "Error:")
-           (String.length trimmed - String.length "Error:"))
+  let lines = String.split_on_char '\n' stderr in
+  let is_blank line = String.trim line = "" in
+  let is_indented line =
+    String.length line > 0
+    &&
+    match line.[0] with
+    | ' ' | '\t' -> true
+    | _ -> false
+  in
+  let remove_error_prefix line =
+    let trimmed = String.trim line in
+    String.trim
+      (String.sub trimmed (String.length "Error:")
+         (String.length trimmed - String.length "Error:"))
+  in
+  let rec collect_continuations acc = function
+    | line :: rest when is_blank line -> List.rev acc
+    | line :: rest when is_indented line ->
+        collect_continuations (String.trim line :: acc) rest
+    | _ -> List.rev acc
+  in
+  let rec find_error_block = function
+    | [] -> None
+    | line :: rest ->
+        if starts_with ~prefix:"Error:" (String.trim line) then
+          Some (remove_error_prefix line :: collect_continuations [] rest)
+        else find_error_block rest
+  in
+  match find_error_block lines with
+  | Some parts ->
+      let parts = List.filter (fun part -> part <> "") parts in
+      String.concat " " parts
   | None ->
       let trimmed = String.trim stderr in
       if trimmed = "" then "ocamlc -bin-annot failed" else trimmed

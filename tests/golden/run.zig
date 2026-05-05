@@ -1,5 +1,4 @@
-//! Golden tests on Core IR: verify `omlz check --emit=core-ir` output
-//! matches committed `.core.snapshot` files.
+//! Golden tests on Core IR and frontend diagnostics.
 //!
 //! RESPONSIBILITIES:
 //! - Iterate every `.ml` in `tests/golden/`.
@@ -37,6 +36,21 @@ fn runCoreIr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stdout
     return .{ .stdout = result.stdout, .exit_code = exit_code };
 }
 
+/// Runs `omlz check <ml_file>` and returns (stderr, exit_code).
+/// Caller owns stderr and must free it.
+fn runCheckStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stderr: []u8, exit_code: u8 } {
+    const argv = [_][]const u8{ golden_options.omlz_bin, "check", ml_file };
+    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    allocator.free(result.stdout);
+
+    const exit_code: u8 = switch (result.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+
+    return .{ .stderr = result.stderr, .exit_code = exit_code };
+}
+
 /// Trims trailing newline from a slice, returning the trimmed view.
 fn trimTrailingNewline(s: []const u8) []const u8 {
     return std.mem.trimEnd(u8, s, "\n\r");
@@ -65,6 +79,19 @@ fn findFirstDiffLine(actual: []const u8, expected: []const u8) ?struct { line: u
     }
 }
 
+fn pathExists(io: Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
+fn containsExpectedOfTypeWithToken(stderr: []const u8) bool {
+    const phrase = "expected of type";
+    const start = std.mem.indexOf(u8, stderr, phrase) orelse return false;
+    const after = stderr[start + phrase.len ..];
+    const trimmed = std.mem.trim(u8, after, " \t\r\n");
+    return trimmed.len > 0 and !std.ascii.isWhitespace(trimmed[0]);
+}
+
 test "golden: Core IR snapshots match for all tests/golden/*.ml" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -83,6 +110,13 @@ test "golden: Core IR snapshots match for all tests/golden/*.ml" {
         const stem = name[0 .. name.len - 3];
         const snapshot_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.core.snapshot", .{stem});
         defer allocator.free(snapshot_path);
+
+        const stderr_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.stderr.txt", .{stem});
+        defer allocator.free(stderr_path);
+
+        if (pathExists(io, stderr_path)) {
+            continue;
+        }
 
         // Read expected snapshot
         const snapshot_data = cwd.readFileAlloc(io, snapshot_path, allocator, .limited(16384)) catch |err| {
@@ -126,6 +160,72 @@ test "golden: Core IR snapshots match for all tests/golden/*.ml" {
         std.debug.print("WARNING: no golden test pairs found in tests/golden/\n", .{});
     }
     try std.testing.expect(failures == 0);
+}
+
+test "golden: frontend stderr diagnostics match for tests/golden/*.stderr.txt fixtures" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const cwd = std.Io.Dir.cwd();
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, "tests/golden", ".stderr.txt");
+    defer test_util.freeStringList(allocator, names);
+
+    var tested: usize = 0;
+    var failures: usize = 0;
+
+    for (names) |name| {
+        const stem = name[0 .. name.len - ".stderr.txt".len];
+        const ml_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.ml", .{stem});
+        defer allocator.free(ml_path);
+
+        const expected_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}", .{name});
+        defer allocator.free(expected_path);
+
+        const expected_data = cwd.readFileAlloc(io, expected_path, allocator, .limited(65536)) catch |err| {
+            std.debug.print("GOLDEN STDERR SKIP: {s}: cannot read {s}: {s}\n", .{ ml_path, expected_path, @errorName(err) });
+            continue;
+        };
+        defer allocator.free(expected_data);
+
+        const result = try runCheckStderr(allocator, io, ml_path);
+        defer allocator.free(result.stderr);
+
+        if (result.exit_code == 0) {
+            std.debug.print("GOLDEN STDERR FAIL: {s}: omlz unexpectedly exited 0\n", .{ml_path});
+            failures += 1;
+            tested += 1;
+            continue;
+        }
+
+        const actual = trimTrailingNewline(result.stderr);
+        const expected = trimTrailingNewline(expected_data);
+
+        if (std.mem.eql(u8, actual, expected) and containsExpectedOfTypeWithToken(actual)) {
+            tested += 1;
+            continue;
+        }
+
+        if (!containsExpectedOfTypeWithToken(actual)) {
+            std.debug.print(
+                "GOLDEN STDERR FAIL: {s}: stderr lacks `expected of type` followed by a type token\n  actual: {s}\n",
+                .{ ml_path, actual },
+            );
+        } else if (findFirstDiffLine(actual, expected)) |diff| {
+            std.debug.print(
+                "GOLDEN STDERR FAIL: {s}: stderr line {d} differs\n  expected: {s}\n  actual:   {s}\n",
+                .{ ml_path, diff.line, diff.expected_line, diff.actual_line },
+            );
+        } else {
+            std.debug.print("GOLDEN STDERR FAIL: {s}: stderr length differs\n", .{ml_path});
+        }
+        failures += 1;
+        tested += 1;
+    }
+
+    if (tested == 0) {
+        std.debug.print("WARNING: no golden stderr fixtures found in tests/golden/\n", .{});
+    }
+    try std.testing.expectEqual(@as(usize, 0), failures);
 }
 
 test "golden: snapshot determinism — no memory addresses or timestamps" {
