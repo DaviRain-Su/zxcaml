@@ -4,11 +4,11 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.1`, the examples corpus contains 54
-`.ml` programs, the Mollusk SVM suite contains 21 integration tests, and P1-P8
+frontend bridge accepts sexp wire format `1.2`, the examples corpus contains 54
+`.ml` programs, the Mollusk SVM suite contains 21 integration tests, and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 
-## Completed phases (P1–P8)
+## Completed phases (P1–P9)
 
 | Phase | Status | One-line summary | Changelog citation |
 |---|---|---|---|
@@ -20,10 +20,28 @@ are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 | P6 | ✅ | Region inference: escape analysis, stack-region codegen for eligible locals, and region allocation examples. | [`[P6]`](../CHANGELOG.md#p6-region-inference---2026-04-30) |
 | P7 | ✅ | OCaml subset expansion: desugared surface forms, richer patterns, string/char support, and broader stdlib utilities. | [`[P7]`](../CHANGELOG.md#p7-ocaml-subset-expansion---2026-04-30) |
 | P8 | ✅ | Compiler optimizations: constant folding, dead-code elimination, self-recursive tail call optimization, function inlining, and mutual recursion groups. | [`[P8]`](../CHANGELOG.md#p8-compiler-optimizations---2026-05-01) |
+| P9 | ✅ sealed | Developer experience: rustc-style diagnostics, wire `1.2` location plumbing, `omlz-lsp`, and deterministic source maps with `omlz unmap`. | [`[P9 Developer Experience]`](../CHANGELOG.md#p9-developer-experience---2026-05-05) |
 
 Phases are **not** time-boxed in this document. They are scope-boxed, and a
 phase only moves into this table after the corresponding changelog section is
 present.
+
+### P9 — Developer Experience ✅ sealed
+
+P9 is sealed as a product-quality developer-experience pass spanning four
+milestones:
+
+- **DX1 — rustc-style diagnostics:** human diagnostics now render source
+  snippets with caret spans, with `--error-format=human|json|oneline` for
+  terminal, tooling, and CI use.
+- **DX2 — wire 1.2 location plumbing:** frontend sexps and Core IR preserve
+  OCaml locations so no_alloc, region, and subset failures can point at the
+  originating `.ml` span.
+- **LSP — `omlz-lsp`:** the stdio language server speaks LSP JSON-RPC and
+  publishes diagnostics for editor clients.
+- **SRCMAP — source maps:** BPF builds emit deterministic `.map` sidecars,
+  embed `.zxcaml.srcmap`, and let `omlz unmap` resolve program counters back to
+  OCaml source locations.
 
 ## Hackathon work (post-P8)
 
@@ -36,33 +54,12 @@ present.
   component scripts under `scripts/demo/`.
 - The public landing page for the current demo narrative is
   [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/), which presents the
-  P1-P8 compiler state and post-P8 hackathon assets without treating the demo as
+  P1-P9 compiler state and post-P8 hackathon assets without treating the demo as
   a new compiler phase.
-
-## P9 — Developer Experience (preview)
-
-**Status:** preview, not committed scope. P9 is a direction marker for the next
-possible product-quality pass; it is not a promise that the work below is
-scheduled or accepted as phase scope.
-
-Preview goals:
-
-- Improve diagnostics so frontend, Core IR, and BPF-lowering failures keep the
-  existing `path:line:col: severity: message` shape while adding more actionable
-  hints.
-- Sketch LSP-friendly output so editor integrations can consume stable
-  diagnostics and ranges without scraping human terminal text.
-- Raise error message quality for unsupported OCaml forms, no-allocation proof
-  failures, and runtime-shape mismatches.
-- Preserve source map fidelity from OCaml locations through sexp `1.1`, Core IR,
-  ANF/lowering, and generated Zig so later diagnostics can point back to the
-  original `.ml` span.
-- Make the `omlz check` UX more useful as the fast feedback path: clear summary,
-  deterministic ordering, and enough context for CI logs and local editor use.
 
 ## Future / optional
 
-The prose below is retained for optional ideas that are outside the sealed P1-P8
+The prose below is retained for optional ideas that are outside the sealed P1-P9
 compiler scope and outside the post-P8 hackathon/demo work.
 
 ### PX — Multi-target expansion (optional, gated)
@@ -135,12 +132,12 @@ make `omlz` produce one.
 - Not "make the language general-purpose". The BPF-shaped
   constraints (no GC, no syscalls, no threads, no exceptions) stay
   in place unless an ADR explicitly relaxes them per target.
-- Not part of the sealed P1-P8 deliverable set. It is intentionally placed after
+- Not part of the sealed P1-P9 deliverable set. It is intentionally placed after
   the main numbered phases, and is itself optional.
 
 #### Relationship to existing phases
 
-PX **does not block any earlier phase**. P1–P8 are sealed with BPF as
+PX **does not block any earlier phase**. P1–P9 are sealed with BPF as
 the only validated target. PX exists so that, when a real second target
 eventually shows up, it lands through a defined process instead of
 organically blurring the project's focus.

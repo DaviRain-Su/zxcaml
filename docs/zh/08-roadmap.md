@@ -2,9 +2,9 @@
 
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
-这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.1`，examples 语料包含 54 个 `.ml` 程序，Mollusk SVM 套件包含 21 个集成测试，并且 P1-P8 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
+这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.2`，examples 语料包含 54 个 `.ml` 程序，Mollusk SVM 套件包含 21 个集成测试，并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
 
-## 已完成阶段（P1–P8）
+## 已完成阶段（P1–P9）
 
 | 阶段 | 状态 | 一句话摘要 | Changelog 引用 |
 |---|---|---|---|
@@ -16,30 +16,28 @@
 | P6 | ✅ | Region inference：逃逸分析、符合条件局部值的 stack-region codegen，以及 region allocation 示例。 | [`[P6]`](../../CHANGELOG.md#p6-region-inference---2026-04-30) |
 | P7 | ✅ | OCaml 子集扩展：更多 surface desugar、更丰富的 pattern、string/char 支持，以及更宽的 stdlib 工具面。 | [`[P7]`](../../CHANGELOG.md#p7-ocaml-subset-expansion---2026-04-30) |
 | P8 | ✅ | 编译器优化：常量折叠、死代码删除、自递归尾调用优化、函数内联，以及 mutual recursion groups。 | [`[P8]`](../../CHANGELOG.md#p8-compiler-optimizations---2026-05-01) |
+| P9 | ✅ sealed | 开发者体验：rustc-style diagnostics、wire `1.2` location plumbing、`omlz-lsp`，以及带 `omlz unmap` 的确定性 source maps。 | [`[P9 Developer Experience]`](../../CHANGELOG.md#p9-developer-experience---2026-05-05) |
 
 阶段在这里不是按时间盒划分，而是按范围划定。只有当对应的 changelog section 已经存在，一个阶段才会进入这张已完成表。
+
+### P9 — 开发者体验 ✅ sealed
+
+P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone：
+
+- **DX1 — rustc-style diagnostics：** human diagnostics 现在带源码片段和 caret span，同时提供 `--error-format=human|json|oneline`，分别服务终端、工具和 CI。
+- **DX2 — wire 1.2 location plumbing：** frontend sexp 与 Core IR 保留 OCaml 位置，让 no_alloc、region 和 subset 错误能回指原始 `.ml` span。
+- **LSP — `omlz-lsp`：** stdio language server 使用 LSP JSON-RPC，为编辑器客户端推送 diagnostics。
+- **SRCMAP — source maps：** BPF 构建会生成确定性的 `.map` sidecar，嵌入 `.zxcaml.srcmap`，并通过 `omlz unmap` 把 program counter 映射回 OCaml 源位置。
 
 ## Hackathon 工作（P8 之后）
 
 - 已冻结的 hackathon package 由 [`docs/hackathon/README.md`](../hackathon/README.md) 建索引：timeline、双语 demo scripts、shot list、Colosseum submission copy、Anchor comparison artifacts、Slidev recording checklist，以及相关 demo script 链接。
 - 一键复现入口是从仓库根目录运行 `make demo`；同一个 hackathon 索引也指向 `make demo-clean` 以及 `scripts/demo/` 下的组件脚本。
-- 当前 demo 叙事的公开落地页是 [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/)。它呈现 P1-P8 的编译器状态和 P8 之后的 hackathon 资产，但不会把 demo 包装成新的编译器阶段。
-
-## P9 — 开发者体验（预览）
-
-**状态：** 预览，非承诺范围。P9 只是下一轮可能的产品质量提升方向标记；下面的内容并不表示这些工作已经排期，也不表示它们已被接受为阶段范围。
-
-预览目标：
-
-- 改进诊断信息：frontend、Core IR 和 BPF lowering 的失败仍保持现有 `path:line:col: severity: message` 形态，同时给出更可操作的提示。
-- 勾勒 LSP-friendly 输出，让编辑器集成可以消费稳定的 diagnostics 和 ranges，而不是抓取面向人的终端文本。
-- 提升 unsupported OCaml forms、no-allocation proof 失败，以及 runtime shape mismatch 的错误消息质量。
-- 保持 source map fidelity：从 OCaml 位置，经 sexp `1.1`、Core IR、ANF/lowering，到生成的 Zig，都尽量能回指原始 `.ml` span。
-- 让 `omlz check` 成为更有用的快速反馈路径：摘要清晰、顺序确定，并为 CI 日志和本地编辑器使用提供足够上下文。
+- 当前 demo 叙事的公开落地页是 [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/)。它呈现 P1-P9 的编译器状态和 P8 之后的 hackathon 资产，但不会把 demo 包装成新的编译器阶段。
 
 ## 未来 / 可选
 
-下面的内容保留给已封存 P1-P8 编译器范围之外、也不属于 P8 之后 hackathon/demo 工作的可选方向。
+下面的内容保留给已封存 P1-P9 编译器范围之外、也不属于 P8 之后 hackathon/demo 工作的可选方向。
 
 ### PX — 多目标扩展（可选，有门槛）
 
@@ -78,11 +76,11 @@ PX 留给那些不适用上述技巧的目标：也就是今天上游 OCaml 和 
 
 - 不是“支持所有 Zig 目标”。工具链覆盖广度并不等于 ZxCaml 支持广度。
 - 不是“把语言变成通用语言”。除非 ADR 明确按目标放宽，否则 BPF 形态约束（无 GC、无 syscall、无线程、无异常）继续成立。
-- 不是已封存 P1-P8 交付集合的一部分。它被刻意放在主编号阶段之后，并且自身也是可选项。
+- 不是已封存 P1-P9 交付集合的一部分。它被刻意放在主编号阶段之后，并且自身也是可选项。
 
 #### 与既有阶段的关系
 
-PX **不阻塞任何更早阶段**。P1-P8 已经以 BPF 作为唯一验证目标封存。PX 的意义是：当真正的第二个目标出现时，它通过定义好的流程进入项目，而不是自然生长、逐步模糊项目焦点。
+PX **不阻塞任何更早阶段**。P1-P9 已经以 BPF 作为唯一验证目标封存。PX 的意义是：当真正的第二个目标出现时，它通过定义好的流程进入项目，而不是自然生长、逐步模糊项目焦点。
 
 ### 自举（原 P6，可选）
 
