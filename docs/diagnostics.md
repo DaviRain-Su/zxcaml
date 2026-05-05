@@ -158,25 +158,25 @@ tools can key on codes instead of matching message text.
 
 | Stable code | Current alias | Diagnostic family | Status |
 | --- | --- | --- | --- |
-| `E0001` | `OCAML-FRONTEND` | OCaml parser/type-checker errors surfaced by `zxc-frontend`. | Reserved by DX1; currently emitted with the alias in JSON and human output. |
-| `E0002` | `P1-UNSUPPORTED` | Generic ZxCaml subset rejection from the typedtree subset checker. | Reserved by DX1; M-DX2 will split this into narrower codes. |
-| `E0003` | `M0-INTERNAL` | Internal frontend bridge error fallback. | Reserved for unexpected internal frontend failures. |
-| `E0010` | _n/a_ | Polymorphic variants. | Emitted for `Texp_variant`; polymorphic variants are outside the ZxCaml subset. |
-| `E0011` | _n/a_ | Float constants. | Emitted for `Const_float`; floats cannot be lowered to BPF. |
-| `E0012` | _n/a_ | Other unsupported constants. | Emitted for integer-width literals not represented in the current subset. |
-| `E0013` | _n/a_ | Mutable references and mutable updates. | Emitted for `ref`, `:=`, `!`, and mutable field writes. |
-| `E0014` | _n/a_ | First-class modules. | Emitted for `Texp_pack` and local module expressions. |
-| `E0015` | _n/a_ | Recursive modules. | Emitted for `Tstr_recmodule`; recursive modules are not yet supported. |
-| `E0016` | _n/a_ | Exceptions. | Emitted for `try` / exception declarations. |
-| `E0017` | _n/a_ | Loops. | Emitted for `for` / `while`; use recursion or higher-order functions. |
-| `E0018` | _n/a_ | Objects and method calls. | Emitted for OCaml object-oriented expression nodes. |
-| `E0019` | _n/a_ | Arrays. | Emitted for `Texp_array`. |
-| `E0020` | _n/a_ | Lazy expressions. | Emitted for `Texp_lazy`. |
-| `E0021` | _n/a_ | Binding operators. | Emitted for `Texp_letop`. |
-| `E0022` | _n/a_ | Unreachable expressions. | Emitted for `Texp_unreachable`. |
-| `E0023` | _n/a_ | Extension constructors. | Emitted for extension-constructor nodes. |
-| `E0024` | _n/a_ | Unknown constructors. | Emitted when a constructor is not present in the subset type environment. |
-| `E0090`–`E0099` | _n/a_ | Generic subset fallback buckets. | Used only when a more specific tailored subset code does not apply. |
+| E0001 | `OCAML-FRONTEND` | OCaml parser/type-checker errors surfaced by `zxc-frontend`. | Reserved by DX1; currently emitted with the alias in JSON and human output. |
+| E0002 | `P1-UNSUPPORTED` | Generic ZxCaml subset rejection from the typedtree subset checker. | Reserved by DX1; M-DX2 will split this into narrower codes. |
+| E0003 | `M0-INTERNAL` | Internal frontend bridge error fallback. | Reserved for unexpected internal frontend failures. |
+| E0010 | _n/a_ | Polymorphic variants. | Emitted for `Texp_variant`; polymorphic variants are outside the ZxCaml subset. |
+| E0011 | _n/a_ | Float constants. | Emitted for `Const_float`; floats cannot be lowered to BPF. |
+| E0012 | _n/a_ | Other unsupported constants. | Emitted for integer-width literals not represented in the current subset. |
+| E0013 | _n/a_ | Mutable references and mutable updates. | Emitted for `ref`, `:=`, `!`, and mutable field writes. |
+| E0014 | _n/a_ | First-class modules. | Emitted for `Texp_pack` and local module expressions. |
+| E0015 | _n/a_ | Recursive modules. | Emitted for `Tstr_recmodule`; recursive modules are not yet supported. |
+| E0016 | _n/a_ | Exceptions. | Emitted for `try` / exception declarations. |
+| E0017 | _n/a_ | Loops. | Emitted for `for` / `while`; use recursion or higher-order functions. |
+| E0018 | _n/a_ | Objects and method calls. | Emitted for OCaml object-oriented expression nodes. |
+| E0019 | _n/a_ | Arrays. | Emitted for `Texp_array`. |
+| E0020 | _n/a_ | Lazy expressions. | Emitted for `Texp_lazy`. |
+| E0021 | _n/a_ | Binding operators. | Emitted for `Texp_letop`. |
+| E0022 | _n/a_ | Unreachable expressions. | Emitted for `Texp_unreachable`. |
+| E0023 | _n/a_ | Extension constructors. | Emitted for extension-constructor nodes. |
+| E0024 | _n/a_ | Unknown constructors. | Emitted when a constructor is not present in the subset type environment. |
+| E0090–E0099 | _n/a_ | Generic subset fallback buckets. | Used only when a more specific tailored subset code does not apply. |
 
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
@@ -186,20 +186,34 @@ over parsing message text.
 DX2 bumps the frontend bridge wire from `1.1` to `1.2` so frontend-emitted
 S-expressions can carry source locations into the Zig bridge, following the
 minimum-invasive plan in `mission-internal/p9-investigation/report.md` §2. The
-previous canonical fact listed wire `1.1` in `mission-internal/canonical-facts.md`;
-the current implementation source of truth is now
-`src/frontend_bridge/sexp_parser.zig` (`expected_wire_version = "1.2"`).
+mission-local canonical facts snapshot,
+`mission-internal/canonical-facts.md`, is the historical citation for the
+pre-DX2 canonical wire value (`1.1`); the post-bump implementation source of
+truth is now `src/frontend_bridge/sexp_parser.zig`
+(`expected_wire_version = "1.2"`).
 
-Wire `1.2` may annotate an expression with:
+### Optional `(loc ...)` schema
+
+Wire `1.2` adds optional `(loc ...)` metadata and may annotate an expression
+with:
 
 ```text
 (located (loc <file> <line> <col> <end_line> <end_col>) <expr>)
 ```
 
-The location fields are the OCaml frontend span: one-based `line` /
-`end_line`, zero-based `col` / `end_col`, and the source file path reported by
-OCaml. The bridge also accepts a trailing `(loc ...)` field on expression nodes
-for tests and future printers.
+The `(loc ...)` tuple is optional. When present, its fields are:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `<file>` | string atom | Source file path reported by OCaml. |
+| `<line>` | integer | One-based start line. |
+| `<col>` | integer | Zero-based start column. |
+| `<end_line>` | integer | One-based end line. |
+| `<end_col>` | integer | Zero-based exclusive end column. |
+
+The bridge also accepts a trailing `(loc ...)` field on expression nodes for
+tests and future printers. When a wire `1.1` expression or compatibility blob
+omits the tuple, the bridge uses `Loc.unknown`.
 
 For one mission's deprecation window, `omlz check --wire=1.1 ...` forwards
 `--wire=1.1` to `zxc-frontend` and asks it to emit the old location-free shape.
