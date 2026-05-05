@@ -75,6 +75,18 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const lsp_root_module = b.createModule(.{
+        .root_source_file = b.path("src/lsp/lsp_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lsp_root_module.addOptions("build_options", build_options);
+
+    const lsp_exe = b.addExecutable(.{
+        .name = "omlz-lsp",
+        .root_module = lsp_root_module,
+    });
+
     const frontend_output = b.getInstallPath(.bin, "zxc-frontend");
     const install_bin_dir = std.fs.path.dirname(frontend_output).?;
     const make_install_bin = b.addSystemCommand(&.{ "mkdir", "-p", install_bin_dir });
@@ -107,6 +119,10 @@ pub fn build(b: *std.Build) void {
     const cleanup_frontend = b.addSystemCommand(cleanup_frontend_args.items);
     cleanup_frontend.step.dependOn(&frontend.step);
     b.getInstallStep().dependOn(&cleanup_frontend.step);
+
+    const install_lsp = b.addInstallArtifact(lsp_exe, .{});
+    install_lsp.step.dependOn(&cleanup_frontend.step);
+    b.getInstallStep().dependOn(&install_lsp.step);
 
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
@@ -296,6 +312,21 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_cli_tests.setCwd(b.path(""));
 
+    // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.
+    const lsp_scaffold_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/lsp/scaffold_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lsp_scaffold_test_module.addOptions("build_options", build_options);
+    lsp_scaffold_test_module.addImport("lsp_main", lsp_root_module);
+    const lsp_scaffold_tests = b.addTest(.{
+        .root_module = lsp_scaffold_test_module,
+    });
+    const run_lsp_scaffold_tests = b.addRunArtifact(lsp_scaffold_tests);
+    run_lsp_scaffold_tests.step.dependOn(b.getInstallStep());
+    run_lsp_scaffold_tests.setCwd(b.path(""));
+
     // Renderer tests (P9 / F-DX1-1): verify rustc-style diagnostic rendering.
     const render_test_module = b.createModule(.{
         .root_source_file = b.path("tests/cli/render_test.zig"),
@@ -436,6 +467,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_bridge_wire_compat_tests.step);
     test_step.dependOn(&run_core_loc_tests.step);
