@@ -332,6 +332,25 @@ pub fn build(b: *std.Build) void {
     const run_bridge_wire_compat_tests = b.addRunArtifact(bridge_wire_compat_tests);
     run_bridge_wire_compat_tests.setCwd(b.path(""));
 
+    // Core IR loc tests (P9 / F-DX2-3): verify wire loc survives Core passes
+    // while the default Core IR printer remains loc-free.
+    const core_loc_test_module = b.createModule(.{
+        .root_source_file = b.path("core_loc_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const core_loc_options = b.addOptions();
+    core_loc_options.addOption([]const u8, "zxc_frontend_bin", b.path("zig-out/bin/zxc-frontend").getPath(b));
+    core_loc_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    core_loc_test_module.addOptions("core_loc_options", core_loc_options);
+    core_loc_test_module.addOptions("build_options", build_options);
+    const core_loc_tests = b.addTest(.{
+        .root_module = core_loc_test_module,
+    });
+    const run_core_loc_tests = b.addRunArtifact(core_loc_tests);
+    run_core_loc_tests.step.dependOn(b.getInstallStep());
+    run_core_loc_tests.setCwd(b.path(""));
+
     // Codegen regression tests: compile focused `.ml` cases and inspect the
     // emitted Zig source.
     const codegen_external_bytes_test_module = b.createModule(.{
@@ -419,6 +438,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_bridge_wire_compat_tests.step);
+    test_step.dependOn(&run_core_loc_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);

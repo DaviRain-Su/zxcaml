@@ -23,6 +23,7 @@ pub const Site = struct {
     function_name: []const u8,
     kind: AllocationKind,
     detail: ?[]const u8 = null,
+    loc: ?ir.Loc = null,
 };
 
 /// Module-level no_alloc result.
@@ -128,14 +129,14 @@ const Analyzer = struct {
     fn checkLambda(self: *Analyzer, function_name: []const u8, lambda_expr: ir.Lambda, scope: *StringSet, is_top_level: bool) CheckError!?Site {
         if (!is_top_level) {
             if (lambda_expr.layout.region == .Arena and lambda_expr.layout.repr == .Boxed) {
-                return Site{ .function_name = function_name, .kind = .LambdaCapture };
+                return Site{ .function_name = function_name, .kind = .LambdaCapture, .loc = lambda_expr.loc };
             }
 
             var shadowed = StringSet.init(self.allocator);
             defer shadowed.deinit();
             for (lambda_expr.params) |param| try shadowed.put(param.name, {});
             if (try exprCapturesAny(self.allocator, lambda_expr.body.*, scope, &shadowed)) {
-                return Site{ .function_name = function_name, .kind = .LambdaCapture };
+                return Site{ .function_name = function_name, .kind = .LambdaCapture, .loc = lambda_expr.loc };
             }
         }
 
@@ -199,7 +200,7 @@ const Analyzer = struct {
                     if (try self.checkExpr(function_name, arg.*, scope)) |site| return site;
                 }
                 if (ctor_expr.args.len > 0) {
-                    return Site{ .function_name = function_name, .kind = .ConstructorPayload, .detail = ctor_expr.name };
+                    return Site{ .function_name = function_name, .kind = .ConstructorPayload, .detail = ctor_expr.name, .loc = ctor_expr.loc };
                 }
                 return null;
             },
@@ -222,14 +223,14 @@ const Analyzer = struct {
                 for (tuple_expr.items) |item| {
                     if (try self.checkExpr(function_name, item.*, scope)) |site| return site;
                 }
-                return Site{ .function_name = function_name, .kind = .Tuple };
+                return Site{ .function_name = function_name, .kind = .Tuple, .loc = tuple_expr.loc };
             },
             .TupleProj => |tuple_proj| return self.checkExpr(function_name, tuple_proj.tuple_expr.*, scope),
             .Record => |record_expr| {
                 for (record_expr.fields) |field| {
                     if (try self.checkExpr(function_name, field.value.*, scope)) |site| return site;
                 }
-                return Site{ .function_name = function_name, .kind = .Record };
+                return Site{ .function_name = function_name, .kind = .Record, .loc = record_expr.loc };
             },
             .RecordField => |record_field| return self.checkExpr(function_name, record_field.record_expr.*, scope),
             .RecordUpdate => |record_update| {
@@ -237,7 +238,7 @@ const Analyzer = struct {
                 for (record_update.fields) |field| {
                     if (try self.checkExpr(function_name, field.value.*, scope)) |site| return site;
                 }
-                return Site{ .function_name = function_name, .kind = .RecordUpdate };
+                return Site{ .function_name = function_name, .kind = .RecordUpdate, .loc = record_update.loc };
             },
             .AccountFieldSet => |field_set| {
                 if (try self.checkExpr(function_name, field_set.account_expr.*, scope)) |site| return site;

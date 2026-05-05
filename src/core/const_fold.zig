@@ -127,6 +127,7 @@ const FoldContext = struct {
     fn foldExprPtr(self: *FoldContext, expr: ir.Expr) FoldError!*const ir.Expr {
         const ptr = try self.allocator().create(ir.Expr);
         ptr.* = try self.foldExpr(expr);
+        ir.setExprLoc(ptr, ir.exprLoc(expr));
         return ptr;
     }
 

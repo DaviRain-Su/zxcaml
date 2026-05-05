@@ -214,6 +214,7 @@ const InlineContext = struct {
     fn inlineExprPtr(self: *InlineContext, expr: ir.Expr) InlineError!*const ir.Expr {
         const ptr = try self.allocator().create(ir.Expr);
         ptr.* = try self.inlineExpr(expr);
+        ir.setExprLoc(ptr, ir.exprLoc(expr));
         return ptr;
     }
 

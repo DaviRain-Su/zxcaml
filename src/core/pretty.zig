@@ -116,7 +116,11 @@ fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.De
     }
 }
 
-fn formatLoc(out: *std.ArrayList(u8), allocator: std.mem.Allocator, loc: ir.Loc) !void {
+fn formatLoc(out: *std.ArrayList(u8), allocator: std.mem.Allocator, maybe_loc: ?ir.Loc) !void {
+    const loc = maybe_loc orelse {
+        try append(out, allocator, "(loc _unknown_ 0 0 0 0)");
+        return;
+    };
     if (loc.isUnknown()) {
         try append(out, allocator, "(loc _unknown_ 0 0 0 0)");
         return;
@@ -130,7 +134,7 @@ fn formatLoc(out: *std.ArrayList(u8), allocator: std.mem.Allocator, loc: ir.Loc)
     });
 }
 
-fn exprLoc(expr: ir.Expr) ir.Loc {
+fn exprLoc(expr: ir.Expr) ?ir.Loc {
     return switch (expr) {
         .Lambda => |value| value.loc,
         .Constant => |value| value.loc,

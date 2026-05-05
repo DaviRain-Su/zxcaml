@@ -41,6 +41,7 @@ const DceContext = struct {
     fn eliminateExprPtr(self: *DceContext, expr: ir.Expr) DceError!*const ir.Expr {
         const ptr = try self.allocator().create(ir.Expr);
         ptr.* = try self.eliminateExpr(expr);
+        ir.setExprLoc(ptr, ir.exprLoc(expr));
         return ptr;
     }
 

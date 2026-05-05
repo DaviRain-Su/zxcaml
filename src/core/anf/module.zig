@@ -419,8 +419,8 @@ fn ttreeExprLoc(expr: ttree.Expr) ttree.Loc {
     };
 }
 
-fn lowerLoc(arena: *std.heap.ArenaAllocator, loc: ttree.Loc) LowerError!ir.Loc {
-    if (loc.isUnknown()) return ir.Loc.unknown;
+fn lowerLoc(arena: *std.heap.ArenaAllocator, loc: ttree.Loc) LowerError!?ir.Loc {
+    if (loc.isUnknown()) return null;
     return .{
         .file = try arena.allocator().dupe(u8, loc.file),
         .line = loc.line,

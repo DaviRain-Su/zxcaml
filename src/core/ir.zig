@@ -112,7 +112,7 @@ pub const Lambda = struct {
     body: *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Lambda parameter with a resolved type.
@@ -142,6 +142,52 @@ pub const Expr = union(enum) {
     AccountFieldSet: AccountFieldSet,
 };
 
+/// Returns the optional source location carried by any Core IR expression.
+pub fn exprLoc(expr: Expr) ?Loc {
+    return switch (expr) {
+        .Lambda => |value| value.loc,
+        .Constant => |value| value.loc,
+        .App => |value| value.loc,
+        .Let => |value| value.loc,
+        .LetGroup => |value| value.loc,
+        .Assert => |value| value.loc,
+        .If => |value| value.loc,
+        .Prim => |value| value.loc,
+        .Var => |value| value.loc,
+        .Ctor => |value| value.loc,
+        .Match => |value| value.loc,
+        .Tuple => |value| value.loc,
+        .TupleProj => |value| value.loc,
+        .Record => |value| value.loc,
+        .RecordField => |value| value.loc,
+        .RecordUpdate => |value| value.loc,
+        .AccountFieldSet => |value| value.loc,
+    };
+}
+
+/// Overwrites the optional source location on any Core IR expression.
+pub fn setExprLoc(expr: *Expr, loc: ?Loc) void {
+    switch (expr.*) {
+        .Lambda => |*value| value.loc = loc,
+        .Constant => |*value| value.loc = loc,
+        .App => |*value| value.loc = loc,
+        .Let => |*value| value.loc = loc,
+        .LetGroup => |*value| value.loc = loc,
+        .Assert => |*value| value.loc = loc,
+        .If => |*value| value.loc = loc,
+        .Prim => |*value| value.loc = loc,
+        .Var => |*value| value.loc = loc,
+        .Ctor => |*value| value.loc = loc,
+        .Match => |*value| value.loc = loc,
+        .Tuple => |*value| value.loc = loc,
+        .TupleProj => |*value| value.loc = loc,
+        .Record => |*value| value.loc = loc,
+        .RecordField => |*value| value.loc = loc,
+        .RecordUpdate => |*value| value.loc = loc,
+        .AccountFieldSet => |*value| value.loc = loc,
+    }
+}
+
 /// Function application expression.
 pub const App = struct {
     callee: *const Expr,
@@ -149,7 +195,7 @@ pub const App = struct {
     ty: Ty,
     layout: layout.Layout,
     is_tail_call: bool = false,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Lexically-scoped let expression in ANF form.
@@ -160,7 +206,7 @@ pub const LetExpr = struct {
     ty: Ty,
     layout: layout.Layout,
     is_rec: bool = false,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Lexically-scoped mutually recursive group in ANF form.
@@ -169,7 +215,7 @@ pub const LetGroupExpr = struct {
     body: *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Runtime assertion that traps when its boolean condition is false.
@@ -177,7 +223,7 @@ pub const AssertExpr = struct {
     condition: *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Conditional expression.
@@ -187,7 +233,7 @@ pub const IfExpr = struct {
     else_branch: *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Primitive integer/comparison operation.
@@ -196,7 +242,7 @@ pub const Prim = struct {
     args: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Primitive operations supported by the current Core IR.
@@ -225,7 +271,7 @@ pub const Constant = struct {
     value: ConstantValue,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Literal payload carried by a constant expression.
@@ -239,7 +285,7 @@ pub const Var = struct {
     name: []const u8,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Constructor expression for whitelisted option/result/list ADTs.
@@ -250,7 +296,7 @@ pub const Ctor = struct {
     layout: layout.Layout,
     tag: u32 = 0,
     type_name: ?[]const u8 = null,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Tuple construction expression.
@@ -258,7 +304,7 @@ pub const Tuple = struct {
     items: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Tuple projection expression.
@@ -267,7 +313,7 @@ pub const TupleProj = struct {
     index: usize,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Record construction expression.
@@ -275,7 +321,7 @@ pub const Record = struct {
     fields: []const RecordExprField,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// One field assignment in a record construction/update expression.
@@ -290,7 +336,7 @@ pub const RecordField = struct {
     field_name: []const u8,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Functional record update expression.
@@ -299,7 +345,7 @@ pub const RecordUpdate = struct {
     fields: []const RecordExprField,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// AccountFieldSet is the sole mutating Core/ANF expression.
@@ -313,7 +359,7 @@ pub const AccountFieldSet = struct {
     value: *const Expr,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// Pattern match expression; arms are evaluated top-to-bottom.
@@ -322,7 +368,7 @@ pub const Match = struct {
     arms: []const Arm,
     ty: Ty,
     layout: layout.Layout,
-    loc: Loc = Loc.unknown,
+    loc: ?Loc = null,
 };
 
 /// One pattern-match arm.
