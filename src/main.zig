@@ -636,12 +636,12 @@ fn runDoctor(init: std.process.Init) !void {
         &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" },
         &required_misses,
     );
-    try runOptionalDoctorCommand(init, "surfpool", &.{ "surfpool", "--version" });
+    try runSurfpoolDoctorProbe(init);
 
     if (required_misses != 0) {
         const summary = try std.fmt.allocPrint(
             init.arena.allocator(),
-            "summary: {d} required probe(s) missing\n",
+            "{d} required probes missing\n",
             .{required_misses},
         );
         try writeStderr(init.io, summary);
@@ -661,15 +661,6 @@ fn runRequiredDoctorCommand(
     } else {
         required_misses.* += 1;
         try writeDoctorProbeLine(init, .miss, name, result.detail);
-    }
-}
-
-fn runOptionalDoctorCommand(init: std.process.Init, name: []const u8, argv: []const []const u8) !void {
-    const result = runDoctorCommand(init, argv);
-    if (result.ok) {
-        try writeDoctorProbeLine(init, .ok, name, result.detail);
-    } else {
-        try writeDoctorProbeLine(init, .warn, name, result.detail);
     }
 }
 
@@ -698,23 +689,23 @@ fn runOcamlcDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
 fn runOpamSwitchDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
     const result = runDoctorCommand(init, &.{ "opam", "switch", "list" });
     if (result.ok and std.mem.indexOf(u8, result.detail, "zxcaml-p1") != null) {
-        try writeDoctorProbeLine(init, .ok, "opam switch", "zxcaml-p1 present");
+        try writeDoctorProbeLine(init, .ok, "opam-switch (zxcaml-p1)", "present");
         return;
     }
 
     if (result.ok) {
         const full_output = runDoctorCommandFullOutput(init, &.{ "opam", "switch", "list" });
         if (full_output.ok and std.mem.indexOf(u8, full_output.detail, "zxcaml-p1") != null) {
-            try writeDoctorProbeLine(init, .ok, "opam switch", "zxcaml-p1 present");
+            try writeDoctorProbeLine(init, .ok, "opam-switch (zxcaml-p1)", "present");
             return;
         }
         required_misses.* += 1;
-        try writeDoctorProbeLine(init, .miss, "opam switch", "zxcaml-p1 not listed");
+        try writeDoctorProbeLine(init, .miss, "opam-switch (zxcaml-p1)", "not listed");
         return;
     }
 
     required_misses.* += 1;
-    try writeDoctorProbeLine(init, .miss, "opam switch", result.detail);
+    try writeDoctorProbeLine(init, .miss, "opam-switch (zxcaml-p1)", result.detail);
 }
 
 fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
@@ -731,6 +722,15 @@ fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize) !vo
 
     required_misses.* += 1;
     try writeDoctorProbeLine(init, .miss, "sbpf-linker", result.detail);
+}
+
+fn runSurfpoolDoctorProbe(init: std.process.Init) !void {
+    const result = runDoctorCommand(init, &.{ "surfpool", "--version" });
+    if (result.ok or commandExistsOnPath(init, "surfpool")) {
+        try writeDoctorProbeLine(init, .ok, "surfpool", result.detail);
+    } else {
+        try writeDoctorProbeLine(init, .warn, "surfpool", result.detail);
+    }
 }
 
 fn runDoctorCommand(init: std.process.Init, argv: []const []const u8) DoctorCommandOutput {

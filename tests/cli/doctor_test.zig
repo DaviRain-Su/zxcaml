@@ -43,6 +43,17 @@ fn statusLineCount(output: []const u8) usize {
     return count;
 }
 
+fn statusLineAt(output: []const u8, wanted_index: usize) ?[]const u8 {
+    var status_index: usize = 0;
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        if (!startsWithStatus(line)) continue;
+        if (status_index == wanted_index) return line;
+        status_index += 1;
+    }
+    return null;
+}
+
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return true;
     if (haystack.len < needle.len) return false;
@@ -69,16 +80,17 @@ test "cli: doctor reports toolchain health" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    const required_needles = [_][]const u8{
+    const expected_order = [_][]const u8{
         "zig",
-        "opam",
+        "opam-switch (zxcaml-p1)",
         "ocamlc",
         "cargo",
         "sbpf-linker",
         "llvm-objcopy",
+        "surfpool",
     };
 
-    if (result.exit_code != 0 or statusLineCount(result.stdout) < 6) {
+    if (result.exit_code != 0 or statusLineCount(result.stdout) != expected_order.len) {
         std.debug.print(
             "omlz doctor failed expectations\nexit={d}\nstdout:\n{s}\nstderr:\n{s}\n",
             .{ result.exit_code, result.stdout, result.stderr },
@@ -86,9 +98,10 @@ test "cli: doctor reports toolchain health" {
     }
 
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
-    try std.testing.expect(statusLineCount(result.stdout) >= 6);
-    for (required_needles) |needle| {
-        try std.testing.expect(containsIgnoreCase(result.stdout, needle));
+    try std.testing.expectEqual(expected_order.len, statusLineCount(result.stdout));
+    for (expected_order, 0..) |needle, index| {
+        const line = statusLineAt(result.stdout, index) orelse return error.MissingStatusLine;
+        try std.testing.expect(containsIgnoreCase(line, needle));
     }
 }
 
