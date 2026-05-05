@@ -1,0 +1,1 @@
+{"file":"tests/golden/dx1_json_format.ml","line":1,"col":13,"end_line":1,"end_col":19,"severity":"error","code":"OCAML-FRONTEND","message":"This expression has type \"string\" but an expression was expected of type \"int\"","snippet":"let _: int = \"json\""}

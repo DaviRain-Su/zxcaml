@@ -142,7 +142,10 @@ test "golden: Core IR snapshots match for all tests/golden/*.ml" {
         const stderr_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.stderr.txt", .{stem});
         defer allocator.free(stderr_path);
 
-        if (pathExists(io, stderr_path)) {
+        const json_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.expected.jsonl", .{stem});
+        defer allocator.free(json_path);
+
+        if (pathExists(io, stderr_path) or pathExists(io, json_path)) {
             continue;
         }
 
@@ -252,6 +255,91 @@ test "golden: frontend stderr diagnostics match for tests/golden/*.stderr.txt fi
 
     if (tested == 0) {
         std.debug.print("WARNING: no golden stderr fixtures found in tests/golden/\n", .{});
+    }
+    try std.testing.expectEqual(@as(usize, 0), failures);
+}
+
+test "golden: JSON diagnostics match for tests/golden/*.expected.jsonl fixtures" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const cwd = std.Io.Dir.cwd();
+    const names = try test_util.listBasenamesWithSuffix(allocator, io, "tests/golden", ".expected.jsonl");
+    defer test_util.freeStringList(allocator, names);
+
+    var tested: usize = 0;
+    var failures: usize = 0;
+
+    for (names) |name| {
+        const stem = name[0 .. name.len - ".expected.jsonl".len];
+        const ml_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.ml", .{stem});
+        defer allocator.free(ml_path);
+
+        const expected_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}", .{name});
+        defer allocator.free(expected_path);
+
+        const expected_data = cwd.readFileAlloc(io, expected_path, allocator, .limited(65536)) catch |err| {
+            std.debug.print("GOLDEN JSON SKIP: {s}: cannot read {s}: {s}\n", .{ ml_path, expected_path, @errorName(err) });
+            continue;
+        };
+        defer allocator.free(expected_data);
+
+        const result = try runCheckJsonStderr(allocator, io, ml_path);
+        defer allocator.free(result.stderr);
+
+        if (result.exit_code == 0) {
+            std.debug.print("GOLDEN JSON FAIL: {s}: omlz unexpectedly exited 0\n", .{ml_path});
+            failures += 1;
+            tested += 1;
+            continue;
+        }
+
+        var parsed_lines = std.mem.splitScalar(u8, result.stderr, '\n');
+        while (parsed_lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0) continue;
+            var parsed = std.json.parseFromSlice(JsonDiagnostic, allocator, trimmed, .{
+                .ignore_unknown_fields = true,
+            }) catch |err| {
+                std.debug.print("GOLDEN JSON FAIL: {s}: unparseable JSON line `{s}`: {s}\n", .{
+                    ml_path,
+                    trimmed,
+                    @errorName(err),
+                });
+                failures += 1;
+                break;
+            };
+            defer parsed.deinit();
+
+            if (parsed.value.file.len == 0 or parsed.value.severity.len == 0 or parsed.value.message.len == 0) {
+                std.debug.print("GOLDEN JSON FAIL: {s}: required JSON diagnostic key is empty\n", .{ml_path});
+                failures += 1;
+                break;
+            }
+        }
+
+        const actual = trimTrailingNewline(result.stderr);
+        const expected = trimTrailingNewline(expected_data);
+
+        if (std.mem.eql(u8, actual, expected)) {
+            tested += 1;
+            continue;
+        }
+
+        if (findFirstDiffLine(actual, expected)) |diff| {
+            std.debug.print(
+                "GOLDEN JSON FAIL: {s}: stderr line {d} differs\n  expected: {s}\n  actual:   {s}\n",
+                .{ ml_path, diff.line, diff.expected_line, diff.actual_line },
+            );
+        } else {
+            std.debug.print("GOLDEN JSON FAIL: {s}: stderr length differs\n", .{ml_path});
+        }
+        failures += 1;
+        tested += 1;
+    }
+
+    if (tested == 0) {
+        std.debug.print("WARNING: no golden JSON fixtures found in tests/golden/\n", .{});
     }
     try std.testing.expectEqual(@as(usize, 0), failures);
 }

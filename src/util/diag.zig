@@ -70,7 +70,7 @@ pub fn render(
 ) !void {
     switch (options.error_format) {
         .human => renderHuman(writer, allocator, io, diagnostic, options) catch try renderOneline(writer, diagnostic),
-        .json => try renderJson(writer, diagnostic),
+        .json => try renderJson(writer, allocator, io, diagnostic),
         .oneline => try renderOneline(writer, diagnostic),
     }
 }
@@ -118,7 +118,16 @@ fn severityForRenderer(severity: []const u8) render_block.Severity {
     return .@"error";
 }
 
-fn renderJson(writer: *std.Io.Writer, diagnostic: Diagnostic) !void {
+/// Writes the P9 JSON-Lines diagnostic schema documented by
+/// DX1-FORMAT-JSON-001 / `docs/diagnostics.md`: required keys are
+/// `file`, `line`, `col`, `severity`, and `message`; span/code/snippet fields
+/// are emitted when available.  The snippet is plain source text with no ANSI.
+pub fn renderJson(
+    writer: *std.Io.Writer,
+    allocator: Allocator,
+    io: std.Io,
+    diagnostic: Diagnostic,
+) !void {
     try writer.writeByte('{');
     try writeJsonField(writer, "file", diagnostic.file, false);
     try writer.print(",\"line\":{d},\"col\":{d}", .{ diagnostic.line, diagnostic.col });
@@ -127,7 +136,26 @@ fn renderJson(writer: *std.Io.Writer, diagnostic: Diagnostic) !void {
     try writeJsonField(writer, "severity", diagnostic.severity, true);
     if (diagnostic.code) |code| try writeJsonField(writer, "code", code, true);
     try writeJsonField(writer, "message", diagnostic.message, true);
+    try renderJsonSnippet(writer, allocator, io, diagnostic);
     try writer.writeAll("}\n");
+}
+
+fn renderJsonSnippet(
+    writer: *std.Io.Writer,
+    allocator: Allocator,
+    io: std.Io,
+    diagnostic: Diagnostic,
+) !void {
+    const source = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        diagnostic.file,
+        allocator,
+        .limited(1024 * 1024),
+    ) catch return;
+    defer allocator.free(source);
+
+    const snippet = sourceLine(source, diagnostic.line) orelse return;
+    try writeJsonField(writer, "snippet", snippet, true);
 }
 
 fn writeJsonField(writer: *std.Io.Writer, name: []const u8, value: []const u8, leading_comma: bool) !void {
@@ -154,6 +182,19 @@ fn writeJsonString(writer: *std.Io.Writer, value: []const u8) !void {
         }
     }
     try writer.writeByte('"');
+}
+
+fn sourceLine(source: []const u8, one_based_line: u32) ?[]const u8 {
+    if (one_based_line == 0) return null;
+
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var current: u32 = 1;
+    while (lines.next()) |line_with_possible_cr| : (current += 1) {
+        if (current == one_based_line) {
+            return std.mem.trimEnd(u8, line_with_possible_cr, "\r");
+        }
+    }
+    return null;
 }
 
 test "parse flat frontend JSON diagnostic" {
@@ -200,4 +241,48 @@ test "parse accepts widened diagnostic envelope fields" {
     try std.testing.expectEqual(@as(u32, 8), parsed.value.end_col.?);
     try std.testing.expectEqualStrings("E0001", parsed.value.code.?);
     try std.testing.expectEqualStrings("", parsed.value.node_kind);
+}
+
+test "render JSON diagnostic line parses with required keys and snippet" {
+    const JsonDiagnostic = struct {
+        file: []const u8,
+        line: u32,
+        col: u32,
+        end_line: ?u32 = null,
+        end_col: ?u32 = null,
+        severity: []const u8,
+        code: ?[]const u8 = null,
+        message: []const u8,
+        snippet: ?[]const u8 = null,
+    };
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    try renderJson(&out.writer, std.testing.allocator, std.testing.io, .{
+        .file = "tests/golden/dx1_type_caret.ml",
+        .line = 1,
+        .col = 13,
+        .end_line = 1,
+        .end_col = 18,
+        .severity = "error",
+        .code = "OCAML-FRONTEND",
+        .message = "This expression has type \"string\" but an expression was expected of type \"int\"",
+    });
+
+    const rendered = try out.toOwnedSlice();
+    defer std.testing.allocator.free(rendered);
+
+    const first_line = std.mem.trimEnd(u8, rendered, "\n\r");
+    var parsed = try std.json.parseFromSlice(JsonDiagnostic, std.testing.allocator, first_line, .{
+        .ignore_unknown_fields = false,
+    });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("tests/golden/dx1_type_caret.ml", parsed.value.file);
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.line);
+    try std.testing.expectEqual(@as(u32, 13), parsed.value.col);
+    try std.testing.expectEqualStrings("error", parsed.value.severity);
+    try std.testing.expect(parsed.value.message.len > 0);
+    try std.testing.expectEqualStrings("let _: int = \"abc\"", parsed.value.snippet orelse "");
 }

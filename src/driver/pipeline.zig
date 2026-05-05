@@ -327,12 +327,7 @@ fn forwardFrontendStderr(io: Io, stderr: []const u8, options: diag.OutputOptions
             };
             defer parsed.deinit();
 
-            if (options.error_format == .json) {
-                try writer.writeAll(line);
-                try writer.writeAll("\n");
-            } else {
-                try diag.render(writer, std.heap.page_allocator, io, parsed.value, options);
-            }
+            try diag.render(writer, std.heap.page_allocator, io, parsed.value, options);
         } else {
             try writer.writeAll("[zxc-frontend] ");
             try writer.writeAll(line);
