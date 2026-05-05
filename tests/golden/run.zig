@@ -186,7 +186,10 @@ test "golden: Core IR snapshots match for all tests/golden/*.ml" {
         const json_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.expected.jsonl", .{stem});
         defer allocator.free(json_path);
 
-        if (pathExists(io, stderr_path) or pathExists(io, json_path)) {
+        const compile_fail_path = try std.fmt.allocPrint(allocator, "tests/golden/{s}.compile_fail", .{stem});
+        defer allocator.free(compile_fail_path);
+
+        if (pathExists(io, stderr_path) or pathExists(io, json_path) or pathExists(io, compile_fail_path)) {
             continue;
         }
 
