@@ -83,6 +83,21 @@ fn runNoAllocStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct {
     return .{ .stderr = result.stderr, .exit_code = exit_code };
 }
 
+/// Runs `omlz check --color=never <ml_file>` and returns (stderr, exit_code).
+/// Caller owns stderr and must free it.
+fn runRegionStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stderr: []u8, exit_code: u8 } {
+    const argv = [_][]const u8{ golden_options.omlz_bin, "check", "--color=never", ml_file };
+    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    allocator.free(result.stdout);
+
+    const exit_code: u8 = switch (result.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+
+    return .{ .stderr = result.stderr, .exit_code = exit_code };
+}
+
 const JsonDiagnostic = struct {
     file: []const u8,
     line: u32,
@@ -404,6 +419,19 @@ test "golden: no_alloc diagnostics cite source span without Core internals" {
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, fixture ++ ":") != null);
     try std.testing.expect(containsDigitColonDigit(result.stderr));
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Core.Constr(payload)") == null);
+}
+
+test "golden: region inference diagnostics cite source span" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const fixture = "tests/golden/dx2_region_fail.ml";
+
+    const result = try runRegionStderr(allocator, io, fixture);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, fixture ++ ":") != null);
+    try std.testing.expect(containsDigitColonDigit(result.stderr));
 }
 
 test "golden: snapshot determinism — no memory addresses or timestamps" {

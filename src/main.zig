@@ -25,6 +25,7 @@ const core_anf = @import("core/anf.zig");
 const core_const_fold = @import("core/const_fold.zig");
 const core_dce = @import("core/dce.zig");
 const core_inline = @import("core/inline.zig");
+const core_ir = @import("core/ir.zig");
 const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
 const arena_lower = @import("lower/arena.zig");
@@ -99,6 +100,7 @@ pub fn main(init: std.process.Init) !void {
                     try runNoAllocCheck(init, parsed.module, check_args.diagnostics);
                     return;
                 }
+                try runRegionInferenceCheck(init, parsed.module, check_args.diagnostics);
                 return;
             },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
@@ -625,6 +627,95 @@ fn noAllocFailureMessage(allocator: std.mem.Allocator, site: core_no_alloc.Site)
     );
 }
 
+fn runRegionInferenceCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, flags: DiagnosticFlags) !void {
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
+
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    _ = try inferRegionsOrExit(init, &core_arena, optimized_core_module, flags);
+}
+
+fn inferRegionsOrExit(
+    init: std.process.Init,
+    core_arena: *std.heap.ArenaAllocator,
+    optimized_core_module: core_ir.Module,
+    flags: DiagnosticFlags,
+) !core_ir.Module {
+    const result = region_infer.inferModuleChecked(core_arena, optimized_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to infer Core IR regions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    return switch (result) {
+        .Pass => |inferred| inferred,
+        .Fail => |site| {
+            try renderRegionFailure(init, site, flags);
+            std.process.exit(1);
+        },
+    };
+}
+
+fn renderRegionFailure(init: std.process.Init, site: region_infer.Site, flags: DiagnosticFlags) !void {
+    const message = try regionFailureMessage(init.gpa, site);
+    defer init.gpa.free(message);
+
+    const loc = site.loc orelse core_ir.Loc.unknown;
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(.stderr(), init.io, &buffer);
+    const writer = &file_writer.interface;
+    try diag.render(writer, init.gpa, init.io, .{
+        .file = loc.file,
+        .line = loc.line,
+        .col = loc.col,
+        .end_line = loc.end_line,
+        .end_col = loc.end_col,
+        .severity = "error",
+        .code = "DX2-REGION",
+        .message = message,
+    }, try diagnosticOutputOptions(init, flags));
+    try writer.flush();
+}
+
+fn regionFailureMessage(allocator: std.mem.Allocator, site: region_infer.Site) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "region inference failure: {s}",
+        .{region_infer.failureDescription(site.kind)},
+    );
+}
+
 /// Derives the `.core.snapshot` path from an `.ml` input path.
 fn deriveSnapshotPath(allocator: std.mem.Allocator, input_path: []const u8) ![]u8 {
     if (std.mem.endsWith(u8, input_path, ".ml")) {
@@ -780,12 +871,7 @@ fn buildNative(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const inferred_core_module = region_infer.inferModule(&core_arena, optimized_core_module) catch |err| {
-        try writeStderr(init.io, "error: failed to infer Core IR regions: ");
-        try writeStderr(init.io, @errorName(err));
-        try writeStderr(init.io, "\n");
-        std.process.exit(1);
-    };
+    const inferred_core_module = try inferRegionsOrExit(init, &core_arena, optimized_core_module, build_args.diagnostics);
 
     var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer lowered_arena.deinit();
@@ -864,12 +950,7 @@ fn buildBpf(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
-    const inferred_core_module = region_infer.inferModule(&core_arena, optimized_core_module) catch |err| {
-        try writeStderr(init.io, "error: failed to infer Core IR regions: ");
-        try writeStderr(init.io, @errorName(err));
-        try writeStderr(init.io, "\n");
-        std.process.exit(1);
-    };
+    const inferred_core_module = try inferRegionsOrExit(init, &core_arena, optimized_core_module, build_args.diagnostics);
 
     var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer lowered_arena.deinit();

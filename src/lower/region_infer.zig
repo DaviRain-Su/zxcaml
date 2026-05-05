@@ -13,6 +13,24 @@ const layout = @import("../core/layout.zig");
 /// Errors produced by the Core IR region inference pass.
 pub const InferError = std.mem.Allocator.Error;
 
+/// User-facing region inference failures that can be tied back to source.
+pub const FailureKind = enum {
+    EntrypointNotFound,
+    EntrypointNotFunction,
+};
+
+/// The Core IR site that made region inference fail for an executable check.
+pub const Site = struct {
+    kind: FailureKind,
+    loc: ?ir.Loc = null,
+};
+
+/// Region inference result with a diagnostic site for non-allocation failures.
+pub const CheckedResult = union(enum) {
+    Pass: ir.Module,
+    Fail: Site,
+};
+
 const BindingId = usize;
 
 const BindingStack = struct {
@@ -90,6 +108,46 @@ pub fn inferModule(arena: *std.heap.ArenaAllocator, module: ir.Module) InferErro
     };
 }
 
+/// Validates executable-entrypoint preconditions, then refines Core IR layouts.
+pub fn inferModuleChecked(arena: *std.heap.ArenaAllocator, module: ir.Module) InferError!CheckedResult {
+    if (entrypointFailure(module)) |site| return .{ .Fail = site };
+    return .{ .Pass = try inferModule(arena, module) };
+}
+
+/// Returns a stable user-facing description for a region failure kind.
+pub fn failureDescription(kind: FailureKind) []const u8 {
+    return switch (kind) {
+        .EntrypointNotFound => "region inference requires an `entrypoint` function",
+        .EntrypointNotFunction => "`entrypoint` must be a function for region inference",
+    };
+}
+
+fn entrypointFailure(module: ir.Module) ?Site {
+    var fallback_loc: ?ir.Loc = null;
+    for (module.decls) |decl| {
+        if (fallback_loc == null) fallback_loc = declLoc(decl);
+        switch (decl) {
+            .Let => |let_decl| {
+                if (std.mem.eql(u8, let_decl.name, "entrypoint")) {
+                    return switch (let_decl.value.*) {
+                        .Lambda => null,
+                        else => Site{ .kind = .EntrypointNotFunction, .loc = ir.exprLoc(let_decl.value.*) orelse fallback_loc },
+                    };
+                }
+            },
+            .LetGroup => {},
+        }
+    }
+    return Site{ .kind = .EntrypointNotFound, .loc = fallback_loc };
+}
+
+fn declLoc(decl: ir.Decl) ?ir.Loc {
+    return switch (decl) {
+        .Let => |let_decl| ir.exprLoc(let_decl.value.*),
+        .LetGroup => |group| if (group.bindings.len > 0) ir.exprLoc(group.bindings[0].value.*) else null,
+    };
+}
+
 fn inferTopLevelLetGroup(arena: *std.heap.ArenaAllocator, group: ir.LetGroup) InferError!ir.LetGroup {
     const bindings = try arena.allocator().alloc(ir.LetGroupBinding, group.bindings.len);
     for (group.bindings, 0..) |binding, index| {
@@ -131,6 +189,7 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .ty = app.ty,
             .layout = if (escape_context and app.layout.region == .Stack) arenaLayout(app.layout) else app.layout,
             .is_tail_call = app.is_tail_call,
+            .loc = app.loc,
         } },
         .Let => |let_expr| blk: {
             var ctx = AnalyzeContext.init(arena.allocator());
@@ -157,6 +216,7 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .condition = try inferExprPtr(arena, assert_expr.condition.*, false),
             .ty = assert_expr.ty,
             .layout = assert_expr.layout,
+            .loc = assert_expr.loc,
         } },
         .If => |if_expr| .{ .If = .{
             .cond = try inferExprPtr(arena, if_expr.cond.*, false),
@@ -164,12 +224,14 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .else_branch = try inferExprPtr(arena, if_expr.else_branch.*, escape_context),
             .ty = if_expr.ty,
             .layout = if_expr.layout,
+            .loc = if_expr.loc,
         } },
         .Prim => |prim| .{ .Prim = .{
             .op = prim.op,
             .args = try inferExprPtrs(arena, prim.args, false),
             .ty = prim.ty,
             .layout = if (escape_context and prim.layout.region == .Stack) arenaLayout(prim.layout) else prim.layout,
+            .loc = prim.loc,
         } },
         .Var => expr,
         .Ctor => |ctor| .{ .Ctor = .{
@@ -179,40 +241,47 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .layout = if (escape_context and ctor.layout.region == .Stack) arenaLayout(ctor.layout) else ctor.layout,
             .tag = ctor.tag,
             .type_name = ctor.type_name,
+            .loc = ctor.loc,
         } },
         .Match => |match_expr| .{ .Match = .{
             .scrutinee = try inferExprPtr(arena, match_expr.scrutinee.*, escape_context),
             .arms = try inferArms(arena, match_expr.arms, escape_context),
             .ty = match_expr.ty,
             .layout = match_expr.layout,
+            .loc = match_expr.loc,
         } },
         .Tuple => |tuple_expr| .{ .Tuple = .{
             .items = try inferExprPtrs(arena, tuple_expr.items, escape_context),
             .ty = tuple_expr.ty,
             .layout = if (escape_context and tuple_expr.layout.region == .Stack) arenaLayout(tuple_expr.layout) else tuple_expr.layout,
+            .loc = tuple_expr.loc,
         } },
         .TupleProj => |tuple_proj| .{ .TupleProj = .{
             .tuple_expr = try inferExprPtr(arena, tuple_proj.tuple_expr.*, false),
             .index = tuple_proj.index,
             .ty = tuple_proj.ty,
             .layout = tuple_proj.layout,
+            .loc = tuple_proj.loc,
         } },
         .Record => |record_expr| .{ .Record = .{
             .fields = try inferRecordFields(arena, record_expr.fields, escape_context),
             .ty = record_expr.ty,
             .layout = if (escape_context and record_expr.layout.region == .Stack) arenaLayout(record_expr.layout) else record_expr.layout,
+            .loc = record_expr.loc,
         } },
         .RecordField => |record_field| .{ .RecordField = .{
             .record_expr = try inferExprPtr(arena, record_field.record_expr.*, false),
             .field_name = record_field.field_name,
             .ty = record_field.ty,
             .layout = record_field.layout,
+            .loc = record_field.loc,
         } },
         .RecordUpdate => |record_update| .{ .RecordUpdate = .{
             .base_expr = try inferExprPtr(arena, record_update.base_expr.*, escape_context),
             .fields = try inferRecordFields(arena, record_update.fields, escape_context),
             .ty = record_update.ty,
             .layout = if (escape_context and record_update.layout.region == .Stack) arenaLayout(record_update.layout) else record_update.layout,
+            .loc = record_update.loc,
         } },
         .AccountFieldSet => |field_set| .{ .AccountFieldSet = .{
             .account_expr = try inferExprPtr(arena, field_set.account_expr.*, true),
@@ -220,6 +289,7 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .value = try inferExprPtr(arena, field_set.value.*, true),
             .ty = field_set.ty,
             .layout = field_set.layout,
+            .loc = field_set.loc,
         } },
     };
 }
@@ -237,6 +307,7 @@ fn inferLambda(arena: *std.heap.ArenaAllocator, lambda: ir.Lambda) InferError!ir
         .body = try clone.cloneExprPtr(lambda.body.*, true),
         .ty = lambda.ty,
         .layout = lambda.layout,
+        .loc = lambda.loc,
     };
 }
 
@@ -256,6 +327,7 @@ fn inferLetGroupExpr(arena: *std.heap.ArenaAllocator, group: ir.LetGroupExpr, es
         .body = body,
         .ty = group.ty,
         .layout = group.layout,
+        .loc = group.loc,
     };
 }
 
@@ -668,6 +740,7 @@ const CloneContext = struct {
             .ty = let_expr.ty,
             .layout = exprLayout(cloned_body.*),
             .is_rec = let_expr.is_rec,
+            .loc = let_expr.loc,
         };
     }
 
@@ -695,6 +768,7 @@ const CloneContext = struct {
                 .ty = app.ty,
                 .layout = if (escape_context and app.layout.region == .Stack) arenaLayout(app.layout) else app.layout,
                 .is_tail_call = app.is_tail_call,
+                .loc = app.loc,
             } },
             .Let => |let_expr| .{ .Let = try self.cloneLetExpr(let_expr, escape_context) },
             .LetGroup => |group| .{ .LetGroup = try inferLetGroupExprFromClone(self, group, escape_context) },
@@ -702,6 +776,7 @@ const CloneContext = struct {
                 .condition = try self.cloneExprPtr(assert_expr.condition.*, false),
                 .ty = assert_expr.ty,
                 .layout = assert_expr.layout,
+                .loc = assert_expr.loc,
             } },
             .If => |if_expr| .{ .If = .{
                 .cond = try self.cloneExprPtr(if_expr.cond.*, false),
@@ -709,17 +784,20 @@ const CloneContext = struct {
                 .else_branch = try self.cloneExprPtr(if_expr.else_branch.*, escape_context),
                 .ty = if_expr.ty,
                 .layout = if_expr.layout,
+                .loc = if_expr.loc,
             } },
             .Prim => |prim| .{ .Prim = .{
                 .op = prim.op,
                 .args = try self.cloneExprPtrs(prim.args, false),
                 .ty = prim.ty,
                 .layout = if (escape_context and prim.layout.region == .Stack) arenaLayout(prim.layout) else prim.layout,
+                .loc = prim.loc,
             } },
             .Var => |var_ref| .{ .Var = .{
                 .name = var_ref.name,
                 .ty = var_ref.ty,
                 .layout = if (self.scopes.current(var_ref.name)) |id| self.layouts.get(id) orelse var_ref.layout else var_ref.layout,
+                .loc = var_ref.loc,
             } },
             .Ctor => |ctor| .{ .Ctor = .{
                 .name = ctor.name,
@@ -728,40 +806,47 @@ const CloneContext = struct {
                 .layout = if (escape_context and ctor.layout.region == .Stack) arenaLayout(ctor.layout) else ctor.layout,
                 .tag = ctor.tag,
                 .type_name = ctor.type_name,
+                .loc = ctor.loc,
             } },
             .Match => |match_expr| .{ .Match = .{
                 .scrutinee = try self.cloneExprPtr(match_expr.scrutinee.*, escape_context),
                 .arms = try self.cloneArms(match_expr.arms, escape_context),
                 .ty = match_expr.ty,
                 .layout = match_expr.layout,
+                .loc = match_expr.loc,
             } },
             .Tuple => |tuple_expr| .{ .Tuple = .{
                 .items = try self.cloneExprPtrs(tuple_expr.items, escape_context),
                 .ty = tuple_expr.ty,
                 .layout = if (escape_context and tuple_expr.layout.region == .Stack) arenaLayout(tuple_expr.layout) else tuple_expr.layout,
+                .loc = tuple_expr.loc,
             } },
             .TupleProj => |tuple_proj| .{ .TupleProj = .{
                 .tuple_expr = try self.cloneExprPtr(tuple_proj.tuple_expr.*, false),
                 .index = tuple_proj.index,
                 .ty = tuple_proj.ty,
                 .layout = tuple_proj.layout,
+                .loc = tuple_proj.loc,
             } },
             .Record => |record_expr| .{ .Record = .{
                 .fields = try self.cloneRecordFields(record_expr.fields, escape_context),
                 .ty = record_expr.ty,
                 .layout = if (escape_context and record_expr.layout.region == .Stack) arenaLayout(record_expr.layout) else record_expr.layout,
+                .loc = record_expr.loc,
             } },
             .RecordField => |record_field| .{ .RecordField = .{
                 .record_expr = try self.cloneExprPtr(record_field.record_expr.*, false),
                 .field_name = record_field.field_name,
                 .ty = record_field.ty,
                 .layout = record_field.layout,
+                .loc = record_field.loc,
             } },
             .RecordUpdate => |record_update| .{ .RecordUpdate = .{
                 .base_expr = try self.cloneExprPtr(record_update.base_expr.*, escape_context),
                 .fields = try self.cloneRecordFields(record_update.fields, escape_context),
                 .ty = record_update.ty,
                 .layout = if (escape_context and record_update.layout.region == .Stack) arenaLayout(record_update.layout) else record_update.layout,
+                .loc = record_update.loc,
             } },
             .AccountFieldSet => |field_set| .{ .AccountFieldSet = .{
                 .account_expr = try self.cloneExprPtr(field_set.account_expr.*, true),
@@ -769,6 +854,7 @@ const CloneContext = struct {
                 .value = try self.cloneExprPtr(field_set.value.*, true),
                 .ty = field_set.ty,
                 .layout = field_set.layout,
+                .loc = field_set.loc,
             } },
         };
     }
@@ -812,6 +898,7 @@ const CloneContext = struct {
             .body = try self.cloneExprPtr(lambda.body.*, true),
             .ty = lambda.ty,
             .layout = lambda.layout,
+            .loc = lambda.loc,
         };
     }
 
@@ -909,7 +996,7 @@ fn inferLetGroupExprFromClone(self: *CloneContext, group: ir.LetGroupExpr, escap
         };
     }
     const body = try self.cloneExprPtr(group.body.*, escape_context);
-    return .{ .bindings = bindings, .body = body, .ty = group.ty, .layout = group.layout };
+    return .{ .bindings = bindings, .body = body, .ty = group.ty, .layout = group.layout, .loc = group.loc };
 }
 
 fn isPrimitiveStackCandidate(expr: ir.Expr) bool {
@@ -931,11 +1018,13 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .body = lambda.body,
             .ty = lambda.ty,
             .layout = new_layout,
+            .loc = lambda.loc,
         } },
         .Constant => |constant| .{ .Constant = .{
             .value = constant.value,
             .ty = constant.ty,
             .layout = new_layout,
+            .loc = constant.loc,
         } },
         .App => |app| .{ .App = .{
             .callee = app.callee,
@@ -943,6 +1032,7 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .ty = app.ty,
             .layout = new_layout,
             .is_tail_call = app.is_tail_call,
+            .loc = app.loc,
         } },
         .Let => |let_expr| .{ .Let = .{
             .name = let_expr.name,
@@ -951,12 +1041,14 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .ty = let_expr.ty,
             .layout = new_layout,
             .is_rec = let_expr.is_rec,
+            .loc = let_expr.loc,
         } },
-        .LetGroup => |group| .{ .LetGroup = .{ .bindings = group.bindings, .body = group.body, .ty = group.ty, .layout = new_layout } },
+        .LetGroup => |group| .{ .LetGroup = .{ .bindings = group.bindings, .body = group.body, .ty = group.ty, .layout = new_layout, .loc = group.loc } },
         .Assert => |assert_expr| .{ .Assert = .{
             .condition = assert_expr.condition,
             .ty = assert_expr.ty,
             .layout = new_layout,
+            .loc = assert_expr.loc,
         } },
         .If => |if_expr| .{ .If = .{
             .cond = if_expr.cond,
@@ -964,17 +1056,20 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .else_branch = if_expr.else_branch,
             .ty = if_expr.ty,
             .layout = new_layout,
+            .loc = if_expr.loc,
         } },
         .Prim => |prim| .{ .Prim = .{
             .op = prim.op,
             .args = prim.args,
             .ty = prim.ty,
             .layout = new_layout,
+            .loc = prim.loc,
         } },
         .Var => |var_ref| .{ .Var = .{
             .name = var_ref.name,
             .ty = var_ref.ty,
             .layout = new_layout,
+            .loc = var_ref.loc,
         } },
         .Ctor => |ctor| .{ .Ctor = .{
             .name = ctor.name,
@@ -983,40 +1078,47 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .layout = new_layout,
             .tag = ctor.tag,
             .type_name = ctor.type_name,
+            .loc = ctor.loc,
         } },
         .Match => |match_expr| .{ .Match = .{
             .scrutinee = match_expr.scrutinee,
             .arms = match_expr.arms,
             .ty = match_expr.ty,
             .layout = new_layout,
+            .loc = match_expr.loc,
         } },
         .Tuple => |tuple_expr| .{ .Tuple = .{
             .items = tuple_expr.items,
             .ty = tuple_expr.ty,
             .layout = new_layout,
+            .loc = tuple_expr.loc,
         } },
         .TupleProj => |tuple_proj| .{ .TupleProj = .{
             .tuple_expr = tuple_proj.tuple_expr,
             .index = tuple_proj.index,
             .ty = tuple_proj.ty,
             .layout = new_layout,
+            .loc = tuple_proj.loc,
         } },
         .Record => |record_expr| .{ .Record = .{
             .fields = record_expr.fields,
             .ty = record_expr.ty,
             .layout = new_layout,
+            .loc = record_expr.loc,
         } },
         .RecordField => |record_field| .{ .RecordField = .{
             .record_expr = record_field.record_expr,
             .field_name = record_field.field_name,
             .ty = record_field.ty,
             .layout = new_layout,
+            .loc = record_field.loc,
         } },
         .RecordUpdate => |record_update| .{ .RecordUpdate = .{
             .base_expr = record_update.base_expr,
             .fields = record_update.fields,
             .ty = record_update.ty,
             .layout = new_layout,
+            .loc = record_update.loc,
         } },
         .AccountFieldSet => |field_set| .{ .AccountFieldSet = .{
             .account_expr = field_set.account_expr,
@@ -1024,6 +1126,7 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .value = field_set.value,
             .ty = field_set.ty,
             .layout = new_layout,
+            .loc = field_set.loc,
         } },
     };
 }
