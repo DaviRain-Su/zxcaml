@@ -338,6 +338,26 @@ pub fn build(b: *std.Build) void {
     run_srcmap_cli_tests.step.dependOn(&run_determinism_tests.step);
     run_srcmap_cli_tests.setCwd(b.path(""));
 
+    // Source-map unmap CLI integration tests (P9 / F-SRCMAP-5): verify
+    // reverse PC lookup from both sidecar JSON and embedded ELF section.
+    const unmap_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/unmap_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const unmap_cli_options = b.addOptions();
+    unmap_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    unmap_cli_test_module.addOptions("cli_options", unmap_cli_options);
+    unmap_cli_test_module.addImport("srcmap", srcmap_module);
+    const unmap_cli_tests = b.addTest(.{
+        .root_module = unmap_cli_test_module,
+    });
+    const run_unmap_cli_tests = b.addRunArtifact(unmap_cli_tests);
+    run_unmap_cli_tests.step.dependOn(b.getInstallStep());
+    // Reuse the source-map build harness ordering to avoid races on out/program.zig.
+    run_unmap_cli_tests.step.dependOn(&run_srcmap_cli_tests.step);
+    run_unmap_cli_tests.setCwd(b.path(""));
+
     // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.
     const lsp_scaffold_test_module = b.createModule(.{
         .root_source_file = b.path("tests/lsp/scaffold_test.zig"),
@@ -457,7 +477,7 @@ pub fn build(b: *std.Build) void {
     // This harness invokes `omlz build`, which writes out/program.zig. Keep it
     // after the determinism harness, which also exercises native builds.
     run_codegen_external_bytes_tests.step.dependOn(&run_determinism_tests.step);
-    run_codegen_external_bytes_tests.step.dependOn(&run_srcmap_cli_tests.step);
+    run_codegen_external_bytes_tests.step.dependOn(&run_unmap_cli_tests.step);
     run_codegen_external_bytes_tests.step.dependOn(b.getInstallStep());
     run_codegen_external_bytes_tests.setCwd(b.path(""));
 
@@ -527,6 +547,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
+    test_step.dependOn(&run_unmap_cli_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);
     test_step.dependOn(&run_lsp_harness.step);

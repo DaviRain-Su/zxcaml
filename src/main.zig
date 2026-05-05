@@ -65,6 +65,19 @@ pub fn main(init: std.process.Init) !void {
             try writeRunHelp(init.io);
             return;
         }
+        if (std.mem.eql(u8, args[1], "unmap")) {
+            try writeUnmapHelp(init.io);
+            return;
+        }
+    }
+
+    if (args.len >= 3 and std.mem.eql(u8, args[1], "unmap")) {
+        const unmap_args = parseUnmapArgs(args) catch {
+            try writeStderr(init.io, "error: unsupported unmap option; run `omlz unmap --help` for usage.\n");
+            std.process.exit(1);
+        };
+        try runUnmap(init, unmap_args);
+        return;
     }
 
     if (args.len >= 3 and std.mem.eql(u8, args[1], "check")) {
@@ -211,6 +224,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\  omlz run <file.ml>
+        \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
         \\
     );
 }
@@ -286,6 +300,22 @@ fn writeRunHelp(io: Io) !void {
         \\                   Select diagnostic output format (default: human).
         \\  --color=auto|always|never
         \\                   Control ANSI colors in human diagnostics (default: auto).
+        \\
+    );
+}
+
+fn writeUnmapHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
+        \\
+        \\Looks up a BPF program counter in a ZxCaml source map.  The map may be
+        \\read from the JSON sidecar or from the .zxcaml.srcmap ELF section.
+        \\
+        \\Flags:
+        \\  --pc <addr>       Program counter to look up (decimal or 0x-prefixed hex).
+        \\  --map <file.map>  Read a source-map sidecar JSON file.
+        \\  --so <file.so>    Read the embedded .zxcaml.srcmap ELF section.
         \\
     );
 }
@@ -402,6 +432,16 @@ const InputSubcommandArgs = struct {
     diagnostics: DiagnosticFlags = .{},
 };
 
+const SourceMapSource = union(enum) {
+    map: []const u8,
+    so: []const u8,
+};
+
+const UnmapArgs = struct {
+    pc: u32,
+    source: SourceMapSource,
+};
+
 fn parseInputSubcommandArgs(args: []const []const u8) !InputSubcommandArgs {
     var input_file: ?[]const u8 = null;
     var diagnostics: DiagnosticFlags = .{};
@@ -424,6 +464,55 @@ fn parseInputSubcommandArgs(args: []const []const u8) !InputSubcommandArgs {
         .input_file = input_file orelse return error.UnsupportedInputSubcommandArgs,
         .diagnostics = diagnostics,
     };
+}
+
+fn parseUnmapArgs(args: []const []const u8) !UnmapArgs {
+    var pc: ?u32 = null;
+    var source: ?SourceMapSource = null;
+
+    var index: usize = 2;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--pc")) {
+            index += 1;
+            if (index >= args.len) return error.UnsupportedUnmapArgs;
+            pc = try parsePc(args[index]);
+        } else if (std.mem.startsWith(u8, arg, "--pc=")) {
+            pc = try parsePc(arg["--pc=".len..]);
+        } else if (std.mem.eql(u8, arg, "--map")) {
+            if (source != null) return error.UnsupportedUnmapArgs;
+            index += 1;
+            if (index >= args.len) return error.UnsupportedUnmapArgs;
+            source = .{ .map = args[index] };
+        } else if (std.mem.startsWith(u8, arg, "--map=")) {
+            if (source != null) return error.UnsupportedUnmapArgs;
+            source = .{ .map = arg["--map=".len..] };
+        } else if (std.mem.eql(u8, arg, "--so")) {
+            if (source != null) return error.UnsupportedUnmapArgs;
+            index += 1;
+            if (index >= args.len) return error.UnsupportedUnmapArgs;
+            source = .{ .so = args[index] };
+        } else if (std.mem.startsWith(u8, arg, "--so=")) {
+            if (source != null) return error.UnsupportedUnmapArgs;
+            source = .{ .so = arg["--so=".len..] };
+        } else {
+            return error.UnsupportedUnmapArgs;
+        }
+    }
+
+    return .{
+        .pc = pc orelse return error.UnsupportedUnmapArgs,
+        .source = source orelse return error.UnsupportedUnmapArgs,
+    };
+}
+
+fn parsePc(text: []const u8) !u32 {
+    if (text.len == 0) return error.InvalidProgramCounter;
+    const raw = if (std.mem.startsWith(u8, text, "0x") or std.mem.startsWith(u8, text, "0X"))
+        try std.fmt.parseInt(u64, text[2..], 16)
+    else
+        try std.fmt.parseInt(u64, text, 10);
+    return std.math.cast(u32, raw) orelse error.InvalidProgramCounter;
 }
 
 fn parseDiagnosticFlag(arg: []const u8, flags: *DiagnosticFlags) !bool {
@@ -1062,6 +1151,55 @@ fn emitSourceMapSidecar(context: *anyopaque, build: driver_bpf.SourceMapBuild) a
         .data = bytes,
         .flags = .{ .truncate = true },
     });
+}
+
+fn runUnmap(init: std.process.Init, unmap_args: UnmapArgs) !void {
+    const map_bytes = switch (unmap_args.source) {
+        .map => |path| std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .limited(16 * 1024 * 1024)) catch |err| {
+            try writeSourceMapLoadError(init.io, path, err);
+            std.process.exit(1);
+        },
+        .so => |path| driver_srcmap.readEmbeddedSectionJson(init.gpa, init.io, path) catch |err| {
+            try writeSourceMapLoadError(init.io, path, err);
+            std.process.exit(1);
+        },
+    };
+    defer init.gpa.free(map_bytes);
+
+    var parsed = driver_srcmap.deserializeJson(init.gpa, map_bytes) catch |err| {
+        try writeStderr(init.io, "error: invalid source map: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer parsed.deinit();
+
+    const lookup = driver_srcmap.lookupPc(parsed.value, unmap_args.pc) orelse {
+        try writeNoSourceMapEntry(init.io, unmap_args.pc);
+        std.process.exit(1);
+    };
+
+    const rendered = try std.fmt.allocPrint(
+        init.gpa,
+        "{s}{s}:{d}:{d}\n",
+        .{ if (lookup.exact) "" else "~", lookup.entry.ml_file, lookup.entry.ml_line, lookup.entry.ml_col },
+    );
+    defer init.gpa.free(rendered);
+    try writeStdout(init.io, rendered);
+}
+
+fn writeSourceMapLoadError(io: Io, path: []const u8, err: anyerror) !void {
+    try writeStderr(io, "error: failed to load source map from ");
+    try writeStderr(io, path);
+    try writeStderr(io, ": ");
+    try writeStderr(io, @errorName(err));
+    try writeStderr(io, "\n");
+}
+
+fn writeNoSourceMapEntry(io: Io, pc: u32) !void {
+    var buffer: [64]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buffer, "error: no source map entry for pc=0x{x}\n", .{pc});
+    try writeStderr(io, rendered);
 }
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
