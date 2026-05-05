@@ -979,9 +979,21 @@ fn buildBpf(
         .flags = .{ .truncate = true },
     });
 
+    const source_map_program = try sourceMapProgramName(init.gpa, build_args.input_file);
+    defer init.gpa.free(source_map_program);
+    var source_map_sink: u8 = 0;
+
     driver_bpf.buildBpf(init.gpa, init.io, .{
         .output_path = build_args.output_path,
         .environ = init.minimal.environ,
+        .source_map = .{
+            .program = source_map_program,
+            .module = inferred_core_module,
+        },
+        .source_map_hook = .{
+            .context = &source_map_sink,
+            .emit = discardSourceMap,
+        },
     }) catch |err| {
         if (err != error.SbpfLinkerMissing) {
             try writeStderr(init.io, "error: BPF build failed: ");
@@ -991,6 +1003,14 @@ fn buildBpf(
         std.process.exit(1);
     };
 }
+
+fn sourceMapProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]const u8 {
+    const base = std.fs.path.basename(input_file);
+    const stem = if (std.mem.endsWith(u8, base, ".ml")) base[0 .. base.len - ".ml".len] else base;
+    return allocator.dupe(u8, stem);
+}
+
+fn discardSourceMap(_: *anyopaque, _: driver_bpf.SourceMapBuild) anyerror!void {}
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
     var buffer: [1024]u8 = undefined;

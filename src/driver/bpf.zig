@@ -10,6 +10,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const core_anf = @import("../core/anf.zig");
+const core_const_fold = @import("../core/const_fold.zig");
+const core_dce = @import("../core/dce.zig");
+const core_inline = @import("../core/inline.zig");
+const core_ir = @import("../core/ir.zig");
+const ttree = @import("../frontend_bridge/ttree.zig");
+const srcmap = @import("srcmap.zig");
 
 /// ADR-013: mainnet-compatible SBPF v2 is the default; v3 will be opt-in later.
 const default_sbpf_cpu = "v2";
@@ -21,6 +28,31 @@ pub const BpfBuildOptions = struct {
     bitcode_path: []const u8 = "out/program.bc",
     output_path: []const u8,
     environ: std.process.Environ,
+    source_map: ?SourceMapInput = null,
+    source_map_hook: ?SourceMapHook = null,
+};
+
+/// Core IR source-map input retained through BPF build orchestration.
+///
+/// F-SRCMAP-2 intentionally does not write a sidecar yet. Instead, callers can
+/// provide this input plus `source_map_hook` to receive the deterministic
+/// in-memory schema after a successful BPF build.
+pub const SourceMapInput = struct {
+    program: []const u8,
+    module: core_ir.Module,
+};
+
+/// In-memory source map plus the instruction-count bound used by validators.
+pub const SourceMapBuild = struct {
+    schema: srcmap.Schema,
+    total_instructions: u32,
+};
+
+/// Hook that future sidecar/ELF emission features can use without changing the
+/// BPF link contract.
+pub const SourceMapHook = struct {
+    context: *anyopaque,
+    emit: *const fn (context: *anyopaque, build: SourceMapBuild) anyerror!void,
 };
 
 const RuntimeFile = struct {
@@ -86,7 +118,133 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         },
         else => |e| return e,
     };
+
+    if (options.source_map_hook) |hook| {
+        const input = options.source_map orelse return error.MissingSourceMapInput;
+        const source_map = try buildSourceMapSchema(allocator, input);
+        defer allocator.free(source_map.schema.entries);
+        try hook.emit(hook.context, source_map);
+    }
 }
+
+/// Builds the deterministic in-memory source-map schema from Core IR locations.
+///
+/// Investigation §4 notes that exact post-LLVM BPF PCs are not available until
+/// the linker has produced ELF text. F-SRCMAP-2's hook therefore captures a
+/// stable instruction-index stream while BPF lowering still has Core IR `loc`
+/// data; later SRCMAP features can replace the index assignment with post-link
+/// byte offsets without changing the schema or hook shape.
+pub fn buildSourceMapSchema(allocator: Allocator, input: SourceMapInput) !SourceMapBuild {
+    var collector: SourceMapCollector = .{
+        .allocator = allocator,
+        .entries = std.ArrayList(srcmap.Entry).empty,
+    };
+    errdefer collector.entries.deinit(allocator);
+
+    try collector.collectModule(input.module);
+
+    const entries = try collector.entries.toOwnedSlice(allocator);
+    errdefer allocator.free(entries);
+
+    const schema: srcmap.Schema = .{
+        .program = input.program,
+        .entries = entries,
+    };
+    try srcmap.validateSchema(schema);
+
+    return .{
+        .schema = schema,
+        .total_instructions = collector.next_pc,
+    };
+}
+
+const SourceMapCollector = struct {
+    allocator: Allocator,
+    entries: std.ArrayList(srcmap.Entry),
+    next_pc: u32 = 0,
+
+    fn collectModule(self: *SourceMapCollector, module: core_ir.Module) !void {
+        for (module.decls) |decl| {
+            switch (decl) {
+                .Let => |let_decl| try self.collectExpr(let_decl.value),
+                .LetGroup => |group| {
+                    for (group.bindings) |binding| {
+                        try self.collectExpr(binding.value);
+                    }
+                },
+            }
+        }
+    }
+
+    fn collectExpr(self: *SourceMapCollector, expr: *const core_ir.Expr) !void {
+        try self.recordLoc(core_ir.exprLoc(expr.*));
+
+        switch (expr.*) {
+            .Lambda => |value| try self.collectExpr(value.body),
+            .Constant, .Var => {},
+            .App => |value| {
+                try self.collectExpr(value.callee);
+                for (value.args) |arg| try self.collectExpr(arg);
+            },
+            .Let => |value| {
+                try self.collectExpr(value.value);
+                try self.collectExpr(value.body);
+            },
+            .LetGroup => |value| {
+                for (value.bindings) |binding| try self.collectExpr(binding.value);
+                try self.collectExpr(value.body);
+            },
+            .Assert => |value| try self.collectExpr(value.condition),
+            .If => |value| {
+                try self.collectExpr(value.cond);
+                try self.collectExpr(value.then_branch);
+                try self.collectExpr(value.else_branch);
+            },
+            .Prim => |value| {
+                for (value.args) |arg| try self.collectExpr(arg);
+            },
+            .Ctor => |value| {
+                for (value.args) |arg| try self.collectExpr(arg);
+            },
+            .Match => |value| {
+                try self.collectExpr(value.scrutinee);
+                for (value.arms) |arm| {
+                    if (arm.guard) |guard| try self.collectExpr(guard);
+                    try self.collectExpr(arm.body);
+                }
+            },
+            .Tuple => |value| {
+                for (value.items) |item| try self.collectExpr(item);
+            },
+            .TupleProj => |value| try self.collectExpr(value.tuple_expr),
+            .Record => |value| {
+                for (value.fields) |field| try self.collectExpr(field.value);
+            },
+            .RecordField => |value| try self.collectExpr(value.record_expr),
+            .RecordUpdate => |value| {
+                try self.collectExpr(value.base_expr);
+                for (value.fields) |field| try self.collectExpr(field.value);
+            },
+            .AccountFieldSet => |value| {
+                try self.collectExpr(value.account_expr);
+                try self.collectExpr(value.value);
+            },
+        }
+    }
+
+    fn recordLoc(self: *SourceMapCollector, maybe_loc: ?core_ir.Loc) !void {
+        const loc = maybe_loc orelse return;
+        if (loc.isUnknown()) return;
+
+        try self.entries.append(self.allocator, .{
+            .pc = self.next_pc,
+            .ml_file = loc.file,
+            .ml_line = loc.line,
+            .ml_col = loc.col,
+        });
+        self.next_pc += 1;
+    }
+};
 
 fn materializeRuntime(allocator: Allocator, io: Io) !void {
     const cwd = std.Io.Dir.cwd();
@@ -335,4 +493,55 @@ test "BPF linker argv pins ADR-013 default SBPF v2 CPU and entrypoint export" {
     try std.testing.expectEqualStrings("--llvm-args=-bpf-stack-size=4096", linker_argv[3]);
     try std.testing.expectEqualStrings("--export", linker_argv[4]);
     try std.testing.expectEqualStrings("entrypoint", linker_argv[5]);
+}
+
+fn testExitCode(term: std.process.Child.Term) u8 {
+    return switch (term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+}
+
+test "BPF source map builder captures hackathon_greet source locations" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const frontend_argv = [_][]const u8{
+        "zig-out/bin/zxc-frontend",
+        "--emit=sexp",
+        "examples/hackathon_greet.ml",
+    };
+    const frontend = try std.process.run(allocator, io, .{ .argv = &frontend_argv });
+    defer allocator.free(frontend.stdout);
+    defer allocator.free(frontend.stderr);
+
+    if (testExitCode(frontend.term) != 0) {
+        std.debug.print("zxc-frontend failed while building source-map fixture:\n{s}\n", .{frontend.stderr});
+    }
+    try std.testing.expectEqual(@as(u8, 0), testExitCode(frontend.term));
+
+    var frontend_arena = std.heap.ArenaAllocator.init(allocator);
+    defer frontend_arena.deinit();
+    const typed_module = try ttree.parseModule(&frontend_arena, frontend.stdout);
+
+    var core_arena = std.heap.ArenaAllocator.init(allocator);
+    defer core_arena.deinit();
+    const lowered = try core_anf.lowerModule(&core_arena, typed_module);
+    const folded = try core_const_fold.foldModule(&core_arena, lowered);
+    const eliminated = try core_dce.eliminateModule(&core_arena, folded);
+    const inlined = try core_inline.inlineModule(&core_arena, eliminated);
+    const optimized = try core_const_fold.foldModule(&core_arena, inlined);
+
+    const built = try buildSourceMapSchema(allocator, .{
+        .program = "hackathon_greet",
+        .module = optimized,
+    });
+    defer allocator.free(built.schema.entries);
+
+    try srcmap.validateSchema(built.schema);
+    try std.testing.expect(built.schema.entries.len >= 1);
+    for (built.schema.entries) |entry| {
+        try std.testing.expect(entry.pc < built.total_instructions);
+        try std.testing.expect(std.mem.endsWith(u8, entry.ml_file, "hackathon_greet.ml"));
+    }
 }
