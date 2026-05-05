@@ -176,6 +176,66 @@ cargo test -p zxcaml-tests --test hackathon_greet_test
 
 ---
 
+## P9 Developer Experience：rustc-style caret diagnostics
+
+P9 把错误从一行日志升级成可定位的源码片段：
+
+```text
+error[OCAML-FRONTEND]: This expression has type "string"
+ --> examples/demo.ml:1:13
+  |
+1 | let _: int = "json"
+  |             ^^^^^^
+```
+
+- 默认 human 输出：rustc-style 标题、位置、源码行和 caret span
+- `--error-format=human|json|oneline`：终端、LSP、CI 各走合适格式
+- `--color=auto|always|never` 与 `NO_COLOR` 保持日志可复现
+
+<!-- 旁白：P9 的第一层开发体验是诊断。过去错误更像一行日志，现在默认是 rustc-style 的块状输出：有错误代码、文件位置、源码行和 caret 高亮。对本地调试，用 human；对工具和编辑器，用 `--error-format=json`；对 CI grep，用 `oneline`。这让错误从“看见消息”变成“直接定位到源码跨度”。 -->
+
+---
+
+## P9 Developer Experience：`omlz-lsp` Zig stdio LSP
+
+```text
+editor didOpen/didChange
+        │
+        ▼
+omlz-lsp (Zig, stdio JSON-RPC)
+        │ forks
+        ▼
+omlz check --error-format=json
+        │
+        ▼
+textDocument/publishDiagnostics
+```
+
+- LSP 3.17 基础协议：`initialize`、`didOpen`、`didChange`、`shutdown`
+- 全量文档同步，fork-per-request，避免常驻 OCaml frontend 状态
+- harness 观测 median `~138ms`，足够支撑编辑器 debounce
+
+<!-- 旁白：第二层是编辑器闭环。`omlz-lsp` 是一个 Zig 写的 stdio language server，走标准 LSP JSON-RPC framing。它有意保持小而可靠：收到 didOpen 或 didChange，就把文档写成临时 `.ml`，调用 `omlz check --error-format=json`，再把结果推成 diagnostics。当前 harness 的中位延迟大约是一百三十八毫秒，足够做实时反馈。 -->
+
+---
+
+## P9 Developer Experience：source maps + `omlz unmap`
+
+BPF 运行时位置可以反查回 OCaml 源码：
+
+```sh
+./zig-out/bin/omlz build --target=bpf examples/hackathon_greet.ml -o out/hackathon_greet.so
+./zig-out/bin/omlz unmap --so out/hackathon_greet.so --pc 0x80
+```
+
+- deterministic JSON sidecar：`out/<name>.map`
+- BPF `.so` 内嵌 `.zxcaml.srcmap` metadata section
+- `omlz unmap`：PC → `examples/*.ml:line:col`
+
+<!-- 旁白：第三层是链上调试闭环。P9 的 source map 把 BPF 指令偏移反查回 OCaml 文件、行和列。构建时会生成确定性的 `.map` sidecar，同时把压缩后的信息放进 `.zxcaml.srcmap` ELF metadata section。遇到 Mollusk 或链上 PC 时，`omlz unmap` 能把底层地址重新翻译成开发者写过的 `.ml` 源码位置。 -->
+
+---
+
 ## 9:20–10:00 收尾与行动号召
 
 今天的闭环：

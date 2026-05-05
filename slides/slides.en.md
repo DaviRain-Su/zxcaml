@@ -176,6 +176,66 @@ The conclusion is not to replace Anchor; it is to offer Solana builders an OCaml
 
 ---
 
+## P9 Developer Experience: rustc-style caret diagnostics
+
+P9 turns errors from one-line logs into source-localized snippets:
+
+```text
+error[OCAML-FRONTEND]: This expression has type "string"
+ --> examples/demo.ml:1:13
+  |
+1 | let _: int = "json"
+  |             ^^^^^^
+```
+
+- Default human output: rustc-style heading, location, source line, and caret span
+- `--error-format=human|json|oneline`: terminal, LSP, and CI each get the right format
+- `--color=auto|always|never` plus `NO_COLOR` keep logs reproducible
+
+<!-- speaker: The first P9 developer-experience layer is diagnostics. Before P9, an error was mostly a one-line log. Now the default output is a rustc-style block with an error code, file location, source line, and caret highlight. Local users keep the human format, tools and editors consume `--error-format=json`, and CI can still choose `oneline`. The point is to move from seeing an error message to landing directly on the source span. -->
+
+---
+
+## P9 Developer Experience: `omlz-lsp` Zig stdio LSP
+
+```text
+editor didOpen/didChange
+        │
+        ▼
+omlz-lsp (Zig, stdio JSON-RPC)
+        │ forks
+        ▼
+omlz check --error-format=json
+        │
+        ▼
+textDocument/publishDiagnostics
+```
+
+- LSP 3.17 base protocol: `initialize`, `didOpen`, `didChange`, `shutdown`
+- Full-document sync, fork-per-request, no long-lived OCaml frontend state
+- Harness-observed median `~138ms`, fast enough for editor debounce
+
+<!-- speaker: The second layer is the editor loop. `omlz-lsp` is a Zig stdio language server that speaks standard LSP JSON-RPC framing. It stays deliberately small: on didOpen or didChange, it writes the document to a temporary `.ml` file, runs `omlz check --error-format=json`, and publishes diagnostics back to the editor. The harness observes a median latency of roughly one hundred thirty-eight milliseconds, which is well within an interactive debounce window. -->
+
+---
+
+## P9 Developer Experience: source maps + `omlz unmap`
+
+BPF runtime positions can resolve back to OCaml source:
+
+```sh
+./zig-out/bin/omlz build --target=bpf examples/hackathon_greet.ml -o out/hackathon_greet.so
+./zig-out/bin/omlz unmap --so out/hackathon_greet.so --pc 0x80
+```
+
+- Deterministic JSON sidecar: `out/<name>.map`
+- BPF `.so` embeds a `.zxcaml.srcmap` metadata section
+- `omlz unmap`: PC → `examples/*.ml:line:col`
+
+<!-- speaker: The third layer closes the on-chain debugging loop. P9 source maps connect BPF program counters back to OCaml file, line, and column locations. Builds write a deterministic `.map` sidecar and embed compressed metadata in the `.zxcaml.srcmap` ELF section. When a Mollusk failure or runtime PC appears, `omlz unmap` can translate that low-level address back to the `.ml` source a developer actually wrote. -->
+
+---
+
 ## 9:20–10:00 Close and call to action
 
 Today's loop:
