@@ -44,6 +44,25 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (args.len == 3 and std.mem.eql(u8, args[2], "--help")) {
+        if (std.mem.eql(u8, args[1], "check")) {
+            try writeCheckHelp(init.io);
+            return;
+        }
+        if (std.mem.eql(u8, args[1], "build")) {
+            try writeBuildHelp(init.io);
+            return;
+        }
+        if (std.mem.eql(u8, args[1], "idl")) {
+            try writeIdlHelp(init.io);
+            return;
+        }
+        if (std.mem.eql(u8, args[1], "run")) {
+            try writeRunHelp(init.io);
+            return;
+        }
+    }
+
     if (args.len >= 3 and std.mem.eql(u8, args[1], "check")) {
         const check_args = parseCheckArgs(args) catch {
             try writeStderr(init.io, "error: unsupported check option; run `omlz --help` for usage.\n");
@@ -168,6 +187,56 @@ fn writeHelp(io: Io) !void {
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
         \\  omlz run <file.ml>
+        \\
+    );
+}
+
+fn writeCheckHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz check <file.ml>
+        \\  omlz check --no-alloc <file.ml>
+        \\  omlz check --emit=core-ir [--bless] <file.ml>
+        \\
+        \\Flags:
+        \\  --no-alloc       Prove the program performs no Core IR allocations.
+        \\  --emit=core-ir   Print the lowered Core IR instead of only checking.
+        \\  --bless          Rewrite the Core IR golden snapshot for the input.
+        \\
+    );
+}
+
+fn writeBuildHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
+        \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
+        \\
+        \\Flags:
+        \\  --target=native  Build a native executable for local testing.
+        \\  --target=bpf     Build a Solana BPF shared object.
+        \\  --keep-zig       Keep the generated Zig source under out/program.zig.
+        \\  -o <path>        Write the compiled artifact to the given path.
+        \\
+    );
+}
+
+fn writeIdlHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz idl <file.ml>
+        \\
+        \\Emits Anchor-compatible IDL JSON for the given OCaml source file.
+        \\
+    );
+}
+
+fn writeRunHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz run <file.ml>
+        \\
+        \\Runs the given OCaml source file through the tree-walk interpreter.
         \\
     );
 }

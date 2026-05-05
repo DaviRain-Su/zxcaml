@@ -277,6 +277,25 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_idl_tests.setCwd(b.path(""));
 
+    // CLI tests (Phase 6 / F-E1): verify user-facing command help surfaces.
+    const cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/help_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const cli_options = b.addOptions();
+    cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    cli_test_module.addOptions("cli_options", cli_options);
+    const cli_tests = b.addTest(.{
+        .root_module = cli_test_module,
+    });
+    const run_cli_tests = b.addRunArtifact(cli_tests);
+    // The CLI harness invokes `omlz` as a subprocess, so omlz
+    // (and zxc-frontend) must be built before the test runs.
+    run_cli_tests.step.dependOn(b.getInstallStep());
+    // Set working directory to the project root so relative paths resolve.
+    run_cli_tests.setCwd(b.path(""));
+
     // Codegen regression tests: compile focused `.ml` cases and inspect the
     // emitted Zig source.
     const codegen_external_bytes_test_module = b.createModule(.{
@@ -361,6 +380,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_golden_tests.step);
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
+    test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);
