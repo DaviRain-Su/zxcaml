@@ -30,6 +30,7 @@ pub const BpfBuildOptions = struct {
     environ: std.process.Environ,
     source_map: ?SourceMapInput = null,
     source_map_hook: ?SourceMapHook = null,
+    quiet: bool = false,
 };
 
 /// Core IR source-map input retained through BPF build orchestration.
@@ -96,7 +97,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         options.bpf_entry_path,
     };
 
-    try runAndForward(allocator, io, &zig_argv, null, error.BpfZigBuildFailed);
+    try runAndForward(allocator, io, &zig_argv, null, error.BpfZigBuildFailed, !options.quiet);
 
     var env_map = try makeLinkerEnv(allocator, io, options.environ);
     defer env_map.deinit();
@@ -113,7 +114,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         options.bitcode_path,
     };
 
-    runAndForward(allocator, io, &linker_argv, &env_map, error.SbpfLinkFailed) catch |err| switch (err) {
+    runAndForward(allocator, io, &linker_argv, &env_map, error.SbpfLinkFailed, !options.quiet) catch |err| switch (err) {
         error.FileNotFound => {
             try writeMissingSbpfLinkerDiagnostic(io);
             return error.SbpfLinkerMissing;
@@ -271,6 +272,7 @@ fn runAndForward(
     argv: []const []const u8,
     environ_map: ?*const std.process.Environ.Map,
     failure: anyerror,
+    forward_success_output: bool,
 ) !void {
     const completed = try std.process.run(allocator, io, .{
         .argv = argv,
@@ -279,16 +281,18 @@ fn runAndForward(
     defer allocator.free(completed.stdout);
     defer allocator.free(completed.stderr);
 
-    if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
-    if (completed.stderr.len > 0) try writeToolStderr(io, completed.stderr);
+    const success = switch (completed.term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
 
-    switch (completed.term) {
-        .exited => |code| {
-            if (code == 0) return;
-            return failure;
-        },
-        .signal, .stopped, .unknown => return failure,
+    if (forward_success_output or !success) {
+        if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
+        if (completed.stderr.len > 0) try writeToolStderr(io, completed.stderr);
     }
+
+    if (success) return;
+    return failure;
 }
 
 fn makeLinkerEnv(allocator: Allocator, io: Io, environ: std.process.Environ) !std.process.Environ.Map {
@@ -389,7 +393,7 @@ fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, 
         section_arg,
         output_path,
     };
-    try runAndForward(allocator, io, &argv, null, error.LlvmObjcopyFailed);
+    try runAndForward(allocator, io, &argv, null, error.LlvmObjcopyFailed, true);
 }
 
 fn gzipBytes(allocator: Allocator, bytes: []const u8) ![]u8 {

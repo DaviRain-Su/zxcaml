@@ -8,7 +8,6 @@ const TailCallParam = common.TailCallParam;
 const LetBindingStorage = common.LetBindingStorage;
 const freeEmittedFunctionName = common.freeEmittedFunctionName;
 const exprUsesName = common.exprUsesName;
-const exprUsesCpiInvoke = common.exprUsesCpiInvoke;
 const zigTypeName = common.zigTypeName;
 const zigTypeExprName = common.zigTypeExprName;
 const payloadTypeName = common.payloadTypeName;
@@ -226,10 +225,15 @@ pub fn emitFunction(
     }
     if (is_entrypoint) {
         const bindings = try emitEntrypointRuntimeBindings(out, allocator, func.params, func.body);
-        const uses_runtime_cpi = exprUsesCpiInvoke(func.body);
-        if (!uses_runtime_cpi) try append(out, allocator, "    _ = omlz_runtime_input;\n");
-        if (!bindings.accounts_used and !uses_runtime_cpi) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
-        if (!bindings.instruction_data_used) try append(out, allocator, "    _ = omlz_runtime_instruction_data;\n");
+        const body_uses_runtime_input = sourceUsesIdentifier(body_out.items, "omlz_runtime_input") or
+            sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_input");
+        const body_uses_runtime_accounts = sourceUsesIdentifier(body_out.items, "omlz_runtime_accounts") or
+            sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_accounts");
+        const body_uses_runtime_instruction_data = sourceUsesIdentifier(body_out.items, "omlz_runtime_instruction_data") or
+            sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_instruction_data");
+        if (!body_uses_runtime_input) try append(out, allocator, "    _ = omlz_runtime_input;\n");
+        if (!bindings.accounts_used and !body_uses_runtime_accounts) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
+        if (!bindings.instruction_data_used and !body_uses_runtime_instruction_data) try append(out, allocator, "    _ = omlz_runtime_instruction_data;\n");
     }
     if (func.calling_convention == .Closure) {
         try emitClosureCaptureBindings(out, allocator, func.name, func.captures);
@@ -256,6 +260,10 @@ pub fn sourceUsesArena(source: []const u8) bool {
         std.mem.indexOf(u8, source, "arena,") != null or
         std.mem.indexOf(u8, source, "arena)") != null or
         std.mem.indexOf(u8, source, "arena;") != null;
+}
+
+fn sourceUsesIdentifier(source: []const u8, identifier: []const u8) bool {
+    return std.mem.indexOf(u8, source, identifier) != null;
 }
 
 pub fn functionHasSelfTailCall(func: lir.LFunc) bool {

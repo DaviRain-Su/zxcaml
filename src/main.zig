@@ -8,6 +8,7 @@
 //! - Dispatch `omlz idl <file.ml>` through frontend → ANF → JSON IDL emission.
 //! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
 //! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through Zig bitcode emission and sbpf-linker.
+//! - Dispatch `omlz bench` through a fixed local BPF fixture set and print compile metrics.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
@@ -70,6 +71,19 @@ pub fn main(init: std.process.Init) !void {
             try writeUnmapHelp(init.io);
             return;
         }
+        if (std.mem.eql(u8, args[1], "bench")) {
+            try writeBenchHelp(init.io);
+            return;
+        }
+    }
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "bench")) {
+        if (args.len != 2) {
+            try writeStderr(init.io, "error: unsupported bench option; run `omlz bench --help` for usage.\n");
+            std.process.exit(1);
+        }
+        try runBench(init, args[0]);
+        return;
     }
 
     if (args.len >= 3 and std.mem.eql(u8, args[1], "unmap")) {
@@ -231,6 +245,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\  omlz run <file.ml>
         \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
+        \\  omlz bench
         \\
     );
 }
@@ -328,6 +343,23 @@ fn writeUnmapHelp(io: Io) !void {
     );
 }
 
+fn writeBenchHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz bench
+        \\
+        \\Builds the default local benchmark fixtures with --target=bpf and
+        \\prints a markdown table of compile_ms, .so bytes, and source-map
+        \\entry counts.  The command does not spawn surfpool or run Mollusk.
+        \\
+        \\Fixtures:
+        \\  examples/hackathon_greet.ml
+        \\  examples/escrow_full.ml
+        \\  examples/spl_token_transfer.ml
+        \\
+    );
+}
+
 const DiagnosticFlags = struct {
     error_format: diag.ErrorFormat = .human,
     color: render.Color = .auto,
@@ -405,6 +437,7 @@ const BuildArgs = struct {
     input_file: []const u8,
     output_path: ?[]const u8,
     srcmap: bool = true,
+    quiet: bool = false,
     diagnostics: DiagnosticFlags = .{},
 };
 
@@ -446,6 +479,7 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
         .input_file = input_file orelse return error.UnsupportedBuildArgs,
         .output_path = output_path,
         .srcmap = srcmap,
+        .quiet = false,
         .diagnostics = diagnostics,
     };
 }
@@ -1153,6 +1187,7 @@ fn buildBpf(
         .environ = init.minimal.environ,
         .source_map = source_map_input,
         .source_map_hook = source_map_hook,
+        .quiet = build_args.quiet,
     }) catch |err| {
         if (err != error.SbpfLinkerMissing) {
             try writeStderr(init.io, "error: BPF build failed: ");
@@ -1189,6 +1224,159 @@ fn emitSourceMapSidecar(context: *anyopaque, build: driver_bpf.SourceMapBuild) a
         .data = bytes,
         .flags = .{ .truncate = true },
     });
+}
+
+const BenchFixture = struct {
+    program: []const u8,
+    path: []const u8,
+};
+
+const bench_fixtures = [_]BenchFixture{
+    .{ .program = "hackathon_greet", .path = "examples/hackathon_greet.ml" },
+    .{ .program = "escrow_full", .path = "examples/escrow_full.ml" },
+    .{ .program = "spl_token_transfer", .path = "examples/spl_token_transfer.ml" },
+};
+
+const BenchResult = struct {
+    program: []const u8,
+    compile_ms: u64,
+    so_bytes: usize,
+    entries: usize,
+};
+
+fn runBench(init: std.process.Init, argv0: []const u8) !void {
+    var results: [bench_fixtures.len]BenchResult = undefined;
+    for (bench_fixtures, 0..) |fixture, index| {
+        results[index] = try runBenchFixture(init, argv0, fixture);
+    }
+
+    var table = std.Io.Writer.Allocating.init(init.gpa);
+    errdefer table.deinit();
+    try table.writer.writeAll("| program | compile_ms | so_bytes | entries |\n");
+    try table.writer.writeAll("| --- | ---: | ---: | ---: |\n");
+    for (results) |result| {
+        try table.writer.print(
+            "| {s} | {d} | {d} | {d} |\n",
+            .{ result.program, result.compile_ms, result.so_bytes, result.entries },
+        );
+    }
+    const bytes = try table.toOwnedSlice();
+    defer init.gpa.free(bytes);
+    try writeStdout(init.io, bytes);
+}
+
+fn runBenchFixture(init: std.process.Init, argv0: []const u8, fixture: BenchFixture) !BenchResult {
+    const bench_program = try std.fmt.allocPrint(init.gpa, "bench_{s}", .{fixture.program});
+    defer init.gpa.free(bench_program);
+
+    const bench_input_name = try std.fmt.allocPrint(init.gpa, "{s}.ml", .{bench_program});
+    defer init.gpa.free(bench_input_name);
+
+    const so_path = try sourceMapOutputPath(init.gpa, bench_program, ".so");
+    defer init.gpa.free(so_path);
+
+    const map_path = try sourceMapOutputPath(init.gpa, bench_program, ".map");
+    defer init.gpa.free(map_path);
+
+    cleanupBenchArtifact(init.io, so_path);
+    cleanupBenchArtifact(init.io, map_path);
+    defer cleanupBenchArtifact(init.io, so_path);
+    defer cleanupBenchArtifact(init.io, map_path);
+
+    const start_ns = try monotonicNanos();
+    var frontend_result = pipeline.runFrontendFromArgv0WithOptions(
+        init.gpa,
+        init.io,
+        init.minimal.environ,
+        argv0,
+        fixture.path,
+        .{},
+    ) catch |err| {
+        if (shouldPrintGenericFrontendFailure(err)) {
+            try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
+        }
+        std.process.exit(1);
+    };
+    defer frontend_result.deinit();
+
+    switch (frontend_result) {
+        .success => |parsed| {
+            try buildBpf(init, parsed.module, .{
+                .target = "bpf",
+                .keep_zig = false,
+                .input_file = bench_input_name,
+                .output_path = so_path,
+                .srcmap = true,
+                .quiet = true,
+                .diagnostics = .{},
+            });
+        },
+        .failed => |code| std.process.exit(if (code == 0) 1 else code),
+    }
+    const end_ns = try monotonicNanos();
+
+    const so_bytes = try readFileSize(init, so_path);
+    const entries = try readSourceMapEntryCount(init, map_path);
+
+    return .{
+        .program = fixture.program,
+        .compile_ms = elapsedMillis(start_ns, end_ns),
+        .so_bytes = so_bytes,
+        .entries = entries,
+    };
+}
+
+fn cleanupBenchArtifact(io: Io, path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch {};
+}
+
+fn readFileSize(init: std.process.Init, path: []const u8) !usize {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .limited(128 * 1024 * 1024)) catch |err| {
+        try writeStderr(init.io, "error: failed to read benchmark artifact ");
+        try writeStderr(init.io, path);
+        try writeStderr(init.io, ": ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(bytes);
+    return bytes.len;
+}
+
+fn readSourceMapEntryCount(init: std.process.Init, path: []const u8) !usize {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .limited(16 * 1024 * 1024)) catch |err| {
+        try writeStderr(init.io, "error: failed to read benchmark source map ");
+        try writeStderr(init.io, path);
+        try writeStderr(init.io, ": ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(bytes);
+
+    var parsed = driver_srcmap.deserializeJson(init.gpa, bytes) catch |err| {
+        try writeStderr(init.io, "error: invalid benchmark source map ");
+        try writeStderr(init.io, path);
+        try writeStderr(init.io, ": ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer parsed.deinit();
+
+    return parsed.value.entries.len;
+}
+
+fn monotonicNanos() !u64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return error.ClockFailed;
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+fn elapsedMillis(start_ns: u64, end_ns: u64) u64 {
+    if (end_ns <= start_ns) return 0;
+    const elapsed_ns = end_ns - start_ns;
+    return @divTrunc(elapsed_ns + std.time.ns_per_ms - 1, std.time.ns_per_ms);
 }
 
 fn runUnmap(init: std.process.Init, unmap_args: UnmapArgs) !void {
