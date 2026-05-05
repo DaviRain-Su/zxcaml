@@ -313,6 +313,23 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_cli_tests.setCwd(b.path(""));
 
+    // CLI explanation tests (P9.5 / F-OBS1): verify `omlz check --explain`
+    // covers the diagnostics catalog and reports unknown codes cleanly.
+    const explain_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/explain_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const explain_cli_options = b.addOptions();
+    explain_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    explain_cli_test_module.addOptions("cli_options", explain_cli_options);
+    const explain_cli_tests = b.addTest(.{
+        .root_module = explain_cli_test_module,
+    });
+    const run_explain_cli_tests = b.addRunArtifact(explain_cli_tests);
+    run_explain_cli_tests.step.dependOn(b.getInstallStep());
+    run_explain_cli_tests.setCwd(b.path(""));
+
     // Source-map CLI integration tests (P9 / F-SRCMAP-3): verify BPF builds
     // emit deterministic sidecar maps by default and honor --no-srcmap.
     const srcmap_cli_test_module = b.createModule(.{
@@ -566,6 +583,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
     test_step.dependOn(&run_unmap_cli_tests.step);
     test_step.dependOn(&run_srcmap_determinism_tests.step);
