@@ -41,6 +41,10 @@ Solana BPF .so
 - Core IR 形态：**ANF**（A-Normal Form），带类型，带 layout 标注。
 - CLI 二进制名：**`omlz`**（OCaml on Zig）。
 - 构建驱动：单一 **`build.zig`** 同时编排 OCaml 前端桥接和 Zig 管线（ADR-011）。
+- P9 Developer Experience 文档入口：[`docs/diagnostics.md`](../diagnostics.md)
+  说明 rustc-style 诊断，[`docs/lsp.md`](../lsp.md) 说明 `omlz-lsp`，
+  [`docs/source-map.md`](../source-map.md) 说明 source maps，
+  [`docs/wire-compat.md`](../wire-compat.md) 说明 wire `1.2` 兼容窗口。
 
 ---
 
@@ -95,11 +99,12 @@ ZxCaml 保留 OCaml 语言和它的心智模型，但把程序送进一条新的
 
 ## 项目状态
 
-**P8 Compiler Optimizations 已封版。** P1-P8 现在覆盖 walking skeleton、子集扩展、
+**P9 Developer Experience 已封版。** P1-P9 现在覆盖 walking skeleton、子集扩展、
 Solana runtime 集成、Mollusk 测试基础设施、external declarations、Anchor IDL、
 函数式持久化 stdlib、region inference、OCaml 子集继续扩展（desugar、patterns、
 strings、扩展 stdlib），以及源码级编译器优化：constant folding、dead code
-elimination、自递归 tail call optimization 和 function inlining。
+elimination、自递归 tail call optimization、function inlining，以及 P9 的诊断、
+LSP、wire compatibility 和 source map 开发者体验能力。
 
 近期的 hackathon 工作把这些编译器能力包装成可录制的演示：Surfpool localnet
 deploy/invoke 流程、公平性取向的 Anchor 对照、双语 Slidev deck，以及上线在
@@ -108,14 +113,14 @@ deploy/invoke 流程、公平性取向的 Anchor 对照、双语 Slidev deck，�
 [`docs/hackathon/README.md` 索引](../hackathon/README.md)。
 
 `omlz` 已端到端工作：通过上游 `compiler-libs` 解析/type-check OCaml → 发出
-sexp `1.1` → 带 constant folding、DCE、inlining、escape analysis 地 lower 到
+sexp `1.2` → 带 constant folding、DCE、inlining、escape analysis 地 lower 到
 Core IR → 解释执行、构建 native Zig、构建 Solana BPF `.so` 产物，或发出
 Anchor-compatible IDL。
 
 ### 当前功能
 
-- **CLI 命令：** `omlz check <file>`、`omlz check --no-alloc <file>`、`omlz run <file>`、`omlz build --target=native <file> -o <out>`、`omlz build --target=bpf <file> -o <out>`、`omlz idl <file>`
-- **Wire 格式：** 版本 1.1（P1 为 `0.4`；P2 在 `0.5` 加用户 ADT、在 `0.6` 加嵌套/guarded pattern、在 `0.7` 加 tuple/record；P3 在 `0.8` 加 account/syscall 引用、在 `0.9` 加 CPI 类型/引用；P4/P5 让 instruction data 和 external declarations 走过 `1.0`；P8 为 mutual-recursion groups 升到 `1.1`）
+- **CLI 命令：** `omlz check <file>`、`omlz check --no-alloc <file>`、`omlz run <file>`、`omlz build --target=native <file> -o <out>`、`omlz build --target=bpf <file> -o <out>`、`omlz idl <file>`、`omlz unmap --map <file.map> --pc <addr>`、`omlz unmap --so <file.so> --pc <addr>`
+- **Wire 格式：** 版本 1.2（P1 为 `0.4`；P2 在 `0.5` 加用户 ADT、在 `0.6` 加嵌套/guarded pattern、在 `0.7` 加 tuple/record；P3 在 `0.8` 加 account/syscall 引用、在 `0.9` 加 CPI 类型/引用；P4/P5 让 instruction data 和 external declarations 走过 `1.0`；P8 为 mutual-recursion groups 升到 `1.1`；P9/DX2 为 source-location plumbing 升到 `1.2`，同时保留 deprecated `--wire=1.1` 兼容 emitter）
 - **OCaml 子集：** let 绑定、嵌套 let、let rec、curried 函数、函数应用、算术/比较运算、if/then/else、用户自定义 ADT、嵌套构造器模式、带 guard 的 match arm、字面量常量模式、or-pattern、alias pattern、tuple、record、字段访问、函数式 record update、列表（`[]` / `::`）、sequence 表达式（`;`）、function cases（`function |`）、string 操作（`^`、length、get、sub）、char 操作（code、chr），以及覆盖这些形式的模式匹配
 - **Stdlib：** bundled `List`（`length`、`map`、`filter`、`fold_left`、`rev`、`append`、`hd`、`tl`、`nth`、`exists`、`for_all`、`find`、`sort`、`combine`、`split`）、`Option`（`is_none`、`is_some`、`value`、`get`、`fold`）、`Result`（`is_ok`、`is_error`、`ok`、`error`、`map`、`bind`）、`Fun`（`id`、`const`、`flip`）、`Map`（`empty`、`singleton`、`add`、`find`、`remove`、`mem`、`size`、`to_list`）、`Set`（`empty`、`singleton`、`add`、`mem`、`remove`、`size`、`to_list`、`union`、`inter`）、`String`（`length`、`get`、`sub`）、`Char`（`code`、`chr`）、`Crypto`（`sha256`、`keccak256`）和 `Pubkey`（`zero`、`token_program`、`of_hex`）模块
 - **内存模型：** arena-only，并通过 region inference 自动把不逃逸的局部值放到栈上；BPF entry arena 为 32 KiB
@@ -134,10 +139,12 @@ Anchor-compatible IDL。
 - **Dead code elimination：** 移除未使用的 let bindings（保留有副作用或可能 trap 的操作）以及不可达的 if branches
 - **Tail call optimization：** ANF lowering 会识别自递归尾调用，并在生成的 Zig 中发出 `while (true)` loops，让深递归（n > 10000）不再溢出栈
 - **Function inlining：** 小型单表达式函数（≤3 个 Core IR nodes）会带 alpha-renaming 地 inline 到 call site，触发更多 constant folding；String、ADT、Tuple 和 Record 等类型都受支持
-- **确定性：** sealed P1-P8 examples corpus 上，interpreter ≡ Zig native
+- **确定性：** sealed P1-P9 examples corpus 上，interpreter ≡ Zig native
 - **CI：** GitHub Actions 工作流以 `macos-latest` + `ubuntu-latest` matrix 运行 `./init.sh`、`zig build`、`zig build test`、`cargo test`（Mollusk SVM）、P3 `no_alloc` 与 IDL smoke checks、Mollusk tests，以及 examples `omlz check` corpus loop
 - **Mollusk SVM tests：** `tests/` 下有 21 个使用 Mollusk SVM v0.12.1 的 integration tests（hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet，以及 real-world zignocchio ports）
-- **诊断信息：** 人性化的 `path:line:col: severity: message` 渲染
+- **诊断信息：** 默认是 rustc-style 诊断，并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注
+- **LSP：** `zig build` 会安装 `omlz-lsp`，它通过 stdio JSON-RPC 提供 LSP push diagnostics
+- **Source maps：** BPF 构建会发出确定性的 source map，嵌入 `.zxcaml.srcmap`，并可用 `omlz unmap` 把 BPF PC 映回 OCaml 位置
 - **示例：** `examples/` 下 54 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion（TCO）、hackathon greeting 和 zignocchio-port programs
 - **Golden/UI 测试：** Core IR/sexp snapshot 和 UI tests 通过 `zig build test` 运行
 - **安装：** `./init.sh && zig build`（见 [INSTALLING.md](./INSTALLING.md)）
@@ -159,10 +166,14 @@ Anchor-compatible IDL。
 | 05 | [后端](./05-backends.md) | Zig codegen、tree-walk interpreter、backend trait |
 | 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.so` 的工具链链路（zig + sbpf-linker） |
 | 07 | [仓库布局](./07-repo-layout.md) | 目录契约，谁拥有什么 |
-| 08 | [路线图](./08-roadmap.md) | P1-P8 已封版；P9 Developer Experience 预览 |
+| 08 | [路线图](./08-roadmap.md) | P1-P9 已封版；未来工作预览 |
 | 09 | [决策（ADR）](./09-decisions.md) | 锁定的决策，附带理由 |
 | 10 | [前端桥接](./10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | 11 | [Solana P3 指南](./11-solana-p3.md) | Account layout、syscalls、CPI、SPL-Token、no_alloc、IDL 和 CI coverage |
+| P9 | [Diagnostics / docs/diagnostics.md](../diagnostics.md) | `--error-format`、caret rendering、color、JSON schema 和 wire `1.2` loc 说明 |
+| P9 | [LSP / docs/lsp.md](../lsp.md) | `omlz-lsp` stdio JSON-RPC、支持的 LSP 方法和编辑器设置 |
+| P9 | [Source maps / docs/source-map.md](../source-map.md) | `.map` sidecar schema、`.zxcaml.srcmap` 和 `omlz unmap` |
+| P9 | [Wire compatibility / docs/wire-compat.md](../wire-compat.md) | wire `1.2` location metadata 与 deprecated `--wire=1.1` 窗口 |
 | —  | [Hackathon assets](../hackathon/README.md) | Surfpool demo、Anchor comparison、Slidev decks、录制清单和 submission copy |
 | —  | [Live site](https://zxcaml.pages.dev/) | 当前公开项目 landing page |
 | —  | [备选方案对比](./alternatives-considered.md) | 为什么不自写、为什么不 fork OxCaml |
