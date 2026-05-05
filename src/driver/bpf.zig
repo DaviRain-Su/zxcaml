@@ -119,7 +119,7 @@ fn runAndForward(
     defer allocator.free(completed.stderr);
 
     if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
-    if (completed.stderr.len > 0) try writeStderr(io, completed.stderr);
+    if (completed.stderr.len > 0) try writeToolStderr(io, completed.stderr);
 
     switch (completed.term) {
         .exited => |code| {
@@ -215,6 +215,105 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
     const writer = &file_writer.interface;
     try writer.writeAll(bytes);
     try writer.flush();
+}
+
+fn writeToolStderr(io: Io, bytes: []const u8) !void {
+    // sbpf-linker's LLVM proxy scans Homebrew's llvm@20 directory on macOS and
+    // tries to `dlopen` every `libLLVM*.a` static archive. Static archives can
+    // never be loaded with dlopen, so suppress only those probe lines while
+    // preserving genuine dynamic-library and linker diagnostics.
+    var start: usize = 0;
+    while (start < bytes.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, bytes, start, '\n') orelse bytes.len;
+        const segment_end = if (line_end < bytes.len) line_end + 1 else line_end;
+        const line = bytes[start..line_end];
+
+        if (!isStaticArchiveDlopenWarning(line)) {
+            try writeStderr(io, bytes[start..segment_end]);
+        }
+
+        start = segment_end;
+    }
+}
+
+fn isStaticArchiveDlopenWarning(line: []const u8) bool {
+    return std.mem.indexOf(u8, line, "unable to open LLVM shared lib ") != null and
+        std.mem.indexOf(u8, line, ".a: dlopen failed") != null;
+}
+
+fn countDlopenMentionsIgnoreCase(bytes: []const u8) usize {
+    const needle = "dlopen";
+    var count: usize = 0;
+    var index: usize = 0;
+
+    while (index + needle.len <= bytes.len) : (index += 1) {
+        for (needle, 0..) |needle_char, offset| {
+            const actual = std.ascii.toLower(bytes[index + offset]);
+            if (actual != needle_char) break;
+        } else {
+            count += 1;
+            index += needle.len - 1;
+        }
+    }
+
+    return count;
+}
+
+test "static archive LLVM dlopen warnings are filtered narrowly" {
+    try std.testing.expect(isStaticArchiveDlopenWarning(
+        "unable to open LLVM shared lib /opt/homebrew/opt/llvm@20/lib/libLLVMAnalysis.a: dlopen failed",
+    ));
+    try std.testing.expect(!isStaticArchiveDlopenWarning(
+        "unable to open LLVM shared lib /opt/homebrew/opt/llvm@20/lib/libLLVM.dylib: dlopen failed",
+    ));
+    try std.testing.expect(!isStaticArchiveDlopenWarning(
+        "error: sbpf-linker failed to parse out/program.bc",
+    ));
+}
+
+test "BPF build smoke does not spam LLVM dlopen warnings" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const output_path = "out/zxcaml_dlopen_smoke.so";
+    const cwd = std.Io.Dir.cwd();
+    defer cwd.deleteFile(io, output_path) catch {};
+
+    const argv = [_][]const u8{
+        "zig-out/bin/omlz",
+        "build",
+        "--target=bpf",
+        "examples/hackathon_greet.ml",
+        "-o",
+        output_path,
+    };
+
+    const completed = try std.process.run(allocator, io, .{ .argv = &argv });
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+
+    const exit_code: u8 = switch (completed.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+    if (exit_code != 0) {
+        std.debug.print(
+            "BPF smoke build failed\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ completed.stdout, completed.stderr },
+        );
+    }
+    try std.testing.expectEqual(@as(u8, 0), exit_code);
+
+    const stdout_dlopen_count = countDlopenMentionsIgnoreCase(completed.stdout);
+    const stderr_dlopen_count = countDlopenMentionsIgnoreCase(completed.stderr);
+    const dlopen_count = stdout_dlopen_count + stderr_dlopen_count;
+    if (dlopen_count > 2) {
+        std.debug.print(
+            "BPF smoke build emitted {d} dlopen mentions\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ dlopen_count, completed.stdout, completed.stderr },
+        );
+    }
+    try std.testing.expect(dlopen_count <= 2);
 }
 
 test "BPF linker argv pins ADR-013 default SBPF v2 CPU and entrypoint export" {
