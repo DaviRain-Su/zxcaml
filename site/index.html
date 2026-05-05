@@ -17,6 +17,7 @@
       <nav aria-label="Primary navigation">
         <a href="#pipeline">Pipeline</a>
         <a href="#status">Status</a>
+        <a href="#developer-experience">P9 DX</a>
         <a href="#hackathon">Hackathon</a>
         <a href="#frontier">Frontier</a>
         <a href="https://github.com/DaviRain-Su/ZxCaml">GitHub</a>
@@ -28,6 +29,7 @@
           <p class="eyebrow">OCaml frontend. Zig backend. Solana BPF.</p>
           <h1>Functional Solana, today.</h1>
           <p class="lede">ZxCaml borrows upstream OCaml's parser and type checker, throws away the OCaml runtime, and lowers a practical `.ml` subset through Core IR and ANF into deterministic BPF output through Zig.</p>
+          <p class="lede">P9 adds the developer loop around that compiler path: rustc-style caret diagnostics with `--error-format`, the `omlz-lsp` LSP language server, and source maps that let `omlz unmap` translate BPF PCs back to OCaml source.</p>
           <div class="actions">
             <a class="button primary" href="https://github.com/DaviRain-Su/ZxCaml">View Source</a>
             <a class="button secondary" href="#status">See Progress</a>
@@ -49,7 +51,7 @@
         <h2>Keep OCaml's frontend. Own everything after Typedtree.</h2>
         <div class="pipeline">
           <div><span>01</span><h3>Upstream OCaml</h3><p>Parsing and type checking are handled by OCaml compiler-libs, without forking the compiler.</p></div>
-          <div><span>02</span><h3>Wire 1.1 to Core IR</h3><p>The current bridge lowers typed OCaml into ANF-shaped Core IR with layout information.</p></div>
+          <div><span>02</span><h3>Wire 1.2 to Core IR</h3><p>The current bridge lowers typed OCaml into ANF-shaped Core IR with source-location metadata for diagnostics, LSP, and source maps.</p></div>
           <div><span>03</span><h3>Zig Pipeline</h3><p>Shared lowering feeds three backends: tree-walk interpreter, native Zig codegen, and Solana BPF artifacts.</p></div>
           <div><span>04</span><h3>Demo-Ready BPF</h3><p>The target path emits runtime-free `.so` programs, Anchor-compatible IDL, and artifacts exercised through Mollusk and Surfpool demo flows.</p></div>
         </div>
@@ -58,15 +60,28 @@
         <div>
           <p class="eyebrow">Current State</p>
           <h2>A current compiler path with clear boundaries.</h2>
-          <p>ZxCaml is an active hackathon-stage compiler: P8 optimizations are implemented, real examples check, run, emit IDL, and build BPF artifacts, and the Solana path is validated through Mollusk and Surfpool demo scripts. It remains a deliberately scoped OCaml subset rather than a claim of full OCaml compatibility.</p>
+          <p>ZxCaml is an active hackathon-stage compiler: P9 developer experience is sealed, real examples check, run, emit IDL, and build BPF artifacts, and the Solana path is validated through Mollusk and Surfpool demo scripts. It remains a deliberately scoped OCaml subset rather than a claim of full OCaml compatibility.</p>
         </div>
         <div class="metrics">
-          <div><strong>P8</strong><span>Compiler optimizations implemented</span></div>
-          <div><strong>1.1</strong><span>Current frontend wire format</span></div>
-          <div><strong>54+</strong><span>Example programs across the OCaml subset</span></div>
+          <div><strong>P9</strong><span>Developer experience surfaces sealed</span></div>
+          <div><strong>1.2</strong><span>Current frontend wire format</span></div>
+          <div><strong>54</strong><span>Example programs across the OCaml subset</span></div>
           <div><strong>3</strong><span>Interpreter, native Zig, BPF paths</span></div>
           <div><strong>223/224</strong><span>Zig tests passed, with one skipped</span></div>
           <div><strong>107s</strong><span>End-to-end Surfpool demo runtime</span></div>
+        </div>
+      </section>
+      <section id="developer-experience" class="band">
+        <div class="section-heading">
+          <p class="eyebrow">P9 Developer Experience</p>
+          <h2>Diagnostics, editor feedback, and BPF source lookup are now first-class.</h2>
+          <p>P9 turns the compiler into a tighter daily loop: human diagnostics now render rustc-style caret spans, tools can opt into `--error-format=human|json|oneline`, `omlz-lsp` publishes LSP diagnostics over stdio, and BPF builds carry source maps for `omlz unmap`.</p>
+        </div>
+        <div class="pipeline">
+          <div><span>DX1</span><h3>Rustc-style diagnostics</h3><p>Caret snippets point at the OCaml source span while `--error-format` keeps CI and editor integrations machine-readable.</p></div>
+          <div><span>LSP</span><h3>`omlz-lsp` language server</h3><p>The LSP server runs `omlz check` behind stdio JSON-RPC and pushes diagnostics as files open or change.</p></div>
+          <div><span>MAP</span><h3>Source maps and `omlz unmap`</h3><p>BPF builds emit deterministic source maps, embed `.zxcaml.srcmap`, and map program counters back to `.ml` line and column locations.</p></div>
+          <div><span>1.2</span><h3>Location-aware wire</h3><p>Wire 1.2 carries source locations through the bridge so diagnostics, LSP, and source-map tooling share the same location plumbing.</p></div>
         </div>
       </section>
       <section id="hackathon" class="band hackathon">
