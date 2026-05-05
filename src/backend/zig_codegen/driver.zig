@@ -28,6 +28,12 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const Arena = @import("runtime/arena.zig").Arena;
         \\const AccountRuntime = @import("runtime/account.zig");
         \\const cpi = @import("runtime/cpi.zig");
+        \\const transfer_sol = @import("runtime/programs/transfer_sol.zig");
+        \\const vault = @import("runtime/programs/vault.zig");
+        \\const vault_v2 = @import("runtime/programs/vault_v2.zig");
+        \\const hackathon_greet = @import("runtime/programs/hackathon_greet.zig");
+        \\const token_vault = @import("runtime/programs/token_vault.zig");
+        \\const escrow_full = @import("runtime/programs/escrow_full.zig");
         \\const prelude = @import("runtime/prelude.zig");
         \\const runtime_panic = @import("runtime/panic.zig");
         \\const spl_token = @import("runtime/spl_token.zig");

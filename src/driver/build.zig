@@ -25,6 +25,13 @@ const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
     .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
     .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
+    .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
+    .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
+    .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
+    .{ .src_path = "runtime/zig/programs/vault_v2.zig", .out_path = "out/runtime/programs/vault_v2.zig" },
+    .{ .src_path = "runtime/zig/programs/hackathon_greet.zig", .out_path = "out/runtime/programs/hackathon_greet.zig" },
+    .{ .src_path = "runtime/zig/programs/token_vault.zig", .out_path = "out/runtime/programs/token_vault.zig" },
+    .{ .src_path = "runtime/zig/programs/escrow_full.zig", .out_path = "out/runtime/programs/escrow_full.zig" },
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
     .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
     .{ .src_path = "runtime/zig/spl_token.zig", .out_path = "out/runtime/spl_token.zig" },
@@ -67,6 +74,7 @@ pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !v
 fn materializeRuntime(allocator: Allocator, io: Io) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, "out/runtime");
+    try cwd.createDirPath(io, "out/runtime/programs");
 
     inline for (runtime_files) |file| {
         const contents = try cwd.readFileAlloc(io, file.src_path, allocator, .limited(128 * 1024));

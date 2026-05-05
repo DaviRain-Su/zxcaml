@@ -358,7 +358,7 @@ pub fn emitCounterAppExpr(
         try emitIndent(out, allocator, indent_level + 1);
         try append(out, allocator, "_ = omlz_runtime_accounts;\n");
         try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} cpi.zxcaml_transfer_sol_process(arena, omlz_runtime_input, ", .{block_id});
+        try appendPrint(out, allocator, "break :blk{d} transfer_sol.zxcaml_transfer_sol_process(arena, omlz_runtime_input, ", .{block_id});
         try emitExpr(out, allocator, app.args[3].*, indent_level, ctx);
         try append(out, allocator, ");\n");
         try emitIndent(out, allocator, indent_level);
@@ -368,13 +368,13 @@ pub fn emitCounterAppExpr(
     if (std.mem.eql(u8, name, "vault_deposit") or std.mem.eql(u8, name, "vault_withdraw")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "cpi.zxcaml_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try append(out, allocator, "vault.zxcaml_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
     if (std.mem.eql(u8, name, "vault_v2_deposit") or std.mem.eql(u8, name, "vault_v2_withdraw")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "cpi.zxcaml_vault_v2_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try append(out, allocator, "vault_v2.zxcaml_vault_v2_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
     if (std.mem.eql(u8, name, "pda_storage_process")) {
@@ -447,7 +447,7 @@ pub fn emitCounterAppExpr(
         ctx.next_block_id += 1;
         try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
         try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} cpi.zxcaml_hackathon_greet_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
+        try appendPrint(out, allocator, "break :blk{d} hackathon_greet.zxcaml_hackathon_greet_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
         try emitIndent(out, allocator, indent_level);
         try append(out, allocator, "}");
         return true;
@@ -455,7 +455,7 @@ pub fn emitCounterAppExpr(
     if (std.mem.eql(u8, name, "token_vault_process")) {
         if (app.args.len != 7) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "cpi.zxcaml_token_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try append(out, allocator, "token_vault.zxcaml_token_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
     if (std.mem.eql(u8, name, "escrow_full_process")) {
@@ -477,7 +477,7 @@ pub fn emitCounterAppExpr(
         try emitIndent(out, allocator, indent_level + 1);
         try appendPrint(out, allocator, "_ = omlz_escrow_instruction_data_witness_{d};\n", .{block_id});
         try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} cpi.zxcaml_escrow_full_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
+        try appendPrint(out, allocator, "break :blk{d} escrow_full.zxcaml_escrow_full_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
         try emitIndent(out, allocator, indent_level);
         try append(out, allocator, "}");
         return true;
