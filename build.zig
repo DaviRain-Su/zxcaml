@@ -403,6 +403,18 @@ pub fn build(b: *std.Build) void {
     run_core_loc_tests.step.dependOn(b.getInstallStep());
     run_core_loc_tests.setCwd(b.path(""));
 
+    // Source-map schema tests (P9 / F-SRCMAP-1): verify deterministic JSON
+    // shape and parser validation before the BPF builder starts emitting maps.
+    const srcmap_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/driver/srcmap.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_srcmap_tests = b.addRunArtifact(srcmap_tests);
+    run_srcmap_tests.setCwd(b.path(""));
+
     // Codegen regression tests: compile focused `.ml` cases and inspect the
     // emitted Zig source.
     const codegen_external_bytes_test_module = b.createModule(.{
@@ -494,6 +506,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_bridge_wire_compat_tests.step);
     test_step.dependOn(&run_core_loc_tests.step);
+    test_step.dependOn(&run_srcmap_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);
