@@ -314,6 +314,24 @@ pub fn build(b: *std.Build) void {
     const run_render_tests = b.addRunArtifact(render_tests);
     run_render_tests.setCwd(b.path(""));
 
+    // Frontend bridge tests (P9 / F-DX2-2): verify wire 1.1/1.2 loc compatibility.
+    const bridge_wire_compat_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/frontend_bridge/wire_loc_compat_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const ttree_module = b.createModule(.{
+        .root_source_file = b.path("src/frontend_bridge/ttree.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bridge_wire_compat_test_module.addImport("ttree", ttree_module);
+    const bridge_wire_compat_tests = b.addTest(.{
+        .root_module = bridge_wire_compat_test_module,
+    });
+    const run_bridge_wire_compat_tests = b.addRunArtifact(bridge_wire_compat_tests);
+    run_bridge_wire_compat_tests.setCwd(b.path(""));
+
     // Codegen regression tests: compile focused `.ml` cases and inspect the
     // emitted Zig source.
     const codegen_external_bytes_test_module = b.createModule(.{
@@ -400,6 +418,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_render_tests.step);
+    test_step.dependOn(&run_bridge_wire_compat_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);
