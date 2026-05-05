@@ -5,6 +5,7 @@ import os
 import select
 import subprocess
 import sys
+import time
 
 
 BIN = "zig-out/bin/omlz-lsp"
@@ -194,6 +195,28 @@ def shutdown():
             os.unlink(sentinel)
 
 
+def latency():
+    # Fork-per-request latency budget and expected ~80 ms steady-state are cited in
+    # mission-internal/p9-investigation/report.md §3 and Appendix C.
+    uri = fixture_uri("latency.ml")
+    text = read_fixture("latency.ml")
+    elapsed_ms = []
+    proc = start_and_initialize()
+    try:
+        for run in range(3):
+            start = time.perf_counter()
+            send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": run + 1, "text": text}}})
+            params = recv_publish_diagnostics(proc, uri)
+            elapsed_ms.append((time.perf_counter() - start) * 1000.0)
+            assert params["diagnostics"] == [], params
+    finally:
+        stop(proc)
+
+    median_ms = sorted(elapsed_ms)[len(elapsed_ms) // 2]
+    print(f"latency_median={median_ms:.1f}ms")
+    assert median_ms <= 200.0, elapsed_ms
+
+
 if __name__ == "__main__":
     commands = {
         "initialize": initialize,
@@ -201,6 +224,7 @@ if __name__ == "__main__":
         "didopen_clean": didopen_clean,
         "didchange_roundtrip": didchange_roundtrip,
         "shutdown": shutdown,
+        "latency": latency,
     }
     assert len(sys.argv) == 2 and sys.argv[1] in commands, "usage: run_lsp_check.py " + "|".join(commands)
     commands[sys.argv[1]]()
