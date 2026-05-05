@@ -1,1 +1,5 @@
-tests/ui/exception.ml:1:10: error: Texp_try is not supported in the current ZxCaml subset; expected top-level `let` declarations, integer constants, identifiers, string constants, one-argument functions, non-recursive nested `let` expressions, or the whitelisted constructors None/Some/Ok/Error/[]/::, including basic pattern matches over those values
+error[P1-UNSUPPORTED]: Texp_try is not supported in the current ZxCaml subset; expected top-level `let` declarations, integer constants, identifiers, string constants, one-argument functions, non-recursive nested `let` expressions, or the whitelisted constructors None/Some/Ok/Error/[]/::, including basic pattern matches over those values
+ --> tests/ui/exception.ml:1:10
+  |
+1 | let f x = try x with _ -> 0
+  |          ^^^^^^^^^^^^^^^^^

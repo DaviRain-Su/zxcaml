@@ -54,17 +54,86 @@ fn findFirstDiffLine(actual: []const u8, expected: []const u8) ?struct {
     }
 }
 
-/// Runs `omlz run <ml_file>` and returns (stdout, stderr, exit_code).
+fn pathExists(io: Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
+fn stemFromMlName(name: []const u8) []const u8 {
+    std.debug.assert(std.mem.endsWith(u8, name, ".ml"));
+    return name[0 .. name.len - 3];
+}
+
+fn resolveExpectedPath(allocator: Allocator, io: Io, name: []const u8) ![]u8 {
+    const stem = stemFromMlName(name);
+    const stem_expected_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}.expected", .{stem});
+    if (pathExists(io, stem_expected_path)) return stem_expected_path;
+    allocator.free(stem_expected_path);
+
+    return std.fmt.allocPrint(allocator, "tests/ui/{s}.expected", .{name});
+}
+
+fn resolveCmdPath(allocator: Allocator, io: Io, name: []const u8) !?[]u8 {
+    const stem = stemFromMlName(name);
+    const stem_cmd_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}.cmd", .{stem});
+    if (pathExists(io, stem_cmd_path)) return stem_cmd_path;
+    allocator.free(stem_cmd_path);
+
+    const legacy_cmd_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}.cmd", .{name});
+    if (pathExists(io, legacy_cmd_path)) return legacy_cmd_path;
+    allocator.free(legacy_cmd_path);
+    return null;
+}
+
+fn isExplicitSubcommand(token: []const u8) bool {
+    return std.mem.eql(u8, token, "check") or
+        std.mem.eql(u8, token, "run") or
+        std.mem.eql(u8, token, "build") or
+        std.mem.eql(u8, token, "idl");
+}
+
+/// Runs `omlz` for a UI fixture and returns (stdout, stderr, exit_code).
+/// A sibling `.cmd` file may provide per-fixture subcommand flags. If the
+/// first token is an `omlz` subcommand it replaces the default `run`;
+/// otherwise all tokens are passed as flags to `omlz run`.
 /// Caller owns stdout and stderr and must free both.
-fn runOmlz(allocator: Allocator, io: Io, ml_file: []const u8) !struct {
+fn runOmlz(allocator: Allocator, io: Io, ml_file: []const u8, cmd_path: ?[]const u8) !struct {
     stdout: []u8,
     stderr: []u8,
     exit_code: u8,
 } {
-    // Existing UI fixtures lock the pre-P9 one-line stderr shape until the
-    // dedicated DX1 re-bless feature moves them to caret-format expectations.
-    const argv = [_][]const u8{ ui_options.omlz_bin, "run", "--error-format=oneline", ml_file };
-    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    var cmd_data: ?[]u8 = null;
+    defer if (cmd_data) |data| allocator.free(data);
+
+    var tokens = std.ArrayList([]const u8).empty;
+    defer tokens.deinit(allocator);
+
+    if (cmd_path) |path| {
+        cmd_data = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4096));
+        var iter = std.mem.tokenizeAny(u8, cmd_data.?, " \t\r\n");
+        while (iter.next()) |token| {
+            try tokens.append(allocator, token);
+        }
+    }
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, ui_options.omlz_bin);
+
+    var first_flag_index: usize = 0;
+    if (tokens.items.len > 0 and isExplicitSubcommand(tokens.items[0])) {
+        try argv.append(allocator, tokens.items[0]);
+        first_flag_index = 1;
+    } else {
+        try argv.append(allocator, "run");
+    }
+
+    for (tokens.items[first_flag_index..]) |token| {
+        try argv.append(allocator, token);
+    }
+    try argv.append(allocator, ml_file);
+
+    const result = try std.process.run(allocator, io, .{ .argv = argv.items });
 
     const exit_code: u8 = switch (result.term) {
         .exited => |code| code,
@@ -89,8 +158,11 @@ test "ui: all .ml files match their .expected counterparts" {
         const ml_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}", .{name});
         defer allocator.free(ml_path);
 
-        const expected_path = try std.fmt.allocPrint(allocator, "tests/ui/{s}.expected", .{name});
+        const expected_path = try resolveExpectedPath(allocator, io, name);
         defer allocator.free(expected_path);
+
+        const cmd_path = try resolveCmdPath(allocator, io, name);
+        defer if (cmd_path) |path| allocator.free(path);
 
         // Read expected output
         const expected_data = cwd.readFileAlloc(io, expected_path, allocator, .limited(65536)) catch |err| {
@@ -100,7 +172,7 @@ test "ui: all .ml files match their .expected counterparts" {
         defer allocator.free(expected_data);
 
         // Run omlz run
-        const result = try runOmlz(allocator, io, ml_path);
+        const result = try runOmlz(allocator, io, ml_path, cmd_path);
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 

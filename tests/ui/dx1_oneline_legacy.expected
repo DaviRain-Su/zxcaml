@@ -1,0 +1,1 @@
+tests/ui/dx1_oneline_legacy.ml:1:19: error: Texp_for is not supported in the current ZxCaml subset; expected top-level `let` declarations, integer constants, identifiers, string constants, one-argument functions, non-recursive nested `let` expressions, or the whitelisted constructors None/Some/Ok/Error/[]/::, including basic pattern matches over those values
