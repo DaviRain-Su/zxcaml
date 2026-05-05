@@ -34,6 +34,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const hackathon_greet = @import("runtime/programs/hackathon_greet.zig");
         \\const token_vault = @import("runtime/programs/token_vault.zig");
         \\const escrow_full = @import("runtime/programs/escrow_full.zig");
+        \\const ata = @import("runtime/programs/ata.zig");
         \\const prelude = @import("runtime/prelude.zig");
         \\const runtime_panic = @import("runtime/panic.zig");
         \\const spl_token = @import("runtime/spl_token.zig");

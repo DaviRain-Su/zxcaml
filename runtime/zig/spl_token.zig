@@ -19,6 +19,12 @@ pub const pubkey_len: usize = 32;
 pub const transfer_discriminator: u8 = 3;
 /// SPL Token Transfer instruction data length: one u8 discriminator plus u64 amount.
 pub const transfer_instruction_data_len: usize = 9;
+/// SPL Token InitializeAccount instruction discriminator.
+pub const initialize_account_discriminator: u8 = 1;
+/// SPL Token InitializeAccount instruction data length: one u8 discriminator.
+pub const initialize_account_instruction_data_len: usize = 1;
+/// SPL Token InitializeAccount account count: account, mint, owner, rent sysvar.
+pub const initialize_account_account_count: usize = 4;
 /// Canonical packed SPL Token account length.
 pub const token_account_len: usize = 165;
 const max_cpi_account_infos: usize = 4;
@@ -99,6 +105,18 @@ pub fn encodeTransferInto(out: []u8, amount: u64) Error![]const u8 {
     return out[0..transfer_instruction_data_len];
 }
 
+/// Encodes SPL Token InitializeAccount instruction data into a fixed-size array.
+pub fn encodeInitializeAccount() [initialize_account_instruction_data_len]u8 {
+    return .{initialize_account_discriminator};
+}
+
+/// Encodes SPL Token InitializeAccount instruction data into `out` and returns the written prefix.
+pub fn encodeInitializeAccountInto(out: []u8) Error![]const u8 {
+    if (out.len < initialize_account_instruction_data_len) return error.OutputTooShort;
+    out[0] = initialize_account_discriminator;
+    return out[0..initialize_account_instruction_data_len];
+}
+
 /// Builds account metas for Transfer: source writable, destination writable, authority signer.
 pub fn transferAccountMetas(source: *const Pubkey, destination: *const Pubkey, authority: *const Pubkey) [3]cpi.SolAccountMeta {
     return .{
@@ -106,6 +124,30 @@ pub fn transferAccountMetas(source: *const Pubkey, destination: *const Pubkey, a
         .{ .pubkey = destination, .is_writable = 1, .is_signer = 0 },
         .{ .pubkey = authority, .is_writable = 0, .is_signer = 1 },
     };
+}
+
+/// Builds account metas for InitializeAccount: account writable, mint readonly, owner readonly, rent sysvar readonly.
+pub fn initializeAccountMetas(account_pubkey: *const Pubkey, mint: *const Pubkey, owner: *const Pubkey, rent_sysvar: *const Pubkey) [initialize_account_account_count]cpi.SolAccountMeta {
+    return .{
+        .{ .pubkey = account_pubkey, .is_writable = 1, .is_signer = 0 },
+        .{ .pubkey = mint, .is_writable = 0, .is_signer = 0 },
+        .{ .pubkey = owner, .is_writable = 0, .is_signer = 0 },
+        .{ .pubkey = rent_sysvar, .is_writable = 0, .is_signer = 0 },
+    };
+}
+
+/// Builds an SPL Token InitializeAccount instruction using caller-owned meta/data buffers.
+pub fn initializeAccountInstruction(
+    account_pubkey: *const Pubkey,
+    mint: *const Pubkey,
+    owner: *const Pubkey,
+    rent_sysvar: *const Pubkey,
+    metas: *[initialize_account_account_count]cpi.SolAccountMeta,
+    data: *[initialize_account_instruction_data_len]u8,
+) cpi.SolInstruction {
+    metas.* = initializeAccountMetas(account_pubkey, mint, owner, rent_sysvar);
+    data.* = encodeInitializeAccount();
+    return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
 /// Parses the first three input accounts and invokes SPL Token Transfer for one token.
@@ -325,6 +367,47 @@ test "SPL Token Transfer account metas use source destination authority flags" {
     try std.testing.expect(metas[2].pubkey == &authority);
     try std.testing.expectEqual(@as(u8, 0), metas[2].is_writable);
     try std.testing.expectEqual(@as(u8, 1), metas[2].is_signer);
+}
+
+test "SPL Token InitializeAccount instruction encoding is discriminator only" {
+    const encoded = encodeInitializeAccount();
+    try std.testing.expectEqual(@as(usize, 1), encoded.len);
+    try std.testing.expectEqualSlices(u8, &.{1}, &encoded);
+
+    var out: [1]u8 = undefined;
+    const written = try encodeInitializeAccountInto(out[0..]);
+    try std.testing.expectEqualSlices(u8, &.{1}, written);
+    try std.testing.expectError(error.OutputTooShort, encodeInitializeAccountInto(out[0..0]));
+}
+
+test "SPL Token InitializeAccount builder uses canonical metas and data" {
+    var account_pubkey: Pubkey = [_]u8{1} ** pubkey_len;
+    var mint: Pubkey = [_]u8{2} ** pubkey_len;
+    var owner: Pubkey = [_]u8{3} ** pubkey_len;
+    var rent_sysvar: Pubkey = [_]u8{4} ** pubkey_len;
+    var metas: [initialize_account_account_count]cpi.SolAccountMeta = undefined;
+    var data: [initialize_account_instruction_data_len]u8 = undefined;
+
+    const instruction = initializeAccountInstruction(&account_pubkey, &mint, &owner, &rent_sysvar, &metas, &data);
+    try std.testing.expect(instruction.program_id == &program_id);
+    try std.testing.expectEqual(@as(u64, initialize_account_account_count), instruction.account_len);
+    try std.testing.expect(instruction.accounts == metas[0..].ptr);
+    try std.testing.expectEqual(@as(u64, initialize_account_instruction_data_len), instruction.data_len);
+    try std.testing.expect(instruction.data == data[0..].ptr);
+    try std.testing.expectEqualSlices(u8, &.{1}, instruction.data[0..@intCast(instruction.data_len)]);
+
+    try std.testing.expect(metas[0].pubkey == &account_pubkey);
+    try std.testing.expectEqual(@as(u8, 1), metas[0].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[0].is_signer);
+    try std.testing.expect(metas[1].pubkey == &mint);
+    try std.testing.expectEqual(@as(u8, 0), metas[1].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[1].is_signer);
+    try std.testing.expect(metas[2].pubkey == &owner);
+    try std.testing.expectEqual(@as(u8, 0), metas[2].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[2].is_signer);
+    try std.testing.expect(metas[3].pubkey == &rent_sysvar);
+    try std.testing.expectEqual(@as(u8, 0), metas[3].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[3].is_signer);
 }
 
 test "SPL Token account parser extracts mint owner amount and options" {

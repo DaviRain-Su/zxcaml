@@ -181,6 +181,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_runtime_spl_token_tests = b.addRunArtifact(runtime_spl_token_tests);
 
+    const runtime_ata_test_module = b.createModule(.{
+        .root_source_file = b.path("runtime/zig/ata_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const runtime_ata_tests = b.addTest(.{
+        .name = "runtime-ata-test",
+        .root_module = runtime_ata_test_module,
+    });
+    const run_runtime_ata_tests = b.addRunArtifact(runtime_ata_tests);
+
     const runtime_bs58_test_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/bs58.zig"),
         .target = target,
@@ -628,6 +639,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_runtime_syscalls_tests.step);
     test_step.dependOn(&run_runtime_cpi_tests.step);
     test_step.dependOn(&run_runtime_spl_token_tests.step);
+    test_step.dependOn(&run_runtime_ata_tests.step);
     test_step.dependOn(&run_runtime_bs58_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);
     test_step.dependOn(&run_core_no_alloc_tests.step);
