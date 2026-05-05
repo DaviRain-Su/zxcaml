@@ -23,6 +23,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "src/srcmap.rs"]
+mod srcmap;
+
 const PROGRAM_ID_BYTES: [u8; 32] = [20u8; 32];
 const ESCROW_DISCRIMINATOR: u8 = 0xE5;
 const ESCROW_STATE_LEN: usize = 80;
@@ -233,7 +236,7 @@ fn compile_program(example: &str) -> PathBuf {
     output_path
 }
 
-fn setup_mollusk() -> Mollusk {
+fn setup_mollusk_with_elf() -> (Mollusk, PathBuf) {
     let elf_path = compile_program("escrow_full");
     let elf = fs::read(&elf_path).unwrap_or_else(|error| {
         panic!(
@@ -253,12 +256,23 @@ fn setup_mollusk() -> Mollusk {
             name: "system_program",
             entrypoint: solana_system_program::system_processor::Entrypoint::vm,
         });
+    (mollusk, elf_path)
+}
+
+fn setup_mollusk() -> Mollusk {
+    let (mollusk, _elf_path) = setup_mollusk_with_elf();
     mollusk
 }
 
 #[test]
 fn escrow_full_test_srcmap_augmented_so_loads_in_mollusk() {
-    let _mollusk = setup_mollusk();
+    let (_mollusk, elf_path) = setup_mollusk_with_elf();
+    srcmap::assert_with_unmap_on_failure(
+        &elf_path,
+        "0x0",
+        std::env::var_os("ZXCAML_FORCE_UNMAP_DEMO").is_none(),
+        "forced escrow_full source-map unmap demo failure",
+    );
 }
 
 fn system_account() -> Account {
