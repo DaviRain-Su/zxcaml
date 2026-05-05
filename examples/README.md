@@ -7,16 +7,24 @@ file clearly exercises.
 Capability tag vocabulary: `Closure`, `ADT`, `PDA`, `CPI`, `SPL-Token`, `TCO`,
 `Mutual-Rec`, `Region`, `Assert`.
 
+## M-EX2 additions
+
+- [`examples/dao_voting.ml`](./dao_voting.ml) — DAO proposal and vote-record PDAs with yes/no vote counting and double-vote rejection.
+- [`examples/ata_transfer.ml`](./ata_transfer.ml) — Associated Token Account create-idempotent flow followed by a mocked SPL-Token transfer.
+- [`examples/order_book.ml`](./order_book.ml) — Maker/taker order PDA with full and partial fill token-balance flows.
+
 | Example | Capability tags | zignocchio counterpart |
 |---|---|---|
 | [`arith_wrap.ml`](./arith_wrap.ml) | — | — |
 | [`assert_demo.ml`](./assert_demo.ml) | ADT, Assert | — |
+| [`ata_transfer.ml`](./ata_transfer.ml) | CPI, SPL-Token | — |
 | [`box_bool_adt.ml`](./box_bool_adt.ml) | ADT | — |
 | [`captured_loop.ml`](./captured_loop.ml) | Closure | — |
 | [`closure_adt.ml`](./closure_adt.ml) | Closure, ADT | — |
 | [`counter.ml`](./counter.ml) | ADT | — |
 | [`counter_v2.ml`](./counter_v2.ml) | ADT, PDA | [`examples/counter/lib.zig`](https://github.com/DaviRain-Su/zignocchio/blob/main/examples/counter/lib.zig) |
 | [`crypto_demo.ml`](./crypto_demo.ml) | — | — |
+| [`dao_voting.ml`](./dao_voting.ml) | PDA | — |
 | [`demo.ml`](./demo.ml) | — | — |
 | [`div_zero.ml`](./div_zero.ml) | — | — |
 | [`enum_adt.ml`](./enum_adt.ml) | ADT | — |
@@ -26,6 +34,7 @@ Capability tag vocabulary: `Closure`, `ADT`, `PDA`, `CPI`, `SPL-Token`, `TCO`,
 | [`first_class_closure_pass.ml`](./first_class_closure_pass.ml) | Closure | — |
 | [`first_class_closure_return.ml`](./first_class_closure_return.ml) | Closure | — |
 | [`guard_match.ml`](./guard_match.ml) | ADT | — |
+| [`hackathon_greet.ml`](./hackathon_greet.ml) | PDA | — |
 | [`hello.ml`](./hello.ml) | — | — |
 | [`let_basic.ml`](./let_basic.ml) | — | — |
 | [`list_sum.ml`](./list_sum.ml) | ADT | — |
@@ -42,6 +51,7 @@ Capability tag vocabulary: `Closure`, `ADT`, `PDA`, `CPI`, `SPL-Token`, `TCO`,
 | [`option_basic.ml`](./option_basic.ml) | ADT | — |
 | [`option_chain.ml`](./option_chain.ml) | ADT | — |
 | [`option_construct.ml`](./option_construct.ml) | ADT | — |
+| [`order_book.ml`](./order_book.ml) | PDA, CPI, SPL-Token | — |
 | [`pda_storage.ml`](./pda_storage.ml) | PDA | [`examples/pda-storage/lib.zig`](https://github.com/DaviRain-Su/zignocchio/blob/main/examples/pda-storage/lib.zig) |
 | [`record_nested.ml`](./record_nested.ml) | ADT | — |
 | [`record_param_box.ml`](./record_param_box.ml) | ADT | — |
