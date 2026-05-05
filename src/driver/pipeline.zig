@@ -82,6 +82,10 @@ pub const FrontendConfig = struct {
     emit_not_found_diagnostic: bool = true,
 };
 
+pub const FrontendOptions = struct {
+    diagnostics: diag.OutputOptions = .{},
+};
+
 /// Locates and runs `zxc-frontend --emit=sexp <input_file>`.
 pub fn runFrontend(
     allocator: Allocator,
@@ -89,13 +93,23 @@ pub fn runFrontend(
     environ: std.process.Environ,
     input_file: []const u8,
 ) !FrontendResult {
+    return runFrontendWithOptions(allocator, io, environ, input_file, .{});
+}
+
+pub fn runFrontendWithOptions(
+    allocator: Allocator,
+    io: Io,
+    environ: std.process.Environ,
+    input_file: []const u8,
+    options: FrontendOptions,
+) !FrontendResult {
     const path_env = std.process.Environ.getAlloc(environ, allocator, "PATH") catch |err| switch (err) {
         error.EnvironmentVariableMissing => null,
         else => |e| return e,
     };
     defer if (path_env) |path| allocator.free(path);
 
-    return runFrontendWithConfig(allocator, io, input_file, .{ .path_env = path_env });
+    return runFrontendWithConfigOptions(allocator, io, input_file, .{ .path_env = path_env }, options);
 }
 
 /// Locates the frontend as a sibling of `omlz_argv0`, then on PATH, and runs it.
@@ -106,6 +120,17 @@ pub fn runFrontendFromArgv0(
     omlz_argv0: []const u8,
     input_file: []const u8,
 ) !FrontendResult {
+    return runFrontendFromArgv0WithOptions(allocator, io, environ, omlz_argv0, input_file, .{});
+}
+
+pub fn runFrontendFromArgv0WithOptions(
+    allocator: Allocator,
+    io: Io,
+    environ: std.process.Environ,
+    omlz_argv0: []const u8,
+    input_file: []const u8,
+    options: FrontendOptions,
+) !FrontendResult {
     const path_env = std.process.Environ.getAlloc(environ, allocator, "PATH") catch |err| switch (err) {
         error.EnvironmentVariableMissing => null,
         else => |e| return e,
@@ -115,10 +140,10 @@ pub fn runFrontendFromArgv0(
     const sibling_path = try frontendSiblingFromArgv0(allocator, omlz_argv0);
     defer allocator.free(sibling_path);
 
-    return runFrontendWithConfig(allocator, io, input_file, .{
+    return runFrontendWithConfigOptions(allocator, io, input_file, .{
         .sibling_path = sibling_path,
         .path_env = path_env,
-    });
+    }, options);
 }
 
 /// Locates and runs the frontend with an explicit lookup configuration.
@@ -128,9 +153,19 @@ pub fn runFrontendWithConfig(
     input_file: []const u8,
     config: FrontendConfig,
 ) !FrontendResult {
+    return runFrontendWithConfigOptions(allocator, io, input_file, config, .{});
+}
+
+pub fn runFrontendWithConfigOptions(
+    allocator: Allocator,
+    io: Io,
+    input_file: []const u8,
+    config: FrontendConfig,
+    options: FrontendOptions,
+) !FrontendResult {
     const executable = try findFrontendExecutable(allocator, io, config);
     defer allocator.free(executable);
-    return runFrontendExecutable(allocator, io, executable, input_file);
+    return runFrontendExecutableWithOptions(allocator, io, executable, input_file, options);
 }
 
 /// Runs a known frontend executable path with the standard frontend arguments.
@@ -140,8 +175,18 @@ pub fn runFrontendExecutable(
     executable: []const u8,
     input_file: []const u8,
 ) !FrontendResult {
+    return runFrontendExecutableWithOptions(allocator, io, executable, input_file, .{});
+}
+
+pub fn runFrontendExecutableWithOptions(
+    allocator: Allocator,
+    io: Io,
+    executable: []const u8,
+    input_file: []const u8,
+    options: FrontendOptions,
+) !FrontendResult {
     const argv = [_][]const u8{ executable, "--emit=sexp", input_file };
-    return runFrontendArgvParsed(allocator, io, &argv);
+    return runFrontendArgvParsedOptions(allocator, io, &argv, options);
 }
 
 fn frontendSiblingFromArgv0(allocator: Allocator, omlz_argv0: []const u8) ![]u8 {
@@ -157,10 +202,19 @@ pub fn runFrontendArgv(
     io: Io,
     argv: []const []const u8,
 ) !FrontendProcessResult {
+    return runFrontendArgvWithOptions(allocator, io, argv, .{});
+}
+
+pub fn runFrontendArgvWithOptions(
+    allocator: Allocator,
+    io: Io,
+    argv: []const []const u8,
+    options: FrontendOptions,
+) !FrontendProcessResult {
     const completed = try std.process.run(allocator, io, .{ .argv = argv });
     defer allocator.free(completed.stderr);
 
-    try forwardFrontendStderr(io, completed.stderr);
+    try forwardFrontendStderr(io, completed.stderr, options.diagnostics);
 
     switch (completed.term) {
         .exited => |code| {
@@ -182,7 +236,16 @@ fn runFrontendArgvParsed(
     io: Io,
     argv: []const []const u8,
 ) !FrontendResult {
-    var process_result = try runFrontendArgv(allocator, io, argv);
+    return runFrontendArgvParsedOptions(allocator, io, argv, .{});
+}
+
+fn runFrontendArgvParsedOptions(
+    allocator: Allocator,
+    io: Io,
+    argv: []const []const u8,
+    options: FrontendOptions,
+) !FrontendResult {
+    var process_result = try runFrontendArgvWithOptions(allocator, io, argv, options);
     defer process_result.deinit(allocator);
 
     switch (process_result) {
@@ -241,7 +304,7 @@ fn isExecutable(io: Io, path: []const u8) bool {
     return true;
 }
 
-fn forwardFrontendStderr(io: Io, stderr: []const u8) !void {
+fn forwardFrontendStderr(io: Io, stderr: []const u8, options: diag.OutputOptions) !void {
     // Use a single buffered writer for the entire stderr stream instead of
     // creating a new Io.File.Writer per line.  Creating one writer per call
     // to writeStderr triggers a Zig 0.16 Io.File.Writer first-byte-drop
@@ -264,7 +327,12 @@ fn forwardFrontendStderr(io: Io, stderr: []const u8) !void {
             };
             defer parsed.deinit();
 
-            try diag.render(writer, parsed.value);
+            if (options.error_format == .json) {
+                try writer.writeAll(line);
+                try writer.writeAll("\n");
+            } else {
+                try diag.render(writer, std.heap.page_allocator, io, parsed.value, options);
+            }
         } else {
             try writer.writeAll("[zxc-frontend] ");
             try writer.writeAll(line);

@@ -17,9 +17,15 @@ const HelpResult = struct {
     exit_code: u8,
 };
 
+const CommandResult = HelpResult;
+
 fn runHelp(allocator: Allocator, io: Io, subcommand: []const u8) !HelpResult {
     const argv = [_][]const u8{ cli_options.omlz_bin, subcommand, "--help" };
-    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    return runCommand(allocator, io, &argv);
+}
+
+fn runCommand(allocator: Allocator, io: Io, argv: []const []const u8) !CommandResult {
+    const result = try std.process.run(allocator, io, .{ .argv = argv });
 
     const exit_code: u8 = switch (result.term) {
         .exited => |code| code,
@@ -53,6 +59,10 @@ fn outputContainsHelpText(stdout: []const u8, stderr: []const u8, subcommand: []
         containsIgnoreCase(stderr, subcommand);
 }
 
+fn outputContainsNeedle(stdout: []const u8, stderr: []const u8, needle: []const u8) bool {
+    return std.mem.indexOf(u8, stdout, needle) != null or std.mem.indexOf(u8, stderr, needle) != null;
+}
+
 test "cli: every subcommand accepts --help" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -63,13 +73,69 @@ test "cli: every subcommand accepts --help" {
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
 
-        if (result.exit_code != 0 or !outputContainsHelpText(result.stdout, result.stderr, subcommand)) {
+        const has_help = outputContainsHelpText(result.stdout, result.stderr, subcommand);
+        const has_error_format = outputContainsNeedle(result.stdout, result.stderr, "--error-format");
+        const has_color = outputContainsNeedle(result.stdout, result.stderr, "--color");
+
+        if (result.exit_code != 0 or !has_help or !has_error_format or !has_color) {
             std.debug.print(
                 "omlz {s} --help failed expectations\nexit={d}\nstdout:\n{s}\nstderr:\n{s}\n",
                 .{ subcommand, result.exit_code, result.stdout, result.stderr },
             );
         }
         try std.testing.expectEqual(@as(u8, 0), result.exit_code);
-        try std.testing.expect(outputContainsHelpText(result.stdout, result.stderr, subcommand));
+        try std.testing.expect(has_help);
+        try std.testing.expect(has_error_format);
+        try std.testing.expect(has_color);
     }
+}
+
+test "cli: check --color=never emits no ANSI escapes" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const argv = [_][]const u8{
+        cli_options.omlz_bin,
+        "check",
+        "--color=never",
+        "tests/golden/dx1_type_caret.ml",
+    };
+    const result = try runCommand(allocator, io, &argv);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "\x1b[") == null);
+}
+
+test "cli: default error format matches explicit human" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const default_argv = [_][]const u8{
+        cli_options.omlz_bin,
+        "check",
+        "--color=never",
+        "tests/golden/dx1_type_caret.ml",
+    };
+    const explicit_argv = [_][]const u8{
+        cli_options.omlz_bin,
+        "check",
+        "--color=never",
+        "--error-format=human",
+        "tests/golden/dx1_type_caret.ml",
+    };
+
+    const default_result = try runCommand(allocator, io, &default_argv);
+    defer allocator.free(default_result.stdout);
+    defer allocator.free(default_result.stderr);
+    const explicit_result = try runCommand(allocator, io, &explicit_argv);
+    defer allocator.free(explicit_result.stdout);
+    defer allocator.free(explicit_result.stderr);
+
+    try std.testing.expect(default_result.exit_code != 0);
+    try std.testing.expectEqual(default_result.exit_code, explicit_result.exit_code);
+    try std.testing.expectEqualStrings(default_result.stdout, explicit_result.stdout);
+    try std.testing.expectEqualStrings(default_result.stderr, explicit_result.stderr);
 }

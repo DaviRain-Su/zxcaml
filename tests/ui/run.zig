@@ -61,7 +61,9 @@ fn runOmlz(allocator: Allocator, io: Io, ml_file: []const u8) !struct {
     stderr: []u8,
     exit_code: u8,
 } {
-    const argv = [_][]const u8{ ui_options.omlz_bin, "run", ml_file };
+    // Existing UI fixtures lock the pre-P9 one-line stderr shape until the
+    // dedicated DX1 re-bless feature moves them to caret-format expectations.
+    const argv = [_][]const u8{ ui_options.omlz_bin, "run", "--error-format=oneline", ml_file };
     const result = try std.process.run(allocator, io, .{ .argv = &argv });
 
     const exit_code: u8 = switch (result.term) {

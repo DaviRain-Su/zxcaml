@@ -39,7 +39,9 @@ fn runCoreIr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stdout
 /// Runs `omlz check <ml_file>` and returns (stderr, exit_code).
 /// Caller owns stderr and must free it.
 fn runCheckStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stderr: []u8, exit_code: u8 } {
-    const argv = [_][]const u8{ golden_options.omlz_bin, "check", ml_file };
+    // Existing stderr fixtures lock the pre-P9 one-line shape until the
+    // dedicated DX1 re-bless feature migrates them to caret-format goldens.
+    const argv = [_][]const u8{ golden_options.omlz_bin, "check", "--error-format=oneline", ml_file };
     const result = try std.process.run(allocator, io, .{ .argv = &argv });
     allocator.free(result.stdout);
 

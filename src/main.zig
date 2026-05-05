@@ -17,6 +17,8 @@ const pipeline = @import("driver/pipeline.zig");
 const driver_build = @import("driver/build.zig");
 const driver_bpf = @import("driver/bpf.zig");
 const driver_idl = @import("driver/idl.zig");
+const diag = @import("util/diag.zig");
+const render = @import("util/render.zig");
 const interp = @import("backend/interp.zig");
 const zig_codegen = @import("backend/zig_codegen.zig");
 const core_anf = @import("core/anf.zig");
@@ -68,8 +70,9 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported check option; run `omlz --help` for usage.\n");
             std.process.exit(1);
         };
+        const frontend_options = try frontendOptions(init, check_args.diagnostics);
 
-        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], check_args.input_file) catch |err| {
+        var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], check_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
                 try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
             }
@@ -102,8 +105,14 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (args.len == 3 and std.mem.eql(u8, args[1], "run")) {
-        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
+    if (args.len >= 3 and std.mem.eql(u8, args[1], "run")) {
+        const run_args = parseInputSubcommandArgs(args) catch {
+            try writeStderr(init.io, "error: unsupported run option; run `omlz --help` for usage.\n");
+            std.process.exit(1);
+        };
+        const frontend_options = try frontendOptions(init, run_args.diagnostics);
+
+        var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], run_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
                 try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
             }
@@ -118,8 +127,14 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (args.len == 3 and std.mem.eql(u8, args[1], "idl")) {
-        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], args[2]) catch |err| {
+    if (args.len >= 3 and std.mem.eql(u8, args[1], "idl")) {
+        const idl_args = parseInputSubcommandArgs(args) catch {
+            try writeStderr(init.io, "error: unsupported idl option; run `omlz --help` for usage.\n");
+            std.process.exit(1);
+        };
+        const frontend_options = try frontendOptions(init, idl_args.diagnostics);
+
+        var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], idl_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
                 try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
             }
@@ -128,7 +143,7 @@ pub fn main(init: std.process.Init) !void {
         defer result.deinit();
 
         switch (result) {
-            .success => |parsed| try emitIdl(init, parsed.module, args[2]),
+            .success => |parsed| try emitIdl(init, parsed.module, idl_args.input_file),
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
         }
         return;
@@ -139,13 +154,14 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported build option; run `omlz --help` for usage.\n");
             std.process.exit(1);
         };
+        const frontend_options = try frontendOptions(init, build_args.diagnostics);
 
         if (!std.mem.eql(u8, build_args.target, "native") and !std.mem.eql(u8, build_args.target, "bpf")) {
             try writeStderr(init.io, "error: unsupported build target; expected native or bpf.\n");
             std.process.exit(1);
         }
 
-        var result = pipeline.runFrontendFromArgv0(init.gpa, init.io, init.minimal.environ, args[0], build_args.input_file) catch |err| {
+        var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], build_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
                 try writeStderr(init.io, "error: failed to run zxc-frontend subprocess\n");
             }
@@ -202,6 +218,10 @@ fn writeCheckHelp(io: Io) !void {
         \\  --no-alloc       Prove the program performs no Core IR allocations.
         \\  --emit=core-ir   Print the lowered Core IR instead of only checking.
         \\  --bless          Rewrite the Core IR golden snapshot for the input.
+        \\  --error-format=human|json|oneline
+        \\                   Select diagnostic output format (default: human).
+        \\  --color=auto|always|never
+        \\                   Control ANSI colors in human diagnostics (default: auto).
         \\
     );
 }
@@ -217,6 +237,10 @@ fn writeBuildHelp(io: Io) !void {
         \\  --target=bpf     Build a Solana BPF shared object.
         \\  --keep-zig       Keep the generated Zig source under out/program.zig.
         \\  -o <path>        Write the compiled artifact to the given path.
+        \\  --error-format=human|json|oneline
+        \\                   Select diagnostic output format (default: human).
+        \\  --color=auto|always|never
+        \\                   Control ANSI colors in human diagnostics (default: auto).
         \\
     );
 }
@@ -228,6 +252,12 @@ fn writeIdlHelp(io: Io) !void {
         \\
         \\Emits Anchor-compatible IDL JSON for the given OCaml source file.
         \\
+        \\Flags:
+        \\  --error-format=human|json|oneline
+        \\                   Select diagnostic output format (default: human).
+        \\  --color=auto|always|never
+        \\                   Control ANSI colors in human diagnostics (default: auto).
+        \\
     );
 }
 
@@ -238,14 +268,26 @@ fn writeRunHelp(io: Io) !void {
         \\
         \\Runs the given OCaml source file through the tree-walk interpreter.
         \\
+        \\Flags:
+        \\  --error-format=human|json|oneline
+        \\                   Select diagnostic output format (default: human).
+        \\  --color=auto|always|never
+        \\                   Control ANSI colors in human diagnostics (default: auto).
+        \\
     );
 }
+
+const DiagnosticFlags = struct {
+    error_format: diag.ErrorFormat = .human,
+    color: render.Color = .auto,
+};
 
 const CheckArgs = struct {
     emit: ?[]const u8,
     input_file: []const u8,
     bless: bool = false,
     no_alloc: bool = false,
+    diagnostics: DiagnosticFlags = .{},
 };
 
 fn parseCheckArgs(args: []const []const u8) !CheckArgs {
@@ -253,11 +295,14 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
     var input_file: ?[]const u8 = null;
     var bless = false;
     var no_alloc = false;
+    var diagnostics: DiagnosticFlags = .{};
 
     var index: usize = 2;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
-        if (std.mem.startsWith(u8, arg, "--emit=")) {
+        if (parseDiagnosticFlag(arg, &diagnostics) catch return error.UnsupportedCheckArgs) {
+            continue;
+        } else if (std.mem.startsWith(u8, arg, "--emit=")) {
             emit = arg["--emit=".len..];
         } else if (std.mem.eql(u8, arg, "--bless")) {
             bless = true;
@@ -277,6 +322,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         .input_file = input_file orelse return error.UnsupportedCheckArgs,
         .bless = bless,
         .no_alloc = no_alloc,
+        .diagnostics = diagnostics,
     };
 }
 
@@ -285,6 +331,7 @@ const BuildArgs = struct {
     keep_zig: bool,
     input_file: []const u8,
     output_path: []const u8,
+    diagnostics: DiagnosticFlags = .{},
 };
 
 fn parseBuildArgs(args: []const []const u8) !BuildArgs {
@@ -292,11 +339,14 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
     var keep_zig = false;
     var input_file: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
+    var diagnostics: DiagnosticFlags = .{};
 
     var index: usize = 2;
     while (index < args.len) : (index += 1) {
         const arg = args[index];
-        if (std.mem.startsWith(u8, arg, "--target=")) {
+        if (parseDiagnosticFlag(arg, &diagnostics) catch return error.UnsupportedBuildArgs) {
+            continue;
+        } else if (std.mem.startsWith(u8, arg, "--target=")) {
             target = arg["--target=".len..];
         } else if (std.mem.eql(u8, arg, "--keep-zig")) {
             keep_zig = true;
@@ -318,7 +368,71 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
         .keep_zig = keep_zig,
         .input_file = input_file orelse return error.UnsupportedBuildArgs,
         .output_path = output_path orelse return error.UnsupportedBuildArgs,
+        .diagnostics = diagnostics,
     };
+}
+
+const InputSubcommandArgs = struct {
+    input_file: []const u8,
+    diagnostics: DiagnosticFlags = .{},
+};
+
+fn parseInputSubcommandArgs(args: []const []const u8) !InputSubcommandArgs {
+    var input_file: ?[]const u8 = null;
+    var diagnostics: DiagnosticFlags = .{};
+
+    var index: usize = 2;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (parseDiagnosticFlag(arg, &diagnostics) catch return error.UnsupportedInputSubcommandArgs) {
+            continue;
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            return error.UnsupportedInputSubcommandArgs;
+        } else if (input_file == null) {
+            input_file = arg;
+        } else {
+            return error.UnsupportedInputSubcommandArgs;
+        }
+    }
+
+    return .{
+        .input_file = input_file orelse return error.UnsupportedInputSubcommandArgs,
+        .diagnostics = diagnostics,
+    };
+}
+
+fn parseDiagnosticFlag(arg: []const u8, flags: *DiagnosticFlags) !bool {
+    if (std.mem.startsWith(u8, arg, "--error-format=")) {
+        flags.error_format = diag.parseErrorFormat(arg["--error-format=".len..]) catch return error.UnsupportedDiagnosticFlag;
+        return true;
+    }
+    if (std.mem.startsWith(u8, arg, "--color=")) {
+        flags.color = diag.parseColor(arg["--color=".len..]) catch return error.UnsupportedDiagnosticFlag;
+        return true;
+    }
+    return false;
+}
+
+fn frontendOptions(init: std.process.Init, flags: DiagnosticFlags) !pipeline.FrontendOptions {
+    return .{
+        .diagnostics = .{
+            .error_format = flags.error_format,
+            .color = flags.color,
+            // TTY autodetection follows the investigation report's §5 guidance:
+            // resolve `auto` at the CLI edge, not inside the pure renderer.
+            .stderr_is_tty = std.Io.File.stderr().isTty(init.io) catch false,
+            .no_color_env = try hasNoColorEnv(init.gpa, init.minimal.environ),
+        },
+    };
+}
+
+fn hasNoColorEnv(allocator: std.mem.Allocator, environ: std.process.Environ) !bool {
+    const value = std.process.Environ.getAlloc(environ, allocator, "NO_COLOR") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return false,
+        else => |e| return e,
+    };
+    allocator.free(value);
+    return true;
 }
 
 fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, check_args: CheckArgs) !void {
