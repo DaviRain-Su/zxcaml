@@ -15,7 +15,7 @@
    │   .cmt（二进制 Typedtree）
    ▼
 [ zxc-frontend (OCaml 胶水) ]        ◀── 遍历 Typedtree，强制子集白名单
-   │   .cir.sexp（带版本的 wire 格式；当前 `1.1`）
+   │   .cir.sexp（带版本的 wire 格式；当前 `1.2`）
    ▼
 [ frontend_bridge (Zig) ]            ◀── 把 sexp 解析成 Zig 镜像类型
    │   ttree.Module（Zig）
@@ -49,7 +49,7 @@ Solana BPF .so
                   我们不拥有这个格式；我们消费它的一个 *子集*
                  （见 10-frontend-bridge.md §4）。
 
-.cir.sexp       — 我们的 wire 格式（当前 `1.1`）：
+.cir.sexp       — 我们的 wire 格式（当前 `1.2`）：
                   对所接受 Typedtree 子集的有版本、无损 S-expression 序列化。
                   每个节点都带 `ty` 和 `span`。
 
@@ -68,7 +68,7 @@ Lowered IR      — Core IR 加上显式的分配计划和闭包表示。
 **不变量：** Core IR 是唯一稳定契约。后端**绝不**回头看 `.cmt`、`.cir.sexp`、
 `ttree`。Lowered IR 允许因策略而异 —— 这正是它存在的意义。
 
-为什么要走当前 `1.1` 的 sexp wire + Zig 镜像，而不是直接从 Zig 读 `.cmt`？
+为什么要走当前 `1.2` 的 sexp wire + Zig 镜像，而不是直接从 Zig 读 `.cmt`？
 因为 `.cmt` 是 OCaml 的 marshal 格式，跨发行版不稳定。
 sexp 是 **我们的**，由我们定版本，把上游 OCaml 的二进制格式和我们的消费者解耦。
 

@@ -70,7 +70,7 @@
 
 ### 缓解
 - ADR-011 让构建保持单驱动（`build.zig`），双语对外不可见。
-- `.cir.sexp` wire 格式带版本（当前 `1.1`；见 `10-frontend-bridge.md` §3.2）。
+- `.cir.sexp` wire 格式带版本（当前 `1.2`；见 `10-frontend-bridge.md` §3.2）。
   major bump 同 PR 内更新两侧。
 - "每个 phase 一个 OCaml 版本"的策略写在 ADR-010 里，
   并被 `08-roadmap.md` 引用。

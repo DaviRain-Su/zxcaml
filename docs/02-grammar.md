@@ -18,7 +18,7 @@ functional record update, and the bundled `Option`, `Result`, `List`,
 `Map`, `Set`, `String`, `Char`, `Crypto`, and `Pubkey` stdlib surfaces.
 
 The authoritative implementation is `src/frontend/zxc_subset.ml`; the
-wire contract currently emitted by the frontend is sexp **version `1.1`**.
+wire contract currently emitted by the frontend is sexp **version `1.2`**.
 `src/frontend/zxc_sexp_format.md` is a lower-level wire-contract reference;
 this document describes the user-facing subset.
 
@@ -60,7 +60,7 @@ Accepted expression classes:
 
 | Surface form | Notes |
 |---|---|
-| `let x = e` / `let rec f x = e` / recursive `and` groups | top-level and nested; mutually recursive groups are preserved in wire `1.1` |
+| `let x = e` / `let rec f x = e` / recursive `and` groups | top-level and nested; mutually recursive groups are preserved in wire `1.2` (introduced in `1.1`) |
 | `fun x -> e` / function-sugar lets | curried multi-argument functions are represented as nested lambdas / multi-arg arrows |
 | variable reference | identifiers resolved by OCaml before serialisation; stdlib paths such as `List.map` stay qualified |
 | integer, string, char, boolean, and unit constants | other constants rejected |

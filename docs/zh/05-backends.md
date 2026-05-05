@@ -37,7 +37,7 @@ Stub（仅签名，必须能编译，被调用时返回"未实现"诊断）：
 ### 2.1 输入
 
 由 `ArenaStrategy` 产出的 `Lowered IR`。
-后端 **不允许** 回头读上游 `Typedtree`、当前 `1.1` 的 sexp wire 格式、Zig 的 `ttree` 镜像，
+后端 **不允许** 回头读上游 `Typedtree`、当前 `1.2` 的 sexp wire 格式、Zig 的 `ttree` 镜像，
 也不允许直接读 Core IR。
 
 ### 2.2 输出

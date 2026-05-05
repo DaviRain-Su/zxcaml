@@ -15,7 +15,7 @@ The frontend is borrowed from upstream OCaml; everything from
    │   .cmt (binary Typedtree)
    ▼
 [ zxc-frontend (OCaml glue) ]        ◀── walks Typedtree, enforces subset
-   │   .cir.sexp (versioned wire format; current `1.1`)
+   │   .cir.sexp (versioned wire format; current `1.2`)
    ▼
 [ frontend_bridge (Zig) ]            ◀── parses sexp into Zig mirror types
    │   ttree.Module (Zig)
@@ -50,7 +50,7 @@ small. Above the bar is OCaml; below it is Zig.
                   type-checked AST. We do not own this format; we
                   consume a *subset* of it (see 10-frontend-bridge.md §4).
 
-.cir.sexp       — our wire format (current `1.1`): a versioned, lossless
+.cir.sexp       — our wire format (current `1.2`): a versioned, lossless
                   serialisation of the accepted Typedtree subset.
                   Carries `ty` and `span` on every node.
 
@@ -73,7 +73,7 @@ Lowered IR      — Core IR with explicit allocation plans and closure
 look at `.cmt`, `.cir.sexp`, or `ttree`. Lowered IR is allowed to
 differ per strategy — that is the whole point of having it.
 
-Why a sexp wire format (currently `1.1`) and a Zig mirror, instead of consuming
+Why a sexp wire format (currently `1.2`) and a Zig mirror, instead of consuming
 `.cmt` directly from Zig? Because `.cmt` is OCaml's marshal format
 and is unstable across releases. The sexp is **ours**, versioned by
 us, and decouples upstream OCaml's binary format from our consumer.

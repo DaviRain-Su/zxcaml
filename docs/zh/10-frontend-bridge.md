@@ -85,11 +85,11 @@ zxc-frontend --emit=sexp <input.ml>
 
 ### 3.1 顶层形态
 
-当前 wire grammar 是 sexp **版本 `1.1`**。Header 携带版本，使 `omlz` 能对过期
+当前 wire grammar 是 sexp **版本 `1.2`**。Header 携带版本，使 `omlz` 能对过期
 前端输出给出 upgrade hint：
 
 ```text
-(zxcaml-cir 1.1
+(zxcaml-cir 1.2
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -117,6 +117,7 @@ Wire-format history：
 | `0.9` | CPI-shaped type references 和 function applications |
 | `1.0` | external declarations、instruction-data/account attributes，以及 P4/P5 Solana/IDL metadata |
 | `1.1` | mutual-recursion groups 和 erased type aliases |
+| `1.2` | 用于 DX2 diagnostics、LSP 和 source maps 的 per-node source locations |
 
 诊断位置仍通过 stderr 上的诊断单独携带；普通注释和格式 trivia 不会序列化。
 
