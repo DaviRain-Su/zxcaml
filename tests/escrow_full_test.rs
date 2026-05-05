@@ -113,6 +113,36 @@ fn llvm20_lib_dir() -> Option<PathBuf> {
     lib.join("libLLVM.dylib").exists().then_some(lib)
 }
 
+fn llvm_objdump_path() -> PathBuf {
+    for candidate in [
+        PathBuf::from("/opt/homebrew/opt/llvm@20/bin/llvm-objdump"),
+        PathBuf::from("/usr/local/opt/llvm@20/bin/llvm-objdump"),
+    ] {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    let output = Command::new("brew")
+        .args(["--prefix", "llvm@20"])
+        .output()
+        .ok();
+    if let Some(output) = output {
+        if output.status.success() {
+            if let Ok(prefix) = String::from_utf8(output.stdout) {
+                let objdump = PathBuf::from(prefix.trim())
+                    .join("bin")
+                    .join("llvm-objdump");
+                if objdump.exists() {
+                    return objdump;
+                }
+            }
+        }
+    }
+
+    PathBuf::from("llvm-objdump")
+}
+
 fn apply_platform_env(command: &mut Command) {
     if cfg!(target_os = "macos") {
         if let Some(lib) = llvm20_lib_dir() {
@@ -124,6 +154,46 @@ fn apply_platform_env(command: &mut Command) {
             command.env("DYLD_FALLBACK_LIBRARY_PATH", value);
         }
     }
+}
+
+fn assert_embedded_srcmap_section(elf_path: &Path) {
+    let mut command = Command::new(llvm_objdump_path());
+    command.args(["-h"]).arg(elf_path);
+    apply_platform_env(&mut command);
+
+    let output = command.output().unwrap_or_else(|error| {
+        panic!(
+            "failed to spawn `llvm-objdump -h {}` while checking embedded source map: {error}",
+            elf_path.display()
+        )
+    });
+    assert!(
+        output.status.success(),
+        "`llvm-objdump -h {}` failed\nstdout:\n{}\nstderr:\n{}",
+        elf_path.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let section_line = stdout
+        .lines()
+        .find(|line| line.contains(".zxcaml.srcmap"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected embedded .zxcaml.srcmap section in {}\nllvm-objdump stdout:\n{}",
+                elf_path.display(),
+                stdout
+            )
+        });
+
+    // mission-internal/p9-investigation/report.md §4 found loader risk low
+    // because llvm-objcopy adds this as a non-allocated SHT_PROGBITS section.
+    // Keep that safety property live while Mollusk loads the augmented escrow ELF.
+    assert!(
+        !section_line.contains("ALLOC"),
+        "expected .zxcaml.srcmap to remain non-allocated, got section line: {section_line}"
+    );
 }
 
 fn compile_program(example: &str) -> PathBuf {
@@ -159,6 +229,7 @@ fn compile_program(example: &str) -> PathBuf {
         "expected BPF artifact at {}",
         output_path.display()
     );
+    assert_embedded_srcmap_section(&output_path);
     output_path
 }
 
@@ -183,6 +254,11 @@ fn setup_mollusk() -> Mollusk {
             entrypoint: solana_system_program::system_processor::Entrypoint::vm,
         });
     mollusk
+}
+
+#[test]
+fn escrow_full_test_srcmap_augmented_so_loads_in_mollusk() {
+    let _mollusk = setup_mollusk();
 }
 
 fn system_account() -> Account {

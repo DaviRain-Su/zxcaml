@@ -358,6 +358,26 @@ pub fn build(b: *std.Build) void {
     run_unmap_cli_tests.step.dependOn(&run_srcmap_cli_tests.step);
     run_unmap_cli_tests.setCwd(b.path(""));
 
+    // Source-map determinism property test (P9 / F-SRCMAP-6): verify repeated
+    // BPF builds of the same source produce byte-identical `.map` JSON.
+    const srcmap_determinism_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/property/srcmap_determinism_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const srcmap_det_options = b.addOptions();
+    srcmap_det_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    srcmap_determinism_test_module.addOptions("srcmap_det_options", srcmap_det_options);
+    const srcmap_determinism_tests = b.addTest(.{
+        .root_module = srcmap_determinism_test_module,
+    });
+    const run_srcmap_determinism_tests = b.addRunArtifact(srcmap_determinism_tests);
+    run_srcmap_determinism_tests.step.dependOn(b.getInstallStep());
+    // The property build writes out/program.zig and out/hackathon_greet.map,
+    // so keep it serialized with the other source-map CLI integration tests.
+    run_srcmap_determinism_tests.step.dependOn(&run_unmap_cli_tests.step);
+    run_srcmap_determinism_tests.setCwd(b.path(""));
+
     // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.
     const lsp_scaffold_test_module = b.createModule(.{
         .root_source_file = b.path("tests/lsp/scaffold_test.zig"),
@@ -477,7 +497,7 @@ pub fn build(b: *std.Build) void {
     // This harness invokes `omlz build`, which writes out/program.zig. Keep it
     // after the determinism harness, which also exercises native builds.
     run_codegen_external_bytes_tests.step.dependOn(&run_determinism_tests.step);
-    run_codegen_external_bytes_tests.step.dependOn(&run_unmap_cli_tests.step);
+    run_codegen_external_bytes_tests.step.dependOn(&run_srcmap_determinism_tests.step);
     run_codegen_external_bytes_tests.step.dependOn(b.getInstallStep());
     run_codegen_external_bytes_tests.setCwd(b.path(""));
 
@@ -548,6 +568,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
     test_step.dependOn(&run_unmap_cli_tests.step);
+    test_step.dependOn(&run_srcmap_determinism_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);
     test_step.dependOn(&run_lsp_harness.step);
