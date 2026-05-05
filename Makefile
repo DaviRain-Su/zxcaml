@@ -1,4 +1,4 @@
-.PHONY: demo demo-record-prep demo-clean slides-install slides-dev slides-export-pdf slides-clean
+.PHONY: demo demo-record-prep demo-clean demo-clean-deep slides-install slides-dev slides-export-pdf slides-clean clean
 
 demo:
 	./scripts/demo/run_full_demo.sh
@@ -32,3 +32,17 @@ slides-export-pdf:
 
 slides-clean:
 	rm -rf out/slides
+
+clean:
+	$(MAKE) demo-clean
+	$(MAKE) slides-clean
+	@printf '[clean] done: demo-clean + slides-clean completed; anchor_reference/target preserved (use demo-clean-deep to remove it).\n'
+
+demo-clean-deep:
+	@if [ -d scripts/demo/anchor_reference/target ]; then \
+		freed=$$(du -sh scripts/demo/anchor_reference/target 2>/dev/null | awk '{print $$1}'); \
+		rm -rf scripts/demo/anchor_reference/target; \
+		printf '[demo-clean-deep] removed scripts/demo/anchor_reference/target (freed approximately %s).\n' "$$freed"; \
+	else \
+		printf '[demo-clean-deep] no scripts/demo/anchor_reference/target directory found.\n'; \
+	fi

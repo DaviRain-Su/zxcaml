@@ -23,6 +23,18 @@ Or run the whole sequence with timestamps:
 
 Generated local artifacts live under `out/`, `scripts/demo/.keypairs/`, `scripts/demo/.program_id`, `scripts/demo/.surfpool.pid`, and `.surfpool/`.
 
+## Deep clean
+
+`make clean` removes normal demo and slide outputs while preserving `scripts/demo/anchor_reference/target/`, which can contain large but valid Anchor/Cargo build artifacts.
+
+To opt in to removing that Anchor build cache, run:
+
+```sh
+make demo-clean-deep
+```
+
+The deep-clean target deletes `scripts/demo/anchor_reference/target/` only when it exists and prints the approximate disk space freed.
+
 ## Expected Output
 
 A successful run prints:
