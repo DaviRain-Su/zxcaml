@@ -53,6 +53,32 @@ fn runCheckStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { s
     return .{ .stderr = result.stderr, .exit_code = exit_code };
 }
 
+/// Runs `omlz check --error-format=json <ml_file>` and returns (stderr, exit_code).
+/// Caller owns stderr and must free it.
+fn runCheckJsonStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stderr: []u8, exit_code: u8 } {
+    const argv = [_][]const u8{ golden_options.omlz_bin, "check", "--error-format=json", ml_file };
+    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    allocator.free(result.stdout);
+
+    const exit_code: u8 = switch (result.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+
+    return .{ .stderr = result.stderr, .exit_code = exit_code };
+}
+
+const JsonDiagnostic = struct {
+    file: []const u8,
+    line: u32,
+    col: u32,
+    end_line: ?u32 = null,
+    end_col: ?u32 = null,
+    severity: []const u8,
+    code: ?[]const u8 = null,
+    message: []const u8,
+};
+
 /// Trims trailing newline from a slice, returning the trimmed view.
 fn trimTrailingNewline(s: []const u8) []const u8 {
     return std.mem.trimEnd(u8, s, "\n\r");
@@ -228,6 +254,28 @@ test "golden: frontend stderr diagnostics match for tests/golden/*.stderr.txt fi
         std.debug.print("WARNING: no golden stderr fixtures found in tests/golden/\n", .{});
     }
     try std.testing.expectEqual(@as(usize, 0), failures);
+}
+
+test "golden: JSON diagnostics expose multi-character span end column" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const result = try runCheckJsonStderr(allocator, io, "tests/golden/dx1_type_caret.ml");
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+
+    const first_line = std.mem.sliceTo(result.stderr, '\n');
+    var parsed = try std.json.parseFromSlice(JsonDiagnostic, allocator, first_line, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("error", parsed.value.severity);
+    try std.testing.expectEqualStrings("OCAML-FRONTEND", parsed.value.code orelse "");
+    try std.testing.expectEqual(@as(u32, 1), parsed.value.line);
+    try std.testing.expectEqual(parsed.value.line, parsed.value.end_line orelse 0);
+    try std.testing.expect((parsed.value.end_col orelse parsed.value.col) > parsed.value.col);
 }
 
 test "golden: snapshot determinism — no memory addresses or timestamps" {

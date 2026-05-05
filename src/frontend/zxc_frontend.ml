@@ -31,11 +31,12 @@ let emit_diagnostic (diagnostic : Zxc_subset.diagnostic) =
     | Some value -> Format.fprintf ppf ",\"hint\":%a" pp_json_string value
   in
   Format.eprintf
-    "@[<h>{\"file\":%a,\"line\":%d,\"col\":%d,\"severity\":%a,\"message\":%a,\
-     \"node_kind\":%a%a}@]@."
-    pp_json_string loc.file loc.line loc.col pp_json_string diagnostic.severity
-    pp_json_string diagnostic.message pp_json_string diagnostic.node_kind
-    pp_optional_field diagnostic.hint
+    "@[<h>{\"file\":%a,\"line\":%d,\"col\":%d,\"end_line\":%d,\"end_col\":%d,\
+     \"severity\":%a,\"code\":%a,\"message\":%a,\"node_kind\":%a%a}@]@."
+    pp_json_string loc.file loc.line loc.col loc.end_line loc.end_col
+    pp_json_string diagnostic.severity pp_json_string diagnostic.code
+    pp_json_string diagnostic.message pp_json_string diagnostic.node_kind pp_optional_field
+    diagnostic.hint
 
 let emit_internal_error ~message =
   let diagnostic : Zxc_subset.diagnostic =
@@ -65,7 +66,7 @@ let find_line predicate text =
   let lines = String.split_on_char '\n' text in
   List.find_opt predicate lines
 
-let parse_int_at s start =
+let parse_int_span_at s start =
   let len = String.length s in
   let rec advance index =
     if index < len then
@@ -74,7 +75,12 @@ let parse_int_at s start =
   in
   let finish = advance start in
   if finish = start then None
-  else int_of_string_opt (String.sub s start (finish - start))
+  else
+    Option.map
+      (fun value -> (value, finish))
+      (int_of_string_opt (String.sub s start (finish - start)))
+
+let parse_int_at s start = Option.map fst (parse_int_span_at s start)
 
 let find_sub_from s sub start =
   let s_len = String.length s in
@@ -101,15 +107,26 @@ let parse_ocamlc_location ~input stderr =
           | Some index -> parse_int_at line (index + String.length line_prefix)
           | None -> None
         in
-        let col =
+        let col, end_col =
           match find_sub_from line chars_prefix file_end with
-          | Some index -> parse_int_at line (index + String.length chars_prefix)
-          | None -> None
+          | Some index -> (
+              let chars_start = index + String.length chars_prefix in
+              match parse_int_span_at line chars_start with
+              | Some (start_col, after_start) ->
+                  let parsed_end_col =
+                    if after_start < String.length line && line.[after_start] = '-' then
+                      parse_int_at line (after_start + 1)
+                    else None
+                  in
+                  (Some start_col, parsed_end_col)
+              | None -> (None, None))
+          | None -> (None, None)
         in
         let line_number = Option.value line_number ~default:1 in
         let col = Option.value col ~default:0 in
-        { Zxc_subset.file; line = line_number; col; end_line = line_number; end_col = col }
-      with Invalid_argument _ ->
+        let end_col = Option.value end_col ~default:col in
+        { Zxc_subset.file; line = line_number; col; end_line = line_number; end_col }
+      with Invalid_argument _ | Not_found ->
         { Zxc_subset.file = input; line = 1; col = 0; end_line = 1; end_col = 0 })
 
 let parse_ocamlc_message stderr =
