@@ -327,6 +327,18 @@ pub fn build(b: *std.Build) void {
     run_lsp_scaffold_tests.step.dependOn(b.getInstallStep());
     run_lsp_scaffold_tests.setCwd(b.path(""));
 
+    // LSP JSON-RPC framing tests (P9 / F-LSP-2): verify Content-Length
+    // reader/writer behavior before later protocol handlers rely on it.
+    const lsp_jsonrpc_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lsp/jsonrpc.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_lsp_jsonrpc_tests = b.addRunArtifact(lsp_jsonrpc_tests);
+    run_lsp_jsonrpc_tests.setCwd(b.path(""));
+
     // Renderer tests (P9 / F-DX1-1): verify rustc-style diagnostic rendering.
     const render_test_module = b.createModule(.{
         .root_source_file = b.path("tests/cli/render_test.zig"),
@@ -468,6 +480,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
+    test_step.dependOn(&run_lsp_jsonrpc_tests.step);
     test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_bridge_wire_compat_tests.step);
     test_step.dependOn(&run_core_loc_tests.step);
