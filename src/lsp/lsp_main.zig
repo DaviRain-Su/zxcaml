@@ -48,6 +48,10 @@ const ServerState = struct {
     /// LSP 3.17 §Server lifetime requires `initialize` as the first request;
     /// until then, servers reject all other requests as not initialized.
     initialized: bool = false,
+    /// LSP 3.17 §`shutdown` / §`exit`: `shutdown` is a request that returns
+    /// a null result and records intent to terminate; a later `exit`
+    /// notification terminates with status 0 only if this flag was set.
+    shutdown_received: bool = false,
     documents: std.StringHashMap([]u8),
     next_doc_id: u64 = 0,
 
@@ -56,6 +60,15 @@ const ServerState = struct {
             .allocator = allocator,
             .documents = std.StringHashMap([]u8).init(allocator),
         };
+    }
+
+    fn deinit(self: *ServerState) void {
+        var iter = self.documents.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.documents.deinit();
     }
 
     fn putDocument(self: *ServerState, uri: []const u8, text: []const u8) !void {
@@ -81,6 +94,8 @@ fn runServer(io: Io) !void {
     const stdout_writer = &stdout_file_writer.interface;
 
     var state = ServerState.init(std.heap.page_allocator);
+    defer state.deinit();
+    defer cleanupTempFiles(io) catch {};
     while (true) {
         var message_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer message_arena.deinit();
@@ -127,6 +142,11 @@ fn handleMessage(
     }
 
     const method = method_value.string;
+    if (std.mem.eql(u8, method, "exit")) {
+        cleanupTempFiles(io) catch {};
+        std.process.exit(if (state.shutdown_received) 0 else 1);
+    }
+
     if (std.mem.eql(u8, method, "initialize")) {
         state.initialized = true;
         if (id) |request_id| try writeInitializeResponse(allocator, writer, request_id);
@@ -139,6 +159,12 @@ fn handleMessage(
     }
 
     if (std.mem.eql(u8, method, "initialized")) {
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "shutdown")) {
+        state.shutdown_received = true;
+        if (id) |request_id| try writeNullResultResponse(allocator, writer, request_id);
         return;
     }
 
@@ -244,6 +270,24 @@ fn tempPath(allocator: std.mem.Allocator, state: *ServerState) ![]u8 {
     );
 }
 
+fn cleanupTempFiles(io: Io) !void {
+    var prefix_buffer: [64]u8 = undefined;
+    const prefix = try std.fmt.bufPrint(&prefix_buffer, "omlz_lsp_{d}_", .{std.posix.system.getpid()});
+
+    var tmp_dir = try std.Io.Dir.openDirAbsolute(io, "/tmp", .{
+        .access_sub_paths = true,
+        .iterate = true,
+    });
+    defer tmp_dir.close(io);
+
+    var iter = tmp_dir.iterate();
+    while (try iter.next(io)) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, prefix)) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
+        tmp_dir.deleteFile(io, entry.name) catch {};
+    }
+}
+
 fn writePublishDiagnostics(
     allocator: std.mem.Allocator,
     writer: *Io.Writer,
@@ -323,6 +367,20 @@ fn writeInitializeResponse(
     try body.writer.writeAll(",\"version\":");
     try std.json.Stringify.value(build_options.version, .{}, &body.writer);
     try body.writer.writeAll("}}}");
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeNullResultResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":null}");
 
     try jsonrpc.writeFrame(writer, body.writer.buffered());
 }

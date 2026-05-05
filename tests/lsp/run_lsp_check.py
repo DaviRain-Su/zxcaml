@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import glob
 import os
 import select
 import subprocess
@@ -89,6 +90,11 @@ def assert_no_lsp_process():
     assert subprocess.run(["pgrep", "-f", "omlz-lsp"], stdout=subprocess.DEVNULL).returncode == 1
 
 
+def assert_no_temp_files():
+    leftovers = glob.glob("/tmp/omlz_lsp_*.ml")
+    assert leftovers == [], "leftover temp files: " + repr(leftovers)
+
+
 def start_and_initialize():
     proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
@@ -114,6 +120,7 @@ def stop(proc):
             proc.kill()
             proc.wait(timeout=2)
     assert_no_lsp_process()
+    assert_no_temp_files()
 
 
 def initialize():
@@ -166,12 +173,34 @@ def didchange_roundtrip():
         stop(proc)
 
 
+def shutdown():
+    proc = start_and_initialize()
+    sentinel = f"/tmp/omlz_lsp_{proc.pid}_sentinel.ml"
+    with open(sentinel, "w", encoding="utf-8") as f:
+        f.write("let _ = 1\n")
+    try:
+        send(proc, {"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None})
+        response = recv(proc)
+        assert response == {"jsonrpc": "2.0", "id": 2, "result": None}, response
+        send(proc, {"jsonrpc": "2.0", "method": "exit", "params": None})
+        proc.wait(timeout=2)
+        assert proc.returncode == 0, proc.returncode
+        assert_no_lsp_process()
+        assert_no_temp_files()
+    finally:
+        if proc.poll() is None:
+            stop(proc)
+        if os.path.exists(sentinel):
+            os.unlink(sentinel)
+
+
 if __name__ == "__main__":
     commands = {
         "initialize": initialize,
         "didopen_parse_err": didopen_parse_err,
         "didopen_clean": didopen_clean,
         "didchange_roundtrip": didchange_roundtrip,
+        "shutdown": shutdown,
     }
     assert len(sys.argv) == 2 and sys.argv[1] in commands, "usage: run_lsp_check.py " + "|".join(commands)
     commands[sys.argv[1]]()
