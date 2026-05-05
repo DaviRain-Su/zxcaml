@@ -494,6 +494,12 @@ pub fn emitCounterAppExpr(
         try append(out, allocator, "ata_transfer.zxcaml_ata_transfer_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
+    if (std.mem.eql(u8, name, "order_book_process")) {
+        if (app.args.len != 8) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        try append(out, allocator, "order_book.zxcaml_order_book_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        return true;
+    }
     return false;
 }
 

@@ -109,3 +109,7 @@ path = "dao_voting_test.rs"
 [[test]]
 name = "ata_transfer_test"
 path = "ata_transfer_test.rs"
+
+[[test]]
+name = "order_book_test"
+path = "order_book_test.rs"
