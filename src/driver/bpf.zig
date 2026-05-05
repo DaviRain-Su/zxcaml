@@ -60,6 +60,8 @@ const RuntimeFile = struct {
     out_path: []const u8,
 };
 
+const srcmap_section_name = ".zxcaml.srcmap";
+
 const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
     .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
@@ -124,6 +126,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         const source_map = try buildSourceMapSchema(allocator, input);
         defer allocator.free(source_map.schema.entries);
         try hook.emit(hook.context, source_map);
+        try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
     }
 }
 
@@ -351,6 +354,61 @@ fn isExecutable(io: Io, path: []const u8) bool {
     }
     std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch return false;
     return true;
+}
+
+fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, schema: srcmap.Schema) !void {
+    // F-SRCMAP-4 follows investigation §4 / Appendix B: add a post-link
+    // SHT_PROGBITS section containing the same deterministic, minified JSON as
+    // the sidecar, gzip-compressed. `llvm-objcopy --add-section` does not set
+    // SHF_ALLOC by default, so the Solana loader ignores the new section.
+    const json = try srcmap.serializeJson(allocator, schema);
+    defer allocator.free(json);
+
+    const gzipped = try gzipBytes(allocator, json);
+    defer allocator.free(gzipped);
+
+    const temp_section_path = try std.fmt.allocPrint(allocator, "{s}.zxcaml.srcmap.gz.tmp", .{output_path});
+    defer allocator.free(temp_section_path);
+    defer std.Io.Dir.cwd().deleteFile(io, temp_section_path) catch {};
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = temp_section_path,
+        .data = gzipped,
+        .flags = .{ .truncate = true },
+    });
+
+    const section_arg = try std.fmt.allocPrint(allocator, "{s}={s}", .{ srcmap_section_name, temp_section_path });
+    defer allocator.free(section_arg);
+
+    const objcopy = try findLlvmObjcopy(allocator, io);
+    defer allocator.free(objcopy);
+
+    const argv = [_][]const u8{
+        objcopy,
+        "--add-section",
+        section_arg,
+        output_path,
+    };
+    try runAndForward(allocator, io, &argv, null, error.LlvmObjcopyFailed);
+}
+
+fn gzipBytes(allocator: Allocator, bytes: []const u8) ![]u8 {
+    var output = try std.Io.Writer.Allocating.initCapacity(allocator, bytes.len + std.compress.flate.Container.gzip.size());
+    errdefer output.deinit();
+
+    const flate_buffer = try allocator.alloc(u8, std.compress.flate.max_window_len);
+    defer allocator.free(flate_buffer);
+
+    var compressor = try std.compress.flate.Compress.init(
+        &output.writer,
+        flate_buffer,
+        .gzip,
+        .default,
+    );
+    try compressor.writer.writeAll(bytes);
+    try compressor.finish();
+
+    return output.toOwnedSlice();
 }
 
 fn writeMissingSbpfLinkerDiagnostic(io: Io) !void {

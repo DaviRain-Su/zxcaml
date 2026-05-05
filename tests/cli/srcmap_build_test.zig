@@ -13,6 +13,7 @@ const cli_options = @import("cli_options");
 const srcmap = @import("srcmap");
 
 const map_path = "out/hackathon_greet.map";
+const so_path = "out/hackathon_greet.so";
 
 const CommandResult = struct {
     stdout: []u8,
@@ -67,6 +68,26 @@ fn fileExists(io: Io, path: []const u8) bool {
     return true;
 }
 
+fn llvmObjdumpPath(io: Io) []const u8 {
+    const homebrew_objdump = "/opt/homebrew/opt/llvm@20/bin/llvm-objdump";
+    std.Io.Dir.accessAbsolute(io, homebrew_objdump, .{ .execute = true }) catch return "llvm-objdump";
+    return homebrew_objdump;
+}
+
+fn llvmReadelfPath(io: Io) []const u8 {
+    const homebrew_readelf = "/opt/homebrew/opt/llvm@20/bin/llvm-readelf";
+    std.Io.Dir.accessAbsolute(io, homebrew_readelf, .{ .execute = true }) catch return "llvm-readelf";
+    return homebrew_readelf;
+}
+
+fn findSrcmapSectionLine(output: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, ".zxcaml.srcmap") != null) return line;
+    }
+    return null;
+}
+
 test "cli: bpf build emits deterministic source-map sidecar" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -96,6 +117,49 @@ test "cli: bpf build emits deterministic source-map sidecar" {
     defer allocator.free(cmp_result.stdout);
     defer allocator.free(cmp_result.stderr);
     try expectCommandSuccess(cmp_result, "cmp /tmp/zxcaml_hackathon_greet_first.map /tmp/zxcaml_hackathon_greet_second.map");
+}
+
+test "cli: bpf build embeds non-allocated source-map ELF section" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+
+    cwd.deleteFile(io, so_path) catch {};
+    cwd.deleteFile(io, map_path) catch {};
+    try buildHackathonGreet(allocator, io);
+    try std.testing.expect(fileExists(io, so_path));
+    try std.testing.expect(fileExists(io, map_path));
+
+    const objdump_argv = [_][]const u8{ llvmObjdumpPath(io), "-h", so_path };
+    const objdump = try runCommand(allocator, io, &objdump_argv);
+    defer allocator.free(objdump.stdout);
+    defer allocator.free(objdump.stderr);
+    try expectCommandSuccess(objdump, "llvm-objdump -h out/hackathon_greet.so");
+
+    const section_line = findSrcmapSectionLine(objdump.stdout) orelse {
+        std.debug.print(
+            "llvm-objdump did not list .zxcaml.srcmap\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ objdump.stdout, objdump.stderr },
+        );
+        return error.MissingSrcmapElfSection;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, section_line, "ALLOC") == null);
+
+    const readelf_argv = [_][]const u8{ llvmReadelfPath(io), "-S", so_path };
+    const readelf = try runCommand(allocator, io, &readelf_argv);
+    defer allocator.free(readelf.stdout);
+    defer allocator.free(readelf.stderr);
+    try expectCommandSuccess(readelf, "llvm-readelf -S out/hackathon_greet.so");
+
+    const readelf_section_line = findSrcmapSectionLine(readelf.stdout) orelse {
+        std.debug.print(
+            "llvm-readelf did not list .zxcaml.srcmap\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ readelf.stdout, readelf.stderr },
+        );
+        return error.MissingSrcmapElfSection;
+    };
+    try std.testing.expect(std.mem.indexOf(u8, readelf_section_line, "PROGBITS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, readelf_section_line, "ALLOC") == null);
 }
 
 test "cli: bpf build --no-srcmap suppresses sidecar" {
