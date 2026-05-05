@@ -120,6 +120,27 @@ feature phase.
   surfaces so users can navigate to `runtime-api.md` from the main docs
   (`6b7ec07`).
 
+## [Real-world Examples Batch 2] - 2026-05-05
+
+### Added
+
+- Added the `examples/dao_voting.ml` real-world example for proposal and
+  vote-record PDAs, yes/no vote counting, and double-vote rejection, with
+  Mollusk coverage in `tests/dao_voting_test.rs` for yes-vote increments and
+  double-vote blocking (`e656fdb`).
+- Added the `examples/ata_transfer.ml` Associated Token Account flow, covering
+  create-idempotent setup followed by a mocked SPL-Token transfer, with Mollusk
+  coverage in `tests/ata_transfer_test.rs` for destination ATA initialization
+  and token movement (`67a50e8`).
+- Added the `examples/order_book.ml` maker/taker order-book example for order
+  PDAs, full fills, partial fills, and mocked two-sided SPL-Token balance
+  updates, with Mollusk coverage in `tests/order_book_test.rs` for both fill
+  paths (`5340d40`).
+- Extended the runtime surface for these examples with
+  `runtime/zig/programs/ata.zig` Associated Token Account helpers and
+  `runtime/zig/spl_token.zig` `encodeInitializeAccount` /
+  `initializeAccountInstruction` support (`f1c3edc`).
+
 ## [P7] OCaml Subset Expansion - 2026-04-30
 
 ### Added
