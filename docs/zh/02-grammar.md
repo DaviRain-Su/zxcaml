@@ -15,7 +15,7 @@ ZxCaml 接受 **OCaml 的严格子集**。每个被接受的程序都会先由�
 `Set`、`String`、`Char`、`Crypto`、`Pubkey` stdlib 表面。
 
 权威实现是 `src/frontend/zxc_subset.ml`；当前前端发出的 wire contract 是 sexp
-**版本 `1.1`**。`src/frontend/zxc_sexp_format.md` 是更底层的 wire-contract 参考；
+**版本 `1.2`**。`src/frontend/zxc_sexp_format.md` 是更底层的 wire-contract 参考；
 本文描述用户可见的子集。
 
 文件扩展名是 `.ml`。已封存的 P1-P8 编译器不支持 `.mli` 或多文件模块。
@@ -54,7 +54,7 @@ let entrypoint _input =
 
 | 表层形式 | 说明 |
 |---|---|
-| `let x = e` / `let rec f x = e` / recursive `and` groups | 顶层和嵌套均可；mutually recursive groups 会保留在 wire `1.1` 中 |
+| `let x = e` / `let rec f x = e` / recursive `and` groups | 顶层和嵌套均可；mutually recursive groups 会保留在 sexp `1.2` 中；该分组形态最早由历史版本 `1.1` 引入 |
 | `fun x -> e` / 函数语法糖 let | curried 多参数函数表示为嵌套 lambda / 多参数 arrow |
 | 变量引用 | OCaml 在序列化前完成解析；`List.map` 等 stdlib 路径保持 qualified |
 | 整数、字符串、char、布尔、unit 常量 | 其他常量拒绝 |
