@@ -9,6 +9,7 @@
 //! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
 //! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through Zig bitcode emission and sbpf-linker.
 //! - Dispatch `omlz bench` through a fixed local BPF fixture set and print compile metrics.
+//! - Dispatch `omlz doctor` through local toolchain probes and print health status.
 //! - Reject all unimplemented commands with a non-zero exit status.
 
 const std = @import("std");
@@ -75,6 +76,19 @@ pub fn main(init: std.process.Init) !void {
             try writeBenchHelp(init.io);
             return;
         }
+        if (std.mem.eql(u8, args[1], "doctor")) {
+            try writeDoctorHelp(init.io);
+            return;
+        }
+    }
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "doctor")) {
+        if (args.len != 2) {
+            try writeStderr(init.io, "error: unsupported doctor option; run `omlz doctor --help` for usage.\n");
+            std.process.exit(1);
+        }
+        try runDoctor(init);
+        return;
     }
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "bench")) {
@@ -246,6 +260,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz run <file.ml>
         \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
         \\  omlz bench
+        \\  omlz doctor
         \\
     );
 }
@@ -271,6 +286,18 @@ fn writeCheckHelp(io: Io) !void {
         \\                   Select diagnostic output format (default: human).
         \\  --color=auto|always|never
         \\                   Control ANSI colors in human diagnostics (default: auto).
+        \\
+    );
+}
+
+fn writeDoctorHelp(io: Io) !void {
+    try writeStdout(io,
+        \\Usage:
+        \\  omlz doctor
+        \\
+        \\Runs local toolchain self-checks for Zig, opam/OCaml, Cargo, the
+        \\Solana BPF linker, llvm-objcopy, and optional Surfpool support.
+        \\Each probe prints an OK, WARN, or MISS status line.
         \\
     );
 }
@@ -582,6 +609,198 @@ fn parseDiagnosticFlag(arg: []const u8, flags: *DiagnosticFlags) !bool {
         return true;
     }
     return false;
+}
+
+const DoctorCommandOutput = struct {
+    ok: bool,
+    detail: []const u8,
+};
+
+const DoctorStatus = enum {
+    ok,
+    warn,
+    miss,
+};
+
+fn runDoctor(init: std.process.Init) !void {
+    var required_misses: usize = 0;
+
+    try runRequiredDoctorCommand(init, "zig", &.{ "zig", "version" }, &required_misses);
+    try runOpamSwitchDoctorProbe(init, &required_misses);
+    try runOcamlcDoctorProbe(init, &required_misses);
+    try runRequiredDoctorCommand(init, "cargo", &.{ "cargo", "--version" }, &required_misses);
+    try runSbpfLinkerDoctorProbe(init, &required_misses);
+    try runRequiredDoctorCommand(
+        init,
+        "llvm-objcopy",
+        &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" },
+        &required_misses,
+    );
+    try runOptionalDoctorCommand(init, "surfpool", &.{ "surfpool", "--version" });
+
+    if (required_misses != 0) {
+        const summary = try std.fmt.allocPrint(
+            init.arena.allocator(),
+            "summary: {d} required probe(s) missing\n",
+            .{required_misses},
+        );
+        try writeStderr(init.io, summary);
+        std.process.exit(1);
+    }
+}
+
+fn runRequiredDoctorCommand(
+    init: std.process.Init,
+    name: []const u8,
+    argv: []const []const u8,
+    required_misses: *usize,
+) !void {
+    const result = runDoctorCommand(init, argv);
+    if (result.ok) {
+        try writeDoctorProbeLine(init, .ok, name, result.detail);
+    } else {
+        required_misses.* += 1;
+        try writeDoctorProbeLine(init, .miss, name, result.detail);
+    }
+}
+
+fn runOptionalDoctorCommand(init: std.process.Init, name: []const u8, argv: []const []const u8) !void {
+    const result = runDoctorCommand(init, argv);
+    if (result.ok) {
+        try writeDoctorProbeLine(init, .ok, name, result.detail);
+    } else {
+        try writeDoctorProbeLine(init, .warn, name, result.detail);
+    }
+}
+
+fn runOcamlcDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
+    const direct = runDoctorCommand(init, &.{ "ocamlc", "-version" });
+    if (direct.ok) {
+        try writeDoctorProbeLine(init, .ok, "ocamlc", direct.detail);
+        return;
+    }
+
+    const via_opam = runDoctorCommand(init, &.{ "opam", "exec", "--switch=zxcaml-p1", "--", "ocamlc", "-version" });
+    if (via_opam.ok) {
+        const detail = try std.fmt.allocPrint(
+            init.arena.allocator(),
+            "{s} (via opam switch zxcaml-p1)",
+            .{via_opam.detail},
+        );
+        try writeDoctorProbeLine(init, .ok, "ocamlc", detail);
+        return;
+    }
+
+    required_misses.* += 1;
+    try writeDoctorProbeLine(init, .miss, "ocamlc", via_opam.detail);
+}
+
+fn runOpamSwitchDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
+    const result = runDoctorCommand(init, &.{ "opam", "switch", "list" });
+    if (result.ok and std.mem.indexOf(u8, result.detail, "zxcaml-p1") != null) {
+        try writeDoctorProbeLine(init, .ok, "opam switch", "zxcaml-p1 present");
+        return;
+    }
+
+    if (result.ok) {
+        const full_output = runDoctorCommandFullOutput(init, &.{ "opam", "switch", "list" });
+        if (full_output.ok and std.mem.indexOf(u8, full_output.detail, "zxcaml-p1") != null) {
+            try writeDoctorProbeLine(init, .ok, "opam switch", "zxcaml-p1 present");
+            return;
+        }
+        required_misses.* += 1;
+        try writeDoctorProbeLine(init, .miss, "opam switch", "zxcaml-p1 not listed");
+        return;
+    }
+
+    required_misses.* += 1;
+    try writeDoctorProbeLine(init, .miss, "opam switch", result.detail);
+}
+
+fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
+    const result = runDoctorCommand(init, &.{ "sbpf-linker", "--version" });
+    if (result.ok) {
+        try writeDoctorProbeLine(init, .ok, "sbpf-linker", result.detail);
+        return;
+    }
+
+    if (commandExistsOnPath(init, "sbpf-linker")) {
+        try writeDoctorProbeLine(init, .ok, "sbpf-linker", "present on PATH");
+        return;
+    }
+
+    required_misses.* += 1;
+    try writeDoctorProbeLine(init, .miss, "sbpf-linker", result.detail);
+}
+
+fn runDoctorCommand(init: std.process.Init, argv: []const []const u8) DoctorCommandOutput {
+    const result = std.process.run(init.arena.allocator(), init.io, .{ .argv = argv }) catch |err| {
+        return .{ .ok = false, .detail = @errorName(err) };
+    };
+    const exit_code: u8 = switch (result.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+
+    const detail = firstNonEmptyLine(result.stdout, result.stderr);
+    return .{
+        .ok = exit_code == 0,
+        .detail = if (detail.len != 0) detail else if (exit_code == 0) "ok" else "non-zero exit",
+    };
+}
+
+fn runDoctorCommandFullOutput(init: std.process.Init, argv: []const []const u8) DoctorCommandOutput {
+    const result = std.process.run(init.arena.allocator(), init.io, .{ .argv = argv }) catch |err| {
+        return .{ .ok = false, .detail = @errorName(err) };
+    };
+    const exit_code: u8 = switch (result.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+
+    return .{
+        .ok = exit_code == 0,
+        .detail = if (result.stdout.len != 0) result.stdout else result.stderr,
+    };
+}
+
+fn firstNonEmptyLine(stdout: []const u8, stderr: []const u8) []const u8 {
+    const stdout_line = firstLine(stdout);
+    if (stdout_line.len != 0) return stdout_line;
+    return firstLine(stderr);
+}
+
+fn firstLine(text: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    if (trimmed.len == 0) return "";
+    const end = std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len;
+    return std.mem.trim(u8, trimmed[0..end], " \t\r");
+}
+
+fn commandExistsOnPath(init: std.process.Init, command: []const u8) bool {
+    const path = std.process.Environ.getAlloc(init.minimal.environ, init.arena.allocator(), "PATH") catch return false;
+    var dirs = std.mem.splitScalar(u8, path, ':');
+    while (dirs.next()) |dir| {
+        if (dir.len == 0) continue;
+        const candidate = std.fmt.allocPrint(init.arena.allocator(), "{s}/{s}", .{ dir, command }) catch return false;
+        std.Io.Dir.cwd().access(init.io, candidate, .{}) catch continue;
+        return true;
+    }
+    return false;
+}
+
+fn writeDoctorProbeLine(init: std.process.Init, status: DoctorStatus, name: []const u8, detail: []const u8) !void {
+    const prefix = switch (status) {
+        .ok => "OK",
+        .warn => "WARN",
+        .miss => "MISS",
+    };
+    const rendered = try std.fmt.allocPrint(
+        init.arena.allocator(),
+        "{s} {s}: {s}\n",
+        .{ prefix, name, detail },
+    );
+    try writeStdout(init.io, rendered);
 }
 
 fn runExplain(init: std.process.Init, code: []const u8) !void {

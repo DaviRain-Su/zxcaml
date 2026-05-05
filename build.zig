@@ -346,9 +346,29 @@ pub fn build(b: *std.Build) void {
     const run_bench_cli_tests = b.addRunArtifact(bench_cli_tests);
     run_bench_cli_tests.step.dependOn(b.getInstallStep());
     // Bench writes the shared generated sources under out/, so keep it
-    // serialized with the other CLI tests that spawn `omlz build`.
+    // serialized with determinism and the other CLI tests that spawn
+    // `omlz build`.
+    run_bench_cli_tests.step.dependOn(&run_determinism_tests.step);
     run_bench_cli_tests.step.dependOn(&run_explain_cli_tests.step);
     run_bench_cli_tests.setCwd(b.path(""));
+
+    // Doctor CLI integration tests (P9.5 / F-OBS3): verify local toolchain
+    // self-check output and help behavior.
+    const doctor_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/doctor_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const doctor_cli_options = b.addOptions();
+    doctor_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    doctor_cli_test_module.addOptions("cli_options", doctor_cli_options);
+    const doctor_cli_tests = b.addTest(.{
+        .root_module = doctor_cli_test_module,
+    });
+    const run_doctor_cli_tests = b.addRunArtifact(doctor_cli_tests);
+    run_doctor_cli_tests.step.dependOn(b.getInstallStep());
+    run_doctor_cli_tests.step.dependOn(&run_bench_cli_tests.step);
+    run_doctor_cli_tests.setCwd(b.path(""));
 
     // Source-map CLI integration tests (P9 / F-SRCMAP-3): verify BPF builds
     // emit deterministic sidecar maps by default and honor --no-srcmap.
@@ -373,7 +393,7 @@ pub fn build(b: *std.Build) void {
     run_srcmap_cli_tests.step.dependOn(b.getInstallStep());
     // Avoid concurrent tests racing on out/program.zig.
     run_srcmap_cli_tests.step.dependOn(&run_determinism_tests.step);
-    run_srcmap_cli_tests.step.dependOn(&run_bench_cli_tests.step);
+    run_srcmap_cli_tests.step.dependOn(&run_doctor_cli_tests.step);
     run_srcmap_cli_tests.setCwd(b.path(""));
 
     // Source-map unmap CLI integration tests (P9 / F-SRCMAP-5): verify
