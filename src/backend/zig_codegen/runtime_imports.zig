@@ -482,6 +482,12 @@ pub fn emitCounterAppExpr(
         try append(out, allocator, "}");
         return true;
     }
+    if (std.mem.eql(u8, name, "dao_voting_process")) {
+        if (app.args.len != 4) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        try append(out, allocator, "dao_voting.zxcaml_dao_voting_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        return true;
+    }
     return false;
 }
 

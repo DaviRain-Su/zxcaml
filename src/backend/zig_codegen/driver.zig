@@ -34,6 +34,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const hackathon_greet = @import("runtime/programs/hackathon_greet.zig");
         \\const token_vault = @import("runtime/programs/token_vault.zig");
         \\const escrow_full = @import("runtime/programs/escrow_full.zig");
+        \\const dao_voting = @import("runtime/programs/dao_voting.zig");
         \\const ata = @import("runtime/programs/ata.zig");
         \\const prelude = @import("runtime/prelude.zig");
         \\const runtime_panic = @import("runtime/panic.zig");
@@ -84,5 +85,6 @@ pub fn isCounterHelperName(name: []const u8) bool {
         std.mem.eql(u8, name, "pda_storage_process") or
         std.mem.eql(u8, name, "hackathon_greet_process") or
         std.mem.eql(u8, name, "token_vault_process") or
-        std.mem.eql(u8, name, "escrow_full_process");
+        std.mem.eql(u8, name, "escrow_full_process") or
+        std.mem.eql(u8, name, "dao_voting_process");
 }
