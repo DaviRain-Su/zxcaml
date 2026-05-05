@@ -17,6 +17,7 @@ const pipeline = @import("driver/pipeline.zig");
 const driver_build = @import("driver/build.zig");
 const driver_bpf = @import("driver/bpf.zig");
 const driver_idl = @import("driver/idl.zig");
+const driver_srcmap = @import("driver/srcmap.zig");
 const diag = @import("util/diag.zig");
 const render = @import("util/render.zig");
 const interp = @import("backend/interp.zig");
@@ -162,6 +163,10 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported build target; expected native or bpf.\n");
             std.process.exit(1);
         }
+        if (std.mem.eql(u8, build_args.target, "native") and build_args.output_path == null) {
+            try writeStderr(init.io, "error: native builds require -o <out>.\n");
+            std.process.exit(1);
+        }
 
         var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], build_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
@@ -204,7 +209,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz check --emit=core-ir-with-loc <file.ml>
         \\  omlz idl <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
-        \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
+        \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\  omlz run <file.ml>
         \\
     );
@@ -237,12 +242,13 @@ fn writeBuildHelp(io: Io) !void {
     try writeStdout(io,
         \\Usage:
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
-        \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
+        \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\
         \\Flags:
         \\  --target=native  Build a native executable for local testing.
         \\  --target=bpf     Build a Solana BPF shared object.
         \\  --keep-zig       Keep the generated Zig source under out/program.zig.
+        \\  --no-srcmap      Skip the default out/<name>.map BPF source-map sidecar.
         \\  -o <path>        Write the compiled artifact to the given path.
         \\  --error-format=human|json|oneline
         \\                   Select diagnostic output format (default: human).
@@ -344,7 +350,8 @@ const BuildArgs = struct {
     target: []const u8,
     keep_zig: bool,
     input_file: []const u8,
-    output_path: []const u8,
+    output_path: ?[]const u8,
+    srcmap: bool = true,
     diagnostics: DiagnosticFlags = .{},
 };
 
@@ -353,6 +360,7 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
     var keep_zig = false;
     var input_file: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
+    var srcmap = true;
     var diagnostics: DiagnosticFlags = .{};
 
     var index: usize = 2;
@@ -364,6 +372,8 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
             target = arg["--target=".len..];
         } else if (std.mem.eql(u8, arg, "--keep-zig")) {
             keep_zig = true;
+        } else if (std.mem.eql(u8, arg, "--no-srcmap")) {
+            srcmap = false;
         } else if (std.mem.eql(u8, arg, "-o")) {
             index += 1;
             if (index >= args.len) return error.UnsupportedBuildArgs;
@@ -381,7 +391,8 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
         .target = target orelse return error.UnsupportedBuildArgs,
         .keep_zig = keep_zig,
         .input_file = input_file orelse return error.UnsupportedBuildArgs,
-        .output_path = output_path orelse return error.UnsupportedBuildArgs,
+        .output_path = output_path,
+        .srcmap = srcmap,
         .diagnostics = diagnostics,
     };
 }
@@ -903,7 +914,7 @@ fn buildNative(
     driver_build.buildNative(init.gpa, init.io, .{
         .generated_zig_path = "out/program.zig",
         .native_entry_path = "out/native_entry.zig",
-        .output_path = build_args.output_path,
+        .output_path = build_args.output_path.?,
     }) catch |err| {
         try writeStderr(init.io, "error: native build failed: ");
         try writeStderr(init.io, @errorName(err));
@@ -981,19 +992,40 @@ fn buildBpf(
 
     const source_map_program = try sourceMapProgramName(init.gpa, build_args.input_file);
     defer init.gpa.free(source_map_program);
-    var source_map_sink: u8 = 0;
 
-    driver_bpf.buildBpf(init.gpa, init.io, .{
-        .output_path = build_args.output_path,
-        .environ = init.minimal.environ,
-        .source_map = .{
+    const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, source_map_program, ".so");
+    defer if (build_args.output_path == null) init.gpa.free(output_path);
+
+    var source_map_input: ?driver_bpf.SourceMapInput = null;
+    var source_map_hook: ?driver_bpf.SourceMapHook = null;
+    var source_map_context: SourceMapSidecarContext = undefined;
+    var source_map_path: ?[]const u8 = null;
+    defer if (source_map_path) |path| init.gpa.free(path);
+
+    if (build_args.srcmap) {
+        // Investigation report §4 fixed the sidecar contract: minified,
+        // deterministic JSON in out/<program>.map with no timestamps or IDs.
+        source_map_path = try sourceMapOutputPath(init.gpa, source_map_program, ".map");
+        source_map_input = .{
             .program = source_map_program,
             .module = inferred_core_module,
-        },
-        .source_map_hook = .{
-            .context = &source_map_sink,
-            .emit = discardSourceMap,
-        },
+        };
+        source_map_context = .{
+            .allocator = init.gpa,
+            .io = init.io,
+            .path = source_map_path.?,
+        };
+        source_map_hook = .{
+            .context = &source_map_context,
+            .emit = emitSourceMapSidecar,
+        };
+    }
+
+    driver_bpf.buildBpf(init.gpa, init.io, .{
+        .output_path = output_path,
+        .environ = init.minimal.environ,
+        .source_map = source_map_input,
+        .source_map_hook = source_map_hook,
     }) catch |err| {
         if (err != error.SbpfLinkerMissing) {
             try writeStderr(init.io, "error: BPF build failed: ");
@@ -1010,7 +1042,27 @@ fn sourceMapProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![
     return allocator.dupe(u8, stem);
 }
 
-fn discardSourceMap(_: *anyopaque, _: driver_bpf.SourceMapBuild) anyerror!void {}
+fn sourceMapOutputPath(allocator: std.mem.Allocator, program: []const u8, extension: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "out/{s}{s}", .{ program, extension });
+}
+
+const SourceMapSidecarContext = struct {
+    allocator: std.mem.Allocator,
+    io: Io,
+    path: []const u8,
+};
+
+fn emitSourceMapSidecar(context: *anyopaque, build: driver_bpf.SourceMapBuild) anyerror!void {
+    const sidecar: *SourceMapSidecarContext = @ptrCast(@alignCast(context));
+    const bytes = try driver_srcmap.serializeJson(sidecar.allocator, build.schema);
+    defer sidecar.allocator.free(bytes);
+
+    try std.Io.Dir.cwd().writeFile(sidecar.io, .{
+        .sub_path = sidecar.path,
+        .data = bytes,
+        .flags = .{ .truncate = true },
+    });
+}
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
     var buffer: [1024]u8 = undefined;
@@ -1077,7 +1129,7 @@ test "parse F07 native build arguments without requiring keep-zig" {
     try std.testing.expectEqualStrings("native", parsed.target);
     try std.testing.expect(!parsed.keep_zig);
     try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
-    try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path);
+    try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path.?);
 }
 
 test {

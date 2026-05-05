@@ -313,6 +313,31 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_cli_tests.setCwd(b.path(""));
 
+    // Source-map CLI integration tests (P9 / F-SRCMAP-3): verify BPF builds
+    // emit deterministic sidecar maps by default and honor --no-srcmap.
+    const srcmap_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/srcmap_build_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const srcmap_cli_options = b.addOptions();
+    srcmap_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    srcmap_cli_test_module.addOptions("cli_options", srcmap_cli_options);
+    const srcmap_module = b.createModule(.{
+        .root_source_file = b.path("src/driver/srcmap.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    srcmap_cli_test_module.addImport("srcmap", srcmap_module);
+    const srcmap_cli_tests = b.addTest(.{
+        .root_module = srcmap_cli_test_module,
+    });
+    const run_srcmap_cli_tests = b.addRunArtifact(srcmap_cli_tests);
+    run_srcmap_cli_tests.step.dependOn(b.getInstallStep());
+    // Avoid concurrent tests racing on out/program.zig.
+    run_srcmap_cli_tests.step.dependOn(&run_determinism_tests.step);
+    run_srcmap_cli_tests.setCwd(b.path(""));
+
     // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.
     const lsp_scaffold_test_module = b.createModule(.{
         .root_source_file = b.path("tests/lsp/scaffold_test.zig"),
@@ -432,6 +457,7 @@ pub fn build(b: *std.Build) void {
     // This harness invokes `omlz build`, which writes out/program.zig. Keep it
     // after the determinism harness, which also exercises native builds.
     run_codegen_external_bytes_tests.step.dependOn(&run_determinism_tests.step);
+    run_codegen_external_bytes_tests.step.dependOn(&run_srcmap_cli_tests.step);
     run_codegen_external_bytes_tests.step.dependOn(b.getInstallStep());
     run_codegen_external_bytes_tests.setCwd(b.path(""));
 
@@ -500,6 +526,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_srcmap_cli_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);
     test_step.dependOn(&run_lsp_harness.step);

@@ -76,8 +76,10 @@ test "cli: every subcommand accepts --help" {
         const has_help = outputContainsHelpText(result.stdout, result.stderr, subcommand);
         const has_error_format = outputContainsNeedle(result.stdout, result.stderr, "--error-format");
         const has_color = outputContainsNeedle(result.stdout, result.stderr, "--color");
+        const has_no_srcmap = !std.mem.eql(u8, subcommand, "build") or
+            outputContainsNeedle(result.stdout, result.stderr, "--no-srcmap");
 
-        if (result.exit_code != 0 or !has_help or !has_error_format or !has_color) {
+        if (result.exit_code != 0 or !has_help or !has_error_format or !has_color or !has_no_srcmap) {
             std.debug.print(
                 "omlz {s} --help failed expectations\nexit={d}\nstdout:\n{s}\nstderr:\n{s}\n",
                 .{ subcommand, result.exit_code, result.stdout, result.stderr },
@@ -87,6 +89,7 @@ test "cli: every subcommand accepts --help" {
         try std.testing.expect(has_help);
         try std.testing.expect(has_error_format);
         try std.testing.expect(has_color);
+        try std.testing.expect(has_no_srcmap);
     }
 }
 
