@@ -170,6 +170,7 @@ Anchor-compatible IDL。
 | 09 | [决策（ADR）](./09-decisions.md) | 锁定的决策，附带理由 |
 | 10 | [前端桥接](./10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | 11 | [Solana P3 指南](./11-solana-p3.md) | Account layout、syscalls、CPI、SPL-Token、no_alloc、IDL 和 CI coverage |
+| RT | [运行时 API](../../docs/zh/runtime-api.md) | Zig runtime 公契面：Arena、Syscalls、CPI、Account、SPL Token、Bs58 和 programs registry |
 | P9 | [Diagnostics / docs/diagnostics.md](../diagnostics.md) | `--error-format`、caret rendering、color、JSON schema 和 wire `1.2` loc 说明 |
 | P9 | [LSP / docs/lsp.md](../lsp.md) | `omlz-lsp` stdio JSON-RPC、支持的 LSP 方法和编辑器设置 |
 | P9 | [Source maps / docs/source-map.md](../source-map.md) | `.map` sidecar schema、`.zxcaml.srcmap` 和 `omlz unmap` |

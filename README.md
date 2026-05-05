@@ -184,6 +184,7 @@ Read in order:
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | 11 | [Solana P3 guide](./docs/11-solana-p3.md) | Account layout, syscalls, CPI, SPL-Token, no_alloc, IDL, and CI coverage |
+| RT | [Runtime API](./docs/runtime-api.md) | Public Zig runtime surface: Arena, Syscalls, CPI, Account, SPL Token, Bs58, and programs registry |
 | P9 | [Diagnostics](./docs/diagnostics.md) | `--error-format`, caret rendering, color, JSON schema, and wire `1.2` location notes |
 | P9 | [LSP](./docs/lsp.md) | `omlz-lsp` stdio JSON-RPC, supported LSP methods, and editor setup |
 | P9 | [Source maps](./docs/source-map.md) | `.map` sidecar schema, `.zxcaml.srcmap`, and `omlz unmap` |
