@@ -33,6 +33,7 @@ const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/programs/token_vault.zig", .out_path = "out/runtime/programs/token_vault.zig" },
     .{ .src_path = "runtime/zig/programs/escrow_full.zig", .out_path = "out/runtime/programs/escrow_full.zig" },
     .{ .src_path = "runtime/zig/programs/dao_voting.zig", .out_path = "out/runtime/programs/dao_voting.zig" },
+    .{ .src_path = "runtime/zig/programs/ata_transfer.zig", .out_path = "out/runtime/programs/ata_transfer.zig" },
     .{ .src_path = "runtime/zig/programs/ata.zig", .out_path = "out/runtime/programs/ata.zig" },
     .{ .src_path = "runtime/zig/bs58.zig", .out_path = "out/runtime/bs58.zig" },
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },

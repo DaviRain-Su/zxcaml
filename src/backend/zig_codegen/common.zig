@@ -161,7 +161,8 @@ pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
                         std.mem.eql(u8, callee.name, "hackathon_greet_process") or
                         std.mem.eql(u8, callee.name, "token_vault_process") or
                         std.mem.eql(u8, callee.name, "escrow_full_process") or
-                        std.mem.eql(u8, callee.name, "dao_voting_process")) break :blk true;
+                        std.mem.eql(u8, callee.name, "dao_voting_process") or
+                        std.mem.eql(u8, callee.name, "ata_transfer_process")) break :blk true;
                 },
                 else => {},
             }

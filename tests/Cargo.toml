@@ -105,3 +105,7 @@ path = "assert_panic_test.rs"
 [[test]]
 name = "dao_voting_test"
 path = "dao_voting_test.rs"
+
+[[test]]
+name = "ata_transfer_test"
+path = "ata_transfer_test.rs"
