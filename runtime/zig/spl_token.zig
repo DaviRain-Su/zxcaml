@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const Arena = @import("arena.zig").Arena;
+const bs58 = @import("bs58.zig");
 const cpi = @import("cpi.zig");
 
 /// 32-byte Solana public key.
@@ -28,13 +29,8 @@ const account_alignment: usize = 8;
 /// Canonical SPL Token program id as base58 for diagnostics and tests.
 pub const program_id_base58 = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
-/// Canonical SPL Token program id bytes for `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`.
-pub const program_id: Pubkey = .{
-    0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93,
-    0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
-    0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91,
-    0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
-};
+/// Canonical SPL Token program id decoded at comptime from `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`.
+pub const program_id: Pubkey = decodeProgramIdComptime();
 
 /// Errors returned by SPL Token runtime helpers.
 pub const Error = error{
@@ -57,12 +53,7 @@ pub const TokenAccountView = struct {
 
 /// Writes the canonical SPL Token program id into a caller-owned stack or arena buffer.
 pub inline fn writeProgramId(out: *Pubkey) void {
-    out.* = .{
-        0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93,
-        0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
-        0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91,
-        0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
-    };
+    out.* = program_id;
 }
 
 /// Writes an SPL Token program id from either raw bytes or the canonical base58 text.
@@ -76,6 +67,21 @@ pub fn writeProgramIdFromBytes(out: *Pubkey, bytes: []const u8) bool {
         return true;
     }
     return false;
+}
+
+fn decodeProgramIdComptime() Pubkey {
+    @setEvalBranchQuota(20_000);
+    var scratch: [128]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(scratch[0..]);
+    const decoded = bs58.decode(fixed.allocator(), program_id_base58) catch {
+        @compileError("invalid SPL Token program id base58 literal");
+    };
+    if (decoded.len != pubkey_len) {
+        @compileError("SPL Token program id must decode to 32 bytes");
+    }
+    var out: Pubkey = undefined;
+    @memcpy(out[0..], decoded[0..pubkey_len]);
+    return out;
 }
 
 /// Encodes SPL Token Transfer instruction data into a fixed-size array.
@@ -275,9 +281,10 @@ fn writeU32Le(out: []u8, value: u32) void {
 test "SPL Token program id matches Tokenkeg bytes" {
     try std.testing.expectEqualStrings(program_id_base58, "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
     try std.testing.expectEqual(@as(usize, pubkey_len), program_id.len);
-    try std.testing.expectEqual(@as(u8, 0x06), program_id[0]);
-    try std.testing.expectEqual(@as(u8, 0xdd), program_id[1]);
-    try std.testing.expectEqual(@as(u8, 0xa9), program_id[31]);
+
+    const encoded = try bs58.encode(std.testing.allocator, &program_id);
+    defer std.testing.allocator.free(encoded);
+    try std.testing.expectEqualStrings(program_id_base58, encoded);
 
     var copied: Pubkey = undefined;
     writeProgramId(&copied);
