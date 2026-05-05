@@ -296,6 +296,24 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_cli_tests.setCwd(b.path(""));
 
+    // Renderer tests (P9 / F-DX1-1): verify rustc-style diagnostic rendering.
+    const render_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/render_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const render_module = b.createModule(.{
+        .root_source_file = b.path("src/util/render.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    render_test_module.addImport("render", render_module);
+    const render_tests = b.addTest(.{
+        .root_module = render_test_module,
+    });
+    const run_render_tests = b.addRunArtifact(render_tests);
+    run_render_tests.setCwd(b.path(""));
+
     // Codegen regression tests: compile focused `.ml` cases and inspect the
     // emitted Zig source.
     const codegen_external_bytes_test_module = b.createModule(.{
@@ -381,6 +399,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);
