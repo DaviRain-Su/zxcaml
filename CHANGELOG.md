@@ -76,6 +76,32 @@ feature phase.
   [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/) (`f94e89f`,
   `d96bf70`, `573ca24`, `e0bc7f9`).
 
+## [P9 Developer Experience] - 2026-05-05
+
+### Added
+
+- Added DX1 diagnostics infrastructure with rustc-style human output,
+  `--error-format` human/json/oneline modes, `--color` controls, JSON-lines
+  diagnostics, and reblessed UI coverage (`f4b8a58`, `2068d3c`, `e88137e`,
+  `34a5dd1`).
+- Added the LSP surface as `omlz-lsp`, including Content-Length JSON-RPC
+  framing, initialize/shutdown lifecycle handling, text-sync
+  `publishDiagnostics`, latency probes, and build-test harness coverage
+  (`7561b76`, `69abcb3`, `578383c`, `03c4ea5`, `7d2597c`, `567afb4`,
+  `77de5f5`).
+- Added SRCMAP/source map support with the JSON sidecar schema, BPF map
+  construction, deterministic `.map` emission, `.zxcaml.srcmap` ELF embedding,
+  `omlz unmap` reverse lookups, and loader/determinism tests (`828f4ba`,
+  `4fcf183`, `00487eb`, `0a2fe1f`, `a5faaa8`, `8604864`).
+
+### Changed
+
+- Advanced DX2 location plumbing by bumping the frontend wire format to `1.2`,
+  keeping deprecated `--wire=1.1` compatibility, preserving Core IR locations,
+  rendering `no_alloc` and region failures with OCaml spans, and tailoring
+  subset diagnostics (`d7513b6`, `1469bf0`, `f878677`, `59a0b02`, `2e30c89`,
+  `8b4441a`, `31c7814`).
+
 ## [P7] OCaml Subset Expansion - 2026-04-30
 
 ### Added
