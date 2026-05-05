@@ -84,6 +84,7 @@ pub const FrontendConfig = struct {
 
 pub const FrontendOptions = struct {
     diagnostics: diag.OutputOptions = .{},
+    wire_version: ?[]const u8 = null,
 };
 
 /// Locates and runs `zxc-frontend --emit=sexp <input_file>`.
@@ -185,6 +186,12 @@ pub fn runFrontendExecutableWithOptions(
     input_file: []const u8,
     options: FrontendOptions,
 ) !FrontendResult {
+    if (options.wire_version) |wire_version| {
+        const wire_flag = try std.fmt.allocPrint(allocator, "--wire={s}", .{wire_version});
+        defer allocator.free(wire_flag);
+        const argv = [_][]const u8{ executable, "--emit=sexp", wire_flag, input_file };
+        return runFrontendArgvParsedOptions(allocator, io, &argv, options);
+    }
     const argv = [_][]const u8{ executable, "--emit=sexp", input_file };
     return runFrontendArgvParsedOptions(allocator, io, &argv, options);
 }

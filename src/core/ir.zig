@@ -41,6 +41,27 @@
 const layout = @import("layout.zig");
 const types = @import("types.zig");
 
+/// Optional source location threaded from frontend wire 1.2.
+pub const Loc = struct {
+    file: []const u8,
+    line: u32,
+    col: u32,
+    end_line: u32,
+    end_col: u32,
+
+    pub const unknown: Loc = .{
+        .file = "_unknown_",
+        .line = 0,
+        .col = 0,
+        .end_line = 0,
+        .end_col = 0,
+    };
+
+    pub fn isUnknown(self: Loc) bool {
+        return self.line == 0 and self.end_line == 0;
+    }
+};
+
 /// A Core IR module containing top-level declarations.
 pub const Module = struct {
     decls: []const Decl,
@@ -91,6 +112,7 @@ pub const Lambda = struct {
     body: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Lambda parameter with a resolved type.
@@ -127,6 +149,7 @@ pub const App = struct {
     ty: Ty,
     layout: layout.Layout,
     is_tail_call: bool = false,
+    loc: Loc = Loc.unknown,
 };
 
 /// Lexically-scoped let expression in ANF form.
@@ -137,6 +160,7 @@ pub const LetExpr = struct {
     ty: Ty,
     layout: layout.Layout,
     is_rec: bool = false,
+    loc: Loc = Loc.unknown,
 };
 
 /// Lexically-scoped mutually recursive group in ANF form.
@@ -145,6 +169,7 @@ pub const LetGroupExpr = struct {
     body: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Runtime assertion that traps when its boolean condition is false.
@@ -152,6 +177,7 @@ pub const AssertExpr = struct {
     condition: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Conditional expression.
@@ -161,6 +187,7 @@ pub const IfExpr = struct {
     else_branch: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Primitive integer/comparison operation.
@@ -169,6 +196,7 @@ pub const Prim = struct {
     args: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Primitive operations supported by the current Core IR.
@@ -197,6 +225,7 @@ pub const Constant = struct {
     value: ConstantValue,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Literal payload carried by a constant expression.
@@ -210,6 +239,7 @@ pub const Var = struct {
     name: []const u8,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Constructor expression for whitelisted option/result/list ADTs.
@@ -220,6 +250,7 @@ pub const Ctor = struct {
     layout: layout.Layout,
     tag: u32 = 0,
     type_name: ?[]const u8 = null,
+    loc: Loc = Loc.unknown,
 };
 
 /// Tuple construction expression.
@@ -227,6 +258,7 @@ pub const Tuple = struct {
     items: []const *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Tuple projection expression.
@@ -235,6 +267,7 @@ pub const TupleProj = struct {
     index: usize,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Record construction expression.
@@ -242,6 +275,7 @@ pub const Record = struct {
     fields: []const RecordExprField,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// One field assignment in a record construction/update expression.
@@ -256,6 +290,7 @@ pub const RecordField = struct {
     field_name: []const u8,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Functional record update expression.
@@ -264,6 +299,7 @@ pub const RecordUpdate = struct {
     fields: []const RecordExprField,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// AccountFieldSet is the sole mutating Core/ANF expression.
@@ -277,6 +313,7 @@ pub const AccountFieldSet = struct {
     value: *const Expr,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// Pattern match expression; arms are evaluated top-to-bottom.
@@ -285,6 +322,7 @@ pub const Match = struct {
     arms: []const Arm,
     ty: Ty,
     layout: layout.Layout,
+    loc: Loc = Loc.unknown,
 };
 
 /// One pattern-match arm.

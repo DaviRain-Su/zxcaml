@@ -70,7 +70,7 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported check option; run `omlz --help` for usage.\n");
             std.process.exit(1);
         };
-        const frontend_options = try frontendOptions(init, check_args.diagnostics);
+        const frontend_options = try frontendOptions(init, check_args.diagnostics, check_args.wire_version);
 
         var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], check_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
@@ -87,12 +87,12 @@ pub fn main(init: std.process.Init) !void {
                     std.process.exit(1);
                 }
                 if (check_args.emit) |emit_kind| {
-                    if (std.mem.eql(u8, emit_kind, "core-ir")) {
+                    if (std.mem.eql(u8, emit_kind, "core-ir") or std.mem.eql(u8, emit_kind, "core-ir-with-loc")) {
                         try emitCoreIr(init, parsed.module, check_args);
                         return;
                     }
 
-                    try writeStderr(init.io, "error: unsupported --emit value; expected core-ir\n");
+                    try writeStderr(init.io, "error: unsupported --emit value; expected core-ir or core-ir-with-loc\n");
                     std.process.exit(1);
                 }
                 if (check_args.no_alloc) {
@@ -110,7 +110,7 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported run option; run `omlz --help` for usage.\n");
             std.process.exit(1);
         };
-        const frontend_options = try frontendOptions(init, run_args.diagnostics);
+        const frontend_options = try frontendOptions(init, run_args.diagnostics, null);
 
         var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], run_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
@@ -132,7 +132,7 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported idl option; run `omlz --help` for usage.\n");
             std.process.exit(1);
         };
-        const frontend_options = try frontendOptions(init, idl_args.diagnostics);
+        const frontend_options = try frontendOptions(init, idl_args.diagnostics, null);
 
         var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, args[0], idl_args.input_file, frontend_options) catch |err| {
             if (shouldPrintGenericFrontendFailure(err)) {
@@ -154,7 +154,7 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported build option; run `omlz --help` for usage.\n");
             std.process.exit(1);
         };
-        const frontend_options = try frontendOptions(init, build_args.diagnostics);
+        const frontend_options = try frontendOptions(init, build_args.diagnostics, null);
 
         if (!std.mem.eql(u8, build_args.target, "native") and !std.mem.eql(u8, build_args.target, "bpf")) {
             try writeStderr(init.io, "error: unsupported build target; expected native or bpf.\n");
@@ -198,7 +198,8 @@ fn writeHelp(io: Io) !void {
         \\  omlz --help
         \\  omlz check <file.ml>
         \\  omlz check --no-alloc <file.ml>
-        \\  omlz check --emit=core-ir [--bless] <file.ml>
+        \\  omlz check --emit=core-ir [--bless] [--wire=1.1] <file.ml>
+        \\  omlz check --emit=core-ir-with-loc <file.ml>
         \\  omlz idl <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] <file.ml> -o <out.so>
@@ -212,11 +213,15 @@ fn writeCheckHelp(io: Io) !void {
         \\Usage:
         \\  omlz check <file.ml>
         \\  omlz check --no-alloc <file.ml>
-        \\  omlz check --emit=core-ir [--bless] <file.ml>
+        \\  omlz check --emit=core-ir [--bless] [--wire=1.1] <file.ml>
+        \\  omlz check --emit=core-ir-with-loc <file.ml>
         \\
         \\Flags:
         \\  --no-alloc       Prove the program performs no Core IR allocations.
         \\  --emit=core-ir   Print the lowered Core IR instead of only checking.
+        \\  --emit=core-ir-with-loc
+        \\                   Print Core IR with source-location annotations.
+        \\  --wire=1.1       Deprecated: ask zxc-frontend to emit old wire 1.1 sexp.
         \\  --bless          Rewrite the Core IR golden snapshot for the input.
         \\  --error-format=human|json|oneline
         \\                   Select diagnostic output format (default: human).
@@ -287,6 +292,7 @@ const CheckArgs = struct {
     input_file: []const u8,
     bless: bool = false,
     no_alloc: bool = false,
+    wire_version: ?[]const u8 = null,
     diagnostics: DiagnosticFlags = .{},
 };
 
@@ -295,6 +301,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
     var input_file: ?[]const u8 = null;
     var bless = false;
     var no_alloc = false;
+    var wire_version: ?[]const u8 = null;
     var diagnostics: DiagnosticFlags = .{};
 
     var index: usize = 2;
@@ -308,6 +315,10 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
             bless = true;
         } else if (std.mem.eql(u8, arg, "--no-alloc")) {
             no_alloc = true;
+        } else if (std.mem.startsWith(u8, arg, "--wire=")) {
+            const requested = arg["--wire=".len..];
+            if (!std.mem.eql(u8, requested, "1.1")) return error.UnsupportedCheckArgs;
+            wire_version = requested;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             return error.UnsupportedCheckArgs;
         } else if (input_file == null) {
@@ -322,6 +333,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         .input_file = input_file orelse return error.UnsupportedCheckArgs,
         .bless = bless,
         .no_alloc = no_alloc,
+        .wire_version = wire_version,
         .diagnostics = diagnostics,
     };
 }
@@ -413,7 +425,7 @@ fn parseDiagnosticFlag(arg: []const u8, flags: *DiagnosticFlags) !bool {
     return false;
 }
 
-fn frontendOptions(init: std.process.Init, flags: DiagnosticFlags) !pipeline.FrontendOptions {
+fn frontendOptions(init: std.process.Init, flags: DiagnosticFlags, wire_version: ?[]const u8) !pipeline.FrontendOptions {
     return .{
         .diagnostics = .{
             .error_format = flags.error_format,
@@ -423,6 +435,7 @@ fn frontendOptions(init: std.process.Init, flags: DiagnosticFlags) !pipeline.Fro
             .stderr_is_tty = std.Io.File.stderr().isTty(init.io) catch false,
             .no_color_env = try hasNoColorEnv(init.gpa, init.minimal.environ),
         },
+        .wire_version = wire_version,
     };
 }
 
@@ -470,7 +483,8 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
         std.process.exit(1);
     };
 
-    const rendered = core_pretty.formatModule(init.gpa, optimized_core_module) catch |err| {
+    const include_locs = if (check_args.emit) |emit_kind| std.mem.eql(u8, emit_kind, "core-ir-with-loc") else false;
+    const rendered = core_pretty.formatModuleWithOptions(init.gpa, optimized_core_module, .{ .include_locs = include_locs }) catch |err| {
         try writeStderr(init.io, "error: failed to pretty-print Core IR: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
@@ -499,6 +513,11 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
         try writeStdout(init.io, snapshot_path);
         try writeStdout(init.io, "\n");
     } else {
+        if (check_args.wire_version) |wire_version| {
+            try writeStdout(init.io, "(version ");
+            try writeStdout(init.io, wire_version);
+            try writeStdout(init.io, ")\n");
+        }
         try writeStdout(init.io, rendered);
         try writeStdout(init.io, "\n");
     }

@@ -704,7 +704,7 @@ def run_case(tmp_dir: pathlib.Path, name: str, source: str, expected: str) -> bo
     path.write_text(source, encoding="utf-8")
 
     result = subprocess.run(
-        [str(FRONTEND_BIN), "--emit=sexp", str(path)],
+        [str(FRONTEND_BIN), "--emit=sexp", "--wire=1.1", str(path)],
         check=False,
         text=True,
         capture_output=True,
@@ -729,7 +729,7 @@ def run_reject_case(
     path.write_text(source, encoding="utf-8")
 
     result = subprocess.run(
-        [str(FRONTEND_BIN), "--emit=sexp", str(path)],
+        [str(FRONTEND_BIN), "--emit=sexp", "--wire=1.1", str(path)],
         check=False,
         text=True,
         capture_output=True,

@@ -74,6 +74,7 @@ and let_rec_binding = {
   rec_name : string;
   rec_params : param list;
   rec_body : expr;
+  rec_loc : loc;
 }
 
 and if_expr = {
@@ -177,6 +178,7 @@ type value_decl = {
   name : string;
   body : expr;
   is_rec : bool;
+  loc : loc;
 }
 
 type type_decl = {
@@ -827,7 +829,7 @@ and split_rec_binding_body = function
 and parse_let_rec_binding env (binding : value_binding) =
   let rec_name = parse_binding_name binding.vb_pat in
   let rec_params, rec_body = split_rec_binding_body (parse_expr env binding.vb_expr) in
-  { rec_name; rec_params; rec_body }
+  { rec_name; rec_params; rec_body; rec_loc = loc_of_location binding.vb_expr.exp_loc }
 
 and parse_expr env (expr : expression) =
   match expr.exp_desc with
@@ -1421,7 +1423,7 @@ let add_builtin_record_decls decls =
 let parse_value_binding env (binding : value_binding) =
   let name = parse_binding_name binding.vb_pat in
   let body = parse_expr env binding.vb_expr in
-  Let_decl { name; body; is_rec = false }
+  Let_decl { name; body; is_rec = false; loc = loc_of_location binding.vb_expr.exp_loc }
 
 let raw_alias_binding_of_declaration (type_decl : type_declaration) =
   match (type_decl.typ_kind, type_decl.typ_manifest) with

@@ -188,12 +188,19 @@ let emit_ocamlc_error ~input ~stderr =
   emit_diagnostic diagnostic
 
 let usage () =
-  prerr_endline "usage: zxc-frontend --emit=sexp <input.ml>";
+  prerr_endline "usage: zxc-frontend --emit=sexp [--wire=1.1|--wire=1.2] <input.ml>";
   exit 3
 
 let parse_args () =
   match Array.to_list Sys.argv with
-  | [ _program; "--emit=sexp"; input ] -> input
+  | [ _program; "--emit=sexp"; input ] -> (input, Zxc_sexp.Wire_1_2)
+  | [ _program; "--emit=sexp"; wire_flag; input ]
+    when starts_with ~prefix:"--wire=" wire_flag -> (
+      let requested = String.sub wire_flag (String.length "--wire=")
+          (String.length wire_flag - String.length "--wire=") in
+      match Zxc_sexp.wire_version_of_string requested with
+      | Some wire -> (input, wire)
+      | None -> usage ())
   | _ -> usage ()
 
 let cmt_modname_to_string (info : Cmt_format.cmt_infos) =
@@ -323,13 +330,13 @@ let load_implementation cmt_path =
       exit 3
 
 let () =
-  let input = parse_args () in
+  let input, wire = parse_args () in
   let tmp_cmo, tmp_cmt = compile_to_cmt input in
   let tmp_cmi = Filename.remove_extension tmp_cmo ^ ".cmi" in
   try
     let structure = load_implementation tmp_cmt in
     let modul = Zxc_subset.of_structure structure in
-    print_string (Zxc_sexp.to_string modul);
+    print_string (Zxc_sexp.to_string ~wire modul);
     cleanup [ tmp_cmo; tmp_cmt; tmp_cmi ]
   with
   | Zxc_subset.Unsupported diagnostic ->

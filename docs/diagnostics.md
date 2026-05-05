@@ -167,6 +167,33 @@ unsupported-node diagnostics.
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
 
+## Wire format 1.2
+
+DX2 bumps the frontend bridge wire from `1.1` to `1.2` so frontend-emitted
+S-expressions can carry source locations into the Zig bridge, following the
+minimum-invasive plan in `mission-internal/p9-investigation/report.md` §2. The
+previous canonical fact listed wire `1.1` in `mission-internal/canonical-facts.md`;
+the current implementation source of truth is now
+`src/frontend_bridge/sexp_parser.zig` (`expected_wire_version = "1.2"`).
+
+Wire `1.2` may annotate an expression with:
+
+```text
+(located (loc <file> <line> <col> <end_line> <end_col>) <expr>)
+```
+
+The location fields are the OCaml frontend span: one-based `line` /
+`end_line`, zero-based `col` / `end_col`, and the source file path reported by
+OCaml. The bridge also accepts a trailing `(loc ...)` field on expression nodes
+for tests and future printers.
+
+For one mission's deprecation window, `omlz check --wire=1.1 ...` forwards
+`--wire=1.1` to `zxc-frontend` and asks it to emit the old location-free shape.
+That compatibility flag is deprecated and targeted for removal in the next
+mission after downstream consumers have moved to wire `1.2`. The `1.2` reader
+continues to accept wire `1.1` sexps; missing locations are treated as
+`Loc.unknown`.
+
 ## Examples
 
 The same type error is shown below in all three formats.

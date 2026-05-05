@@ -1,7 +1,7 @@
 //! Typed Zig mirror for the M1 P3 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 1.1 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 1.2 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -11,6 +11,27 @@ const sexp_parser = @import("sexp_parser.zig");
 const Sexp = sexp_parser.Sexp;
 
 pub const expected_wire_version = sexp_parser.expected_wire_version;
+
+/// Source location carried by wire 1.2 expression nodes.
+pub const Loc = struct {
+    file: []const u8,
+    line: u32,
+    col: u32,
+    end_line: u32,
+    end_col: u32,
+
+    pub const unknown: Loc = .{
+        .file = "_unknown_",
+        .line = 0,
+        .col = 0,
+        .end_line = 0,
+        .end_col = 0,
+    };
+
+    pub fn isUnknown(self: Loc) bool {
+        return self.line == 0 and self.end_line == 0 and std.mem.eql(u8, self.file, "_unknown_");
+    }
+};
 
 /// Typed mirror of an accepted frontend module.
 pub const Module = struct {
@@ -157,12 +178,14 @@ pub const Expr = union(enum) {
 pub const Lambda = struct {
     params: []const []const u8,
     body: *const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Function application expression.
 pub const App = struct {
     callee: *const Expr,
     args: []const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Nested `let NAME = VALUE in BODY` expression.
@@ -171,17 +194,20 @@ pub const LetExpr = struct {
     value: *const Expr,
     body: *const Expr,
     is_rec: bool = false,
+    loc: Loc = Loc.unknown,
 };
 
 /// Nested `let rec A = ... and B = ... in BODY` expression.
 pub const LetRecGroupExpr = struct {
     bindings: []const LetRecBinding,
     body: *const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Assert expression whose condition must evaluate to true.
 pub const AssertExpr = struct {
     condition: *const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Conditional expression with an explicit else branch.
@@ -189,39 +215,46 @@ pub const IfExpr = struct {
     cond: *const Expr,
     then_branch: *const Expr,
     else_branch: *const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Primitive integer/comparison operation.
 pub const Prim = struct {
     op: []const u8,
     args: []const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Variable reference expression.
 pub const Var = struct {
     name: []const u8,
+    loc: Loc = Loc.unknown,
 };
 
 /// Constructor expression such as `None`, `Some x`, `Ok x`, `Error e`, `[]`, or `x :: xs`.
 pub const Ctor = struct {
     name: []const u8,
     args: []const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Tuple construction expression.
 pub const Tuple = struct {
     items: []const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Tuple projection expression, emitted for `fst`/`snd` helpers.
 pub const TupleProj = struct {
     tuple_expr: *const Expr,
     index: usize,
+    loc: Loc = Loc.unknown,
 };
 
 /// Record construction expression with source-order fields.
 pub const Record = struct {
     fields: []const RecordExprField,
+    loc: Loc = Loc.unknown,
 };
 
 /// One field assignment in a record construction/update expression.
@@ -234,12 +267,14 @@ pub const RecordExprField = struct {
 pub const RecordField = struct {
     record_expr: *const Expr,
     field_name: []const u8,
+    loc: Loc = Loc.unknown,
 };
 
 /// Functional record update expression.
 pub const RecordUpdate = struct {
     base_expr: *const Expr,
     fields: []const RecordExprField,
+    loc: Loc = Loc.unknown,
 };
 
 /// In-place record field assignment expression emitted for mutable fields.
@@ -247,12 +282,14 @@ pub const FieldSet = struct {
     record_expr: *const Expr,
     field_name: []const u8,
     value: *const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Pattern match expression with arms evaluated top-to-bottom.
 pub const Match = struct {
     scrutinee: *const Expr,
     arms: []const Arm,
+    loc: Loc = Loc.unknown,
 };
 
 /// Single match arm.
@@ -333,6 +370,7 @@ pub const BridgeError = sexp_parser.ParseError || error{
     MalformedMatch,
     MalformedPattern,
     MalformedConstant,
+    MalformedLoc,
 };
 
 /// Parses frontend bytes into an arena-owned typed module mirror.
@@ -344,6 +382,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
 
     const file_version = try expectAtom(header[1]);
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "1.1") and
         !std.mem.eql(u8, file_version, "1.0") and
         !std.mem.eql(u8, file_version, "0.9") and
         !std.mem.eql(u8, file_version, "0.8") and
@@ -364,7 +403,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=1.1\n");
+            try writeStderr(io, " expected=1.2\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
@@ -374,11 +413,12 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.7") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.8") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.9") or
-                std.mem.eql(u8, extractHeaderVersion(bytes), "1.0"))
+                std.mem.eql(u8, extractHeaderVersion(bytes), "1.0") or
+                std.mem.eql(u8, extractHeaderVersion(bytes), "1.1"))
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits mutual-recursion-aware sexp 1.1.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits location-aware sexp 1.2.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -387,7 +427,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 1.1 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 1.2 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -765,26 +805,225 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
     if (items.len == 0) return error.UnexpectedAtom;
 
     const tag = try expectAtom(items[0]);
-    if (std.mem.eql(u8, tag, "lambda")) return .{ .Lambda = try parseLambda(arena, items) };
-    if (std.mem.eql(u8, tag, "const-int")) return .{ .Constant = .{ .Int = try parseConstInt(items) } };
-    if (std.mem.eql(u8, tag, "const-string")) return .{ .Constant = .{ .String = try parseConstString(arena, items) } };
-    if (std.mem.eql(u8, tag, "app")) return .{ .App = try parseApp(arena, items) };
-    if (std.mem.eql(u8, tag, "let")) return .{ .Let = try parseLetExpr(arena, items, false) };
-    if (std.mem.eql(u8, tag, "let-rec")) return .{ .Let = try parseLetExpr(arena, items, true) };
-    if (std.mem.eql(u8, tag, "Let_rec_group")) return .{ .LetRecGroup = try parseLetRecGroupExpr(arena, items) };
-    if (std.mem.eql(u8, tag, "Assert")) return .{ .Assert = try parseAssert(arena, items) };
-    if (std.mem.eql(u8, tag, "if")) return .{ .If = try parseIf(arena, items) };
-    if (std.mem.eql(u8, tag, "prim")) return .{ .Prim = try parsePrim(arena, items) };
-    if (std.mem.eql(u8, tag, "var")) return .{ .Var = try parseVar(arena, items) };
-    if (std.mem.eql(u8, tag, "ctor")) return .{ .Ctor = try parseCtor(arena, items) };
-    if (std.mem.eql(u8, tag, "match")) return .{ .Match = try parseMatch(arena, items) };
-    if (std.mem.eql(u8, tag, "tuple")) return .{ .Tuple = try parseTuple(arena, items) };
-    if (std.mem.eql(u8, tag, "tuple_project")) return .{ .TupleProj = try parseTupleProj(arena, items) };
-    if (std.mem.eql(u8, tag, "record")) return .{ .Record = try parseRecord(arena, items) };
-    if (std.mem.eql(u8, tag, "field_access")) return .{ .RecordField = try parseRecordField(arena, items) };
-    if (std.mem.eql(u8, tag, "record_update")) return .{ .RecordUpdate = try parseRecordUpdate(arena, items) };
-    if (std.mem.eql(u8, tag, "field_set")) return .{ .FieldSet = try parseFieldSet(arena, items) };
+    if (std.mem.eql(u8, tag, "located")) return parseLocatedExpr(arena, items);
+
+    const located = try splitTrailingLoc(arena, items);
+    const expr_items = located.items;
+    const expr_tag = try expectAtom(expr_items[0]);
+    if (std.mem.eql(u8, expr_tag, "lambda")) {
+        var value = try parseLambda(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Lambda = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "const-int")) return .{ .Constant = .{ .Int = try parseConstInt(expr_items) } };
+    if (std.mem.eql(u8, expr_tag, "const-string")) return .{ .Constant = .{ .String = try parseConstString(arena, expr_items) } };
+    if (std.mem.eql(u8, expr_tag, "app")) {
+        var value = try parseApp(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .App = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "let")) {
+        var value = try parseLetExpr(arena, expr_items, false);
+        value.loc = located.loc;
+        return .{ .Let = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "let-rec")) {
+        var value = try parseLetExpr(arena, expr_items, true);
+        value.loc = located.loc;
+        return .{ .Let = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "Let_rec_group")) {
+        var value = try parseLetRecGroupExpr(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .LetRecGroup = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "Assert")) {
+        var value = try parseAssert(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Assert = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "if")) {
+        var value = try parseIf(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .If = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "prim")) {
+        var value = try parsePrim(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Prim = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "var")) {
+        var value = try parseVar(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Var = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "ctor")) {
+        var value = try parseCtor(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Ctor = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "match")) {
+        var value = try parseMatch(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Match = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "tuple")) {
+        var value = try parseTuple(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Tuple = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "tuple_project")) {
+        var value = try parseTupleProj(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .TupleProj = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "record")) {
+        var value = try parseRecord(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .Record = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "field_access")) {
+        var value = try parseRecordField(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .RecordField = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "record_update")) {
+        var value = try parseRecordUpdate(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .RecordUpdate = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "field_set")) {
+        var value = try parseFieldSet(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .FieldSet = value };
+    }
     return error.UnsupportedNode;
+}
+
+const LocatedItems = struct {
+    items: []const *const Sexp,
+    loc: Loc,
+};
+
+fn parseLocatedExpr(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Expr {
+    if (items.len != 3) return error.MalformedLoc;
+    const loc = try parseLoc(arena, items[1]);
+    const child = try parseExpr(arena, items[2]);
+    return applyLoc(child, loc);
+}
+
+fn splitTrailingLoc(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!LocatedItems {
+    if (items.len == 0) return error.UnexpectedAtom;
+    const last_items = expectList(items[items.len - 1]) catch return .{ .items = items, .loc = Loc.unknown };
+    if (last_items.len == 0) return .{ .items = items, .loc = Loc.unknown };
+    const last_tag = expectAtom(last_items[0]) catch return .{ .items = items, .loc = Loc.unknown };
+    if (!std.mem.eql(u8, last_tag, "loc")) return .{ .items = items, .loc = Loc.unknown };
+    return .{
+        .items = items[0 .. items.len - 1],
+        .loc = try parseLocItems(arena, last_items),
+    };
+}
+
+fn parseLoc(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Loc {
+    return parseLocItems(arena, try expectList(node));
+}
+
+fn parseLocItems(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!Loc {
+    if (items.len != 6) return error.MalformedLoc;
+    try expectAtomValue(items[0], "loc");
+    return .{
+        .file = try dupeAtom(arena, items[1]),
+        .line = try expectU32(items[2]),
+        .col = try expectU32(items[3]),
+        .end_line = try expectU32(items[4]),
+        .end_col = try expectU32(items[5]),
+    };
+}
+
+fn applyLoc(expr: Expr, loc: Loc) Expr {
+    return switch (expr) {
+        .Lambda => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Lambda = copy };
+        },
+        .Constant => expr,
+        .App => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .App = copy };
+        },
+        .Let => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Let = copy };
+        },
+        .LetRecGroup => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .LetRecGroup = copy };
+        },
+        .Assert => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Assert = copy };
+        },
+        .If => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .If = copy };
+        },
+        .Prim => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Prim = copy };
+        },
+        .Var => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Var = copy };
+        },
+        .Ctor => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Ctor = copy };
+        },
+        .Match => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Match = copy };
+        },
+        .Tuple => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Tuple = copy };
+        },
+        .TupleProj => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .TupleProj = copy };
+        },
+        .Record => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .Record = copy };
+        },
+        .RecordField => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .RecordField = copy };
+        },
+        .RecordUpdate => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .RecordUpdate = copy };
+        },
+        .FieldSet => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .FieldSet = copy };
+        },
+    };
 }
 
 fn parseAssert(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!AssertExpr {
@@ -1204,6 +1443,12 @@ fn expectInteger(node: *const Sexp) BridgeError!i64 {
     };
 }
 
+fn expectU32(node: *const Sexp) BridgeError!u32 {
+    const value = try expectInteger(node);
+    if (value < 0 or value > std.math.maxInt(u32)) return error.MalformedLoc;
+    return @intCast(value);
+}
+
 fn extractHeaderVersion(bytes: []const u8) []const u8 {
     const marker = "zxcaml-cir";
     const marker_index = std.mem.indexOf(u8, bytes, marker) orelse return "unknown";
@@ -1272,6 +1517,43 @@ test "parse single int constant module" {
         .Int => |value| try std.testing.expectEqual(@as(i64, 0), value),
         .String => return error.TestUnexpectedResult,
     }
+}
+
+test "wire 1.2 loc fields populate top-level expression loc" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(&arena, "(zxcaml-cir 1.2 (module (let entrypoint (lambda (_) (const-int 0) (loc \"tests/golden/dx2_wire.ml\" 3 4 3 18)))))");
+    const decl = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
+    };
+    const lambda = switch (decl.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(!lambda.loc.isUnknown());
+    try std.testing.expectEqualStrings("tests/golden/dx2_wire.ml", lambda.loc.file);
+    try std.testing.expectEqual(@as(u32, 3), lambda.loc.line);
+    try std.testing.expectEqual(@as(u32, 4), lambda.loc.col);
+    try std.testing.expectEqual(@as(u32, 3), lambda.loc.end_line);
+    try std.testing.expectEqual(@as(u32, 18), lambda.loc.end_col);
+}
+
+test "wire_back_compat compat_1_1 loc_unknown accepts missing loc" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try parseModule(&arena, "(zxcaml-cir 1.1 (module (let entrypoint (lambda (_) (const-int 0)))))");
+    const decl = switch (module.decls[0]) {
+        .Let => |let_decl| let_decl,
+        .LetRecGroup => unreachable,
+    };
+    const lambda = switch (decl.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(lambda.loc.isUnknown());
 }
 
 test "parse top-level and nested let expressions with variable references" {

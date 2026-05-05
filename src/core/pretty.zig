@@ -11,6 +11,15 @@ const layout = @import("layout.zig");
 
 /// Formats a Core IR module as a deterministic single-line S-expression.
 pub fn formatModule(allocator: std.mem.Allocator, module: ir.Module) ![]u8 {
+    return formatModuleWithOptions(allocator, module, .{});
+}
+
+pub const FormatOptions = struct {
+    include_locs: bool = false,
+};
+
+/// Formats a Core IR module, optionally including source locations for DX2.
+pub fn formatModuleWithOptions(allocator: std.mem.Allocator, module: ir.Module, options: FormatOptions) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
@@ -29,7 +38,7 @@ pub fn formatModule(allocator: std.mem.Allocator, module: ir.Module) ![]u8 {
     }
     for (module.decls) |decl| {
         try append(&out, allocator, " ");
-        try formatDecl(&out, allocator, decl);
+        try formatDecl(&out, allocator, decl, options);
     }
     try append(&out, allocator, ")");
 
@@ -76,12 +85,16 @@ fn formatTypeParams(out: *std.ArrayList(u8), allocator: std.mem.Allocator, param
     try append(out, allocator, ")");
 }
 
-fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.Decl) !void {
+fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.Decl, options: FormatOptions) !void {
     switch (decl) {
         .Let => |let_decl| {
             try append(out, allocator, if (let_decl.is_rec) "(let-rec " else "(let ");
             try append(out, allocator, let_decl.name);
             try append(out, allocator, " ");
+            if (options.include_locs) {
+                try formatLoc(out, allocator, exprLoc(let_decl.value.*));
+                try append(out, allocator, " ");
+            }
             try formatExpr(out, allocator, let_decl.value.*);
             try append(out, allocator, ")");
         },
@@ -91,12 +104,52 @@ fn formatDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, decl: ir.De
                 try append(out, allocator, " (binding ");
                 try append(out, allocator, binding.name);
                 try append(out, allocator, " ");
+                if (options.include_locs) {
+                    try formatLoc(out, allocator, exprLoc(binding.value.*));
+                    try append(out, allocator, " ");
+                }
                 try formatExpr(out, allocator, binding.value.*);
                 try append(out, allocator, ")");
             }
             try append(out, allocator, ")");
         },
     }
+}
+
+fn formatLoc(out: *std.ArrayList(u8), allocator: std.mem.Allocator, loc: ir.Loc) !void {
+    if (loc.isUnknown()) {
+        try append(out, allocator, "(loc _unknown_ 0 0 0 0)");
+        return;
+    }
+    try appendPrint(out, allocator, "(loc \"{f}\" {d} {d} {d} {d})", .{
+        std.zig.fmtString(loc.file),
+        loc.line,
+        loc.col,
+        loc.end_line,
+        loc.end_col,
+    });
+}
+
+fn exprLoc(expr: ir.Expr) ir.Loc {
+    return switch (expr) {
+        .Lambda => |value| value.loc,
+        .Constant => |value| value.loc,
+        .App => |value| value.loc,
+        .Let => |value| value.loc,
+        .LetGroup => |value| value.loc,
+        .Assert => |value| value.loc,
+        .If => |value| value.loc,
+        .Prim => |value| value.loc,
+        .Var => |value| value.loc,
+        .Ctor => |value| value.loc,
+        .Match => |value| value.loc,
+        .Tuple => |value| value.loc,
+        .TupleProj => |value| value.loc,
+        .Record => |value| value.loc,
+        .RecordField => |value| value.loc,
+        .RecordUpdate => |value| value.loc,
+        .AccountFieldSet => |value| value.loc,
+    };
 }
 
 fn formatTypeDecl(out: *std.ArrayList(u8), allocator: std.mem.Allocator, type_decl: @import("types.zig").VariantType) !void {

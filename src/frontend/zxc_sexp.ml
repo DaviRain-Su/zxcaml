@@ -10,7 +10,14 @@
 open Format
 open Zxc_subset
 
-let version = "1.1"
+type wire_version = Wire_1_1 | Wire_1_2
+
+let version = function Wire_1_1 -> "1.1" | Wire_1_2 -> "1.2"
+
+let wire_version_of_string = function
+  | "1.1" -> Some Wire_1_1
+  | "1.2" -> Some Wire_1_2
+  | _ -> None
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
@@ -23,6 +30,10 @@ let pp_atom ppf atom =
 let pp_param ppf = function
   | Anonymous -> fprintf ppf "_"
   | Param name -> pp_atom ppf name
+
+let pp_loc ppf (loc : loc) =
+  fprintf ppf "(loc %S %d %d %d %d)" loc.file loc.line loc.col loc.end_line
+    loc.end_col
 
 let rec pp_expr ppf = function
   | Const_int n -> fprintf ppf "(const-int %d)" n
@@ -82,6 +93,9 @@ let rec pp_expr ppf = function
       List.iter (fun arm -> fprintf ppf " %a" pp_match_arm arm) match_expr.arms;
       fprintf ppf ")"
 
+and pp_expr_with_loc ppf (loc, expr) =
+  fprintf ppf "(located %a %a)" pp_loc loc pp_expr expr
+
 and pp_record_expr_fields ppf = function
   | [] -> ()
   | [ field ] -> pp_record_expr_field ppf field
@@ -96,6 +110,11 @@ and pp_let_rec_binding ppf binding =
   fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
   List.iter (fun param -> fprintf ppf " %a" pp_param param) binding.rec_params;
   fprintf ppf ") (body %a))" pp_expr binding.rec_body
+
+and pp_let_rec_binding_with_loc ppf binding =
+  fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
+  List.iter (fun param -> fprintf ppf " %a" pp_param param) binding.rec_params;
+  fprintf ppf ") (body %a))" pp_expr_with_loc (binding.rec_loc, binding.rec_body)
 
 and pp_params ppf = function
   | [] -> ()
@@ -153,16 +172,22 @@ and pp_record_pattern_field ppf field =
   fprintf ppf "(%a %a)" pp_atom field.pattern_field_name pp_match_pattern
     field.pattern_field_value
 
-let rec pp_decl ppf decl =
+let rec pp_decl ~wire ppf decl =
+  let emit_locs = match wire with Wire_1_2 -> true | Wire_1_1 -> false in
   match decl with
   | Let_decl decl ->
       fprintf ppf "(%s %a %a)"
         (if decl.is_rec then "let-rec" else "let")
-        pp_atom decl.name pp_expr decl.body
+        pp_atom decl.name
+        (if emit_locs then pp_expr_with_loc else fun ppf (_, expr) -> pp_expr ppf expr)
+        (decl.loc, decl.body)
   | Let_rec_group_decl bindings ->
       fprintf ppf "(Let_rec_group (bindings";
       List.iter
-        (fun binding -> fprintf ppf " %a" pp_let_rec_binding binding)
+        (fun binding ->
+          fprintf ppf " %a"
+            (if emit_locs then pp_let_rec_binding_with_loc else pp_let_rec_binding)
+            binding)
         bindings;
       fprintf ppf "))"
   | Type_decl decl ->
@@ -259,10 +284,10 @@ and pp_external_type_expr ppf = function
       fprintf ppf "(arrow %a %a)" pp_external_type_expr arg
         pp_external_type_expr result
 
-let pp_module ppf = function
+let pp_module ~wire ppf = function
   | Module decls ->
-      fprintf ppf "(zxcaml-cir %s (module" version;
-      List.iter (fun decl -> fprintf ppf " %a" pp_decl decl) decls;
+      fprintf ppf "(zxcaml-cir %s (module" (version wire);
+      List.iter (fun decl -> fprintf ppf " %a" (pp_decl ~wire) decl) decls;
       fprintf ppf "))"
 
-let to_string modul = asprintf "%a@." pp_module modul
+let to_string ?(wire = Wire_1_2) modul = asprintf "%a@." (pp_module ~wire) modul

@@ -374,7 +374,7 @@ pub fn lowerExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttre
 }
 
 pub fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, expr: ttree.Expr, expected_ty: ?ir.Ty) LowerError!ir.Expr {
-    return switch (expr) {
+    var lowered: ir.Expr = switch (expr) {
         .Lambda => |lambda| .{ .Lambda = try lowerLambda(arena, ctx, lambda) },
         .Constant => |constant| .{ .Constant = try lowerConstant(arena, constant) },
         .App => |app| try lowerApp(arena, ctx, app),
@@ -393,6 +393,64 @@ pub fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ex
         .RecordUpdate => |record_update| try lowerRecordUpdate(arena, ctx, record_update),
         .FieldSet => |field_set| try lowerFieldSet(arena, ctx, field_set),
     };
+    try setCoreLoc(arena, &lowered, ttreeExprLoc(expr));
+    return lowered;
+}
+
+fn ttreeExprLoc(expr: ttree.Expr) ttree.Loc {
+    return switch (expr) {
+        .Lambda => |value| value.loc,
+        .Constant => ttree.Loc.unknown,
+        .App => |value| value.loc,
+        .Let => |value| value.loc,
+        .LetRecGroup => |value| value.loc,
+        .Assert => |value| value.loc,
+        .If => |value| value.loc,
+        .Prim => |value| value.loc,
+        .Var => |value| value.loc,
+        .Ctor => |value| value.loc,
+        .Match => |value| value.loc,
+        .Tuple => |value| value.loc,
+        .TupleProj => |value| value.loc,
+        .Record => |value| value.loc,
+        .RecordField => |value| value.loc,
+        .RecordUpdate => |value| value.loc,
+        .FieldSet => |value| value.loc,
+    };
+}
+
+fn lowerLoc(arena: *std.heap.ArenaAllocator, loc: ttree.Loc) LowerError!ir.Loc {
+    if (loc.isUnknown()) return ir.Loc.unknown;
+    return .{
+        .file = try arena.allocator().dupe(u8, loc.file),
+        .line = loc.line,
+        .col = loc.col,
+        .end_line = loc.end_line,
+        .end_col = loc.end_col,
+    };
+}
+
+fn setCoreLoc(arena: *std.heap.ArenaAllocator, expr: *ir.Expr, loc: ttree.Loc) LowerError!void {
+    const lowered = try lowerLoc(arena, loc);
+    switch (expr.*) {
+        .Lambda => |*value| value.loc = lowered,
+        .Constant => |*value| value.loc = lowered,
+        .App => |*value| value.loc = lowered,
+        .Let => |*value| value.loc = lowered,
+        .LetGroup => |*value| value.loc = lowered,
+        .Assert => |*value| value.loc = lowered,
+        .If => |*value| value.loc = lowered,
+        .Prim => |*value| value.loc = lowered,
+        .Var => |*value| value.loc = lowered,
+        .Ctor => |*value| value.loc = lowered,
+        .Match => |*value| value.loc = lowered,
+        .Tuple => |*value| value.loc = lowered,
+        .TupleProj => |*value| value.loc = lowered,
+        .Record => |*value| value.loc = lowered,
+        .RecordField => |*value| value.loc = lowered,
+        .RecordUpdate => |*value| value.loc = lowered,
+        .AccountFieldSet => |*value| value.loc = lowered,
+    }
 }
 
 pub fn lowerAssert(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, assert_expr: ttree.AssertExpr) LowerError!ir.AssertExpr {
