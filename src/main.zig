@@ -96,7 +96,7 @@ pub fn main(init: std.process.Init) !void {
                     std.process.exit(1);
                 }
                 if (check_args.no_alloc) {
-                    try runNoAllocCheck(init, parsed.module);
+                    try runNoAllocCheck(init, parsed.module, check_args.diagnostics);
                     return;
                 }
                 return;
@@ -425,16 +425,20 @@ fn parseDiagnosticFlag(arg: []const u8, flags: *DiagnosticFlags) !bool {
     return false;
 }
 
+fn diagnosticOutputOptions(init: std.process.Init, flags: DiagnosticFlags) !diag.OutputOptions {
+    return .{
+        .error_format = flags.error_format,
+        .color = flags.color,
+        // TTY autodetection follows the investigation report's §5 guidance:
+        // resolve `auto` at the CLI edge, not inside the pure renderer.
+        .stderr_is_tty = std.Io.File.stderr().isTty(init.io) catch false,
+        .no_color_env = try hasNoColorEnv(init.gpa, init.minimal.environ),
+    };
+}
+
 fn frontendOptions(init: std.process.Init, flags: DiagnosticFlags, wire_version: ?[]const u8) !pipeline.FrontendOptions {
     return .{
-        .diagnostics = .{
-            .error_format = flags.error_format,
-            .color = flags.color,
-            // TTY autodetection follows the investigation report's §5 guidance:
-            // resolve `auto` at the CLI edge, not inside the pure renderer.
-            .stderr_is_tty = std.Io.File.stderr().isTty(init.io) catch false,
-            .no_color_env = try hasNoColorEnv(init.gpa, init.minimal.environ),
-        },
+        .diagnostics = try diagnosticOutputOptions(init, flags),
         .wire_version = wire_version,
     };
 }
@@ -523,7 +527,7 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
     }
 }
 
-fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module) !void {
+fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, flags: DiagnosticFlags) !void {
     var core_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer core_arena.deinit();
 
@@ -568,18 +572,57 @@ fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttre
     switch (result) {
         .Pass => try writeStdout(init.io, "no_alloc: PASS\n"),
         .Fail => |site| {
-            try writeStderr(init.io, "no_alloc: FAIL function ");
-            try writeStderr(init.io, site.function_name);
-            try writeStderr(init.io, ": allocation site ");
-            try writeStderr(init.io, core_no_alloc.nodeLabel(site.kind));
-            if (site.detail) |detail| {
-                try writeStderr(init.io, " ");
-                try writeStderr(init.io, detail);
-            }
-            try writeStderr(init.io, "\n");
+            try renderNoAllocFailure(init, site, flags);
             std.process.exit(1);
         },
     }
+}
+
+fn renderNoAllocFailure(init: std.process.Init, site: core_no_alloc.Site, flags: DiagnosticFlags) !void {
+    const message = try noAllocFailureMessage(init.gpa, site);
+    defer init.gpa.free(message);
+
+    const loc = site.loc orelse @import("core/ir.zig").Loc.unknown;
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(.stderr(), init.io, &buffer);
+    const writer = &file_writer.interface;
+    try diag.render(writer, init.gpa, init.io, .{
+        .file = loc.file,
+        .line = loc.line,
+        .col = loc.col,
+        .end_line = loc.end_line,
+        .end_col = loc.end_col,
+        .severity = "error",
+        .code = "DX2-NOALLOC",
+        .message = message,
+    }, try diagnosticOutputOptions(init, flags));
+    try writer.flush();
+}
+
+fn noAllocFailureMessage(allocator: std.mem.Allocator, site: core_no_alloc.Site) ![]u8 {
+    if (site.kind == .ConstructorPayload) {
+        if (site.detail) |constructor| {
+            return std.fmt.allocPrint(
+                allocator,
+                "no_alloc failure in function `{s}`: constructor `{s}` carries an arena-allocated payload",
+                .{ site.function_name, constructor },
+            );
+        }
+    }
+
+    if (site.detail) |detail| {
+        return std.fmt.allocPrint(
+            allocator,
+            "no_alloc failure in function `{s}`: {s} `{s}` is not allowed in a no_alloc context",
+            .{ site.function_name, core_no_alloc.allocationDescription(site.kind), detail },
+        );
+    }
+
+    return std.fmt.allocPrint(
+        allocator,
+        "no_alloc failure in function `{s}`: {s} is not allowed in a no_alloc context",
+        .{ site.function_name, core_no_alloc.allocationDescription(site.kind) },
+    );
 }
 
 /// Derives the `.core.snapshot` path from an `.ml` input path.

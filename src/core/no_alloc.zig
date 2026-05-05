@@ -89,7 +89,7 @@ const Analyzer = struct {
                     var scope = StringSet.init(self.allocator);
                     defer scope.deinit();
                     for (group.bindings) |binding| {
-                        if (try self.checkExpr(binding.name, binding.value.*, &scope)) |site| return .{ .Fail = site };
+                        if (try self.checkExpr(binding.name, binding.value.*, &scope, ir.exprLoc(binding.value.*))) |site| return .{ .Fail = site };
                     }
                 },
             }
@@ -112,8 +112,8 @@ const Analyzer = struct {
         defer scope.deinit();
 
         const failure = switch (let_decl.value.*) {
-            .Lambda => |lambda| try self.checkLambda(let_decl.name, lambda, &scope, true),
-            else => try self.checkExpr(let_decl.name, let_decl.value.*, &scope),
+            .Lambda => |lambda| try self.checkLambda(let_decl.name, lambda, &scope, true, ir.exprLoc(let_decl.value.*)),
+            else => try self.checkExpr(let_decl.name, let_decl.value.*, &scope, ir.exprLoc(let_decl.value.*)),
         };
 
         if (failure) |site| {
@@ -126,17 +126,18 @@ const Analyzer = struct {
         return null;
     }
 
-    fn checkLambda(self: *Analyzer, function_name: []const u8, lambda_expr: ir.Lambda, scope: *StringSet, is_top_level: bool) CheckError!?Site {
+    fn checkLambda(self: *Analyzer, function_name: []const u8, lambda_expr: ir.Lambda, scope: *StringSet, is_top_level: bool, inherited_loc: ?ir.Loc) CheckError!?Site {
+        const current_loc = firstKnownLoc(lambda_expr.loc, inherited_loc);
         if (!is_top_level) {
             if (lambda_expr.layout.region == .Arena and lambda_expr.layout.repr == .Boxed) {
-                return Site{ .function_name = function_name, .kind = .LambdaCapture, .loc = lambda_expr.loc };
+                return Site{ .function_name = function_name, .kind = .LambdaCapture, .loc = current_loc };
             }
 
             var shadowed = StringSet.init(self.allocator);
             defer shadowed.deinit();
             for (lambda_expr.params) |param| try shadowed.put(param.name, {});
             if (try exprCapturesAny(self.allocator, lambda_expr.body.*, scope, &shadowed)) {
-                return Site{ .function_name = function_name, .kind = .LambdaCapture, .loc = lambda_expr.loc };
+                return Site{ .function_name = function_name, .kind = .LambdaCapture, .loc = current_loc };
             }
         }
 
@@ -147,17 +148,18 @@ const Analyzer = struct {
         }
         defer restoreBindings(scope, snapshots.items);
 
-        return self.checkExpr(function_name, lambda_expr.body.*, scope);
+        return self.checkExpr(function_name, lambda_expr.body.*, scope, current_loc);
     }
 
-    fn checkExpr(self: *Analyzer, function_name: []const u8, expr: ir.Expr, scope: *StringSet) CheckError!?Site {
+    fn checkExpr(self: *Analyzer, function_name: []const u8, expr: ir.Expr, scope: *StringSet, inherited_loc: ?ir.Loc) CheckError!?Site {
+        const current_loc = firstKnownLoc(ir.exprLoc(expr), inherited_loc);
         switch (expr) {
-            .Lambda => |lambda_expr| return self.checkLambda(function_name, lambda_expr, scope, false),
+            .Lambda => |lambda_expr| return self.checkLambda(function_name, lambda_expr, scope, false, current_loc),
             .Constant, .Var => return null,
             .App => |app| {
-                if (try self.checkExpr(function_name, app.callee.*, scope)) |site| return site;
+                if (try self.checkExpr(function_name, app.callee.*, scope, current_loc)) |site| return site;
                 for (app.args) |arg| {
-                    if (try self.checkExpr(function_name, arg.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, arg.*, scope, current_loc)) |site| return site;
                 }
                 if (app.callee.* == .Var) {
                     const callee = app.callee.Var.name;
@@ -166,12 +168,12 @@ const Analyzer = struct {
                 return null;
             },
             .Let => |let_expr| {
-                if (try self.checkExpr(function_name, let_expr.value.*, scope)) |site| return site;
+                if (try self.checkExpr(function_name, let_expr.value.*, scope, current_loc)) |site| return site;
                 var snapshots = std.ArrayList(BindingSnapshot).empty;
                 defer snapshots.deinit(self.allocator);
                 try pushBinding(self.allocator, scope, &snapshots, let_expr.name);
                 defer restoreBindings(scope, snapshots.items);
-                return self.checkExpr(function_name, let_expr.body.*, scope);
+                return self.checkExpr(function_name, let_expr.body.*, scope, current_loc);
             },
             .LetGroup => |group| {
                 var snapshots = std.ArrayList(BindingSnapshot).empty;
@@ -179,33 +181,33 @@ const Analyzer = struct {
                 for (group.bindings) |binding| try pushBinding(self.allocator, scope, &snapshots, binding.name);
                 defer restoreBindings(scope, snapshots.items);
                 for (group.bindings) |binding| {
-                    if (try self.checkExpr(function_name, binding.value.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, binding.value.*, scope, current_loc)) |site| return site;
                 }
-                return self.checkExpr(function_name, group.body.*, scope);
+                return self.checkExpr(function_name, group.body.*, scope, current_loc);
             },
-            .Assert => |assert_expr| return self.checkExpr(function_name, assert_expr.condition.*, scope),
+            .Assert => |assert_expr| return self.checkExpr(function_name, assert_expr.condition.*, scope, current_loc),
             .If => |if_expr| {
-                if (try self.checkExpr(function_name, if_expr.cond.*, scope)) |site| return site;
-                if (try self.checkExpr(function_name, if_expr.then_branch.*, scope)) |site| return site;
-                return self.checkExpr(function_name, if_expr.else_branch.*, scope);
+                if (try self.checkExpr(function_name, if_expr.cond.*, scope, current_loc)) |site| return site;
+                if (try self.checkExpr(function_name, if_expr.then_branch.*, scope, current_loc)) |site| return site;
+                return self.checkExpr(function_name, if_expr.else_branch.*, scope, current_loc);
             },
             .Prim => |prim| {
                 for (prim.args) |arg| {
-                    if (try self.checkExpr(function_name, arg.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, arg.*, scope, current_loc)) |site| return site;
                 }
                 return null;
             },
             .Ctor => |ctor_expr| {
                 for (ctor_expr.args) |arg| {
-                    if (try self.checkExpr(function_name, arg.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, arg.*, scope, current_loc)) |site| return site;
                 }
                 if (ctor_expr.args.len > 0) {
-                    return Site{ .function_name = function_name, .kind = .ConstructorPayload, .detail = ctor_expr.name, .loc = ctor_expr.loc };
+                    return Site{ .function_name = function_name, .kind = .ConstructorPayload, .detail = ctor_expr.name, .loc = firstKnownLoc(ctor_expr.loc, current_loc) };
                 }
                 return null;
             },
             .Match => |match_expr| {
-                if (try self.checkExpr(function_name, match_expr.scrutinee.*, scope)) |site| return site;
+                if (try self.checkExpr(function_name, match_expr.scrutinee.*, scope, current_loc)) |site| return site;
                 for (match_expr.arms) |arm| {
                     var snapshots = std.ArrayList(BindingSnapshot).empty;
                     defer snapshots.deinit(self.allocator);
@@ -213,36 +215,36 @@ const Analyzer = struct {
                     defer restoreBindings(scope, snapshots.items);
 
                     if (arm.guard) |guard| {
-                        if (try self.checkExpr(function_name, guard.*, scope)) |site| return site;
+                        if (try self.checkExpr(function_name, guard.*, scope, current_loc)) |site| return site;
                     }
-                    if (try self.checkExpr(function_name, arm.body.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, arm.body.*, scope, current_loc)) |site| return site;
                 }
                 return null;
             },
             .Tuple => |tuple_expr| {
                 for (tuple_expr.items) |item| {
-                    if (try self.checkExpr(function_name, item.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, item.*, scope, current_loc)) |site| return site;
                 }
-                return Site{ .function_name = function_name, .kind = .Tuple, .loc = tuple_expr.loc };
+                return Site{ .function_name = function_name, .kind = .Tuple, .loc = firstKnownLoc(tuple_expr.loc, current_loc) };
             },
-            .TupleProj => |tuple_proj| return self.checkExpr(function_name, tuple_proj.tuple_expr.*, scope),
+            .TupleProj => |tuple_proj| return self.checkExpr(function_name, tuple_proj.tuple_expr.*, scope, current_loc),
             .Record => |record_expr| {
                 for (record_expr.fields) |field| {
-                    if (try self.checkExpr(function_name, field.value.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, field.value.*, scope, current_loc)) |site| return site;
                 }
-                return Site{ .function_name = function_name, .kind = .Record, .loc = record_expr.loc };
+                return Site{ .function_name = function_name, .kind = .Record, .loc = firstKnownLoc(record_expr.loc, current_loc) };
             },
-            .RecordField => |record_field| return self.checkExpr(function_name, record_field.record_expr.*, scope),
+            .RecordField => |record_field| return self.checkExpr(function_name, record_field.record_expr.*, scope, current_loc),
             .RecordUpdate => |record_update| {
-                if (try self.checkExpr(function_name, record_update.base_expr.*, scope)) |site| return site;
+                if (try self.checkExpr(function_name, record_update.base_expr.*, scope, current_loc)) |site| return site;
                 for (record_update.fields) |field| {
-                    if (try self.checkExpr(function_name, field.value.*, scope)) |site| return site;
+                    if (try self.checkExpr(function_name, field.value.*, scope, current_loc)) |site| return site;
                 }
-                return Site{ .function_name = function_name, .kind = .RecordUpdate, .loc = record_update.loc };
+                return Site{ .function_name = function_name, .kind = .RecordUpdate, .loc = firstKnownLoc(record_update.loc, current_loc) };
             },
             .AccountFieldSet => |field_set| {
-                if (try self.checkExpr(function_name, field_set.account_expr.*, scope)) |site| return site;
-                return self.checkExpr(function_name, field_set.value.*, scope);
+                if (try self.checkExpr(function_name, field_set.account_expr.*, scope, current_loc)) |site| return site;
+                return self.checkExpr(function_name, field_set.value.*, scope, current_loc);
             },
         }
     }
@@ -264,6 +266,27 @@ pub fn nodeLabel(kind: AllocationKind) []const u8 {
         .ConstructorPayload => "Core.Constr(payload)",
         .LambdaCapture => "Core.Lambda(captures)",
     };
+}
+
+/// Returns a user-facing allocation description for diagnostics.
+pub fn allocationDescription(kind: AllocationKind) []const u8 {
+    return switch (kind) {
+        .Tuple => "tuple allocation",
+        .Record => "record allocation",
+        .RecordUpdate => "record update allocation",
+        .ConstructorPayload => "constructor payload allocation",
+        .LambdaCapture => "capturing lambda allocation",
+    };
+}
+
+fn firstKnownLoc(preferred: ?ir.Loc, fallback: ?ir.Loc) ?ir.Loc {
+    if (preferred) |loc| {
+        if (!loc.isUnknown()) return loc;
+    }
+    if (fallback) |loc| {
+        if (!loc.isUnknown()) return loc;
+    }
+    return preferred orelse fallback;
 }
 
 fn exprCapturesAny(allocator: std.mem.Allocator, expr: ir.Expr, visible: *const StringSet, shadowed: *StringSet) CheckError!bool {

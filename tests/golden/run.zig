@@ -68,6 +68,21 @@ fn runCheckJsonStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct
     return .{ .stderr = result.stderr, .exit_code = exit_code };
 }
 
+/// Runs `omlz check --no-alloc --color=never <ml_file>` and returns (stderr, exit_code).
+/// Caller owns stderr and must free it.
+fn runNoAllocStderr(allocator: Allocator, io: Io, ml_file: []const u8) !struct { stderr: []u8, exit_code: u8 } {
+    const argv = [_][]const u8{ golden_options.omlz_bin, "check", "--no-alloc", "--color=never", ml_file };
+    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    allocator.free(result.stdout);
+
+    const exit_code: u8 = switch (result.term) {
+        .exited => |code| code,
+        .signal, .stopped, .unknown => 1,
+    };
+
+    return .{ .stderr = result.stderr, .exit_code = exit_code };
+}
+
 const JsonDiagnostic = struct {
     file: []const u8,
     line: u32,
@@ -118,6 +133,17 @@ fn containsExpectedOfTypeWithToken(stderr: []const u8) bool {
     const after = stderr[start + phrase.len ..];
     const trimmed = std.mem.trim(u8, after, " \t\r\n");
     return trimmed.len > 0 and !std.ascii.isWhitespace(trimmed[0]);
+}
+
+fn containsDigitColonDigit(s: []const u8) bool {
+    if (s.len < 3) return false;
+    var index: usize = 1;
+    while (index + 1 < s.len) : (index += 1) {
+        if (s[index] == ':' and std.ascii.isDigit(s[index - 1]) and std.ascii.isDigit(s[index + 1])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 test "golden: Core IR snapshots match for all tests/golden/*.ml" {
@@ -364,6 +390,20 @@ test "golden: JSON diagnostics expose multi-character span end column" {
     try std.testing.expectEqual(@as(u32, 1), parsed.value.line);
     try std.testing.expectEqual(parsed.value.line, parsed.value.end_line orelse 0);
     try std.testing.expect((parsed.value.end_col orelse parsed.value.col) > parsed.value.col);
+}
+
+test "golden: no_alloc diagnostics cite source span without Core internals" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const fixture = "tests/golden/dx2_noalloc_list.ml";
+
+    const result = try runNoAllocStderr(allocator, io, fixture);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, fixture ++ ":") != null);
+    try std.testing.expect(containsDigitColonDigit(result.stderr));
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Core.Constr(payload)") == null);
 }
 
 test "golden: snapshot determinism — no memory addresses or timestamps" {

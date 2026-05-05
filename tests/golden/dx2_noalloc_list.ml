@@ -1,0 +1,3 @@
+let entrypoint n =
+  let xs = [1; 2; 3] in
+  xs
