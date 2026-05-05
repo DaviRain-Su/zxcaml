@@ -102,6 +102,24 @@ feature phase.
   subset diagnostics (`d7513b6`, `1469bf0`, `f878677`, `59a0b02`, `2e30c89`,
   `8b4441a`, `31c7814`).
 
+## [Runtime Refactor] - 2026-05-05
+
+### Changed
+
+- Split `runtime/zig/cpi.zig` down to pure CPI primitives with a ≤ 600-line
+  target, moving the six `zxcaml_*_process` entry points into focused modules
+  under `runtime/zig/programs/` (`26085cf`).
+- Added the `runtime/zig/bs58.zig` module with encode/decode helpers and
+  Pubkey-focused coverage, then switched the SPL Token runtime helper to
+  consume the canonical Tokenkeg base58 program ID through `bs58`
+  (`b3b2a4a`, `f34f6e4`).
+- Documented the public runtime surface in `docs/runtime-api.md` and the
+  Chinese mirror `docs/zh/runtime-api.md`, covering Arena, Syscalls, CPI,
+  Account, SPL Token, Bs58, and the programs registry (`465b50f`, `7837c90`).
+- Linked the new runtime API guide from the English/Chinese README and roadmap
+  surfaces so users can navigate to `runtime-api.md` from the main docs
+  (`6b7ec07`).
+
 ## [P7] OCaml Subset Expansion - 2026-04-30
 
 ### Added
