@@ -151,18 +151,32 @@ expecting a JSON array.
 
 ## Error code catalog
 
-DX1 preserves current compatibility aliases while reserving stable numeric codes
-for the diagnostic families already emitted by the compiler. The stable `E0001`
-range is the catalog that downstream tools should key on once aliases are
-retired or mapped by the CLI. M-DX2 will add subset-violation codes for tailored
-unsupported-node diagnostics.
+DX1 preserved current compatibility aliases while reserving stable numeric codes
+for the diagnostic families already emitted by the compiler. DX2 starts emitting
+stable `E0010+` codes for tailored subset-violation diagnostics so downstream
+tools can key on codes instead of matching message text.
 
 | Stable code | Current alias | Diagnostic family | Status |
 | --- | --- | --- | --- |
 | `E0001` | `OCAML-FRONTEND` | OCaml parser/type-checker errors surfaced by `zxc-frontend`. | Reserved by DX1; currently emitted with the alias in JSON and human output. |
 | `E0002` | `P1-UNSUPPORTED` | Generic ZxCaml subset rejection from the typedtree subset checker. | Reserved by DX1; M-DX2 will split this into narrower codes. |
 | `E0003` | `M0-INTERNAL` | Internal frontend bridge error fallback. | Reserved for unexpected internal frontend failures. |
-| `E0010` and above | _TBD_ | Tailored subset-violation diagnostics. | Reserved for M-DX2. |
+| `E0010` | _n/a_ | Polymorphic variants. | Emitted for `Texp_variant`; polymorphic variants are outside the ZxCaml subset. |
+| `E0011` | _n/a_ | Float constants. | Emitted for `Const_float`; floats cannot be lowered to BPF. |
+| `E0012` | _n/a_ | Other unsupported constants. | Emitted for integer-width literals not represented in the current subset. |
+| `E0013` | _n/a_ | Mutable references and mutable updates. | Emitted for `ref`, `:=`, `!`, and mutable field writes. |
+| `E0014` | _n/a_ | First-class modules. | Emitted for `Texp_pack` and local module expressions. |
+| `E0015` | _n/a_ | Recursive modules. | Emitted for `Tstr_recmodule`; recursive modules are not yet supported. |
+| `E0016` | _n/a_ | Exceptions. | Emitted for `try` / exception declarations. |
+| `E0017` | _n/a_ | Loops. | Emitted for `for` / `while`; use recursion or higher-order functions. |
+| `E0018` | _n/a_ | Objects and method calls. | Emitted for OCaml object-oriented expression nodes. |
+| `E0019` | _n/a_ | Arrays. | Emitted for `Texp_array`. |
+| `E0020` | _n/a_ | Lazy expressions. | Emitted for `Texp_lazy`. |
+| `E0021` | _n/a_ | Binding operators. | Emitted for `Texp_letop`. |
+| `E0022` | _n/a_ | Unreachable expressions. | Emitted for `Texp_unreachable`. |
+| `E0023` | _n/a_ | Extension constructors. | Emitted for extension-constructor nodes. |
+| `E0024` | _n/a_ | Unknown constructors. | Emitted when a constructor is not present in the subset type environment. |
+| `E0090`–`E0099` | _n/a_ | Generic subset fallback buckets. | Used only when a more specific tailored subset code does not apply. |
 
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
@@ -205,8 +219,9 @@ The same type error is shown below in all three formats.
 ### Pre-P9 probe baselines
 
 Appendix A of `mission-internal/p9-investigation/report.md` recorded the
-post-Phase-6, pre-P9 probe output. These baselines are included verbatim here
-so readers can compare the legacy one-line surface with the P9 renderers:
+post-Phase-6, pre-P9 probe output. These baselines preserve the legacy one-line
+shape while abbreviating the old subset whitelist dump, so readers can compare
+the prior surface with the P9 renderers:
 
 ```text
 === DX1 parse error ===
@@ -225,11 +240,11 @@ no_alloc: FAIL function entrypoint: allocation site Core.Constr(payload) ::
 exit=1
 
 === DX4 polyvariant ===
-/tmp/p9_dx_probes/dx4_unsupp.ml:2:10: error: Texp_variant is not supported in the current ZxCaml subset; expected top-level `let` declarations, integer constants, identifiers, string constants, one-argument functions, non-recursive nested `let` expressions, or the whitelisted constructors None/Some/Ok/Error/[]/::, including basic pattern matches over those values
+/tmp/p9_dx_probes/dx4_unsupp.ml:2:10: error: Texp_variant is not supported in the current ZxCaml subset; [legacy whitelist dump omitted]
 exit=1
 
 === DX4 float ===
-/tmp/p9_dx_probes/dx4_float.ml:2:10: error: Texp_constant is not supported in the current ZxCaml subset; expected top-level `let` declarations, integer constants, identifiers, string constants, one-argument functions, non-recursive nested `let` expressions, or the whitelisted constructors None/Some/Ok/Error/[]/::, including basic pattern matches over those values
+/tmp/p9_dx_probes/dx4_float.ml:2:10: error: Texp_constant is not supported in the current ZxCaml subset; [legacy whitelist dump omitted]
 exit=1
 
 === DX5 idl broken ===

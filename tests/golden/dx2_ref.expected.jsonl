@@ -1,0 +1,1 @@
+{"file":"tests/golden/dx2_ref.ml","line":2,"col":10,"end_line":2,"end_col":15,"severity":"error","code":"E0013","message":"mutable references are not part of the ZxCaml subset","snippet":"  let x = ref 0 in"}

@@ -1,0 +1,1 @@
+{"file":"tests/golden/dx2_first_class_module.ml","line":2,"col":2,"end_line":3,"end_col":9,"severity":"error","code":"E0014","message":"first-class modules are not supported","snippet":"  let module M = struct let value = 1 end in"}

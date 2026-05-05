@@ -1,0 +1,1 @@
+{"file":"tests/golden/dx2_float.ml","line":2,"col":2,"end_line":2,"end_col":5,"severity":"error","code":"E0011","message":"float constants cannot be lowered to BPF","snippet":"  1.5"}

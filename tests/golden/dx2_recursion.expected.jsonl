@@ -1,0 +1,1 @@
+{"file":"tests/golden/dx2_recursion.ml","line":1,"col":0,"end_line":5,"end_col":3,"severity":"error","code":"E0015","message":"recursive modules are not yet supported","snippet":"module rec M : sig"}

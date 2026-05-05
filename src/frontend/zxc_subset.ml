@@ -423,34 +423,79 @@ let loc_of_location (location : Location.t) =
     end_col = finish.Lexing.pos_cnum - finish.Lexing.pos_bol;
   }
 
-let unsupported ?message ?hint ~node_kind ~loc () =
+let starts_with ~prefix value =
+  let prefix_len = String.length prefix in
+  String.length value >= prefix_len && String.sub value 0 prefix_len = prefix
+
+let unsupported_code_and_message node_kind =
+  match node_kind with
+  | "Texp_variant" ->
+      ( "E0010",
+        "polymorphic variants are not part of the ZxCaml subset" )
+  | "Texp_constant(float)" ->
+      ("E0011", "float constants cannot be lowered to BPF")
+  | "Texp_constant" ->
+      ("E0012", "this constant is not part of the ZxCaml subset")
+  | "Texp_apply(mutation)" | "Texp_setfield" | "Texp_instvar"
+  | "Texp_setinstvar" | "Texp_override" ->
+      ("E0013", "mutable references are not part of the ZxCaml subset")
+  | "Texp_pack" | "Texp_letmodule" ->
+      ("E0014", "first-class modules are not supported")
+  | "Tstr_recmodule" ->
+      ("E0015", "recursive modules are not yet supported")
+  | "Texp_try" | "Texp_letexception" | "Tstr_exception" ->
+      ("E0016", "exceptions are not supported")
+  | "Texp_for" | "Texp_while" ->
+      ("E0017", "loops are not supported; use recursion or higher-order functions")
+  | "Texp_object" | "Texp_new" | "Texp_send" ->
+      ("E0018", "objects and method calls are not part of the ZxCaml subset")
+  | "Texp_array" ->
+      ("E0019", "arrays are not part of the ZxCaml subset")
+  | "Texp_lazy" ->
+      ("E0020", "lazy expressions are not supported")
+  | "Texp_letop" ->
+      ("E0021", "binding operators are not supported")
+  | "Texp_unreachable" ->
+      ("E0022", "unreachable expressions are not supported")
+  | "Texp_extension_constructor" | "Tstr_typext" ->
+      ("E0023", "extension constructors are not part of the ZxCaml subset")
+  | node_kind when starts_with ~prefix:"Texp_construct" node_kind ->
+      ("E0024", "this constructor is not known to the ZxCaml subset")
+  | node_kind when starts_with ~prefix:"Texp_" node_kind ->
+      ("E0090", Printf.sprintf "%s is not part of the ZxCaml subset" node_kind)
+  | node_kind when starts_with ~prefix:"Tstr_" node_kind ->
+      ("E0091", Printf.sprintf "%s declarations are not part of the ZxCaml subset" node_kind)
+  | node_kind when starts_with ~prefix:"Tpat_" node_kind ->
+      ("E0092", Printf.sprintf "%s patterns are not part of the ZxCaml subset" node_kind)
+  | _ ->
+      ("E0099", Printf.sprintf "%s is not part of the ZxCaml subset" node_kind)
+
+let unsupported ?code ?message ?hint ~node_kind ~loc () =
+  let default_code, default_message = unsupported_code_and_message node_kind in
   raise
     (Unsupported
        {
          severity = "error";
-         code = "P1-UNSUPPORTED";
+         code = Option.value code ~default:default_code;
          node_kind;
          loc = loc_of_location loc;
-         message =
-           (match message with
-           | Some message -> message
-           | None ->
-               Printf.sprintf
-                 "%s is not supported in the current ZxCaml subset; expected \
-                  top-level `let` declarations, integer constants, identifiers, \
-                  string constants, one-argument functions, non-recursive nested \
-                  `let` expressions, or the whitelisted constructors \
-                  None/Some/Ok/Error/[]/::, including basic pattern matches over \
-                  those values"
-                 node_kind);
+         message = Option.value message ~default:default_message;
          hint;
        })
 
 let unsupported_mutation ~feature ~node_kind ~loc =
-  unsupported ~node_kind ~loc
-    ~message:(Printf.sprintf "mutation (%s) is not supported in P1" feature)
-    ~hint:"ZxCaml P1 is arena-only and does not support OCaml refs or mutable updates"
+  unsupported ~node_kind ~loc ~code:"E0013"
+    ~message:"mutable references are not part of the ZxCaml subset"
+    ~hint:(Printf.sprintf "%s mutates local state; use immutable values instead" feature)
     ()
+
+let unsupported_constant ~loc = function
+  | Const_float _ ->
+      unsupported ~node_kind:"Texp_constant(float)" ~loc
+        ~message:"float constants cannot be lowered to BPF"
+        ()
+  | _ ->
+      unsupported ~node_kind:"Texp_constant" ~loc ()
 
 let structure_item_kind = function
   | Tstr_eval _ -> "Tstr_eval"
@@ -641,6 +686,7 @@ let rec parse_match_scrutinee env (expr : expression) =
           record_expr = parse_match_scrutinee env record_expr;
           field_name = label.Types.lbl_name;
         }
+  | Texp_constant constant -> unsupported_constant ~loc:expr.exp_loc constant
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let flatten_or_pattern = function
@@ -874,7 +920,7 @@ and parse_expr env (expr : expression) =
       unsupported ~node_kind:"Texp_let(empty)" ~loc:expr.exp_loc ()
   | Texp_let (_, _ :: _ :: _, _) ->
       unsupported ~node_kind:"Texp_let(and)" ~loc:expr.exp_loc ()
-  | Texp_constant _ -> unsupported ~node_kind:"Texp_constant" ~loc:expr.exp_loc ()
+  | Texp_constant constant -> unsupported_constant ~loc:expr.exp_loc constant
   | Texp_construct (_lid, constructor, args) ->
       let name = constructor.Types.cstr_name in
       if type_env_has_constructor env name then

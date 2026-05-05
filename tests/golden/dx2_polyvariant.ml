@@ -1,0 +1,2 @@
+let entrypoint _ =
+  `Ready

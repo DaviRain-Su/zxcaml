@@ -1,0 +1,1 @@
+{"file":"tests/golden/dx2_polyvariant.ml","line":2,"col":2,"end_line":2,"end_col":8,"severity":"error","code":"E0010","message":"polymorphic variants are not part of the ZxCaml subset","snippet":"  `Ready"}
