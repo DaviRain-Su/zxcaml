@@ -73,7 +73,8 @@ pub fn build(b: *std.Build) void {
         .root_module = root_module,
     });
 
-    b.installArtifact(exe);
+    const install_omlz = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install_omlz.step);
 
     const lsp_root_module = b.createModule(.{
         .root_source_file = b.path("src/lsp/lsp_main.zig"),
@@ -339,6 +340,14 @@ pub fn build(b: *std.Build) void {
     const run_lsp_jsonrpc_tests = b.addRunArtifact(lsp_jsonrpc_tests);
     run_lsp_jsonrpc_tests.setCwd(b.path(""));
 
+    // End-to-end LSP harness (P9 / F-LSP-7): exercise every Python stdlib
+    // client scenario through the installed omlz-lsp binary.  The harness
+    // invokes both zig-out/bin/omlz-lsp and omlz check, so depend explicitly
+    // on the install steps for both user-facing binaries.
+    const run_lsp_harness = b.addSystemCommand(&.{ "python3", "tests/lsp/run_lsp_check.py", "all" });
+    run_lsp_harness.step.dependOn(&install_omlz.step);
+    run_lsp_harness.step.dependOn(&install_lsp.step);
+
     // Renderer tests (P9 / F-DX1-1): verify rustc-style diagnostic rendering.
     const render_test_module = b.createModule(.{
         .root_source_file = b.path("tests/cli/render_test.zig"),
@@ -481,6 +490,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);
+    test_step.dependOn(&run_lsp_harness.step);
     test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_bridge_wire_compat_tests.step);
     test_step.dependOn(&run_core_loc_tests.step);

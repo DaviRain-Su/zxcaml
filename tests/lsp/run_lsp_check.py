@@ -217,6 +217,29 @@ def latency():
     assert median_ms <= 200.0, elapsed_ms
 
 
+def all_checks():
+    failures = []
+    for name in [
+        "initialize",
+        "didopen_parse_err",
+        "didopen_clean",
+        "didchange_roundtrip",
+        "shutdown",
+        "latency",
+    ]:
+        try:
+            commands[name]()
+        except BaseException as exc:
+            failures.append((name, exc))
+            print(f"FAIL {name}: {exc!r}", file=sys.stderr)
+            break
+        else:
+            print(f"PASS {name}")
+
+    if failures:
+        raise AssertionError(f"LSP harness failed at {failures[0][0]}")
+
+
 if __name__ == "__main__":
     commands = {
         "initialize": initialize,
@@ -225,6 +248,7 @@ if __name__ == "__main__":
         "didchange_roundtrip": didchange_roundtrip,
         "shutdown": shutdown,
         "latency": latency,
+        "all": all_checks,
     }
     assert len(sys.argv) == 2 and sys.argv[1] in commands, "usage: run_lsp_check.py " + "|".join(commands)
     commands[sys.argv[1]]()
