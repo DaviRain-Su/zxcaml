@@ -9,7 +9,10 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
-No unreleased user-visible changes are documented yet.
+### Added
+
+- Added project wiki generation plus a GitHub Actions auto-refresh workflow
+  that regenerates the wiki on pushes to `main`.
 
 ## [Real-world Examples Batch 3] - 2026-05-06
 
