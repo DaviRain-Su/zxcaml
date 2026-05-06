@@ -235,6 +235,12 @@ CASES: list[tuple[str, str, str]] = [
         "(const-int 3))))))\n",
     ),
     (
+        "stdlib Crypto.keccak256 uses bundled fixed hash binding",
+        'let entrypoint input = Crypto.keccak256 input\n',
+        "(zxcaml-cir 1.1 (module (let entrypoint (lambda (input) "
+        "(app (var Crypto.keccak256) (var input))))))\n",
+    ),
+    (
         "string concatenation operator uses bundled function",
         'let entrypoint _ = "hello" ^ " world"\n',
         "(zxcaml-cir 1.1 (module (let entrypoint (lambda (_) "

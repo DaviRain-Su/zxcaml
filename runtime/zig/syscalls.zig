@@ -208,3 +208,17 @@ test "hosted hash fallbacks match known SHA-256 and Keccak-256 vectors" {
         &keccak,
     );
 }
+
+test "keccak256 arena wrapper returns fixed 32-byte digest" {
+    var buf: [64]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+
+    const digest = sol_keccak256_alloc(&arena, "abc");
+    try std.testing.expectEqual(@as(usize, 32), digest.len);
+    try std.testing.expectEqual(@as(usize, 32), arena.offset);
+    try std.testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 0x4e, 0x03, 0x65, 0x7a, 0xea, 0x45, 0xa9, 0x4f, 0xc7, 0xd4, 0x7b, 0xa8, 0x26, 0xc8, 0xd6, 0x67, 0xc0, 0xd1, 0xe6, 0xe3, 0x3a, 0x64, 0xa0, 0x36, 0xec, 0x44, 0xf5, 0x8f, 0xa1, 0x2d, 0x6c, 0x45 },
+        digest,
+    );
+}

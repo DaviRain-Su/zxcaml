@@ -650,6 +650,20 @@ pub fn build(b: *std.Build) void {
     run_codegen_pattern_extensions_tests.step.dependOn(b.getInstallStep());
     run_codegen_pattern_extensions_tests.setCwd(b.path(""));
 
+    const keccak_codegen_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/golden/keccak/codegen_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    keccak_codegen_test_module.addOptions("codegen_options", codegen_options);
+    const keccak_codegen_tests = b.addTest(.{
+        .root_module = keccak_codegen_test_module,
+    });
+    const run_keccak_codegen_tests = b.addRunArtifact(keccak_codegen_tests);
+    run_keccak_codegen_tests.step.dependOn(&run_codegen_pattern_extensions_tests.step);
+    run_keccak_codegen_tests.step.dependOn(b.getInstallStep());
+    run_keccak_codegen_tests.setCwd(b.path(""));
+
     const anf_test_module = b.createModule(.{
         .root_source_file = b.path("anf_tests.zig"),
         .target = target,
@@ -707,4 +721,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);
+    test_step.dependOn(&run_keccak_codegen_tests.step);
 }

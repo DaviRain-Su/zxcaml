@@ -1,0 +1,2 @@
+digest.* = syscalls.sol_keccak256_alloc(arena, input);
+_ = syscalls.sol_log_pubkey(@ptrCast((digest.*).ptr));
