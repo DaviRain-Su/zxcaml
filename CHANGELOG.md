@@ -11,6 +11,26 @@ evidence for each major bullet.
 
 No unreleased user-visible changes are documented yet.
 
+## [Real-world Examples Batch 3] - 2026-05-06
+
+### Added
+
+- Added three SPL Token primitive example programs: `spl_burn` for Burn
+  discriminator `8`, `spl_close_account` for CloseAccount discriminator `9`,
+  and `spl_revoke` for Revoke discriminator `5` (`b0dce5e`, `1acf30b`,
+  `8eac394`).
+- Added Burn / CloseAccount / Revoke runtime support in
+  `runtime/zig/spl_token.zig`, including six instruction encoders
+  (`encode*` / `encode*Into`) plus six account-meta and instruction builders
+  for the new primitives (`16a80fb`).
+- Added three focused `runtime/zig/programs/spl_*.zig` wrappers that witness
+  the SPL Token builders while mutating the mocked program-owned token-account
+  state used by the Mollusk fixtures (`16a80fb`).
+- Added Mollusk integration coverage in `tests/spl_burn_test.rs`,
+  `tests/spl_close_account_test.rs`, and `tests/spl_revoke_test.rs`, and
+  bumped the corpus counts from 57 to 60 examples and from 24 to 27 Mollusk
+  tests (`b0dce5e`, `1acf30b`, `8eac394`, `f724b46`).
+
 ## [P9 LSP Resilience] - 2026-05-06
 
 ### Added
