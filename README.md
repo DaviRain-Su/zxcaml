@@ -145,6 +145,7 @@ or emit Anchor-compatible IDL.
 - **CPI and PDA helpers:** built-in `instruction` / `account_meta` records, `invoke`, `invoke_signed`, PDA helpers, and return-data syscalls mirror the Solana C ABI
 - **SPL-Token:** helper support and acceptance examples cover the legacy Tokenkeg primitives transfer, init_account, burn, close_account, and revoke; the current SPL primitive examples are `spl_burn`, `spl_close_account`, and `spl_revoke`
 - **no_alloc:** `omlz check --no-alloc` runs a conservative Core IR allocation proof and reports the allocation-causing node on failure
+- **OCaml-native tests:** `let%test_unit "name" = expr` bindings are discovered by `omlz test`, which runs `examples/tests/*.ml` by default, supports `--filter` / `--format=cargo|json`, and powers LSP CodeLens one-test runs
 - **IDL:** `omlz idl <file>` emits Anchor 0.30+ compatible JSON with SHA-256 discriminators, instruction accounts/args, account types, events, errors, and constants
 - **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
 - **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, closure harness, account/syscall harness, simple CPI harness, and SPL-Token transfer harness

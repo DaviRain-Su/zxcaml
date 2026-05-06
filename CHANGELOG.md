@@ -9,6 +9,14 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — let%%test_unit + omlz test runner
+
+- Added `let%test_unit "name" = expr` frontend support, lowering test bodies into unit thunks and `__otest_registry__` for runner discovery (`46e7695`).
+- Added the `omlz test` subcommand with default `examples/tests/*.ml` discovery, explicit `FILE...` support, cargo-style and JSON reporters, `--filter`, `--format`, `--no-color`, `NO_COLOR`, and exit codes 0/1/2 (`b189935`).
+- Added LSP CodeLens support for `let%test_unit` bindings, including `omlz.runTest`, streaming through `$/omlz.testOutput`, pass/fail lens titles, and the ≤100 ms CodeLens latency harness (`cf27725`).
+- Added three demo test programs under `examples/tests/` with eight passing `let%test_unit` cases plus the failure-template fixture used for reporter demos (`91efeac`).
+- Fixed the frontend pre-scan so `let%test_unit` text inside OCaml comments is ignored cleanly instead of being parsed as a real test (`4048e8d`).
+
 ### Added
 
 - Added project wiki generation plus a GitHub Actions auto-refresh workflow
