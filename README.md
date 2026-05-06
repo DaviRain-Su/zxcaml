@@ -141,6 +141,7 @@ or emit Anchor-compatible IDL.
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
 - **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
+- **Solana sysvar readers:** `Sysvar.clock_from_account`, `rent_from_account`, `instructions_header_from_account`, `instruction_at`, `stake_history_latest_from_account`, and `epoch_schedule_from_account` decode Clock, Rent, Instructions, StakeHistory, and EpochSchedule account data; see [`docs/15-sysvars.md`](./docs/15-sysvars.md)
 - **Runtime crypto syscalls:** Solana-backed SHA-256, Keccak-256, BLAKE3, and `secp256k1_recover` are exposed through `Crypto`, with digest-writer and signature-recovery examples (`keccak_demo`, `blake3_demo`, `secp_recover_demo`)
 - **External declarations:** `external name : type = "zig_symbol"` syntax enables direct FFI to Zig runtime functions with type safety enforced by the frontend
 - **CPI and PDA helpers:** built-in `instruction` / `account_meta` records, `invoke`, `invoke_signed`, PDA helpers, and return-data syscalls mirror the Solana C ABI

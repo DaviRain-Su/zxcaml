@@ -17,6 +17,22 @@ evidence for each major bullet.
 - Added Keccak and BLAKE3 digest-writer examples plus Mollusk SVM tests that compare account-data output against known digest bytes (`973850b`).
 - Added the secp256k1 recovery demo with a documented libsecp256k1/Bitcoin Core fixture proving the `(hash, recovery_id, signature) -> pubkey` path in Mollusk (`40fa8bd`).
 
+### Added — Sysvar coverage (Clock/Rent/Instructions/StakeHistory/EpochSchedule)
+
+- Added Clock and Rent account-data readers plus `Sysvar.clock_from_account`
+  and `Sysvar.rent_from_account` stdlib bindings for slot, timestamp, and
+  rent-parameter access (`12cb702`).
+- Added the Instructions sysvar header and indexed instruction readers,
+  including decoded program id, account metas, and instruction data for
+  transaction introspection (`944d42c`).
+- Added StakeHistory latest-row cursor support plus EpochSchedule's five-field
+  reader and stdlib bindings for stake activation and epoch-geometry use cases
+  (`111a7ad`).
+- Added the Clock + Rent demo and Mollusk fixture that writes `slot`,
+  `unix_timestamp`, and `lamports_per_byte_year` to account data (`7b3e25d`).
+- Added the Instructions introspection demo and two-instruction Mollusk fixture
+  that checks the next instruction's target program id (`e02837e`).
+
 ### Added — let%%test_unit + omlz test runner
 
 - Added `let%test_unit "name" = expr` frontend support, lowering test bodies into unit thunks and `__otest_registry__` for runner discovery (`46e7695`).
