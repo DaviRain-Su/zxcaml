@@ -95,3 +95,42 @@ vim.api.nvim_create_autocmd("FileType", {
   `.ml` file and runs `omlz check --error-format=json`.
 - Expected steady-state latency is about 80 ms for small files, as measured and
   accepted in `mission-internal/p9-investigation/report.md` §3.
+
+## Resilience
+
+The M-LSP-FIX hardening keeps the original P9 latency budget intact while
+making the harness less sensitive to cold-start noise. The latency probe now
+runs one warm-up `didOpen` first, waits for its `publishDiagnostics`, and then
+discards that timing. That sample absorbs fork, dynamic-loader, and filesystem
+setup costs that are not representative of steady-state editor feedback.
+
+After the warm-up, the harness records five measured samples. It sorts only
+those five measured values and reports the p50 median, so the single middle
+value defines the pass/fail result. The threshold remains `median_ms <= 200`;
+the fix is to measure the same target more robustly, not to relax the target.
+When the assertion fails, the harness keeps enough raw timing data to show the
+full six-sample story: one warm-up plus five measured requests.
+
+Temporary-file handling is also now scoped by process. Each server writes under
+a per-pid subdirectory:
+
+```text
+/tmp/omlz_lsp_<pid>/<request-id>.ml
+```
+
+This replaces the older flat `/tmp/omlz_lsp_<pid>_<id>.ml` shape. The directory
+name makes ownership obvious, lets one server clean its own request files as a
+group, and avoids matching unrelated LSP work from another running process by
+accident.
+
+There is still a cross-pid stale-cleanup path for crash recovery. On server
+startup, `omlz-lsp` scans `/tmp/omlz_lsp_*`, extracts the pid from matching
+directories, and probes that owner with `kill(pid, 0)`. Live pids are left
+alone; dead-pid directories are removed recursively so a killed server cannot
+poison the next harness run.
+
+The Python harness performs the same stale-pid sweep before it launches the
+server. That pre-run cleanup is deliberately redundant with server startup:
+the harness protects local test assertions, and the server protects editor
+invocations outside the harness. Together they make `/tmp/omlz_lsp_*` safe
+across ordinary shutdown, assertion failures, and abrupt process death.
