@@ -467,6 +467,9 @@ module Crypto = struct
   external keccak256 : bytes -> bytes = "sol_keccak256"
 
   external blake3 : bytes -> bytes = "sol_blake3"
+
+  external secp256k1_recover : bytes -> int -> bytes -> bytes
+    = "sol_secp256k1_recover"
 end
 
 module Pubkey = struct

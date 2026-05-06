@@ -1,0 +1,1 @@
+const recovered = syscalls.sol_secp256k1_recover_alloc(arena, input, @as(i64, 1), input);

@@ -15,6 +15,13 @@ pub const Pubkey = [32]u8;
 /// 32-byte hash output produced by Solana hash syscalls.
 pub const Hash = [32]u8;
 
+/// 64-byte uncompressed secp256k1 public key returned by Solana recovery.
+pub const Secp256k1Pubkey = [64]u8;
+
+pub const secp256k1_hash_len: usize = 32;
+pub const secp256k1_signature_len: usize = 64;
+pub const secp256k1_pubkey_len: usize = 64;
+
 /// C ABI byte slice descriptor consumed by Solana hash syscalls.
 pub const SolBytes = extern struct {
     addr: [*]const u8,
@@ -49,6 +56,8 @@ pub const sol_sha256_address: usize = 0x11f49d86;
 pub const sol_keccak256_address: usize = 0xd7793abb;
 /// MurmurHash3-32 dispatch address for `sol_blake3`.
 pub const sol_blake3_address: usize = 0x174c5122;
+/// MurmurHash3-32 dispatch address for `sol_secp256k1_recover`.
+pub const sol_secp256k1_recover_address: usize = 0x17e40350;
 /// MurmurHash3-32 dispatch address for `sol_get_clock_sysvar`.
 pub const sol_get_clock_sysvar_address: usize = 0xd56b5fe9;
 /// MurmurHash3-32 dispatch address for `sol_get_rent_sysvar`.
@@ -64,6 +73,7 @@ const SolLogFn = *align(1) const fn ([*]const u8, u64) void;
 const SolLog64Fn = *align(1) const fn (u64, u64, u64, u64, u64) void;
 const SolLogPubkeyFn = *align(1) const fn (*const Pubkey) void;
 const SolHashFn = *align(1) const fn ([*]const u8, u64, [*]u8) u64;
+const SolSecp256k1RecoverFn = *align(1) const fn ([*]const u8, u64, [*]const u8, [*]u8) u64;
 const SolGetClockSysvarFn = *align(1) const fn (*Clock) u64;
 const SolGetRentSysvarFn = *align(1) const fn (*Rent) u64;
 const SolLogComputeUnitsFn = *align(1) const fn () void;
@@ -171,6 +181,45 @@ pub inline fn sol_blake3_alloc(arena: *Arena, payload: []const u8) []const u8 {
     return out;
 }
 
+/// Recovers a 64-byte secp256k1 public key through Solana's SVM ABI.
+///
+/// The on-chain syscall ABI mirrors Solana's SDK exactly:
+/// `(hash: *const u8, recovery_id: u64, signature: *const u8, result: *mut u8) -> u64`.
+/// Invalid lengths or recovery IDs surface as a failure (`null`) rather than a
+/// stdlib-side trap; callers that need OCaml `bytes` should use the arena
+/// wrapper below, which maps failure to a 0-length slice.
+pub inline fn sol_secp256k1_recover(hash: []const u8, recovery_id: i64, signature: []const u8) ?Secp256k1Pubkey {
+    if (hash.len != secp256k1_hash_len or signature.len != secp256k1_signature_len) return null;
+    if (recovery_id < 0 or recovery_id > 3) return null;
+
+    var out: Secp256k1Pubkey = undefined;
+    if (comptime is_bpf) {
+        const syscall: SolSecp256k1RecoverFn = @ptrFromInt(sol_secp256k1_recover_address);
+        const rc = syscall(hash.ptr, @intCast(recovery_id), signature.ptr, &out);
+        if (rc != 0) return null;
+        return out;
+    }
+
+    // Hosted builds do not link libsecp256k1. Provide a deterministic
+    // success-shaped fallback so codegen/native typechecks can exercise the
+    // wrapper signature; real recovery happens through the SVM syscall on BPF.
+    @memset(&out, 0);
+    out[0] = @intCast(recovery_id);
+    return out;
+}
+
+/// Recovers a secp256k1 pubkey and returns arena-owned OCaml `bytes`.
+///
+/// On success the returned slice is exactly 64 bytes. On any runtime failure
+/// (including recovery IDs outside 0-3) the returned slice has length 0.
+pub inline fn sol_secp256k1_recover_alloc(arena: *Arena, hash: []const u8, recovery_id: i64, signature: []const u8) []const u8 {
+    const pubkey = sol_secp256k1_recover(hash, recovery_id, signature) orelse return &[_]u8{};
+    var out: []u8 = undefined;
+    arena.allocIntoOrTrap(u8, pubkey.len, &out);
+    @memcpy(out, &pubkey);
+    return out;
+}
+
 /// Reads the Clock sysvar through Solana's `sol_get_clock_sysvar` syscall.
 pub inline fn sol_get_clock_sysvar() Clock {
     if (comptime is_bpf) {
@@ -216,6 +265,7 @@ test "syscall dispatch addresses match Solana MurmurHash3-32 values" {
     try std.testing.expectEqual(@as(usize, 0x11f49d86), sol_sha256_address);
     try std.testing.expectEqual(@as(usize, 0xd7793abb), sol_keccak256_address);
     try std.testing.expectEqual(@as(usize, 0x174c5122), sol_blake3_address);
+    try std.testing.expectEqual(@as(usize, 0x17e40350), sol_secp256k1_recover_address);
     try std.testing.expectEqual(@as(usize, 0xd56b5fe9), sol_get_clock_sysvar_address);
     try std.testing.expectEqual(@as(usize, 0xbf7188f6), sol_get_rent_sysvar_address);
     try std.testing.expectEqual(@as(usize, 0x52ba5096), sol_log_compute_units_address);
@@ -271,4 +321,42 @@ test "blake3 arena wrapper returns fixed 32-byte digest" {
         &[_]u8{ 0x64, 0x37, 0xb3, 0xac, 0x38, 0x46, 0x51, 0x33, 0xff, 0xb6, 0x3b, 0x75, 0x27, 0x3a, 0x8d, 0xb5, 0x48, 0xc5, 0x58, 0x46, 0x5d, 0x79, 0xdb, 0x03, 0xfd, 0x35, 0x9c, 0x6c, 0xd5, 0xbd, 0x9d, 0x85 },
         digest,
     );
+}
+
+test "secp256k1_recover arena wrapper exposes 64-byte success-shaped result" {
+    var buf: [128]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+    const hash = [_]u8{0x11} ** secp256k1_hash_len;
+    const signature = [_]u8{0x22} ** secp256k1_signature_len;
+
+    const pubkey = sol_secp256k1_recover_alloc(&arena, &hash, 1, &signature);
+    try std.testing.expectEqual(@as(usize, secp256k1_pubkey_len), pubkey.len);
+    try std.testing.expectEqual(@as(usize, secp256k1_pubkey_len), arena.offset);
+}
+
+test "secp256k1_recover arena wrapper maps invalid recovery id to zero-length bytes" {
+    var buf: [128]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+    const hash = [_]u8{0x11} ** secp256k1_hash_len;
+    const signature = [_]u8{0x22} ** secp256k1_signature_len;
+
+    const too_large = sol_secp256k1_recover_alloc(&arena, &hash, 4, &signature);
+    try std.testing.expectEqual(@as(usize, 0), too_large.len);
+    try std.testing.expectEqual(@as(usize, 0), arena.offset);
+
+    const negative = sol_secp256k1_recover_alloc(&arena, &hash, -1, &signature);
+    try std.testing.expectEqual(@as(usize, 0), negative.len);
+    try std.testing.expectEqual(@as(usize, 0), arena.offset);
+}
+
+test "secp256k1_recover arena wrapper maps invalid input lengths to zero-length bytes" {
+    var buf: [128]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+    const hash_short = [_]u8{0x11} ** 31;
+    const hash = [_]u8{0x11} ** secp256k1_hash_len;
+    const signature_short = [_]u8{0x22} ** 63;
+
+    try std.testing.expectEqual(@as(usize, 0), sol_secp256k1_recover_alloc(&arena, &hash_short, 1, &signature_short).len);
+    try std.testing.expectEqual(@as(usize, 0), sol_secp256k1_recover_alloc(&arena, &hash, 1, &signature_short).len);
+    try std.testing.expectEqual(@as(usize, 0), arena.offset);
 }

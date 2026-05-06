@@ -249,6 +249,16 @@ CASES: list[tuple[str, str, str]] = [
         "(app (var Crypto.blake3) (var input))))))\n",
     ),
     (
+        "stdlib Crypto.secp256k1_recover uses bundled recovery binding",
+        'let entrypoint hash signature = Crypto.secp256k1_recover hash 1 signature\n',
+        '(zxcaml-cir 1.1 (module (external (name "Crypto.secp256k1_recover") '
+        '(type (arrow bytes (arrow int (arrow bytes bytes)))) '
+        '(symbol "sol_secp256k1_recover_alloc")) '
+        "(let entrypoint (lambda (hash signature) "
+        "(app (var Crypto.secp256k1_recover) (var hash) (const-int 1) "
+        "(var signature))))))\n",
+    ),
+    (
         "string concatenation operator uses bundled function",
         'let entrypoint _ = "hello" ^ " world"\n',
         "(zxcaml-cir 1.1 (module (let entrypoint (lambda (_) "

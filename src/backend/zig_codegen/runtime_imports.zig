@@ -41,6 +41,16 @@ pub fn emitExternalAppExpr(
     if (std.mem.eql(u8, external.symbol, "sol_blake3_alloc") and app.args.len == 1) {
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_blake3_alloc", true, true)) return;
     }
+    if (std.mem.eql(u8, external.symbol, "sol_secp256k1_recover_alloc") and app.args.len == 3) {
+        try append(out, allocator, "syscalls.sol_secp256k1_recover_alloc(arena, ");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ", ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, ", ");
+        try emitExpr(out, allocator, app.args[2].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return;
+    }
 
     if (externalReturnIsBytes(external)) {
         const block_id = ctx.next_block_id;
@@ -184,6 +194,7 @@ pub fn isSyscallExternalSymbol(symbol: []const u8) bool {
         std.mem.eql(u8, symbol, "sol_keccak256_alloc") or
         std.mem.eql(u8, symbol, "sol_blake3") or
         std.mem.eql(u8, symbol, "sol_blake3_alloc") or
+        std.mem.eql(u8, symbol, "sol_secp256k1_recover_alloc") or
         std.mem.eql(u8, symbol, "sol_get_clock_sysvar") or
         std.mem.eql(u8, symbol, "sol_get_rent_sysvar") or
         std.mem.eql(u8, symbol, "sol_log_compute_units_") or
@@ -193,7 +204,8 @@ pub fn isSyscallExternalSymbol(symbol: []const u8) bool {
 pub fn externalNeedsArenaArg(external: lir.LExternalDecl) bool {
     return std.mem.eql(u8, external.symbol, "sol_sha256_alloc") or
         std.mem.eql(u8, external.symbol, "sol_keccak256_alloc") or
-        std.mem.eql(u8, external.symbol, "sol_blake3_alloc");
+        std.mem.eql(u8, external.symbol, "sol_blake3_alloc") or
+        std.mem.eql(u8, external.symbol, "sol_secp256k1_recover_alloc");
 }
 
 pub fn externalReturnIsInt(external: lir.LExternalDecl) bool {
@@ -297,6 +309,17 @@ pub fn emitSyscallAppExpr(
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_blake3_alloc", true, true)) return true;
         try append(out, allocator, "syscalls.sol_blake3_alloc(arena, ");
         try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Crypto.secp256k1_recover")) {
+        if (app.args.len != 3) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_secp256k1_recover_alloc(arena, ");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ", ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, ", ");
+        try emitExpr(out, allocator, app.args[2].*, indent_level, ctx);
         try append(out, allocator, ")");
         return true;
     }

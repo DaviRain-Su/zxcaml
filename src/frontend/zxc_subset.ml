@@ -338,6 +338,18 @@ let builtin_crypto_blake3_external_decl =
       external_symbol = "sol_blake3_alloc";
     }
 
+let builtin_crypto_secp256k1_recover_external_decl =
+  External_decl
+    {
+      external_name = "Crypto.secp256k1_recover";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_arrow (builtin_external_type_ref "int")
+             (builtin_external_arrow (builtin_external_type_ref "bytes")
+                (builtin_external_type_ref "bytes")));
+      external_symbol = "sol_secp256k1_recover_alloc";
+    }
+
 let builtin_account_record_decl =
   Record_type_decl
     {
@@ -1541,10 +1553,17 @@ let add_builtin_external_decls decls =
     (not (List.exists (decl_defines_external "Crypto.blake3") decls))
     && List.exists (decl_uses_var "Crypto.blake3") decls
   in
+  let needs_secp256k1_recover =
+    (not (List.exists (decl_defines_external "Crypto.secp256k1_recover") decls))
+    && List.exists (decl_uses_var "Crypto.secp256k1_recover") decls
+  in
   let builtins =
     List.filter_map
       (fun (needed, decl) -> if needed then Some decl else None)
-      [ (needs_blake3, builtin_crypto_blake3_external_decl) ]
+      [
+        (needs_blake3, builtin_crypto_blake3_external_decl);
+        (needs_secp256k1_recover, builtin_crypto_secp256k1_recover_external_decl);
+      ]
   in
   builtins @ decls
 
