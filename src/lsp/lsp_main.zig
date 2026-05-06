@@ -54,6 +54,7 @@ const ServerState = struct {
     shutdown_received: bool = false,
     documents: std.StringHashMap([]u8),
     next_doc_id: u64 = 0,
+    temp_dir_created: bool = false,
 
     fn init(allocator: std.mem.Allocator) ServerState {
         return .{
@@ -95,7 +96,8 @@ fn runServer(io: Io) !void {
 
     var state = ServerState.init(std.heap.page_allocator);
     defer state.deinit();
-    defer cleanupTempFiles(io) catch {};
+    try cleanupTempFiles(io, false);
+    defer cleanupTempFiles(io, true) catch {};
     while (true) {
         var message_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer message_arena.deinit();
@@ -143,7 +145,7 @@ fn handleMessage(
 
     const method = method_value.string;
     if (std.mem.eql(u8, method, "exit")) {
-        cleanupTempFiles(io) catch {};
+        cleanupTempFiles(io, true) catch {};
         std.process.exit(if (state.shutdown_received) 0 else 1);
     }
 
@@ -243,6 +245,7 @@ fn publishDiagnosticsForText(
     uri: []const u8,
     text: []const u8,
 ) !void {
+    try ensureTempDir(io, allocator, state);
     const tmp_path = try tempPath(allocator, state);
     defer allocator.free(tmp_path);
     defer std.Io.Dir.cwd().deleteFile(io, tmp_path) catch {};
@@ -261,31 +264,107 @@ fn publishDiagnosticsForText(
     try writePublishDiagnostics(allocator, writer, uri, completed.stderr);
 }
 
+fn ensureTempDir(io: Io, allocator: std.mem.Allocator, state: *ServerState) !void {
+    if (state.temp_dir_created) return;
+
+    const tmp_dir_path = try tempDirPath(allocator, std.posix.system.getpid());
+    defer allocator.free(tmp_dir_path);
+
+    std.Io.Dir.createDirAbsolute(io, tmp_dir_path, .default_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    state.temp_dir_created = true;
+}
+
+fn tempDirPath(allocator: std.mem.Allocator, pid: std.posix.pid_t) ![]u8 {
+    return std.fmt.allocPrint(allocator, "/tmp/omlz_lsp_{d}", .{pid});
+}
+
 fn tempPath(allocator: std.mem.Allocator, state: *ServerState) ![]u8 {
     state.next_doc_id += 1;
     return std.fmt.allocPrint(
         allocator,
-        "/tmp/omlz_lsp_{d}_{d}.ml",
+        "/tmp/omlz_lsp_{d}/{d}.ml",
         .{ std.posix.system.getpid(), state.next_doc_id },
     );
 }
 
-fn cleanupTempFiles(io: Io) !void {
-    var prefix_buffer: [64]u8 = undefined;
-    const prefix = try std.fmt.bufPrint(&prefix_buffer, "omlz_lsp_{d}_", .{std.posix.system.getpid()});
-
+fn cleanupTempFiles(io: Io, remove_current_pid: bool) !void {
     var tmp_dir = try std.Io.Dir.openDirAbsolute(io, "/tmp", .{
         .access_sub_paths = true,
         .iterate = true,
     });
     defer tmp_dir.close(io);
 
+    const current_pid = std.posix.system.getpid();
     var iter = tmp_dir.iterate();
     while (try iter.next(io)) |entry| {
-        if (!std.mem.startsWith(u8, entry.name, prefix)) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
-        tmp_dir.deleteFile(io, entry.name) catch {};
+        switch (entry.kind) {
+            .directory => {
+                const pid = parseLspTempDirPid(entry.name) orelse continue;
+                if (!shouldRemoveTempPath(pid, current_pid, remove_current_pid)) continue;
+                tmp_dir.deleteTree(io, entry.name) catch {};
+            },
+            .file => {
+                const pid = parseLegacyTempFilePid(entry.name) orelse continue;
+                if (!shouldRemoveTempPath(pid, current_pid, remove_current_pid)) continue;
+                tmp_dir.deleteFile(io, entry.name) catch {};
+            },
+            else => continue,
+        }
     }
+}
+
+fn parseLspTempDirPid(name: []const u8) ?std.posix.pid_t {
+    const prefix = "omlz_lsp_";
+    if (!std.mem.startsWith(u8, name, prefix)) return null;
+
+    const rest = name[prefix.len..];
+    const parsed = parsePositivePidPrefix(rest) orelse return null;
+    if (parsed.consumed != rest.len) return null;
+    return parsed.pid;
+}
+
+fn parseLegacyTempFilePid(name: []const u8) ?std.posix.pid_t {
+    const prefix = "omlz_lsp_";
+    if (!std.mem.startsWith(u8, name, prefix)) return null;
+    if (!std.mem.endsWith(u8, name, ".ml")) return null;
+
+    const rest = name[prefix.len..];
+    const parsed = parsePositivePidPrefix(rest) orelse return null;
+    if (parsed.consumed >= rest.len or rest[parsed.consumed] != '_') return null;
+    return parsed.pid;
+}
+
+const ParsedPid = struct {
+    pid: std.posix.pid_t,
+    consumed: usize,
+};
+
+fn parsePositivePidPrefix(rest: []const u8) ?ParsedPid {
+    if (rest.len == 0) return null;
+
+    var pid_end: usize = 0;
+    while (pid_end < rest.len and std.ascii.isDigit(rest[pid_end])) : (pid_end += 1) {}
+    if (pid_end == 0) return null;
+
+    const pid = std.fmt.parseInt(std.posix.pid_t, rest[0..pid_end], 10) catch return null;
+    if (pid <= 0) return null;
+    return .{ .pid = pid, .consumed = pid_end };
+}
+
+fn shouldRemoveTempPath(pid: std.posix.pid_t, current_pid: std.posix.pid_t, remove_current_pid: bool) bool {
+    if (pid == current_pid and remove_current_pid) return true;
+    return isDeadPid(pid);
+}
+
+fn isDeadPid(pid: std.posix.pid_t) bool {
+    std.posix.kill(pid, @as(std.posix.SIG, @enumFromInt(0))) catch |err| switch (err) {
+        error.ProcessNotFound => return true,
+        else => return false,
+    };
+    return false;
 }
 
 fn writePublishDiagnostics(
