@@ -269,3 +269,44 @@ return programs.hackathon_greet.zxcaml_hackathon_greet_process(&arena, input, vi
 - 多个 fixture 使用 canonical bump `255`；相关检查应保留在具体 program helper 中。
 - 需要共享 raw account 或整数解析时，先看 `common.zig` 是否已有 helper。
 - 只有通用 CPI/PDA/return-data 原语才属于 `cpi.zig`；业务分发和 fixture 规则属于 Programs 层。
+
+## 测试覆盖
+
+Runtime program 现在采用两层覆盖策略。第一层是
+`runtime/zig/programs/*.zig` 内联的 Zig 白盒测试，直接检查私有 helper、
+分支 guard、PDA seed 和字节布局。第二层是 `tests/` 下的 Mollusk
+集成测试，把编译后的 BPF program 放进接近 Solana loader 的 account fixture
+里运行，用来锁住公开 happy path 的真实行为。
+
+下面的内联白盒数量来自当前源码，而不是手抄计划值；抽取命令是
+`rg -nP '^test "' runtime/zig/programs/<name>.zig | wc -l`：
+
+| Program file | 内联测试数 | 白盒关注点 |
+|---|---:|---|
+| `ata.zig` | 4 | ATA program id、metas 和错误 account 形状 |
+| `ata_transfer.zig` | 5 | init/transfer 状态写入和错误 instruction 形状 |
+| `common.zig` | 7 | little-endian helper、pubkey predicate 和 raw input parsing |
+| `dao_voting.zig` | 7 | proposal 生命周期、vote guard、close path 和 PDA 校验 |
+| `escrow_full.zig` | 7 | accept/refund 状态变化，以及 make 路径的提前拒绝 |
+| `hackathon_greet.zig` | 14 | init/greet happy path、PDA 派生和负向 fixture |
+| `order_book.zig` | 9 | post/fill 流程、算术 guard、mint 检查和 side 校验 |
+| `spl_burn.zig` | 4 | burn 状态变更，以及错误 SPL account/data |
+| `spl_close_account.zig` | 4 | close-account 状态变更、authority 检查和 lamport overflow |
+| `spl_revoke.zig` | 4 | revoke 状态变更、owner 检查和错误输入 |
+| `token_vault.zig` | 7 | initialize/deposit/withdraw 状态迁移和 guard rails |
+| `transfer_sol.zig` | 7 | amount 解码，以及 System Program CPI 之前的提前拒绝 |
+| `vault.zig` | 10 | deposit/withdraw dispatch guard，全部停在 CPI 之前 |
+| `vault_v2.zig` | 10 | vault-v2 PDA/account guard，全部停在 CPI 之前 |
+
+会触碰 CPI 的成功路径不会放在这一层白盒测试里断言。
+`transfer_sol.zig`、`vault.zig`、`vault_v2.zig`，以及
+`escrow_full.zig` 的 make 分支都会通过 Solana `invoke` 或
+`sol_invoke_signed_c` 返回；hosted Zig unit test 只覆盖进入 CPI 前就返回的
+负向分支。它们的 happy path 由 Mollusk 负责，在那里 loader、account owner、
+signer flag、lamports 和 CPI 副作用都作为集成行为来验证，而不是在 runtime
+内部伪造。
+
+内联测试还遵守“每个文件自带私有 mock”的约定。每个 program 把小型 fixture
+builder 放在被测代码旁边，让分支期望保持局部、可审查。仓库刻意不引入共享的
+`test_support.zig`；可复用的生产级解析或整数 helper 应进入 `common.zig`，
+而只服务测试的 account buffer 与 mock PDA input 则留在需要它们的 program 文件中。

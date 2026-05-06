@@ -252,3 +252,47 @@ Operational notes:
 - Several fixtures use canonical bump `255`; helpers verify the exact PDA expected by their tests.
 - Keep new example entrypoints in this directory so the CPI primitive layer remains reusable.
 - Prefer shared helpers in `common.zig` before duplicating raw account or integer parsing in a program file.
+
+## Test Coverage
+
+Runtime program coverage now uses two layers. The first layer is inline Zig
+white-box testing in `runtime/zig/programs/*.zig`; those tests inspect private
+helpers, branch guards, PDA seeds, and byte-layout rules directly. The second
+layer is the Mollusk integration suite under `tests/`, which runs compiled BPF
+programs through Solana-shaped account fixtures and keeps the public happy paths
+anchored to loader behavior.
+
+Current inline white-box counts are extracted from the shipped Zig sources with
+`rg -nP '^test "' runtime/zig/programs/<name>.zig | wc -l`:
+
+| Program file | Inline tests | White-box focus |
+|---|---:|---|
+| `ata.zig` | 4 | ATA program ids, metas, and malformed account shapes |
+| `ata_transfer.zig` | 5 | Init/transfer state mutations plus bad instruction shapes |
+| `common.zig` | 7 | Little-endian helpers, pubkey predicates, and raw input parsing |
+| `dao_voting.zig` | 7 | Proposal lifecycle, vote guards, close path, and PDA checks |
+| `escrow_full.zig` | 7 | Accept/refund state changes plus make-path early rejects |
+| `hackathon_greet.zig` | 14 | Init/greet happy paths, PDA derivation, and negative fixtures |
+| `order_book.zig` | 9 | Post/fill flows, arithmetic guards, mint checks, and side validation |
+| `spl_burn.zig` | 4 | Burn mutation and malformed SPL account/data cases |
+| `spl_close_account.zig` | 4 | Close-account mutation, authority checks, and lamport overflow |
+| `spl_revoke.zig` | 4 | Revoke mutation, owner checks, and malformed input |
+| `token_vault.zig` | 7 | Initialize/deposit/withdraw state transitions and guard rails |
+| `transfer_sol.zig` | 7 | Amount decoding and early rejects before System Program CPI |
+| `vault.zig` | 10 | Deposit/withdraw dispatch guards before CPI |
+| `vault_v2.zig` | 10 | Vault-v2 PDA/account guards before CPI |
+
+CPI-touching success paths are intentionally not asserted at this white-box
+layer. `transfer_sol.zig`, `vault.zig`, `vault_v2.zig`, and the
+`escrow_full.zig` make arm return through Solana `invoke` or
+`sol_invoke_signed_c`; hosted Zig unit tests cover only negative branches that
+return before CPI. Their happy paths remain covered by Mollusk tests, where the
+loader, account ownership, signer flags, lamports, and CPI effects are modeled
+as integration behavior rather than mocked runtime internals.
+
+Inline tests follow a per-file private-mock convention. Each program keeps its
+small fixture builders next to the code being tested, so the branch expectations
+stay local and reviewable. There is deliberately no shared
+`test_support.zig`; reusable production parsing or integer helpers belong in
+`common.zig`, while test-only account buffers and mock PDA inputs stay private
+to the program file that needs them.
