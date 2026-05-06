@@ -73,8 +73,11 @@ Capability tag vocabulary: `Closure`, `ADT`, `PDA`, `CPI`, `SPL-Token`, `TCO`,
 | [`vault.ml`](./vault.ml) | ADT, PDA, CPI | [`examples/vault/`](https://github.com/DaviRain-Su/zignocchio/tree/main/examples/vault) |
 | [`vault_v2.ml`](./vault_v2.ml) | PDA, CPI | [`examples/vault/`](https://github.com/DaviRain-Su/zignocchio/tree/main/examples/vault) |
 
-## Tests
+### Tests
 
 - [`examples/tests/list_ops.ml`](./tests/list_ops.ml) — Capability tags: List ops.
 - [`examples/tests/arith_overflow.ml`](./tests/arith_overflow.ml) — Capability tags: Arith.
 - [`examples/tests/pda_helpers.ml`](./tests/pda_helpers.ml) — Capability tags: PDA helpers.
+- [`examples/tests/prop_list_rev.ml`](./tests/prop_list_rev.ml) — Property demo: list reversal preserves length after double reverse.
+- [`examples/tests/prop_string_concat.ml`](./tests/prop_string_concat.ml) — Property demo: string-concat associativity via generated samples.
+- [`examples/tests/prop_int_add.ml`](./tests/prop_int_add.ml) — Property demo: integer addition commutativity.

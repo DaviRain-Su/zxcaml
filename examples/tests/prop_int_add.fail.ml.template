@@ -1,0 +1,5 @@
+let int seed = (seed, seed + 1)
+
+(* Deliberately broken: `omlz test --seed 42 --num-cases 10` should fail and
+   shrink the integer counterexample toward 0. *)
+let%test_prop "broken overflow assertion" int = fun x -> x + 1 = x

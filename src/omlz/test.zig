@@ -31,10 +31,17 @@ const Format = enum {
     json,
 };
 
+const CaseKind = enum {
+    unit,
+    prop,
+};
+
 const Args = struct {
     filter: ?[]const u8 = null,
     no_color: bool = false,
     format: Format = .cargo,
+    num_cases: usize = 100,
+    seed: i64 = 0,
     files: []const []const u8 = &.{},
 };
 
@@ -42,6 +49,7 @@ const TestCase = struct {
     file: []const u8,
     name: []const u8,
     thunk_name: []const u8,
+    kind: CaseKind = .unit,
     loc: ir.Loc,
 };
 
@@ -61,6 +69,11 @@ const TestResult = struct {
     status: TestStatus,
     message: []const u8 = "",
     elapsed_ms: i64,
+    num_cases: usize = 1,
+    executed_cases: usize = 1,
+    seed: i64 = 0,
+    counterexample: ?[]const u8 = null,
+    shrunk_steps: usize = 0,
 };
 
 const Summary = struct {
@@ -81,6 +94,8 @@ pub fn writeHelp(io: Io) !void {
         \\Options:
         \\  --filter SUBSTR        Run only tests whose name contains SUBSTR.
         \\  --format=cargo|json    Select output format (default: cargo).
+        \\  --num-cases N          Number of generated samples per property test (default: 100).
+        \\  --seed N               Seed property-test generation deterministically (default: current time).
         \\  --no-color             Disable ANSI colors in cargo output.
         \\
     );
@@ -165,7 +180,7 @@ pub fn run(init: std.process.Init, argv0: []const u8, raw_args: []const []const 
 
 fn parseArgs(allocator: std.mem.Allocator, io: Io, raw_args: []const []const u8) !Args {
     var files = std.ArrayList([]const u8).empty;
-    var args: Args = .{};
+    var args: Args = .{ .seed = defaultSeed() };
 
     var index: usize = 2;
     while (index < raw_args.len) : (index += 1) {
@@ -178,6 +193,18 @@ fn parseArgs(allocator: std.mem.Allocator, io: Io, raw_args: []const []const u8)
             args.filter = arg["--filter=".len..];
         } else if (std.mem.eql(u8, arg, "--no-color")) {
             args.no_color = true;
+        } else if (std.mem.eql(u8, arg, "--num-cases")) {
+            index += 1;
+            if (index >= raw_args.len) return error.UnsupportedArgs;
+            args.num_cases = try parsePositiveUsize(raw_args[index]);
+        } else if (std.mem.startsWith(u8, arg, "--num-cases=")) {
+            args.num_cases = try parsePositiveUsize(arg["--num-cases=".len..]);
+        } else if (std.mem.eql(u8, arg, "--seed")) {
+            index += 1;
+            if (index >= raw_args.len) return error.UnsupportedArgs;
+            args.seed = try std.fmt.parseInt(i64, raw_args[index], 10);
+        } else if (std.mem.startsWith(u8, arg, "--seed=")) {
+            args.seed = try std.fmt.parseInt(i64, arg["--seed=".len..], 10);
         } else if (std.mem.startsWith(u8, arg, "--format=")) {
             const value = arg["--format=".len..];
             if (std.mem.eql(u8, value, "cargo")) {
@@ -208,6 +235,20 @@ fn parseArgs(allocator: std.mem.Allocator, io: Io, raw_args: []const []const u8)
     _ = io;
     args.files = try files.toOwnedSlice(allocator);
     return args;
+}
+
+fn parsePositiveUsize(text: []const u8) !usize {
+    const value = try std.fmt.parseInt(usize, text, 10);
+    if (value == 0) return error.UnsupportedArgs;
+    return value;
+}
+
+fn defaultSeed() i64 {
+    var ts: std.c.timespec = undefined;
+    if (std.c.clock_gettime(.MONOTONIC, &ts) != 0) return 1;
+    const sec: i64 = @intCast(ts.sec);
+    const nsec: i64 = @intCast(ts.nsec);
+    return sec ^ nsec;
 }
 
 fn defaultTestFiles(allocator: std.mem.Allocator, io: Io) ![]const []const u8 {
@@ -290,11 +331,15 @@ fn runFile(
 
     var core_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer core_arena.deinit();
+    const core_module = try core_anf.lowerModule(&core_arena, parsed.module);
     const optimized_module = try optimizeModule(&core_arena, parsed.module);
 
     var summary: Summary = .{};
     for (discovery.cases) |case| {
-        const result = try runOneCase(&core_arena, optimized_module, case);
+        const result = switch (case.kind) {
+            .unit => try runOneCase(&core_arena, optimized_module, case),
+            .prop => try runOnePropCase(init.gpa, &core_arena, core_module, case, args),
+        };
         summary.total += 1;
         switch (result.status) {
             .ok => summary.passed += 1,
@@ -385,7 +430,7 @@ fn collectRegistryPair(
         .Tuple => |tuple| tuple,
         else => return,
     };
-    if (tuple.items.len != 2) return;
+    if (tuple.items.len != 2 and tuple.items.len != 3) return;
     const name_expr = resolveRegistryExpr(env, tuple.items[0].*);
     const name = switch (name_expr) {
         .Constant => |constant| switch (constant.value) {
@@ -394,7 +439,26 @@ fn collectRegistryPair(
         },
         else => return,
     };
-    const thunk_expr = resolveRegistryExpr(env, tuple.items[1].*);
+    var kind: CaseKind = .unit;
+    const thunk_index: usize = if (tuple.items.len == 3) blk: {
+        const kind_expr = resolveRegistryExpr(env, tuple.items[1].*);
+        const kind_text = switch (kind_expr) {
+            .Constant => |constant| switch (constant.value) {
+                .String => |value| value,
+                else => return,
+            },
+            else => return,
+        };
+        if (std.mem.eql(u8, kind_text, "prop")) {
+            kind = .prop;
+        } else if (std.mem.eql(u8, kind_text, "unit")) {
+            kind = .unit;
+        } else {
+            return;
+        }
+        break :blk 2;
+    } else 1;
+    const thunk_expr = resolveRegistryExpr(env, tuple.items[thunk_index].*);
     const thunk_name = switch (thunk_expr) {
         .Var => |var_ref| var_ref.name,
         else => return,
@@ -405,6 +469,7 @@ fn collectRegistryPair(
         .file = try allocator.dupe(u8, file),
         .name = try allocator.dupe(u8, name),
         .thunk_name = try allocator.dupe(u8, thunk_name),
+        .kind = kind,
         .loc = .{
             .file = try allocator.dupe(u8, if (loc.isUnknown()) file else loc.file),
             .line = loc.line,
@@ -468,6 +533,382 @@ fn runOneCase(core_arena: *std.heap.ArenaAllocator, module: ir.Module, case: Tes
         .case = case,
         .status = .ok,
         .elapsed_ms = 0,
+    };
+}
+
+const PropParts = struct {
+    generator: *const ir.Expr,
+    body: ir.Lambda,
+    sample_ty: ir.Ty,
+};
+
+fn runOnePropCase(
+    allocator: std.mem.Allocator,
+    core_arena: *std.heap.ArenaAllocator,
+    module: ir.Module,
+    case: TestCase,
+    args: Args,
+) !TestResult {
+    const parts = findPropParts(module, case.thunk_name) orelse {
+        return .{
+            .case = case,
+            .status = .failed,
+            .message = "property thunk did not contain generator/body metadata",
+            .elapsed_ms = 0,
+            .num_cases = args.num_cases,
+            .executed_cases = 0,
+            .seed = args.seed,
+        };
+    };
+
+    var seed = args.seed;
+    var case_index: usize = 0;
+    while (case_index < args.num_cases) : (case_index += 1) {
+        const entry_module = try moduleWithPropEntrypoint(core_arena, module, parts, seed, case.loc);
+        var interpreter: interp.Interpreter = .{};
+        const next_seed_u64 = interpreter.backend().evalModule(entry_module) catch |err| {
+            const shrink = try shrinkCounterexample(allocator, core_arena, module, parts, seed, case.loc);
+            defer allocator.free(shrink.counterexample);
+            return .{
+                .case = case,
+                .status = .failed,
+                .message = interp.panicMarker(err) orelse interp.errorMessage(err),
+                .elapsed_ms = 0,
+                .num_cases = args.num_cases,
+                .executed_cases = case_index + 1,
+                .seed = args.seed,
+                .counterexample = try allocator.dupe(u8, shrink.counterexample),
+                .shrunk_steps = shrink.steps,
+            };
+        };
+        seed = @intCast(next_seed_u64);
+    }
+
+    return .{
+        .case = case,
+        .status = .ok,
+        .elapsed_ms = 0,
+        .num_cases = args.num_cases,
+        .executed_cases = args.num_cases,
+        .seed = args.seed,
+    };
+}
+
+fn findPropParts(module: ir.Module, thunk_name: []const u8) ?PropParts {
+    const thunk = findTopLevelLet(module, thunk_name) orelse return null;
+    const lambda = switch (thunk.value.*) {
+        .Lambda => |value| value,
+        else => return null,
+    };
+    const generator_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return null,
+    };
+    const body_let = switch (generator_let.body.*) {
+        .Let => |value| value,
+        else => return null,
+    };
+    if (!std.mem.startsWith(u8, generator_let.name, "__otest_generator_")) return null;
+    if (!std.mem.startsWith(u8, body_let.name, "__otest_body_")) return null;
+    const body_lambda = switch (body_let.value.*) {
+        .Lambda => |value| value,
+        else => return null,
+    };
+    if (body_lambda.params.len != 1) return null;
+    return .{
+        .generator = generator_let.value,
+        .body = body_lambda,
+        .sample_ty = body_lambda.params[0].ty,
+    };
+}
+
+const ShrinkResult = struct {
+    counterexample: []const u8,
+    steps: usize,
+    owned: bool = true,
+};
+
+fn shrinkCounterexample(
+    allocator: std.mem.Allocator,
+    core_arena: *std.heap.ArenaAllocator,
+    module: ir.Module,
+    parts: PropParts,
+    initial: i64,
+    loc: ir.Loc,
+) !ShrinkResult {
+    const sample_is_int = switch (parts.sample_ty) {
+        .Int => true,
+        else => false,
+    };
+    if (!sample_is_int) {
+        const rendered = try std.fmt.allocPrint(allocator, "seed {d}", .{initial});
+        return .{ .counterexample = rendered, .steps = 0 };
+    }
+
+    var current = initial;
+    var steps: usize = 0;
+    while (steps < 100) {
+        const candidates = try shrinkIntCandidates(allocator, current);
+        defer allocator.free(candidates);
+        var advanced = false;
+        for (candidates) |candidate| {
+            if (try propBodyFails(core_arena, module, parts, candidate, loc)) {
+                current = candidate;
+                steps += 1;
+                advanced = true;
+                break;
+            }
+        }
+        if (!advanced) break;
+    }
+    const rendered = try std.fmt.allocPrint(allocator, "{d}", .{current});
+    return .{ .counterexample = rendered, .steps = steps };
+}
+
+fn shrinkIntCandidates(allocator: std.mem.Allocator, value: i64) ![]const i64 {
+    var candidates = std.ArrayList(i64).empty;
+    if (value == 0) return candidates.toOwnedSlice(allocator);
+    try appendUniqueInt(&candidates, allocator, 0);
+    const sign: i64 = if (value < 0) -1 else 1;
+    var delta = @divTrunc(if (value < 0) -value else value, 2);
+    while (delta != 0) : (delta = @divTrunc(delta, 2)) {
+        try appendUniqueInt(&candidates, allocator, value - (sign * delta));
+    }
+    return candidates.toOwnedSlice(allocator);
+}
+
+fn appendUniqueInt(list: *std.ArrayList(i64), allocator: std.mem.Allocator, value: i64) !void {
+    for (list.items) |existing| {
+        if (existing == value) return;
+    }
+    try list.append(allocator, value);
+}
+
+fn propBodyFails(
+    core_arena: *std.heap.ArenaAllocator,
+    module: ir.Module,
+    parts: PropParts,
+    sample: i64,
+    loc: ir.Loc,
+) !bool {
+    const entry_module = try moduleWithPropBodyEntrypoint(core_arena, module, parts, sample, loc);
+    var interpreter: interp.Interpreter = .{};
+    _ = interpreter.backend().evalModule(entry_module) catch return true;
+    return false;
+}
+
+fn moduleWithPropEntrypoint(core_arena: *std.heap.ArenaAllocator, module: ir.Module, parts: PropParts, seed: i64, loc: ir.Loc) !ir.Module {
+    const allocator = core_arena.allocator();
+    const decls = try allocator.alloc(ir.Decl, module.decls.len + 1);
+    @memcpy(decls[0..module.decls.len], module.decls);
+
+    const pair_ty = generatorReturnTy(parts.generator.*) orelse ir.Ty{ .Tuple = &.{ .Int, .Int } };
+    const pair_var = try varExpr(allocator, "__otest_sample_pair__", pair_ty, layout.structPack(), loc);
+    const sample_proj = try allocator.create(ir.Expr);
+    sample_proj.* = .{ .TupleProj = .{
+        .tuple_expr = pair_var,
+        .index = 0,
+        .ty = parts.sample_ty,
+        .layout = layoutForTy(parts.sample_ty),
+        .loc = loc,
+    } };
+
+    const pair_var_for_seed = try varExpr(allocator, "__otest_sample_pair__", pair_ty, layout.structPack(), loc);
+    const next_seed = try allocator.create(ir.Expr);
+    next_seed.* = .{ .TupleProj = .{
+        .tuple_expr = pair_var_for_seed,
+        .index = 1,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+        .loc = loc,
+    } };
+
+    const body_call = try bodyCallExpr(allocator, parts, sample_proj, loc);
+    const after_body = try propContinuationAfterBody(allocator, parts.body, body_call, next_seed, loc);
+
+    const generator_call = try generatorCallExpr(allocator, parts.generator, seed, loc);
+    const body = try allocator.create(ir.Expr);
+    body.* = .{ .Let = .{
+        .name = "__otest_sample_pair__",
+        .value = generator_call,
+        .body = after_body,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+        .loc = loc,
+    } };
+
+    decls[module.decls.len] = try entryDecl(allocator, body, loc);
+    return moduleWithDecls(module, decls);
+}
+
+fn moduleWithPropBodyEntrypoint(core_arena: *std.heap.ArenaAllocator, module: ir.Module, parts: PropParts, sample: i64, loc: ir.Loc) !ir.Module {
+    const allocator = core_arena.allocator();
+    const decls = try allocator.alloc(ir.Decl, module.decls.len + 1);
+    @memcpy(decls[0..module.decls.len], module.decls);
+
+    const sample_expr = try intExpr(allocator, sample, loc);
+    const body_call = try bodyCallExpr(allocator, parts, sample_expr, loc);
+    const zero = try intExpr(allocator, 0, loc);
+    const body = try propContinuationAfterBody(allocator, parts.body, body_call, zero, loc);
+
+    decls[module.decls.len] = try entryDecl(allocator, body, loc);
+    return moduleWithDecls(module, decls);
+}
+
+fn generatorCallExpr(allocator: std.mem.Allocator, generator: *const ir.Expr, seed: i64, loc: ir.Loc) !*const ir.Expr {
+    const args = try allocator.alloc(*const ir.Expr, 1);
+    args[0] = try intExpr(allocator, seed, loc);
+    const call = try allocator.create(ir.Expr);
+    call.* = .{ .App = .{
+        .callee = generator,
+        .args = args,
+        .ty = generatorReturnTy(generator.*) orelse ir.Ty{ .Tuple = &.{ .Int, .Int } },
+        .layout = layout.structPack(),
+        .loc = loc,
+    } };
+    return call;
+}
+
+fn bodyCallExpr(allocator: std.mem.Allocator, parts: PropParts, sample: *const ir.Expr, loc: ir.Loc) !*const ir.Expr {
+    const body_value = try allocator.create(ir.Expr);
+    body_value.* = .{ .Lambda = parts.body };
+    const args = try allocator.alloc(*const ir.Expr, 1);
+    args[0] = sample;
+    const call = try allocator.create(ir.Expr);
+    call.* = .{ .App = .{
+        .callee = body_value,
+        .args = args,
+        .ty = lambdaReturnTy(parts.body) orelse .Unit,
+        .layout = layoutForTy(lambdaReturnTy(parts.body) orelse .Unit),
+        .loc = loc,
+    } };
+    return call;
+}
+
+fn propContinuationAfterBody(
+    allocator: std.mem.Allocator,
+    body_lambda: ir.Lambda,
+    body_call: *const ir.Expr,
+    success_expr: *const ir.Expr,
+    loc: ir.Loc,
+) !*const ir.Expr {
+    const ret_ty = lambdaReturnTy(body_lambda) orelse .Unit;
+    const ret_is_bool = switch (ret_ty) {
+        .Bool => true,
+        else => false,
+    };
+    if (ret_is_bool) {
+        const assert_expr = try allocator.create(ir.Expr);
+        assert_expr.* = .{ .Assert = .{
+            .condition = body_call,
+            .ty = .Unit,
+            .layout = layout.unitValue(),
+            .loc = loc,
+        } };
+        const outer = try allocator.create(ir.Expr);
+        outer.* = .{ .Let = .{
+            .name = "__otest_asserted__",
+            .value = assert_expr,
+            .body = success_expr,
+            .ty = .Int,
+            .layout = layout.intConstant(),
+            .loc = loc,
+        } };
+        return outer;
+    }
+
+    const outer = try allocator.create(ir.Expr);
+    outer.* = .{ .Let = .{
+        .name = "__otest_prop_ignored__",
+        .value = body_call,
+        .body = success_expr,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+        .loc = loc,
+    } };
+    return outer;
+}
+
+fn entryDecl(allocator: std.mem.Allocator, body: *const ir.Expr, loc: ir.Loc) !ir.Decl {
+    const int_ty = try allocator.create(ir.Ty);
+    int_ty.* = .Int;
+    const lambda_ty: ir.Ty = .{ .Arrow = .{ .params = &.{}, .ret = int_ty } };
+    const entry_expr = try allocator.create(ir.Expr);
+    entry_expr.* = .{ .Lambda = .{
+        .params = &.{},
+        .body = body,
+        .ty = lambda_ty,
+        .layout = layout.topLevelLambda(),
+        .loc = loc,
+    } };
+    return .{ .Let = .{
+        .name = "entrypoint",
+        .value = entry_expr,
+        .ty = lambda_ty,
+        .layout = layout.topLevelLambda(),
+    } };
+}
+
+fn moduleWithDecls(module: ir.Module, decls: []const ir.Decl) ir.Module {
+    return .{
+        .decls = decls,
+        .type_decls = module.type_decls,
+        .tuple_type_decls = module.tuple_type_decls,
+        .record_type_decls = module.record_type_decls,
+        .externals = module.externals,
+    };
+}
+
+fn intExpr(allocator: std.mem.Allocator, value: i64, loc: ir.Loc) !*const ir.Expr {
+    const expr = try allocator.create(ir.Expr);
+    expr.* = .{ .Constant = .{
+        .value = .{ .Int = value },
+        .ty = .Int,
+        .layout = layout.intConstant(),
+        .loc = loc,
+    } };
+    return expr;
+}
+
+fn varExpr(allocator: std.mem.Allocator, name: []const u8, ty: ir.Ty, expr_layout: layout.Layout, loc: ir.Loc) !*const ir.Expr {
+    const expr = try allocator.create(ir.Expr);
+    expr.* = .{ .Var = .{
+        .name = name,
+        .ty = ty,
+        .layout = expr_layout,
+        .loc = loc,
+    } };
+    return expr;
+}
+
+fn lambdaReturnTy(lambda: ir.Lambda) ?ir.Ty {
+    return switch (lambda.ty) {
+        .Arrow => |arrow| arrow.ret.*,
+        else => null,
+    };
+}
+
+fn generatorReturnTy(expr: ir.Expr) ?ir.Ty {
+    return switch (expr) {
+        .App => |app| switch (app.ty) {
+            .Arrow => |arrow| arrow.ret.*,
+            else => null,
+        },
+        .Var => |var_ref| switch (var_ref.ty) {
+            .Arrow => |arrow| arrow.ret.*,
+            else => null,
+        },
+        .Lambda => |lambda| lambdaReturnTy(lambda),
+        else => null,
+    };
+}
+
+fn layoutForTy(ty: ir.Ty) layout.Layout {
+    return switch (ty) {
+        .Int, .Bool => layout.intConstant(),
+        .Unit => layout.unitValue(),
+        .String => layout.defaultFor(.StringLiteral),
+        .Adt, .Tuple, .Record, .Var, .Arrow => layout.structPack(),
     };
 }
 
@@ -565,19 +1006,41 @@ fn appendCargoResult(output: *std.ArrayList(u8), allocator: std.mem.Allocator, r
         .ok => if (use_color) "\x1b[32mok\x1b[0m" else "ok",
         .failed => if (use_color) "\x1b[31mFAILED\x1b[0m" else "FAILED",
     };
-    const line = try std.fmt.allocPrint(
-        allocator,
-        "test {s}::{s} ... {s}\n",
-        .{ result.case.file, result.case.name, status },
-    );
+    const line = if (result.case.kind == .prop)
+        try std.fmt.allocPrint(
+            allocator,
+            "test {s}::prop_{s} ... {s} ({d} cases)\n",
+            .{ result.case.file, result.case.name, status, result.num_cases },
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "test {s}::{s} ... {s}\n",
+            .{ result.case.file, result.case.name, status },
+        );
     defer allocator.free(line);
     try output.appendSlice(allocator, line);
     if (result.status == .failed) {
-        const failure_line = try std.fmt.allocPrint(
-            allocator,
-            "  {s}:{d}:{d}: {s}\n",
-            .{ result.case.loc.file, result.case.loc.line, result.case.loc.col, result.message },
-        );
+        const failure_line = if (result.case.kind == .prop)
+            try std.fmt.allocPrint(
+                allocator,
+                "  {s}:{d}:{d}: {s}; FAILED after {d} tests; shrunk to: {s} (in {d} shrink steps)\n",
+                .{
+                    result.case.loc.file,
+                    result.case.loc.line,
+                    result.case.loc.col,
+                    result.message,
+                    result.executed_cases,
+                    result.counterexample orelse "unknown",
+                    result.shrunk_steps,
+                },
+            )
+        else
+            try std.fmt.allocPrint(
+                allocator,
+                "  {s}:{d}:{d}: {s}\n",
+                .{ result.case.loc.file, result.case.loc.line, result.case.loc.col, result.message },
+            );
         defer allocator.free(failure_line);
         try output.appendSlice(allocator, failure_line);
     }
@@ -601,10 +1064,18 @@ fn appendJsonResult(output: *std.ArrayList(u8), allocator: std.mem.Allocator, re
     try appendJsonString(output, allocator, result.case.file);
     try output.appendSlice(allocator, ",\"name\":");
     try appendJsonString(output, allocator, result.case.name);
-    try output.appendSlice(allocator, ",\"status\":\"");
+    try output.appendSlice(allocator, ",\"kind\":\"");
+    try output.appendSlice(allocator, if (result.case.kind == .prop) "prop" else "unit");
+    try output.appendSlice(allocator, "\",\"status\":\"");
     try output.appendSlice(allocator, if (result.status == .ok) "ok" else "failed");
     try output.appendSlice(allocator, "\",\"elapsed_ms\":");
     try appendInt(output, allocator, result.elapsed_ms);
+    if (result.case.kind == .prop) {
+        try output.appendSlice(allocator, ",\"num_cases\":");
+        try appendInt(output, allocator, result.num_cases);
+        try output.appendSlice(allocator, ",\"seed\":");
+        try appendInt(output, allocator, result.seed);
+    }
     if (result.status == .failed) {
         try output.appendSlice(allocator, ",\"message\":");
         try appendJsonString(output, allocator, result.message);
@@ -612,6 +1083,12 @@ fn appendJsonResult(output: *std.ArrayList(u8), allocator: std.mem.Allocator, re
         try appendInt(output, allocator, result.case.loc.line);
         try output.appendSlice(allocator, ",\"col\":");
         try appendInt(output, allocator, result.case.loc.col);
+        if (result.case.kind == .prop) {
+            try output.appendSlice(allocator, ",\"shrunk_steps\":");
+            try appendInt(output, allocator, result.shrunk_steps);
+            try output.appendSlice(allocator, ",\"counterexample\":");
+            try appendJsonString(output, allocator, result.counterexample orelse "unknown");
+        }
     }
     try output.appendSlice(allocator, "}\n");
 }
