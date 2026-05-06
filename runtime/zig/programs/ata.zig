@@ -143,3 +143,33 @@ test "ATA flow can reuse SPL Token InitializeAccount data" {
     const initialize_account_data = spl_token.encodeInitializeAccount();
     try std.testing.expectEqual(spl_token.initialize_account_discriminator, initialize_account_data[0]);
 }
+
+test "ATA CreateIdempotent explicit program metas stay readonly nonsigner" {
+    var funding: cpi.Pubkey = [_]u8{1} ** spl_token.pubkey_len;
+    var associated_token_account: cpi.Pubkey = [_]u8{2} ** spl_token.pubkey_len;
+    var owner: cpi.Pubkey = [_]u8{3} ** spl_token.pubkey_len;
+    var mint: cpi.Pubkey = [_]u8{4} ** spl_token.pubkey_len;
+    var explicit_system_program: cpi.Pubkey = [_]u8{5} ** spl_token.pubkey_len;
+    var explicit_token_program: cpi.Pubkey = [_]u8{6} ** spl_token.pubkey_len;
+    var metas: [create_idempotent_account_count]cpi.SolAccountMeta = undefined;
+    var data: [create_idempotent_instruction_data_len]u8 = undefined;
+
+    const instruction = createIdempotentWithPrograms(
+        &funding,
+        &associated_token_account,
+        &owner,
+        &mint,
+        &explicit_system_program,
+        &explicit_token_program,
+        &metas,
+        &data,
+    );
+
+    try std.testing.expect(instruction.program_id == &program_id);
+    try std.testing.expect(metas[4].pubkey == &explicit_system_program);
+    try std.testing.expectEqual(@as(u8, 0), metas[4].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[4].is_signer);
+    try std.testing.expect(metas[5].pubkey == &explicit_token_program);
+    try std.testing.expectEqual(@as(u8, 0), metas[5].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[5].is_signer);
+}

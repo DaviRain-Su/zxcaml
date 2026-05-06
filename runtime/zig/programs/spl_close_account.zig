@@ -70,3 +70,127 @@ fn tokenAccountOwnerEquals(data: []const u8, expected_owner: *const Pubkey) bool
 fn tokenAmount(data: []const u8) u64 {
     return readU64LeSlice(data[token_account_amount_offset..][0..8]);
 }
+
+const SplCloseAccountTestAccount = struct {
+    key: Pubkey = [_]u8{0} ** spl_token.pubkey_len,
+    owner: Pubkey = [_]u8{0} ** spl_token.pubkey_len,
+    lamports: u64 = 0,
+    rent_epoch: u64 = 0,
+    data: [token_account_len]u8 = [_]u8{0} ** token_account_len,
+
+    fn view(self: *SplCloseAccountTestAccount, is_signer: bool, is_writable: bool, data_len: usize) account.AccountView {
+        return .{
+            .is_signer = is_signer,
+            .is_writable = is_writable,
+            .executable = false,
+            .key = &self.key,
+            .lamports = &self.lamports,
+            .data = self.data[0..data_len],
+            .owner = &self.owner,
+            .rent_epoch = &self.rent_epoch,
+        };
+    }
+};
+
+const SplCloseAccountTestFixture = struct {
+    program_id: Pubkey = [_]u8{0xc1} ** spl_token.pubkey_len,
+    account_to_close: SplCloseAccountTestAccount = .{
+        .key = [_]u8{1} ** spl_token.pubkey_len,
+        .lamports = 7,
+    },
+    destination: SplCloseAccountTestAccount = .{
+        .key = [_]u8{2} ** spl_token.pubkey_len,
+        .lamports = 11,
+    },
+    authority: SplCloseAccountTestAccount = .{ .key = [_]u8{3} ** spl_token.pubkey_len },
+    token_program: SplCloseAccountTestAccount = .{ .key = spl_token.program_id },
+
+    fn init() SplCloseAccountTestFixture {
+        var fixture = SplCloseAccountTestFixture{};
+        fixture.account_to_close.owner = fixture.program_id;
+        writeSplCloseTokenAccount(&fixture.account_to_close.data, &fixture.authority.key, 0);
+        return fixture;
+    }
+
+    fn views(self: *SplCloseAccountTestFixture, authority_signer: bool) [4]account.AccountView {
+        return .{
+            self.account_to_close.view(false, true, token_account_len),
+            self.destination.view(false, true, token_account_len),
+            self.authority.view(authority_signer, false, token_account_len),
+            self.token_program.view(false, false, token_account_len),
+        };
+    }
+};
+
+fn writeSplCloseAccountProgramInput(out: []u8, program_id: Pubkey) void {
+    @memset(out, 0);
+    writeU64LeForTest(out[0..8], 0);
+    writeU64LeForTest(out[8..16], 0);
+    @memcpy(out[16..48], program_id[0..]);
+}
+
+fn writeSplCloseTokenAccount(data: *[token_account_len]u8, owner: *const Pubkey, amount: u64) void {
+    @memset(data[0..], 0);
+    @memcpy(data[token_account_owner_offset..][0..spl_token.pubkey_len], owner[0..]);
+    writeU64LeForTest(data[token_account_amount_offset..][0..8], amount);
+    data[token_account_state_offset] = 1;
+}
+
+fn writeU64LeForTest(out: []u8, value: u64) void {
+    var remaining = value;
+    for (out[0..8]) |*byte| {
+        byte.* = @intCast(remaining & 0xff);
+        remaining >>= 8;
+    }
+}
+
+test "spl_close_account transfers lamports and clears mocked token account" {
+    var arena: Arena = undefined;
+    var fixture = SplCloseAccountTestFixture.init();
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplCloseAccountProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeCloseAccount();
+    try std.testing.expectEqual(@as(u64, 0), zxcaml_spl_close_account_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 0), fixture.account_to_close.lamports);
+    try std.testing.expectEqual(@as(u64, 18), fixture.destination.lamports);
+    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** token_account_len), fixture.account_to_close.data[0..]);
+}
+
+test "spl_close_account rejects authority owner mismatch" {
+    var arena: Arena = undefined;
+    var fixture = SplCloseAccountTestFixture.init();
+    fixture.account_to_close.data[token_account_owner_offset] ^= 0xff;
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplCloseAccountProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeCloseAccount();
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_close_account_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 7), fixture.account_to_close.lamports);
+    try std.testing.expectEqual(@as(u64, 11), fixture.destination.lamports);
+}
+
+test "spl_close_account rejects malformed instruction data length" {
+    var arena: Arena = undefined;
+    var fixture = SplCloseAccountTestFixture.init();
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplCloseAccountProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_close_account_process(&arena, input[0..].ptr, views[0..], &.{}));
+    try std.testing.expectEqual(@as(u64, 7), fixture.account_to_close.lamports);
+    try std.testing.expectEqual(@as(u64, 11), fixture.destination.lamports);
+}
+
+test "spl_close_account rejects destination lamport overflow" {
+    var arena: Arena = undefined;
+    var fixture = SplCloseAccountTestFixture.init();
+    fixture.account_to_close.lamports = 1;
+    fixture.destination.lamports = std.math.maxInt(u64);
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplCloseAccountProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeCloseAccount();
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_close_account_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 1), fixture.account_to_close.lamports);
+    try std.testing.expectEqual(std.math.maxInt(u64), fixture.destination.lamports);
+}

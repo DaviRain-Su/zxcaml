@@ -66,3 +66,116 @@ fn tokenAccountOwnerEquals(data: []const u8, expected_owner: *const Pubkey) bool
     if (data.len < token_account_len) return false;
     return std.mem.eql(u8, data[token_account_owner_offset..][0..32], expected_owner[0..]);
 }
+
+const SplRevokeTestAccount = struct {
+    key: Pubkey = [_]u8{0} ** spl_token.pubkey_len,
+    owner: Pubkey = [_]u8{0} ** spl_token.pubkey_len,
+    lamports: u64 = 0,
+    rent_epoch: u64 = 0,
+    data: [token_account_len]u8 = [_]u8{0} ** token_account_len,
+
+    fn view(self: *SplRevokeTestAccount, is_signer: bool, is_writable: bool, data_len: usize) account.AccountView {
+        return .{
+            .is_signer = is_signer,
+            .is_writable = is_writable,
+            .executable = false,
+            .key = &self.key,
+            .lamports = &self.lamports,
+            .data = self.data[0..data_len],
+            .owner = &self.owner,
+            .rent_epoch = &self.rent_epoch,
+        };
+    }
+};
+
+const SplRevokeTestFixture = struct {
+    program_id: Pubkey = [_]u8{0xd2} ** spl_token.pubkey_len,
+    source: SplRevokeTestAccount = .{ .key = [_]u8{1} ** spl_token.pubkey_len },
+    authority: SplRevokeTestAccount = .{ .key = [_]u8{2} ** spl_token.pubkey_len },
+    token_program: SplRevokeTestAccount = .{ .key = spl_token.program_id },
+
+    fn init() SplRevokeTestFixture {
+        var fixture = SplRevokeTestFixture{};
+        fixture.source.owner = fixture.program_id;
+        writeSplRevokeTokenAccount(&fixture.source.data, &fixture.authority.key);
+        return fixture;
+    }
+
+    fn views(self: *SplRevokeTestFixture, authority_signer: bool) [3]account.AccountView {
+        return .{
+            self.source.view(false, true, token_account_len),
+            self.authority.view(authority_signer, false, token_account_len),
+            self.token_program.view(false, false, token_account_len),
+        };
+    }
+};
+
+fn writeSplRevokeProgramInput(out: []u8, program_id: Pubkey) void {
+    @memset(out, 0);
+    writeU64LeForTest(out[0..8], 0);
+    writeU64LeForTest(out[8..16], 0);
+    @memcpy(out[16..48], program_id[0..]);
+}
+
+fn writeSplRevokeTokenAccount(data: *[token_account_len]u8, owner: *const Pubkey) void {
+    @memset(data[0..], 0);
+    @memcpy(data[token_account_owner_offset..][0..spl_token.pubkey_len], owner[0..]);
+    data[token_account_state_offset] = 1;
+    data[delegate_option_offset] = 1;
+    @memset(data[delegate_offset..delegate_region_end], 0x44);
+    writeU64LeForTest(data[delegated_amount_offset..][0..8], 99);
+}
+
+fn writeU64LeForTest(out: []u8, value: u64) void {
+    var remaining = value;
+    for (out[0..8]) |*byte| {
+        byte.* = @intCast(remaining & 0xff);
+        remaining >>= 8;
+    }
+}
+
+test "spl_revoke clears delegate state on initialized mocked token account" {
+    var arena: Arena = undefined;
+    var fixture = SplRevokeTestFixture.init();
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplRevokeProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeRevoke();
+    try std.testing.expectEqual(@as(u64, 0), zxcaml_spl_revoke_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** (delegate_region_end - delegate_option_offset)), fixture.source.data[delegate_option_offset..delegate_region_end]);
+    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** (delegated_amount_end - delegated_amount_offset)), fixture.source.data[delegated_amount_offset..delegated_amount_end]);
+}
+
+test "spl_revoke rejects uninitialized mocked token account" {
+    var arena: Arena = undefined;
+    var fixture = SplRevokeTestFixture.init();
+    fixture.source.data[token_account_state_offset] = 0;
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplRevokeProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeRevoke();
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_revoke_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u8, 1), fixture.source.data[delegate_option_offset]);
+}
+
+test "spl_revoke rejects malformed instruction data length" {
+    var arena: Arena = undefined;
+    var fixture = SplRevokeTestFixture.init();
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplRevokeProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_revoke_process(&arena, input[0..].ptr, views[0..], &.{}));
+    try std.testing.expectEqual(@as(u8, 1), fixture.source.data[delegate_option_offset]);
+}
+
+test "spl_revoke rejects token account owner mismatch" {
+    var arena: Arena = undefined;
+    var fixture = SplRevokeTestFixture.init();
+    fixture.source.data[token_account_owner_offset] ^= 0xff;
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplRevokeProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeRevoke();
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_revoke_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u8, 1), fixture.source.data[delegate_option_offset]);
+}

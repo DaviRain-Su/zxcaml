@@ -83,3 +83,109 @@ fn tokenAmount(data: []const u8) u64 {
 fn writeTokenAmount(data: []u8, amount: u64) void {
     writeU64Le(data[token_account_amount_offset..][0..8], amount);
 }
+
+const SplBurnTestAccount = struct {
+    key: Pubkey = [_]u8{0} ** spl_token.pubkey_len,
+    owner: Pubkey = [_]u8{0} ** spl_token.pubkey_len,
+    lamports: u64 = 0,
+    rent_epoch: u64 = 0,
+    data: [token_account_len]u8 = [_]u8{0} ** token_account_len,
+
+    fn view(self: *SplBurnTestAccount, is_signer: bool, is_writable: bool, data_len: usize) account.AccountView {
+        return .{
+            .is_signer = is_signer,
+            .is_writable = is_writable,
+            .executable = false,
+            .key = &self.key,
+            .lamports = &self.lamports,
+            .data = self.data[0..data_len],
+            .owner = &self.owner,
+            .rent_epoch = &self.rent_epoch,
+        };
+    }
+};
+
+const SplBurnTestFixture = struct {
+    program_id: Pubkey = [_]u8{0xb0} ** spl_token.pubkey_len,
+    account_to_burn: SplBurnTestAccount = .{ .key = [_]u8{1} ** spl_token.pubkey_len },
+    mint: SplBurnTestAccount = .{ .key = [_]u8{2} ** spl_token.pubkey_len },
+    authority: SplBurnTestAccount = .{ .key = [_]u8{3} ** spl_token.pubkey_len },
+    token_program: SplBurnTestAccount = .{ .key = spl_token.program_id },
+
+    fn init(amount: u64) SplBurnTestFixture {
+        var fixture = SplBurnTestFixture{};
+        fixture.account_to_burn.owner = fixture.program_id;
+        writeSplBurnTokenAccount(&fixture.account_to_burn.data, &fixture.mint.key, &fixture.authority.key, amount);
+        return fixture;
+    }
+
+    fn views(self: *SplBurnTestFixture, authority_signer: bool) [4]account.AccountView {
+        return .{
+            self.account_to_burn.view(false, true, token_account_len),
+            self.mint.view(false, true, token_account_len),
+            self.authority.view(authority_signer, false, token_account_len),
+            self.token_program.view(false, false, token_account_len),
+        };
+    }
+};
+
+fn writeSplBurnProgramInput(out: []u8, program_id: Pubkey) void {
+    @memset(out, 0);
+    writeU64Le(out[0..8], 0);
+    writeU64Le(out[8..16], 0);
+    @memcpy(out[16..48], program_id[0..]);
+}
+
+fn writeSplBurnTokenAccount(data: *[token_account_len]u8, mint: *const Pubkey, owner: *const Pubkey, amount: u64) void {
+    @memset(data[0..], 0);
+    @memcpy(data[token_account_mint_offset..][0..spl_token.pubkey_len], mint[0..]);
+    @memcpy(data[token_account_owner_offset..][0..spl_token.pubkey_len], owner[0..]);
+    writeTokenAmount(data[0..], amount);
+    data[token_account_state_offset] = 1;
+}
+
+test "spl_burn burns requested amount from initialized mocked token account" {
+    var arena: Arena = undefined;
+    var fixture = SplBurnTestFixture.init(40);
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplBurnProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeBurn(15);
+    try std.testing.expectEqual(@as(u64, 0), zxcaml_spl_burn_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 25), tokenAmount(fixture.account_to_burn.data[0..]));
+}
+
+test "spl_burn rejects uninitialized mocked token account" {
+    var arena: Arena = undefined;
+    var fixture = SplBurnTestFixture.init(40);
+    fixture.account_to_burn.data[token_account_state_offset] = 0;
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplBurnProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeBurn(15);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_burn_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 40), tokenAmount(fixture.account_to_burn.data[0..]));
+}
+
+test "spl_burn rejects token account mint mismatch" {
+    var arena: Arena = undefined;
+    var fixture = SplBurnTestFixture.init(40);
+    fixture.account_to_burn.data[token_account_mint_offset] ^= 0xff;
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplBurnProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeBurn(15);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_burn_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 40), tokenAmount(fixture.account_to_burn.data[0..]));
+}
+
+test "spl_burn rejects malformed instruction data length" {
+    var arena: Arena = undefined;
+    var fixture = SplBurnTestFixture.init(40);
+    var views = fixture.views(true);
+    var input: [48]u8 = undefined;
+    writeSplBurnProgramInput(input[0..], fixture.program_id);
+    const ix = spl_token.encodeBurn(15);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_spl_burn_process(&arena, input[0..].ptr, views[0..], ix[0 .. ix.len - 1]));
+    try std.testing.expectEqual(@as(u64, 40), tokenAmount(fixture.account_to_burn.data[0..]));
+}
