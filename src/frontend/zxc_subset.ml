@@ -320,8 +320,23 @@ let type_env_add_alias env name params rhs =
 let builtin_type_ref name =
   Type_constr { type_name = name; args = []; is_recursive_ref = false }
 
+let builtin_external_type_ref name =
+  External_type_constr { external_type_name = name; external_type_args = [] }
+
+let builtin_external_arrow arg result = External_type_arrow (arg, result)
+
 let builtin_record_field name ty =
   { record_field_name = name; record_field_type = ty; record_field_mutable = false }
+
+let builtin_crypto_blake3_external_decl =
+  External_decl
+    {
+      external_name = "Crypto.blake3";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_type_ref "bytes");
+      external_symbol = "sol_blake3_alloc";
+    }
 
 let builtin_account_record_decl =
   Record_type_decl
@@ -1380,6 +1395,48 @@ and pattern_uses_record_fields field_names = function
   | Pat_alias alias ->
       pattern_uses_record_fields field_names alias.alias_pattern
 
+let rec expr_uses_var var_name = function
+  | Var name -> String.equal name var_name
+  | Const_int _ | Const_string _ -> false
+  | Lambda lambda -> expr_uses_var var_name lambda.body
+  | App app ->
+      expr_uses_var var_name app.callee
+      || List.exists (expr_uses_var var_name) app.args
+  | Let let_expr ->
+      expr_uses_var var_name let_expr.value
+      || expr_uses_var var_name let_expr.body
+  | Let_rec_group group ->
+      List.exists
+        (fun binding -> expr_uses_var var_name binding.rec_body)
+        group.bindings
+      || expr_uses_var var_name group.group_body
+  | If if_expr ->
+      expr_uses_var var_name if_expr.cond
+      || expr_uses_var var_name if_expr.then_branch
+      || expr_uses_var var_name if_expr.else_branch
+  | Prim prim -> List.exists (expr_uses_var var_name) prim.args
+  | Ctor ctor -> List.exists (expr_uses_var var_name) ctor.args
+  | Tuple items -> List.exists (expr_uses_var var_name) items
+  | Tuple_project tuple_project -> expr_uses_var var_name tuple_project.tuple_expr
+  | Record record ->
+      List.exists
+        (fun field -> expr_uses_var var_name field.field_value)
+        record.fields
+  | Field_access field_access -> expr_uses_var var_name field_access.record_expr
+  | Record_update record_update ->
+      expr_uses_var var_name record_update.base_expr
+      || List.exists
+           (fun field -> expr_uses_var var_name field.field_value)
+           record_update.fields
+  | Assert condition -> expr_uses_var var_name condition
+  | Match match_expr ->
+      expr_uses_var var_name match_expr.scrutinee
+      || List.exists (match_arm_uses_var var_name) match_expr.arms
+
+and match_arm_uses_var var_name arm =
+  Option.fold ~none:false ~some:(expr_uses_var var_name) arm.guard
+  || expr_uses_var var_name arm.body
+
 let decl_defines_record_type type_name = function
   | Record_type_decl decl -> String.equal decl.record_type_name type_name
   | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _
@@ -1402,6 +1459,20 @@ let decl_uses_record_fields field_names = function
       List.exists
         (fun binding -> expr_uses_record_fields field_names binding.rec_body)
         bindings
+  | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | Type_alias_decl _
+  | External_decl _ ->
+      false
+
+let decl_defines_external external_name = function
+  | External_decl decl -> String.equal decl.external_name external_name
+  | Let_decl _ | Let_rec_group_decl _ | Type_decl _ | Tuple_type_decl _
+  | Record_type_decl _ | Type_alias_decl _ ->
+      false
+
+let decl_uses_var var_name = function
+  | Let_decl decl -> expr_uses_var var_name decl.body
+  | Let_rec_group_decl bindings ->
+      List.exists (fun binding -> expr_uses_var var_name binding.rec_body) bindings
   | Type_decl _ | Tuple_type_decl _ | Record_type_decl _ | Type_alias_decl _
   | External_decl _ ->
       false
@@ -1462,6 +1533,18 @@ let add_builtin_record_decls decls =
         (needs_instruction, builtin_instruction_record_decl);
         (needs_clock, builtin_clock_record_decl);
       ]
+  in
+  builtins @ decls
+
+let add_builtin_external_decls decls =
+  let needs_blake3 =
+    (not (List.exists (decl_defines_external "Crypto.blake3") decls))
+    && List.exists (decl_uses_var "Crypto.blake3") decls
+  in
+  let builtins =
+    List.filter_map
+      (fun (needed, decl) -> if needed then Some decl else None)
+      [ (needs_blake3, builtin_crypto_blake3_external_decl) ]
   in
   builtins @ decls
 
@@ -1546,4 +1629,4 @@ let of_structure (structure : structure) =
         (env, List.rev_append item_decls acc))
       (initial_type_env, []) structure.str_items
   in
-  Module (add_builtin_record_decls (List.rev decls))
+  Module (List.rev decls |> add_builtin_record_decls |> add_builtin_external_decls)

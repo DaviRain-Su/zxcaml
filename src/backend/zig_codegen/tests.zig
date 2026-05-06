@@ -329,6 +329,24 @@ test "ZigBackend emits Crypto wrappers through arena-backed hash syscalls" {
     try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Crypto_keccak256") == null);
 }
 
+test "ZigBackend emits Crypto.blake3 through arena-backed hash syscall" {
+    const bytes_ty: lir.LTy = .String;
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .App = .{
+            .callee = &.{ .Var = .{ .name = "Crypto.blake3" } },
+            .args = &.{&.{ .Var = .{ .name = "input" } }},
+            .ty = bytes_ty,
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_blake3_alloc(arena, input)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "omlz_user_Crypto_blake3") == null);
+}
+
 test "ZigBackend slices fixed-array bytes returned by external calls" {
     const unit_ty: lir.LTy = .Unit;
     const bytes_ty: lir.LTy = .String;

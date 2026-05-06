@@ -47,6 +47,8 @@ pub const sol_log_pubkey_address: usize = 0x7ef088ca;
 pub const sol_sha256_address: usize = 0x11f49d86;
 /// MurmurHash3-32 dispatch address for `sol_keccak256`.
 pub const sol_keccak256_address: usize = 0xd7793abb;
+/// MurmurHash3-32 dispatch address for `sol_blake3`.
+pub const sol_blake3_address: usize = 0x174c5122;
 /// MurmurHash3-32 dispatch address for `sol_get_clock_sysvar`.
 pub const sol_get_clock_sysvar_address: usize = 0xd56b5fe9;
 /// MurmurHash3-32 dispatch address for `sol_get_rent_sysvar`.
@@ -143,6 +145,32 @@ pub inline fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8
     return out;
 }
 
+/// Computes a BLAKE3 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
+pub inline fn sol_blake3(payload: []const u8) Hash {
+    if (comptime is_bpf) {
+        var descriptor: [1]SolBytes = undefined;
+        descriptor[0].addr = payload.ptr;
+        descriptor[0].len = payload.len;
+        var out: Hash = undefined;
+        const syscall: SolHashFn = @ptrFromInt(sol_blake3_address);
+        _ = syscall(@ptrCast(&descriptor[0]), descriptor.len, &out);
+        return out;
+    } else {
+        var out: Hash = undefined;
+        std.crypto.hash.Blake3.hash(payload, &out, .{});
+        return out;
+    }
+}
+
+/// Computes BLAKE3 and returns an arena-owned 32-byte slice suitable for OCaml `bytes`.
+pub inline fn sol_blake3_alloc(arena: *Arena, payload: []const u8) []const u8 {
+    const digest = sol_blake3(payload);
+    var out: []u8 = undefined;
+    arena.allocIntoOrTrap(u8, digest.len, &out);
+    @memcpy(out, &digest);
+    return out;
+}
+
 /// Reads the Clock sysvar through Solana's `sol_get_clock_sysvar` syscall.
 pub inline fn sol_get_clock_sysvar() Clock {
     if (comptime is_bpf) {
@@ -187,6 +215,7 @@ test "syscall dispatch addresses match Solana MurmurHash3-32 values" {
     try std.testing.expectEqual(@as(usize, 0x7ef088ca), sol_log_pubkey_address);
     try std.testing.expectEqual(@as(usize, 0x11f49d86), sol_sha256_address);
     try std.testing.expectEqual(@as(usize, 0xd7793abb), sol_keccak256_address);
+    try std.testing.expectEqual(@as(usize, 0x174c5122), sol_blake3_address);
     try std.testing.expectEqual(@as(usize, 0xd56b5fe9), sol_get_clock_sysvar_address);
     try std.testing.expectEqual(@as(usize, 0xbf7188f6), sol_get_rent_sysvar_address);
     try std.testing.expectEqual(@as(usize, 0x52ba5096), sol_log_compute_units_address);
@@ -207,6 +236,13 @@ test "hosted hash fallbacks match known SHA-256 and Keccak-256 vectors" {
         &[_]u8{ 0x4e, 0x03, 0x65, 0x7a, 0xea, 0x45, 0xa9, 0x4f, 0xc7, 0xd4, 0x7b, 0xa8, 0x26, 0xc8, 0xd6, 0x67, 0xc0, 0xd1, 0xe6, 0xe3, 0x3a, 0x64, 0xa0, 0x36, 0xec, 0x44, 0xf5, 0x8f, 0xa1, 0x2d, 0x6c, 0x45 },
         &keccak,
     );
+
+    const blake3 = sol_blake3("abc");
+    try std.testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 0x64, 0x37, 0xb3, 0xac, 0x38, 0x46, 0x51, 0x33, 0xff, 0xb6, 0x3b, 0x75, 0x27, 0x3a, 0x8d, 0xb5, 0x48, 0xc5, 0x58, 0x46, 0x5d, 0x79, 0xdb, 0x03, 0xfd, 0x35, 0x9c, 0x6c, 0xd5, 0xbd, 0x9d, 0x85 },
+        &blake3,
+    );
 }
 
 test "keccak256 arena wrapper returns fixed 32-byte digest" {
@@ -219,6 +255,20 @@ test "keccak256 arena wrapper returns fixed 32-byte digest" {
     try std.testing.expectEqualSlices(
         u8,
         &[_]u8{ 0x4e, 0x03, 0x65, 0x7a, 0xea, 0x45, 0xa9, 0x4f, 0xc7, 0xd4, 0x7b, 0xa8, 0x26, 0xc8, 0xd6, 0x67, 0xc0, 0xd1, 0xe6, 0xe3, 0x3a, 0x64, 0xa0, 0x36, 0xec, 0x44, 0xf5, 0x8f, 0xa1, 0x2d, 0x6c, 0x45 },
+        digest,
+    );
+}
+
+test "blake3 arena wrapper returns fixed 32-byte digest" {
+    var buf: [64]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&buf);
+
+    const digest = sol_blake3_alloc(&arena, "abc");
+    try std.testing.expectEqual(@as(usize, 32), digest.len);
+    try std.testing.expectEqual(@as(usize, 32), arena.offset);
+    try std.testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 0x64, 0x37, 0xb3, 0xac, 0x38, 0x46, 0x51, 0x33, 0xff, 0xb6, 0x3b, 0x75, 0x27, 0x3a, 0x8d, 0xb5, 0x48, 0xc5, 0x58, 0x46, 0x5d, 0x79, 0xdb, 0x03, 0xfd, 0x35, 0x9c, 0x6c, 0xd5, 0xbd, 0x9d, 0x85 },
         digest,
     );
 }
