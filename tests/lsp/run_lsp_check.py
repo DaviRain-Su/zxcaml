@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import json
+import errno
 import glob
 import os
 import select
+import shutil
 import subprocess
 import sys
 import time
@@ -91,12 +93,60 @@ def assert_no_lsp_process():
     assert subprocess.run(["pgrep", "-f", "omlz-lsp"], stdout=subprocess.DEVNULL).returncode == 1
 
 
+def tmp_path_pid(path):
+    base = os.path.basename(path)
+    prefix = "omlz_lsp_"
+    if not base.startswith(prefix):
+        return None
+
+    rest = base[len(prefix):]
+    digit_count = 0
+    while digit_count < len(rest) and rest[digit_count].isdigit():
+        digit_count += 1
+    if digit_count == 0:
+        return None
+
+    suffix = rest[digit_count:]
+    if suffix and not (suffix.startswith("_") and base.endswith(".ml")):
+        return None
+
+    pid = int(rest[:digit_count])
+    return pid if pid > 0 else None
+
+
+def pid_is_dead(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError as exc:
+        return exc.errno == errno.ESRCH or exc.errno == 3
+    return False
+
+
+def pre_clean_stale_tmp():
+    for path in glob.glob("/tmp/omlz_lsp_*"):
+        pid = tmp_path_pid(path)
+        if pid is None or not pid_is_dead(pid):
+            continue
+
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+        except FileNotFoundError:
+            continue
+
+
 def assert_no_temp_files():
     leftovers = glob.glob("/tmp/omlz_lsp_*.ml")
+    leftovers.extend(path for path in glob.glob("/tmp/omlz_lsp_*") if os.path.isdir(path))
     assert leftovers == [], "leftover temp files: " + repr(leftovers)
 
 
 def start_and_initialize():
+    pre_clean_stale_tmp()
     proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": None, "rootUri": None, "capabilities": {}}})
@@ -120,6 +170,7 @@ def stop(proc):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=2)
+    pre_clean_stale_tmp()
     assert_no_lsp_process()
     assert_no_temp_files()
 
