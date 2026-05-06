@@ -59,6 +59,14 @@ pub fn emitExternalAppExpr(
         try emitSysvarRentFromAccountExpr(out, allocator, app, indent_level, ctx);
         return;
     }
+    if (std.mem.eql(u8, external.symbol, "sysvar.readInstructionsHeader") and app.args.len == 1) {
+        try emitSysvarInstructionsHeaderFromAccountExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
+    if (std.mem.eql(u8, external.symbol, "sysvar.readInstructionAt") and app.args.len == 2) {
+        try emitSysvarInstructionAtExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
 
     if (externalReturnIsBytes(external)) {
         const block_id = ctx.next_block_id;
@@ -1363,6 +1371,72 @@ pub fn emitSysvarRentFromAccountExpr(
     try appendPrint(out, allocator, "const omlz_rent_{d} = sysvar.readRent(omlz_rent_data_{d});\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "break :blk{d} {s}{{ .lamports_per_byte_year = @intCast(omlz_rent_{d}.lamports_per_byte_year), .exemption_threshold = @intFromFloat(omlz_rent_{d}.exemption_threshold), .burn_percent = @intCast(omlz_rent_{d}.burn_percent) }};\n", .{ block_id, rent_ty, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitSysvarInstructionsHeaderFromAccountExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const header_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(header_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_instructions_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_instructions_header_{d} = sysvar.readInstructionsHeader(omlz_instructions_data_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_instruction_offsets_{d}: []i64 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(i64, @intCast(omlz_instructions_header_{d}.instruction_count), &omlz_instruction_offsets_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_instruction_offsets_{d}, 0..) |*omlz_offset, omlz_offset_index| omlz_offset.* = @intCast(omlz_instructions_header_{d}.offsetAt(@intCast(omlz_offset_index)) orelse 0);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .instruction_count = @intCast(omlz_instructions_header_{d}.instruction_count), .offsets = omlz_instruction_offsets_{d} }};\n", .{ block_id, header_ty, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitSysvarInstructionAtExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const instruction_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(instruction_ty);
+    const account_meta_ty = try userTypeName(allocator, "account_meta");
+    defer allocator.free(account_meta_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_instructions_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_instruction_index_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_instruction_info_{d} = if (omlz_instruction_index_{d} < 0) sysvar.InstructionInfo{{}} else sysvar.readInstructionAt(omlz_instructions_data_{d}, @intCast(omlz_instruction_index_{d}));\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_instruction_accounts_{d}: []{s} = undefined;\n", .{ block_id, account_meta_ty });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap({s}, omlz_instruction_info_{d}.accounts.len, &omlz_instruction_accounts_{d});\n", .{ account_meta_ty, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_instruction_info_{d}.accounts, 0..) |omlz_meta, omlz_meta_index| omlz_instruction_accounts_{d}[omlz_meta_index] = .{{ .pubkey = omlz_meta.pubkey, .is_writable = prelude.Bool.fromNative(omlz_meta.is_writable), .is_signer = prelude.Bool.fromNative(omlz_meta.is_signer) }};\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .program_id = omlz_instruction_info_{d}.program_id, .accounts = omlz_instruction_accounts_{d}, .data = omlz_instruction_info_{d}.data }};\n", .{ block_id, instruction_ty, block_id, block_id, block_id });
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
 }

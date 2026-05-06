@@ -292,6 +292,9 @@ let builtin_rent_field_names =
   StringSet.of_list
     [ "lamports_per_byte_year"; "exemption_threshold"; "burn_percent" ]
 
+let builtin_instructions_header_field_names =
+  StringSet.of_list [ "instruction_count"; "offsets" ]
+
 let initial_type_env =
   {
     constructors =
@@ -372,6 +375,27 @@ let builtin_sysvar_rent_from_account_external_decl =
         builtin_external_arrow (builtin_external_type_ref "bytes")
           (builtin_external_type_ref "rent");
       external_symbol = "sysvar.readRent";
+    }
+
+let builtin_sysvar_instructions_header_from_account_external_decl =
+  External_decl
+    {
+      external_name = "Sysvar.instructions_header_from_account";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_type_ref "instructions_header");
+      external_symbol = "sysvar.readInstructionsHeader";
+    }
+
+let builtin_sysvar_instruction_at_external_decl =
+  External_decl
+    {
+      external_name = "Sysvar.instruction_at";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_arrow (builtin_external_type_ref "int")
+             (builtin_external_type_ref "instruction"));
+      external_symbol = "sysvar.readInstructionAt";
     }
 
 let builtin_account_record_decl =
@@ -470,6 +494,26 @@ let builtin_rent_record_decl =
           builtin_record_field "lamports_per_byte_year" (builtin_type_ref "int");
           builtin_record_field "exemption_threshold" (builtin_type_ref "int");
           builtin_record_field "burn_percent" (builtin_type_ref "int");
+        ];
+      record_is_recursive = false;
+      record_is_account = false;
+    }
+
+let builtin_instructions_header_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "instructions_header";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "instruction_count" (builtin_type_ref "int");
+          builtin_record_field "offsets"
+            (Type_constr
+               {
+                 type_name = "array";
+                 args = [ builtin_type_ref "int" ];
+                 is_recursive_ref = false;
+               });
         ];
       record_is_recursive = false;
       record_is_account = false;
@@ -1561,6 +1605,10 @@ let add_builtin_record_decls decls =
     decls_need_builtin_record ~type_name:"rent"
       ~field_names:builtin_rent_field_names decls
   in
+  let needs_instructions_header =
+    decls_need_builtin_record ~type_name:"instructions_header"
+      ~field_names:builtin_instructions_header_field_names decls
+  in
   let needs_error =
     decls_need_builtin_record ~type_name:"error"
       ~field_names:builtin_error_field_names decls
@@ -1588,6 +1636,7 @@ let add_builtin_record_decls decls =
         (needs_instruction, builtin_instruction_record_decl);
         (needs_clock, builtin_clock_record_decl);
         (needs_rent, builtin_rent_record_decl);
+        (needs_instructions_header, builtin_instructions_header_record_decl);
       ]
   in
   builtins @ decls
@@ -1609,6 +1658,17 @@ let add_builtin_external_decls decls =
     (not (List.exists (decl_defines_external "Sysvar.rent_from_account") decls))
     && List.exists (decl_uses_var "Sysvar.rent_from_account") decls
   in
+  let needs_sysvar_instructions_header_from_account =
+    (not
+       (List.exists
+          (decl_defines_external "Sysvar.instructions_header_from_account")
+          decls))
+    && List.exists (decl_uses_var "Sysvar.instructions_header_from_account") decls
+  in
+  let needs_sysvar_instruction_at =
+    (not (List.exists (decl_defines_external "Sysvar.instruction_at") decls))
+    && List.exists (decl_uses_var "Sysvar.instruction_at") decls
+  in
   let builtins =
     List.filter_map
       (fun (needed, decl) -> if needed then Some decl else None)
@@ -1618,6 +1678,9 @@ let add_builtin_external_decls decls =
         ( needs_sysvar_clock_from_account,
           builtin_sysvar_clock_from_account_external_decl );
         (needs_sysvar_rent_from_account, builtin_sysvar_rent_from_account_external_decl);
+        ( needs_sysvar_instructions_header_from_account,
+          builtin_sysvar_instructions_header_from_account_external_decl );
+        (needs_sysvar_instruction_at, builtin_sysvar_instruction_at_external_decl);
       ]
   in
   builtins @ decls

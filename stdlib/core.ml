@@ -54,11 +54,18 @@ type rent = {
   burn_percent : int;
 }
 
+type instructions_header = {
+  instruction_count : int;
+  offsets : int array;
+}
+
 type account_data = bytes
 
 type clock_record = clock
 
 type rent_record = rent
+
+type instruction_info = instruction
 
 module Option = struct
   let map f = function None -> None | Some x -> Some (f x)
@@ -488,6 +495,12 @@ module Sysvar = struct
   external clock_from_account : account_data -> clock_record = "sysvar.readClock"
 
   external rent_from_account : account_data -> rent_record = "sysvar.readRent"
+
+  external instructions_header_from_account : account_data -> instructions_header
+    = "sysvar.readInstructionsHeader"
+
+  external instruction_at : account_data -> int -> instruction_info
+    = "sysvar.readInstructionAt"
 end
 
 module Pubkey = struct

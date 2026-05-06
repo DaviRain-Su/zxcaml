@@ -3,6 +3,7 @@
 //! Layout references (Solana 1.18+ SDK):
 //! - `solana-program/src/sysvar/clock.rs` (`Clock`)
 //! - `solana-program/src/sysvar/rent.rs` (`Rent`)
+//! - `solana-program/src/sysvar/instructions.rs` (`Instructions`)
 //!
 //! Sysvar account data is serialized field-by-field in little-endian order.
 //! These readers do not cast from account bytes, so they are safe for
@@ -12,6 +13,9 @@ const std = @import("std");
 
 pub const clock_account_data_len: usize = 40;
 pub const rent_account_data_len: usize = 17;
+pub const pubkey_len: usize = 32;
+pub const instruction_account_meta_len: usize = 1 + pubkey_len;
+pub const max_instruction_accounts: usize = 256;
 
 /// Solana Clock sysvar fields in SVM serialized order.
 pub const Clock = extern struct {
@@ -28,6 +32,42 @@ pub const Rent = struct {
     exemption_threshold: f64 = 0,
     burn_percent: u8 = 0,
 };
+
+/// Header for the Instructions sysvar account.
+///
+/// `offsets` is the raw little-endian u16 offset table; use `offsetAt` to
+/// decode an individual instruction start offset without assuming alignment.
+pub const InstructionsHeader = struct {
+    instruction_count: u16 = 0,
+    offsets: []const u8 = &.{},
+
+    pub fn offsetAt(self: InstructionsHeader, idx: u16) ?u16 {
+        if (idx >= self.instruction_count) return null;
+        const offset_index = @as(usize, idx) * @sizeOf(u16);
+        if (offset_index + @sizeOf(u16) > self.offsets.len) return null;
+        return std.mem.readInt(u16, self.offsets[offset_index..][0..@sizeOf(u16)], .little);
+    }
+};
+
+/// Account metadata decoded from one serialized Instructions sysvar entry.
+pub const AccountMeta = struct {
+    pubkey: []const u8 = &.{},
+    is_signer: bool = false,
+    is_writable: bool = false,
+};
+
+/// Instruction view decoded from the Instructions sysvar.
+///
+/// The all-empty value is the error sentinel for malformed input and
+/// out-of-bounds indexes. It lets BPF callers branch on empty `program_id` /
+/// `accounts` / `data` instead of trapping.
+pub const InstructionInfo = struct {
+    program_id: []const u8 = &.{},
+    accounts: []const AccountMeta = &.{},
+    data: []const u8 = &.{},
+};
+
+var instruction_account_meta_buffer: [max_instruction_accounts]AccountMeta = undefined;
 
 /// Reads a Clock sysvar account payload. Short data returns the zero value.
 pub fn readClock(account_data: []const u8) Clock {
@@ -51,13 +91,86 @@ pub fn readRent(account_data: []const u8) Rent {
     };
 }
 
+/// Reads the Instructions sysvar header and raw per-instruction offset table.
+/// Malformed account data returns the zero-value header.
+pub fn readInstructionsHeader(account_data: []const u8) InstructionsHeader {
+    const instruction_count = readU16Le(account_data, 0) orelse return .{};
+    const offsets_len = @as(usize, instruction_count) * @sizeOf(u16);
+    if (2 + offsets_len > account_data.len) return .{};
+    return .{
+        .instruction_count = instruction_count,
+        .offsets = account_data[2 .. 2 + offsets_len],
+    };
+}
+
+/// Reads an instruction by absolute transaction index from Instructions data.
+/// Malformed input and out-of-bounds indexes return `InstructionInfo{}`.
+pub fn readInstructionAt(account_data: []const u8, idx: usize) InstructionInfo {
+    const header = readInstructionsHeader(account_data);
+    if (header.instruction_count == 0 or idx >= header.instruction_count) return .{};
+    const start = header.offsetAt(@intCast(idx)) orelse return .{};
+    const min_instruction_start = 2 + (@as(usize, header.instruction_count) * @sizeOf(u16));
+    var current = @as(usize, start);
+    if (current < min_instruction_start or current > account_data.len) return .{};
+
+    const account_count = readU16Advance(account_data, &current) orelse return .{};
+    if (account_count > max_instruction_accounts) return .{};
+    for (0..account_count) |account_index| {
+        const flags = readU8Advance(account_data, &current) orelse return .{};
+        const pubkey = readSliceAdvance(account_data, &current, pubkey_len) orelse return .{};
+        instruction_account_meta_buffer[account_index] = .{
+            .pubkey = pubkey,
+            .is_signer = (flags & 0b0000_0001) != 0,
+            .is_writable = (flags & 0b0000_0010) != 0,
+        };
+    }
+
+    const program_id = readSliceAdvance(account_data, &current, pubkey_len) orelse return .{};
+    const data_len = readU16Advance(account_data, &current) orelse return .{};
+    const instruction_data = readSliceAdvance(account_data, &current, data_len) orelse return .{};
+    return .{
+        .program_id = program_id,
+        .accounts = instruction_account_meta_buffer[0..account_count],
+        .data = instruction_data,
+    };
+}
+
 fn readU64Le(account_data: []const u8, offset: usize) ?u64 {
     if (offset + @sizeOf(u64) > account_data.len) return null;
     return std.mem.readInt(u64, account_data[offset..][0..@sizeOf(u64)], .little);
 }
 
+fn readU16Le(account_data: []const u8, offset: usize) ?u16 {
+    if (offset + @sizeOf(u16) > account_data.len) return null;
+    return std.mem.readInt(u16, account_data[offset..][0..@sizeOf(u16)], .little);
+}
+
+fn readU16Advance(account_data: []const u8, current: *usize) ?u16 {
+    const value = readU16Le(account_data, current.*) orelse return null;
+    current.* += @sizeOf(u16);
+    return value;
+}
+
+fn readU8Advance(account_data: []const u8, current: *usize) ?u8 {
+    if (current.* >= account_data.len) return null;
+    const value = account_data[current.*];
+    current.* += 1;
+    return value;
+}
+
+fn readSliceAdvance(account_data: []const u8, current: *usize, len: usize) ?[]const u8 {
+    if (current.* + len > account_data.len) return null;
+    const value = account_data[current.* .. current.* + len];
+    current.* += len;
+    return value;
+}
+
 fn writeU64Le(out: []u8, offset: usize, value: u64) void {
     std.mem.writeInt(u64, out[offset..][0..@sizeOf(u64)], value, .little);
+}
+
+fn writeU16Le(out: []u8, offset: usize, value: u16) void {
+    std.mem.writeInt(u16, out[offset..][0..@sizeOf(u16)], value, .little);
 }
 
 test "readClock parses happy path little-endian fields" {
@@ -138,4 +251,124 @@ test "sysvar readers preserve zero-initialized account data" {
     try std.testing.expectEqual(@as(u64, 0), rent.lamports_per_byte_year);
     try std.testing.expectEqual(@as(f64, 0), rent.exemption_threshold);
     try std.testing.expectEqual(@as(u8, 0), rent.burn_percent);
+}
+
+fn appendU16(out: *std.ArrayList(u8), value: u16) !void {
+    var bytes = [_]u8{0} ** @sizeOf(u16);
+    writeU16Le(&bytes, 0, value);
+    try out.appendSlice(std.testing.allocator, &bytes);
+}
+
+fn appendPubkey(out: *std.ArrayList(u8), seed: u8) !void {
+    var pubkey = [_]u8{0} ** pubkey_len;
+    for (&pubkey, 0..) |*byte, index| byte.* = seed +% @as(u8, @intCast(index));
+    try out.appendSlice(std.testing.allocator, &pubkey);
+}
+
+fn appendInstruction(
+    out: *std.ArrayList(u8),
+    account_flags: []const u8,
+    account_pubkey_seeds: []const u8,
+    program_seed: u8,
+    instruction_data: []const u8,
+) !void {
+    try appendU16(out, @intCast(account_flags.len));
+    for (account_flags, 0..) |flags, index| {
+        try out.append(std.testing.allocator, flags);
+        try appendPubkey(out, account_pubkey_seeds[index]);
+    }
+    try appendPubkey(out, program_seed);
+    try appendU16(out, @intCast(instruction_data.len));
+    try out.appendSlice(std.testing.allocator, instruction_data);
+}
+
+fn buildInstructionsSysvar(instruction_count: u16) !std.ArrayList(u8) {
+    var out = std.ArrayList(u8).empty;
+    try appendU16(&out, instruction_count);
+    try out.appendNTimes(std.testing.allocator, 0, @as(usize, instruction_count) * @sizeOf(u16));
+    return out;
+}
+
+test "readInstructionsHeader and readInstructionAt parse a single instruction" {
+    var data = try buildInstructionsSysvar(1);
+    defer data.deinit(std.testing.allocator);
+
+    const offset0: u16 = @intCast(data.items.len);
+    writeU16Le(data.items, 2, offset0);
+    try appendInstruction(&data, &.{ 0b11, 0b01 }, &.{ 0x20, 0x40 }, 0x80, &.{ 9, 8, 7 });
+
+    const header = readInstructionsHeader(data.items);
+    try std.testing.expectEqual(@as(u16, 1), header.instruction_count);
+    try std.testing.expectEqual(offset0, header.offsetAt(0).?);
+
+    const info = readInstructionAt(data.items, 0);
+    try std.testing.expectEqual(@as(usize, 32), info.program_id.len);
+    try std.testing.expectEqual(@as(u8, 0x80), info.program_id[0]);
+    try std.testing.expectEqual(@as(usize, 2), info.accounts.len);
+    try std.testing.expectEqual(@as(u8, 0x20), info.accounts[0].pubkey[0]);
+    try std.testing.expect(info.accounts[0].is_signer);
+    try std.testing.expect(info.accounts[0].is_writable);
+    try std.testing.expect(info.accounts[1].is_signer);
+    try std.testing.expect(!info.accounts[1].is_writable);
+    try std.testing.expectEqualSlices(u8, &.{ 9, 8, 7 }, info.data);
+}
+
+test "readInstructionAt parses multiple instructions through offset table" {
+    var data = try buildInstructionsSysvar(2);
+    defer data.deinit(std.testing.allocator);
+
+    const offset0: u16 = @intCast(data.items.len);
+    writeU16Le(data.items, 2, offset0);
+    try appendInstruction(&data, &.{0b00}, &.{0x10}, 0x30, &.{1});
+
+    const offset1: u16 = @intCast(data.items.len);
+    writeU16Le(data.items, 4, offset1);
+    try appendInstruction(&data, &.{0b10}, &.{0x50}, 0x70, &.{ 2, 3, 4, 5 });
+
+    const header = readInstructionsHeader(data.items);
+    try std.testing.expectEqual(@as(u16, 2), header.instruction_count);
+    try std.testing.expectEqual(offset0, header.offsetAt(0).?);
+    try std.testing.expectEqual(offset1, header.offsetAt(1).?);
+
+    const first = readInstructionAt(data.items, 0);
+    const second = readInstructionAt(data.items, 1);
+    try std.testing.expectEqual(@as(u8, 0x30), first.program_id[0]);
+    try std.testing.expectEqualSlices(u8, &.{1}, first.data);
+    try std.testing.expectEqual(@as(u8, 0x70), second.program_id[0]);
+    try std.testing.expectEqualSlices(u8, &.{ 2, 3, 4, 5 }, second.data);
+    try std.testing.expect(!second.accounts[0].is_signer);
+    try std.testing.expect(second.accounts[0].is_writable);
+}
+
+test "Instructions sysvar readers return sentinels for malformed lengths" {
+    const malformed_header = [_]u8{ 1, 0, 4 };
+    const header = readInstructionsHeader(&malformed_header);
+    try std.testing.expectEqual(@as(u16, 0), header.instruction_count);
+
+    var data = try buildInstructionsSysvar(1);
+    defer data.deinit(std.testing.allocator);
+    const offset0: u16 = @intCast(data.items.len);
+    writeU16Le(data.items, 2, offset0);
+    try appendU16(&data, 0);
+    try appendPubkey(&data, 0xa0);
+    try appendU16(&data, 4);
+    try data.appendSlice(std.testing.allocator, &.{ 1, 2 });
+
+    const info = readInstructionAt(data.items, 0);
+    try std.testing.expectEqual(@as(usize, 0), info.program_id.len);
+    try std.testing.expectEqual(@as(usize, 0), info.accounts.len);
+    try std.testing.expectEqual(@as(usize, 0), info.data.len);
+}
+
+test "readInstructionAt returns error sentinel for out-of-bounds index" {
+    var data = try buildInstructionsSysvar(1);
+    defer data.deinit(std.testing.allocator);
+    const offset0: u16 = @intCast(data.items.len);
+    writeU16Le(data.items, 2, offset0);
+    try appendInstruction(&data, &.{}, &.{}, 0x44, &.{0xaa});
+
+    const info = readInstructionAt(data.items, 9);
+    try std.testing.expectEqual(@as(usize, 0), info.program_id.len);
+    try std.testing.expectEqual(@as(usize, 0), info.accounts.len);
+    try std.testing.expectEqual(@as(usize, 0), info.data.len);
 }
