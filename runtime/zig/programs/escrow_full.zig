@@ -160,3 +160,200 @@ fn escrowPdaMatches(escrow_key: *const Pubkey, maker_key: *const Pubkey, program
     if (sol_create_program_address(seeds[0..], program_id, &expected) != success) return false;
     return pubkeyEq(escrow_key, &expected);
 }
+
+const EscrowFullTestAccount = struct {
+    key: Pubkey = [_]u8{0} ** 32,
+    owner: Pubkey = [_]u8{0} ** 32,
+    lamports: u64 = 0,
+    rent_epoch: u64 = 0,
+    data: [escrow_state_len]u8 = [_]u8{0} ** escrow_state_len,
+
+    fn view(self: *EscrowFullTestAccount, is_signer: bool, is_writable: bool, data_len: usize) account.AccountView {
+        return .{
+            .is_signer = is_signer,
+            .is_writable = is_writable,
+            .executable = false,
+            .key = &self.key,
+            .lamports = &self.lamports,
+            .data = self.data[0..data_len],
+            .owner = &self.owner,
+            .rent_epoch = &self.rent_epoch,
+        };
+    }
+};
+
+const EscrowFullTestFixture = struct {
+    program_id: Pubkey = [_]u8{0x31} ** 32,
+    maker: EscrowFullTestAccount = .{ .key = [_]u8{1} ** 32, .lamports = 100_000 },
+    taker: EscrowFullTestAccount = .{ .key = [_]u8{2} ** 32, .lamports = 3_000 },
+    escrow: EscrowFullTestAccount = .{ .lamports = 9_000 },
+    system: EscrowFullTestAccount = .{ .key = [_]u8{0} ** 32 },
+
+    fn init() EscrowFullTestFixture {
+        var fixture = EscrowFullTestFixture{};
+        fixture.maker.key = findEscrowFullMakerForBump255(&fixture.program_id);
+        fixture.escrow.key = deriveEscrowFullPda(&fixture.program_id, &fixture.maker.key);
+        fixture.escrow.owner = fixture.program_id;
+        return fixture;
+    }
+
+    fn initializeState(self: *EscrowFullTestFixture, restricted_taker: ?*const Pubkey, amount: u64) void {
+        @memset(self.escrow.data[0..], 0);
+        self.escrow.data[0] = escrow_discriminator;
+        @memcpy(self.escrow.data[1..33], self.maker.key[0..]);
+        if (restricted_taker) |key| {
+            @memcpy(self.escrow.data[escrow_taker_offset..][0..32], key[0..]);
+        }
+        writeU64Le(self.escrow.data[escrow_amount_offset..][0..8], amount);
+    }
+
+    fn acceptViews(self: *EscrowFullTestFixture, taker_signer: bool) [3]account.AccountView {
+        return .{
+            self.taker.view(taker_signer, true, escrow_state_len),
+            self.escrow.view(false, true, escrow_state_len),
+            self.maker.view(false, false, escrow_state_len),
+        };
+    }
+
+    fn refundViews(self: *EscrowFullTestFixture, maker_signer: bool) [2]account.AccountView {
+        return .{
+            self.maker.view(maker_signer, true, escrow_state_len),
+            self.escrow.view(false, true, escrow_state_len),
+        };
+    }
+
+    fn makeViews(self: *EscrowFullTestFixture, maker_signer: bool) [3]account.AccountView {
+        return .{
+            self.maker.view(maker_signer, true, escrow_state_len),
+            self.escrow.view(false, true, escrow_state_len),
+            self.system.view(false, false, escrow_state_len),
+        };
+    }
+};
+
+fn findEscrowFullMakerForBump255(program_id: *const Pubkey) Pubkey {
+    for (0..256) |byte| {
+        const maker: Pubkey = [_]u8{@intCast(byte)} ** 32;
+        var escrow_seed: [6]u8 = .{ 'e', 's', 'c', 'r', 'o', 'w' };
+        var maker_seed = maker;
+        var bump_seed: [1]u8 = .{255};
+        var seeds = [_]SolSignerSeed{
+            SolSignerSeed.fromSlice(escrow_seed[0..]),
+            SolSignerSeed.fromSlice(maker_seed[0..]),
+            SolSignerSeed.fromSlice(bump_seed[0..]),
+        };
+        var expected: Pubkey = undefined;
+        if (sol_create_program_address(seeds[0..], program_id, &expected) == success) return maker;
+    }
+    @panic("unable to find bump-255 escrow PDA fixture");
+}
+
+fn deriveEscrowFullPda(program_id: *const Pubkey, maker: *const Pubkey) Pubkey {
+    var escrow_seed: [6]u8 = .{ 'e', 's', 'c', 'r', 'o', 'w' };
+    var maker_seed = maker.*;
+    var bump_seed: [1]u8 = .{255};
+    var seeds = [_]SolSignerSeed{
+        SolSignerSeed.fromSlice(escrow_seed[0..]),
+        SolSignerSeed.fromSlice(maker_seed[0..]),
+        SolSignerSeed.fromSlice(bump_seed[0..]),
+    };
+    var expected: Pubkey = undefined;
+    if (sol_create_program_address(seeds[0..], program_id, &expected) != success) @panic("invalid escrow PDA fixture");
+    return expected;
+}
+
+fn writeEscrowFullProgramInput(out: []u8, program_id: Pubkey) void {
+    @memset(out, 0);
+    writeU64Le(out[0..8], 0);
+    writeU64Le(out[8..16], 0);
+    @memcpy(out[16..48], program_id[0..]);
+}
+
+fn writeEscrowFullMakeIx(out: []u8, taker: Pubkey, amount: u64) void {
+    out[0] = 0;
+    @memcpy(out[1..33], taker[0..]);
+    writeU64Le(out[33..41], amount);
+}
+
+test "escrow_full accept transfers escrow lamports to unrestricted taker" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    fixture.initializeState(null, 5_000);
+    var views = fixture.acceptViews(true);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(success, zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{1}));
+    try std.testing.expectEqual(@as(u64, 12_000), fixture.taker.lamports);
+    try std.testing.expectEqual(@as(u64, 0), fixture.escrow.lamports);
+    try std.testing.expectEqual(@as(u8, 0), fixture.escrow.data[0]);
+}
+
+test "escrow_full accept rejects restricted taker mismatch" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    const other_taker: Pubkey = [_]u8{9} ** 32;
+    fixture.initializeState(&other_taker, 5_000);
+    var views = fixture.acceptViews(true);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{1}));
+}
+
+test "escrow_full accept rejects second accept after state is closed" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    fixture.initializeState(null, 5_000);
+    var views = fixture.acceptViews(true);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(success, zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{1}));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{1}));
+}
+
+test "escrow_full refund returns escrow lamports to maker" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    fixture.initializeState(&fixture.taker.key, 5_000);
+    var views = fixture.refundViews(true);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(success, zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{2}));
+    try std.testing.expectEqual(@as(u64, 109_000), fixture.maker.lamports);
+    try std.testing.expectEqual(@as(u64, 0), fixture.escrow.lamports);
+    try std.testing.expectEqual(@as(u8, 0), fixture.escrow.data[0]);
+}
+
+test "escrow_full refund rejects second refund after state is closed" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    fixture.initializeState(null, 5_000);
+    var views = fixture.refundViews(true);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(success, zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{2}));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], &.{2}));
+}
+
+test "make rejects non-signer maker before CPI" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    fixture.escrow.lamports = 0;
+    var views = fixture.makeViews(false);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    var ix: [41]u8 = undefined;
+    writeEscrowFullMakeIx(ix[0..], fixture.taker.key, 5_000);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+}
+
+test "make rejects zero escrow amount before CPI" {
+    var arena: Arena = undefined;
+    var fixture = EscrowFullTestFixture.init();
+    fixture.escrow.lamports = 0;
+    var views = fixture.makeViews(true);
+    var input: [48]u8 = undefined;
+    writeEscrowFullProgramInput(input[0..], fixture.program_id);
+    var ix: [41]u8 = undefined;
+    writeEscrowFullMakeIx(ix[0..], fixture.taker.key, 0);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_escrow_full_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+}

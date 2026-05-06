@@ -145,3 +145,156 @@ fn tokenAmount(data: []const u8) u64 {
 fn writeTokenAmount(data: []u8, amount: u64) void {
     writeU64Le(data[token_account_amount_offset..][0..8], amount);
 }
+
+const ata_transfer_token_program_key_test: Pubkey = .{
+    0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93,
+    0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
+    0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91,
+    0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
+};
+
+const AtaTransferTestAccount = struct {
+    key: Pubkey = [_]u8{0} ** 32,
+    owner: Pubkey = [_]u8{0} ** 32,
+    lamports: u64 = 0,
+    rent_epoch: u64 = 0,
+    data: [token_account_len]u8 = [_]u8{0} ** token_account_len,
+
+    fn view(self: *AtaTransferTestAccount, is_signer: bool, is_writable: bool, data_len: usize) account.AccountView {
+        return .{
+            .is_signer = is_signer,
+            .is_writable = is_writable,
+            .executable = false,
+            .key = &self.key,
+            .lamports = &self.lamports,
+            .data = self.data[0..data_len],
+            .owner = &self.owner,
+            .rent_epoch = &self.rent_epoch,
+        };
+    }
+};
+
+const AtaTransferTestFixture = struct {
+    program_id: Pubkey = [_]u8{0x42} ** 32,
+    funding: AtaTransferTestAccount = .{ .key = [_]u8{1} ** 32 },
+    source: AtaTransferTestAccount = .{ .key = [_]u8{2} ** 32 },
+    destination: AtaTransferTestAccount = .{ .key = [_]u8{3} ** 32 },
+    authority: AtaTransferTestAccount = .{ .key = [_]u8{4} ** 32 },
+    mint: AtaTransferTestAccount = .{ .key = [_]u8{5} ** 32 },
+    system: AtaTransferTestAccount = .{ .key = [_]u8{0} ** 32 },
+    token: AtaTransferTestAccount = .{ .key = ata_transfer_token_program_key_test },
+
+    fn init(self: *AtaTransferTestFixture) void {
+        self.source.owner = self.program_id;
+        self.destination.owner = self.program_id;
+        writeAtaTransferTokenAccount(&self.source.data, &self.mint.key, &self.authority.key, 40);
+        writeAtaTransferTokenAccount(&self.destination.data, &self.mint.key, &self.authority.key, 2);
+    }
+
+    fn initializeViews(self: *AtaTransferTestFixture, funding_signer: bool) [6]account.AccountView {
+        return .{
+            self.funding.view(funding_signer, true, token_account_len),
+            self.destination.view(false, true, token_account_len),
+            self.authority.view(false, false, token_account_len),
+            self.mint.view(false, false, token_account_len),
+            self.system.view(false, false, token_account_len),
+            self.token.view(false, false, token_account_len),
+        };
+    }
+
+    fn transferViews(self: *AtaTransferTestFixture, authority_signer: bool) [6]account.AccountView {
+        return .{
+            self.source.view(false, true, token_account_len),
+            self.destination.view(false, true, token_account_len),
+            self.authority.view(authority_signer, false, token_account_len),
+            self.mint.view(false, false, token_account_len),
+            self.system.view(false, false, token_account_len),
+            self.token.view(false, false, token_account_len),
+        };
+    }
+};
+
+fn writeAtaTransferProgramInput(out: []u8, program_id: Pubkey) void {
+    @memset(out, 0);
+    writeU64Le(out[0..8], 0);
+    writeU64Le(out[8..16], 0);
+    @memcpy(out[16..48], program_id[0..]);
+}
+
+fn writeAtaTransferTokenAccount(data: *[token_account_len]u8, mint: *const Pubkey, owner: *const Pubkey, amount: u64) void {
+    @memset(data[0..], 0);
+    @memcpy(data[token_account_mint_offset..][0..32], mint[0..]);
+    @memcpy(data[token_account_owner_offset..][0..32], owner[0..]);
+    writeU64Le(data[token_account_amount_offset..][0..8], amount);
+    data[token_account_state_offset] = 1;
+}
+
+fn writeAtaTransferIx(out: []u8, amount: u64) void {
+    out[0] = 0x01;
+    writeU64Le(out[1..9], amount);
+}
+
+test "ata_transfer initialize writes destination ATA token layout" {
+    var arena: Arena = undefined;
+    var fixture = AtaTransferTestFixture{};
+    fixture.init();
+    @memset(fixture.destination.data[0..], 0xaa);
+    var views = fixture.initializeViews(true);
+    var input: [48]u8 = undefined;
+    writeAtaTransferProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 0), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], &.{0}));
+    try std.testing.expectEqualSlices(u8, fixture.mint.key[0..], fixture.destination.data[token_account_mint_offset..][0..32]);
+    try std.testing.expectEqualSlices(u8, fixture.authority.key[0..], fixture.destination.data[token_account_owner_offset..][0..32]);
+    try std.testing.expectEqual(@as(u64, 0), tokenAmount(fixture.destination.data[0..]));
+    try std.testing.expectEqual(@as(u8, 1), fixture.destination.data[token_account_state_offset]);
+}
+
+test "ata_transfer transfer moves requested token amount" {
+    var arena: Arena = undefined;
+    var fixture = AtaTransferTestFixture{};
+    fixture.init();
+    var views = fixture.transferViews(true);
+    var input: [48]u8 = undefined;
+    writeAtaTransferProgramInput(input[0..], fixture.program_id);
+    var ix: [spl_token.transfer_instruction_data_len]u8 = undefined;
+    writeAtaTransferIx(ix[0..], 15);
+    try std.testing.expectEqual(@as(u64, 0), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+    try std.testing.expectEqual(@as(u64, 25), tokenAmount(fixture.source.data[0..]));
+    try std.testing.expectEqual(@as(u64, 17), tokenAmount(fixture.destination.data[0..]));
+}
+
+test "ata_transfer initialize rejects destination owner mismatch" {
+    var arena: Arena = undefined;
+    var fixture = AtaTransferTestFixture{};
+    fixture.init();
+    fixture.destination.owner = [_]u8{9} ** 32;
+    var views = fixture.initializeViews(true);
+    var input: [48]u8 = undefined;
+    writeAtaTransferProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], &.{0}));
+}
+
+test "ata_transfer transfer rejects mismatched token mints" {
+    var arena: Arena = undefined;
+    var fixture = AtaTransferTestFixture{};
+    fixture.init();
+    fixture.destination.data[token_account_mint_offset] ^= 0xff;
+    var views = fixture.transferViews(true);
+    var input: [48]u8 = undefined;
+    writeAtaTransferProgramInput(input[0..], fixture.program_id);
+    var ix: [spl_token.transfer_instruction_data_len]u8 = undefined;
+    writeAtaTransferIx(ix[0..], 15);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+}
+
+test "ata_transfer transfer rejects zero amount" {
+    var arena: Arena = undefined;
+    var fixture = AtaTransferTestFixture{};
+    fixture.init();
+    var views = fixture.transferViews(true);
+    var input: [48]u8 = undefined;
+    writeAtaTransferProgramInput(input[0..], fixture.program_id);
+    var ix: [spl_token.transfer_instruction_data_len]u8 = undefined;
+    writeAtaTransferIx(ix[0..], 0);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], ix[0..]));
+}

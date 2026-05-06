@@ -132,3 +132,104 @@ pub inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolA
         .executable = executable,
     };
 }
+
+test "common writeU64Le and readU64LeSlice round-trip a wide value" {
+    var bytes: [8]u8 = undefined;
+    writeU64Le(bytes[0..], 0x8877_6655_4433_2211);
+    try std.testing.expectEqual(@as(u64, 0x8877_6655_4433_2211), readU64LeSlice(bytes[0..]));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 }, bytes[0..]);
+}
+
+test "common pubkeyEq returns true for identical pubkeys" {
+    const lhs: Pubkey = [_]u8{0x42} ** 32;
+    const rhs: Pubkey = [_]u8{0x42} ** 32;
+    try std.testing.expect(pubkeyEq(&lhs, &rhs));
+}
+
+test "common pubkeyEq returns false for different pubkeys" {
+    const lhs: Pubkey = [_]u8{0x42} ** 32;
+    const rhs: Pubkey = [_]u8{0x24} ** 32;
+    try std.testing.expect(!pubkeyEq(&lhs, &rhs));
+}
+
+test "common isTokenProgramKey recognizes only Tokenkeg bytes" {
+    const token_program: Pubkey = .{
+        0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93,
+        0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
+        0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91,
+        0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
+    };
+    var wrong = token_program;
+    wrong[31] ^= 0xff;
+    try std.testing.expect(isTokenProgramKey(&token_program));
+    try std.testing.expect(!isTokenProgramKey(&wrong));
+}
+
+test "common isSystemProgramKey accepts all-zero pubkey only" {
+    const system_program: Pubkey = [_]u8{0} ** 32;
+    var wrong = system_program;
+    wrong[7] = 1;
+    try std.testing.expect(isSystemProgramKey(&system_program));
+    try std.testing.expect(!isSystemProgramKey(&wrong));
+}
+
+test "common writeSystemTransferData matches SystemProgram transfer layout" {
+    var data: [12]u8 = undefined;
+    writeSystemTransferData(data[0..], 0x0102_0304_0506_0708);
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        2, 0, 0, 0,
+        0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+    }, data[0..]);
+}
+
+test "common programIdFromInput reads program id after serialized account and instruction data" {
+    const program_id: Pubkey = [_]u8{0xab} ** 32;
+    var input: [10_400]u8 = undefined;
+    const used = writeCommonSerializedInput(input[0..], program_id);
+    try std.testing.expectEqualSlices(u8, program_id[0..], programIdFromInput(input[0..used].ptr)[0..]);
+}
+
+fn writeCommonSerializedInput(out: []u8, program_id: Pubkey) usize {
+    @memset(out, 0);
+    var cursor: usize = 0;
+    writeU64Le(out[cursor..][0..8], 1);
+    cursor += 8;
+
+    out[cursor] = 0xff; // not a duplicate account
+    cursor += 1;
+    out[cursor] = 1; // signer
+    cursor += 1;
+    out[cursor] = 1; // writable
+    cursor += 1;
+    out[cursor] = 0; // executable
+    cursor += 1;
+    cursor += 4; // original data length padding
+
+    const key: Pubkey = [_]u8{0x11} ** 32;
+    const owner: Pubkey = [_]u8{0x22} ** 32;
+    @memcpy(out[cursor..][0..32], key[0..]);
+    cursor += 32;
+    @memcpy(out[cursor..][0..32], owner[0..]);
+    cursor += 32;
+    writeU64Le(out[cursor..][0..8], 1234);
+    cursor += 8;
+
+    writeU64Le(out[cursor..][0..8], 3);
+    cursor += 8;
+    @memcpy(out[cursor..][0..3], "abc");
+    cursor += 3;
+    cursor += 10 * 1024;
+    cursor = std.mem.alignForward(usize, cursor, 8);
+    writeU64Le(out[cursor..][0..8], 99);
+    cursor += 8;
+
+    writeU64Le(out[cursor..][0..8], 2);
+    cursor += 8;
+    out[cursor] = 0x44;
+    out[cursor + 1] = 0x55;
+    cursor += 2;
+
+    @memcpy(out[cursor..][0..32], program_id[0..]);
+    cursor += 32;
+    return cursor;
+}
