@@ -9,6 +9,22 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — omlz fmt + LSP formatting
+
+- Added the pure formatter core for `.ml` source with two-space indentation,
+  100-column wrapping triggers, comment preservation, final-newline
+  normalization, and bytewise fixed-point behavior (`40a9e22`).
+- Added the `omlz fmt` CLI with `--check`, `--write`, `--stdin`,
+  `--format=text|json`, directory recursion over `*.ml`, and exit codes 0/1/2
+  for success, check-needed, and validation failures (`72a0b1a`).
+- Added ten idempotency golden snapshot pairs covering simple lets, let-in
+  chains, matches, mutual recursion, `let%test_unit`, comments, nesting,
+  applications, records, and string escapes (`50e5346`).
+- Added `omlz-lsp` `textDocument/formatting` and
+  `textDocument/rangeFormatting` handlers using the shared formatter core in
+  process, with malformed-input empty edits and a p50 ≤ 30 ms formatting
+  latency harness (`09b1a7d`).
+
 ### Added — keccak / blake3 / secp256k1_recover
 
 - Added the Keccak-256 runtime syscall wrapper and `Crypto.keccak256 : bytes -> bytes` binding for 32-byte Ethereum-compatible digests (`cd2bc31`).
