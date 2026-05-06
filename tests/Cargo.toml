@@ -99,6 +99,10 @@ name = "clock_rent_demo_test"
 path = "clock_rent_demo_test.rs"
 
 [[test]]
+name = "instruction_introspect_demo_test"
+path = "instruction_introspect_demo_test.rs"
+
+[[test]]
 name = "region_demo_test"
 path = "region_demo_test.rs"
 
