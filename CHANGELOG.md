@@ -11,6 +11,29 @@ evidence for each major bullet.
 
 No unreleased user-visible changes are documented yet.
 
+## [P9 LSP Resilience] - 2026-05-06
+
+### Added
+
+- Added LSP latency-harness stabilization with one warm-up sample followed by
+  five measured checks, reporting the p50 median while preserving the 200ms
+  threshold for the developer-experience budget (`2272a79`).
+
+### Changed
+
+- Changed `omlz-lsp` temp-file isolation to use per-pid subdirectories under
+  `/tmp/omlz_lsp_<pid>/<id>.ml`, preventing concurrent servers from sharing the
+  same transient source paths (`a77a358`).
+
+### Fixed
+
+- Fixed stale LSP temp cleanup across process boundaries by checking
+  `kill(pid, 0)` on server startup before removing only dead peer directories
+  (`a77a358`, `d10682e`).
+- Fixed the Python latency harness pre-run path to call the
+  `pre_clean_stale_tmp()` helper, applying the same cross-pid `kill(pid, 0)`
+  cleanup before launching `omlz-lsp` (`d10682e`, `b649cbe`).
+
 ## [P8] Compiler Optimizations - 2026-05-01
 
 ### Added
