@@ -611,6 +611,18 @@ pub fn build(b: *std.Build) void {
     const run_srcmap_tests = b.addRunArtifact(srcmap_tests);
     run_srcmap_tests.setCwd(b.path(""));
 
+    // Formatter core tests (FMT / F-FMT1): verify canonical OCaml-ish token
+    // stream formatting and fixed-point idempotency before CLI/LSP wiring.
+    const frontend_fmt_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/frontend/fmt.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_frontend_fmt_tests = b.addRunArtifact(frontend_fmt_tests);
+    run_frontend_fmt_tests.setCwd(b.path(""));
+
     // Codegen regression tests: compile focused `.ml` cases and inspect the
     // emitted Zig source.
     const codegen_external_bytes_test_module = b.createModule(.{
@@ -757,6 +769,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_bridge_wire_compat_tests.step);
     test_step.dependOn(&run_core_loc_tests.step);
     test_step.dependOn(&run_srcmap_tests.step);
+    test_step.dependOn(&run_frontend_fmt_tests.step);
     test_step.dependOn(&run_codegen_external_bytes_tests.step);
     test_step.dependOn(&run_codegen_region_let_storage_tests.step);
     test_step.dependOn(&run_codegen_pattern_extensions_tests.step);
