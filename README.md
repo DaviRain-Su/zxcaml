@@ -159,7 +159,7 @@ or emit Anchor-compatible IDL.
 - **Diagnostics:** rustc-style diagnostics are the default, with `--error-format=human|json|oneline` and caret spans over source snippets
 - **LSP:** `omlz-lsp` is installed by `zig build` and provides LSP push diagnostics over stdio JSON-RPC
 - **Source maps:** BPF builds emit deterministic source maps, embed `.zxcaml.srcmap`, and let `omlz unmap` resolve BPF PCs back to OCaml locations
-- **Examples:** 54 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, and zignocchio-port programs
+- **Examples:** 57 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, zignocchio-port programs, dao_voting, ata_transfer, and order_book
 - **Golden/UI tests:** Core IR/sexp snapshot and UI tests run through `zig build test`
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 
