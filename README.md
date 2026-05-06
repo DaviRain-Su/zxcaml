@@ -141,6 +141,7 @@ or emit Anchor-compatible IDL.
 - **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
 - **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
+- **Runtime crypto syscalls:** Solana-backed SHA-256, Keccak-256, BLAKE3, and `secp256k1_recover` are exposed through `Crypto`, with digest-writer and signature-recovery examples (`keccak_demo`, `blake3_demo`, `secp_recover_demo`)
 - **External declarations:** `external name : type = "zig_symbol"` syntax enables direct FFI to Zig runtime functions with type safety enforced by the frontend
 - **CPI and PDA helpers:** built-in `instruction` / `account_meta` records, `invoke`, `invoke_signed`, PDA helpers, and return-data syscalls mirror the Solana C ABI
 - **SPL-Token:** helper support and acceptance examples cover the legacy Tokenkeg primitives transfer, init_account, burn, close_account, and revoke; the current SPL primitive examples are `spl_burn`, `spl_close_account`, and `spl_revoke`

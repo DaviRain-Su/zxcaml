@@ -9,6 +9,14 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — keccak / blake3 / secp256k1_recover
+
+- Added the Keccak-256 runtime syscall wrapper and `Crypto.keccak256 : bytes -> bytes` binding for 32-byte Ethereum-compatible digests (`cd2bc31`).
+- Added the BLAKE3 runtime syscall wrapper and `Crypto.blake3 : bytes -> bytes` binding for fixed 32-byte SVM BLAKE3 digests (`721aeae`).
+- Added `sol_secp256k1_recover` support and `Crypto.secp256k1_recover : bytes -> int -> bytes -> bytes`, returning a 64-byte uncompressed pubkey or empty bytes on failure (`e48ea82`).
+- Added Keccak and BLAKE3 digest-writer examples plus Mollusk SVM tests that compare account-data output against known digest bytes (`973850b`).
+- Added the secp256k1 recovery demo with a documented libsecp256k1/Bitcoin Core fixture proving the `(hash, recovery_id, signature) -> pubkey` path in Mollusk (`40fa8bd`).
+
 ### Added — let%%test_unit + omlz test runner
 
 - Added `let%test_unit "name" = expr` frontend support, lowering test bodies into unit thunks and `__otest_registry__` for runner discovery (`46e7695`).
