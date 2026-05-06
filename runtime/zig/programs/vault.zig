@@ -1,5 +1,6 @@
 //! Runtime entrypoint for the vault example.
 
+const std = @import("std");
 const Arena = @import("../arena.zig").Arena;
 const account = @import("../account.zig");
 const cpi = @import("../cpi.zig");
@@ -92,4 +93,134 @@ fn zxcamlVaultWithdraw(views: []account.AccountView) u64 {
     };
     var seed_groups = [_]SolSignerSeedsC{.{ .addr = c_seeds[0..].ptr, .len = c_seeds.len }};
     return sol_invoke_signed_c(&instruction, infos[0..], seed_groups[0..]);
+}
+
+const VaultTestAccount = struct {
+    key: Pubkey = [_]u8{0} ** 32,
+    owner: Pubkey = [_]u8{0} ** 32,
+    lamports: u64 = 0,
+    rent_epoch: u64 = 0,
+    data: [8]u8 = [_]u8{0} ** 8,
+
+    fn view(self: *VaultTestAccount, is_signer: bool, is_writable: bool) account.AccountView {
+        return .{
+            .is_signer = is_signer,
+            .is_writable = is_writable,
+            .executable = false,
+            .key = &self.key,
+            .lamports = &self.lamports,
+            .data = self.data[0..],
+            .owner = &self.owner,
+            .rent_epoch = &self.rent_epoch,
+        };
+    }
+};
+
+const VaultTestFixture = struct {
+    payer: VaultTestAccount = .{ .key = [_]u8{1} ** 32, .lamports = 10_000 },
+    vault: VaultTestAccount = .{ .key = [_]u8{2} ** 32 },
+    system: VaultTestAccount = .{ .key = [_]u8{0} ** 32 },
+
+    fn views(self: *VaultTestFixture, payer_signer: bool) [3]account.AccountView {
+        return .{
+            self.payer.view(payer_signer, true),
+            self.vault.view(false, true),
+            self.system.view(false, false),
+        };
+    }
+};
+
+fn writeVaultU64LeTest(out: []u8, value: u64) void {
+    var remaining = value;
+    for (out[0..8]) |*byte| {
+        byte.* = @intCast(remaining & 0xff);
+        remaining >>= 8;
+    }
+}
+
+test "vault deposit rejects missing account views" {
+    var arena: Arena = undefined;
+    var views: [2]account.AccountView = undefined;
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], &.{0}));
+}
+
+test "vault deposit rejects empty instruction data" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    var views = fixture.views(true);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], &.{}));
+}
+
+test "vault deposit rejects non-signer payer before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    var views = fixture.views(false);
+    var data: [9]u8 = undefined;
+    data[0] = 0;
+    writeVaultU64LeTest(data[1..9], 1);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], data[0..]));
+}
+
+test "vault deposit rejects non-system program account before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    fixture.system.key = [_]u8{7} ** 32;
+    var views = fixture.views(true);
+    var data: [9]u8 = undefined;
+    data[0] = 0;
+    writeVaultU64LeTest(data[1..9], 1);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], data[0..]));
+}
+
+test "vault deposit rejects vault owner mismatch before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    fixture.vault.owner = [_]u8{9} ** 32;
+    var views = fixture.views(true);
+    var data: [9]u8 = undefined;
+    data[0] = 0;
+    writeVaultU64LeTest(data[1..9], 1);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], data[0..]));
+}
+
+test "vault deposit rejects short amount payload before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    var views = fixture.views(true);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], &.{ 0, 1, 2 }));
+}
+
+test "vault deposit rejects pre-funded vault before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    fixture.vault.lamports = 1;
+    var views = fixture.views(true);
+    var data: [9]u8 = undefined;
+    data[0] = 0;
+    writeVaultU64LeTest(data[1..9], 5);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], data[0..]));
+}
+
+test "vault deposit rejects zero amount before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    var views = fixture.views(true);
+    var data: [9]u8 = undefined;
+    data[0] = 0;
+    writeVaultU64LeTest(data[1..9], 0);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], data[0..]));
+}
+
+test "vault withdraw rejects empty vault before CPI" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    var views = fixture.views(true);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], &.{1}));
+}
+
+test "vault dispatch rejects unknown discriminator" {
+    var arena: Arena = undefined;
+    var fixture = VaultTestFixture{};
+    var views = fixture.views(true);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_process(&arena, undefined, views[0..], &.{99}));
 }
