@@ -283,7 +283,35 @@ let parse_string_literal_end s start =
     in
     loop (start + 1) false
 
-let find_let_percent line = find_sub_from line "let%" 0
+let scan_line_for_let_percent ~comment_depth line =
+  let len = String.length line in
+  let rec skip_string index =
+    if index >= len then len
+    else
+      match line.[index] with
+      | '\\' -> skip_string (min len (index + 2))
+      | '"' -> index + 1
+      | _ -> skip_string (index + 1)
+  in
+  let rec loop index depth first_let_percent =
+    if index >= len then first_let_percent, depth
+    else if depth > 0 then
+      if index + 1 < len && line.[index] = '(' && line.[index + 1] = '*' then
+        loop (index + 2) (depth + 1) first_let_percent
+      else if index + 1 < len && line.[index] = '*' && line.[index + 1] = ')' then
+        loop (index + 2) (depth - 1) first_let_percent
+      else loop (index + 1) depth first_let_percent
+    else if index + 3 < len && String.sub line index 4 = "let%" then
+      loop (index + 4) depth
+        (match first_let_percent with
+        | Some _ -> first_let_percent
+        | None -> Some index)
+    else if index + 1 < len && line.[index] = '(' && line.[index + 1] = '*' then
+      loop (index + 2) (depth + 1) first_let_percent
+    else if line.[index] = '"' then loop (skip_string (index + 1)) depth first_let_percent
+    else loop (index + 1) depth first_let_percent
+  in
+  loop 0 comment_depth None
 
 let top_level_boundary line =
   starts_with ~prefix:"let " line
@@ -358,35 +386,46 @@ let preprocess_otest_source input =
   let lines = String.split_on_char '\n' source in
   let buffer = Buffer.create (String.length source + 256) in
   let bindings = ref [] in
+  let comment_depth = ref 0 in
   let rec loop line_number = function
     | [] -> ()
     | line :: rest ->
-        if starts_with ~prefix:"let%" line then (
+        let let_percent, depth_after_line =
+          scan_line_for_let_percent ~comment_depth:!comment_depth line
+        in
+        if !comment_depth = 0 && starts_with ~prefix:"let%" line then (
           let index = List.length !bindings in
           let name_literal, rhs_tail = parse_otest_header ~input ~line_number line in
           bindings := !bindings @ [ { index; name_literal } ];
+          comment_depth := depth_after_line;
           Buffer.add_string buffer
             (Printf.sprintf "let __otest_unit_%d__ _ : unit =%s\n" index
                rhs_tail);
           let rec append_body current_line = function
-            | next :: remaining when not (top_level_boundary next) ->
-                (match find_let_percent next with
+            | next :: remaining
+              when !comment_depth <> 0 || not (top_level_boundary next) ->
+                let let_percent, depth_after_next =
+                  scan_line_for_let_percent ~comment_depth:!comment_depth next
+                in
+                (match let_percent with
                 | Some column ->
                     reject_nested_or_unknown_extension ~input
                       ~line_number:current_line next column
                 | None -> ());
                 Buffer.add_string buffer next;
                 Buffer.add_char buffer '\n';
+                comment_depth := depth_after_next;
                 append_body (current_line + 1) remaining
             | remaining -> loop current_line remaining
           in
           append_body (line_number + 1) rest)
         else (
-          (match find_let_percent line with
+          (match let_percent with
           | Some column ->
               reject_nested_or_unknown_extension ~input ~line_number line column
           | None -> ());
           Buffer.add_string buffer line;
+          comment_depth := depth_after_line;
           (match rest with [] -> () | _ -> Buffer.add_char buffer '\n');
           loop (line_number + 1) rest)
   in

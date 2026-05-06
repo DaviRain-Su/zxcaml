@@ -667,6 +667,31 @@ CASES: list[tuple[str, str, str]] = [
         "(ctor \"::\" (tuple (items (const-string \"middle\") "
         "(var __otest_unit_0__))) (ctor \"[]\")))))\n",
     ),
+    (
+        "otest ignores extension text inside comment",
+        (
+            "(* Documents let%test_unit syntax *)\n"
+            'let%test_unit "comment ignored" = ()\n'
+        ),
+        "(zxcaml-cir 1.1 (module "
+        "(let __otest_unit_0__ (lambda (_) (ctor \"()\"))) "
+        "(let __otest_registry__ "
+        "(ctor \"::\" (tuple (items (const-string \"comment ignored\") "
+        "(var __otest_unit_0__))) (ctor \"[]\")))))\n",
+    ),
+    (
+        "otest ignores extension text inside nested comments",
+        (
+            "(* outer (* inner has let%foo *) closes *)\n"
+            'let%test_unit "nested comments ignored" = assert (1 = 1)\n'
+        ),
+        "(zxcaml-cir 1.1 (module "
+        "(let __otest_unit_0__ (lambda (_) "
+        "(Assert (prim \"=\" (const-int 1) (const-int 1))))) "
+        "(let __otest_registry__ "
+        "(ctor \"::\" (tuple (items (const-string \"nested comments ignored\") "
+        "(var __otest_unit_0__))) (ctor \"[]\")))))\n",
+    ),
 ]
 
 
