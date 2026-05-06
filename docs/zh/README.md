@@ -129,7 +129,7 @@ Anchor-compatible IDL。
 - **Solana syscalls：** logging、`sol_log_64`、pubkey logging、SHA-256/Keccak、Clock/Rent sysvars 和 remaining compute units 都通过 `external` declarations 直接绑定到 Zig runtime symbols
 - **External declarations：** `external name : type = "zig_symbol"` 语法允许以类型安全方式直接 FFI 到 Zig runtime 函数
 - **CPI 和 PDA helpers：** 内置 `instruction` / `account_meta` records、`invoke`、`invoke_signed`、PDA helpers 和 return-data syscalls，形状贴近 Solana C ABI
-- **SPL-Token：** helper 支持和 acceptance 示例会用 source/destination/authority metas 编码 legacy Tokenkeg Transfer instructions
+- **SPL-Token：** helper 支持和 acceptance 示例覆盖 legacy Tokenkeg primitives：transfer、init_account、burn、close_account、revoke；当前 SPL primitive 示例包括 `spl_burn`、`spl_close_account` 和 `spl_revoke`
 - **no_alloc：** `omlz check --no-alloc` 运行保守的 Core IR allocation proof，失败时报告导致分配的 node
 - **IDL：** `omlz idl <file>` 发出 Anchor 0.30+ compatible JSON，包含 SHA-256 discriminators、instruction accounts/args、account types、events、errors 和 constants
 - **BPF 闭包：** 加固的一等闭包——捕获 ADT 值的闭包、多环境捕获和嵌套闭包都会 lower 成不依赖 BPF 不支持的 code-pointer relocations 的形态，并由 Solana closure acceptance tests 覆盖
@@ -141,11 +141,11 @@ Anchor-compatible IDL。
 - **Function inlining：** 小型单表达式函数（≤3 个 Core IR nodes）会带 alpha-renaming 地 inline 到 call site，触发更多 constant folding；String、ADT、Tuple 和 Record 等类型都受支持
 - **确定性：** sealed P1-P9 examples corpus 上，interpreter ≡ Zig native
 - **CI：** GitHub Actions 工作流以 `macos-latest` + `ubuntu-latest` matrix 运行 `./init.sh`、`zig build`、`zig build test`、`cargo test`（Mollusk SVM）、P3 `no_alloc` 与 IDL smoke checks、Mollusk tests，以及 examples `omlz check` corpus loop
-- **Mollusk SVM tests：** `tests/` 下有 24 个使用 Mollusk SVM v0.12.1 的 integration tests（hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet，以及 real-world zignocchio ports）
+- **Mollusk SVM tests：** `tests/` 下有 27 个使用 Mollusk SVM v0.12.1 的 integration tests（hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet、real-world zignocchio ports，以及 SPL Token primitive coverage）
 - **诊断信息：** 默认是 rustc-style 诊断，并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注
 - **LSP：** `zig build` 会安装 `omlz-lsp`，它通过 stdio JSON-RPC 提供 LSP push diagnostics
 - **Source maps：** BPF 构建会发出确定性的 source map，嵌入 `.zxcaml.srcmap`，并可用 `omlz unmap` 把 BPF PC 映回 OCaml 位置
-- **示例：** `examples/` 下 57 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion（TCO）、hackathon greeting、zignocchio-port programs、dao_voting、ata_transfer 和 order_book
+- **示例：** `examples/` 下 60 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion（TCO）、hackathon greeting、zignocchio-port programs、dao_voting、ata_transfer、order_book、spl_burn、spl_close_account 和 spl_revoke
 - **Golden/UI 测试：** Core IR/sexp snapshot 和 UI tests 通过 `zig build test` 运行
 - **安装：** `./init.sh && zig build`（见 [INSTALLING.md](./INSTALLING.md)）
 
