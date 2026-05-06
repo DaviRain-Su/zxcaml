@@ -82,6 +82,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lsp_root_module.addOptions("build_options", build_options);
+    lsp_root_module.addImport("frontend_fmt", b.createModule(.{
+        .root_source_file = b.path("src/frontend/fmt.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
 
     const lsp_exe = b.addExecutable(.{
         .name = "omlz-lsp",

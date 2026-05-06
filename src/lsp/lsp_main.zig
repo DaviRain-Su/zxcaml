@@ -7,6 +7,7 @@
 const std = @import("std");
 const Io = std.Io;
 const build_options = @import("build_options");
+const frontend_fmt = @import("frontend_fmt");
 
 pub const jsonrpc = @import("jsonrpc.zig");
 pub const protocol = @import("protocol.zig");
@@ -231,6 +232,16 @@ fn handleMessage(
         return;
     }
 
+    if (std.mem.eql(u8, method, "textDocument/formatting")) {
+        if (id) |request_id| try handleFormatting(allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "textDocument/rangeFormatting")) {
+        if (id) |request_id| try handleRangeFormatting(allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
     if (std.mem.eql(u8, method, "textDocument/codeLens")) {
         if (id) |request_id| try handleCodeLens(allocator, writer, object.get("params") orelse .null, state, request_id);
         return;
@@ -279,6 +290,104 @@ fn handleDidChange(
 
     try state.putDocument(uri, text);
     try publishDiagnosticsForText(io, allocator, writer, state, uri, text);
+}
+
+const LspPosition = struct {
+    line: u32,
+    character: u32,
+};
+
+const LspRange = struct {
+    start: LspPosition,
+    end: LspPosition,
+};
+
+fn handleFormatting(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    const text = state.documents.get(uri) orelse {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+
+    if (formattingInputMalformed(text)) {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    }
+
+    const formatted = frontend_fmt.formatAlloc(allocator, text) catch {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+    defer allocator.free(formatted);
+
+    if (std.mem.eql(u8, text, formatted)) {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    }
+
+    try writeSingleTextEditResponse(allocator, writer, id, fullDocumentRange(text), formatted);
+}
+
+fn handleRangeFormatting(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    const text = state.documents.get(uri) orelse {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+    const lsp_range = parseRange(try objectField(params_value, "range")) catch {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+    const start_offset = byteOffsetForPosition(text, lsp_range.start) catch {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+    const end_offset = byteOffsetForPosition(text, lsp_range.end) catch {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+    if (end_offset < start_offset) {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    }
+
+    const selected = text[start_offset..end_offset];
+    if (formattingInputMalformed(selected)) {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    }
+
+    const formatted_owned = frontend_fmt.formatAlloc(allocator, selected) catch {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    };
+    defer allocator.free(formatted_owned);
+
+    var replacement = formatted_owned;
+    if (!endsWithLineBreak(selected) and std.mem.endsWith(u8, replacement, "\n")) {
+        replacement = replacement[0 .. replacement.len - 1];
+    }
+
+    if (std.mem.eql(u8, selected, replacement)) {
+        try writeEmptyTextEditResponse(allocator, writer, id);
+        return;
+    }
+
+    try writeSingleTextEditResponse(allocator, writer, id, lsp_range, replacement);
 }
 
 fn handleCodeLens(
@@ -353,6 +462,131 @@ fn arrayField(value: std.json.Value, name: []const u8) !std.json.Array {
     const field = value.object.get(name) orelse return error.InvalidLspParams;
     if (field != .array) return error.InvalidLspParams;
     return field.array;
+}
+
+fn u32Field(value: std.json.Value, name: []const u8) !u32 {
+    if (value != .object) return error.InvalidLspParams;
+    const field = value.object.get(name) orelse return error.InvalidLspParams;
+    if (field != .integer) return error.InvalidLspParams;
+    if (field.integer < 0 or field.integer > std.math.maxInt(u32)) return error.InvalidLspParams;
+    return @intCast(field.integer);
+}
+
+fn parsePosition(value: std.json.Value) !LspPosition {
+    return .{
+        .line = try u32Field(value, "line"),
+        .character = try u32Field(value, "character"),
+    };
+}
+
+fn parseRange(value: std.json.Value) !LspRange {
+    return .{
+        .start = try parsePosition(try objectField(value, "start")),
+        .end = try parsePosition(try objectField(value, "end")),
+    };
+}
+
+fn fullDocumentRange(text: []const u8) LspRange {
+    return .{
+        .start = .{ .line = 0, .character = 0 },
+        .end = endPosition(text),
+    };
+}
+
+fn endPosition(text: []const u8) LspPosition {
+    var position: LspPosition = .{ .line = 0, .character = 0 };
+    for (text) |byte| {
+        if (byte == '\n') {
+            position.line += 1;
+            position.character = 0;
+        } else {
+            position.character += 1;
+        }
+    }
+    return position;
+}
+
+fn byteOffsetForPosition(text: []const u8, target: LspPosition) !usize {
+    var current: LspPosition = .{ .line = 0, .character = 0 };
+    for (text, 0..) |byte, index| {
+        if (current.line == target.line and current.character == target.character) return index;
+        if (byte == '\n') {
+            current.line += 1;
+            current.character = 0;
+        } else {
+            current.character += 1;
+        }
+    }
+    if (current.line == target.line and current.character == target.character) return text.len;
+    return error.InvalidLspRange;
+}
+
+fn endsWithLineBreak(text: []const u8) bool {
+    return std.mem.endsWith(u8, text, "\n") or std.mem.endsWith(u8, text, "\r\n");
+}
+
+fn formattingInputMalformed(text: []const u8) bool {
+    var paren_depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var brace_depth: usize = 0;
+    var comment_depth: usize = 0;
+    var in_string = false;
+    var in_char = false;
+    var escaped = false;
+    var index: usize = 0;
+
+    while (index < text.len) : (index += 1) {
+        const byte = text[index];
+        if (in_string or in_char) {
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\') {
+                escaped = true;
+            } else if (in_string and byte == '"') {
+                in_string = false;
+            } else if (in_char and byte == '\'') {
+                in_char = false;
+            }
+            continue;
+        }
+
+        if (comment_depth > 0) {
+            if (index + 1 < text.len and byte == '(' and text[index + 1] == '*') {
+                comment_depth += 1;
+                index += 1;
+            } else if (index + 1 < text.len and byte == '*' and text[index + 1] == ')') {
+                comment_depth -= 1;
+                index += 1;
+            }
+            continue;
+        }
+
+        if (index + 1 < text.len and byte == '(' and text[index + 1] == '*') {
+            comment_depth += 1;
+            index += 1;
+        } else if (byte == '"') {
+            in_string = true;
+        } else if (byte == '\'') {
+            in_char = true;
+        } else if (byte == '(') {
+            paren_depth += 1;
+        } else if (byte == ')') {
+            if (paren_depth == 0) return true;
+            paren_depth -= 1;
+        } else if (byte == '[') {
+            bracket_depth += 1;
+        } else if (byte == ']') {
+            if (bracket_depth == 0) return true;
+            bracket_depth -= 1;
+        } else if (byte == '{') {
+            brace_depth += 1;
+        } else if (byte == '}') {
+            if (brace_depth == 0) return true;
+            brace_depth -= 1;
+        }
+    }
+
+    return in_string or in_char or comment_depth != 0 or paren_depth != 0 or bracket_depth != 0 or brace_depth != 0;
 }
 
 fn collectTestBindings(allocator: std.mem.Allocator, text: []const u8) ![]TestBinding {
@@ -811,13 +1045,54 @@ fn writeInitializeResponse(
 
     try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
     try std.json.Stringify.value(id, .{}, &body.writer);
-    try body.writer.writeAll(",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"diagnosticProvider\":null,\"codeLensProvider\":{},\"executeCommandProvider\":{\"commands\":[\"omlz.runTest\"]}},\"serverInfo\":{\"name\":");
+    try body.writer.writeAll(",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"diagnosticProvider\":null,\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":true,\"codeLensProvider\":{},\"executeCommandProvider\":{\"commands\":[\"omlz.runTest\"]}},\"serverInfo\":{\"name\":");
     try std.json.Stringify.value(protocol.server_name, .{}, &body.writer);
     try body.writer.writeAll(",\"version\":");
     try std.json.Stringify.value(build_options.version, .{}, &body.writer);
     try body.writer.writeAll("}}}");
 
     try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeEmptyTextEditResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":[]}");
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeSingleTextEditResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+    range: LspRange,
+    new_text: []const u8,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":[{\"range\":");
+    try writeRangeJson(&body.writer, range);
+    try body.writer.writeAll(",\"newText\":");
+    try std.json.Stringify.value(new_text, .{}, &body.writer);
+    try body.writer.writeAll("}]}");
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeRangeJson(writer: *Io.Writer, range: LspRange) !void {
+    try writer.print(
+        "{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}",
+        .{ range.start.line, range.start.character, range.end.line, range.end.character },
+    );
 }
 
 fn writeNullResultResponse(
