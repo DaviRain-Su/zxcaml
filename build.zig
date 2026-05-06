@@ -161,6 +161,16 @@ pub fn build(b: *std.Build) void {
     });
     const run_runtime_syscalls_tests = b.addRunArtifact(runtime_syscalls_tests);
 
+    const runtime_sysvar_test_module = b.createModule(.{
+        .root_source_file = b.path("runtime/zig/sysvar.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const runtime_sysvar_tests = b.addTest(.{
+        .root_module = runtime_sysvar_test_module,
+    });
+    const run_runtime_sysvar_tests = b.addRunArtifact(runtime_sysvar_tests);
+
     const runtime_cpi_test_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/cpi.zig"),
         .target = target,
@@ -720,6 +730,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_runtime_arena_tests.step);
     test_step.dependOn(&run_runtime_account_tests.step);
     test_step.dependOn(&run_runtime_syscalls_tests.step);
+    test_step.dependOn(&run_runtime_sysvar_tests.step);
     test_step.dependOn(&run_runtime_cpi_tests.step);
     test_step.dependOn(&run_runtime_spl_token_tests.step);
     test_step.dependOn(&run_runtime_ata_tests.step);

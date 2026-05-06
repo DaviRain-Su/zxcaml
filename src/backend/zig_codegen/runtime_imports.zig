@@ -51,6 +51,14 @@ pub fn emitExternalAppExpr(
         try append(out, allocator, ")");
         return;
     }
+    if (std.mem.eql(u8, external.symbol, "sysvar.readClock") and app.args.len == 1) {
+        try emitSysvarClockFromAccountExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
+    if (std.mem.eql(u8, external.symbol, "sysvar.readRent") and app.args.len == 1) {
+        try emitSysvarRentFromAccountExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
 
     if (externalReturnIsBytes(external)) {
         const block_id = ctx.next_block_id;
@@ -1307,6 +1315,54 @@ pub fn emitSyscallClockExpr(
     try appendPrint(out, allocator, "const omlz_clock_{d} = syscalls.sol_get_clock_sysvar();\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "break :blk{d} {s}{{ .slot = @intCast(omlz_clock_{d}.slot), .epoch_start_timestamp = @intCast(omlz_clock_{d}.epoch_start_timestamp), .epoch = @intCast(omlz_clock_{d}.epoch), .leader_schedule_epoch = @intCast(omlz_clock_{d}.leader_schedule_epoch), .unix_timestamp = @intCast(omlz_clock_{d}.unix_timestamp) }};\n", .{ block_id, clock_ty, block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitSysvarClockFromAccountExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const clock_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(clock_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_clock_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_clock_{d} = sysvar.readClock(omlz_clock_data_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .slot = @intCast(omlz_clock_{d}.slot), .epoch_start_timestamp = @intCast(omlz_clock_{d}.epoch_start_timestamp), .epoch = @intCast(omlz_clock_{d}.epoch), .leader_schedule_epoch = @intCast(omlz_clock_{d}.leader_schedule_epoch), .unix_timestamp = @intCast(omlz_clock_{d}.unix_timestamp) }};\n", .{ block_id, clock_ty, block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitSysvarRentFromAccountExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const rent_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(rent_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_rent_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_rent_{d} = sysvar.readRent(omlz_rent_data_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .lamports_per_byte_year = @intCast(omlz_rent_{d}.lamports_per_byte_year), .exemption_threshold = @intFromFloat(omlz_rent_{d}.exemption_threshold), .burn_percent = @intCast(omlz_rent_{d}.burn_percent) }};\n", .{ block_id, rent_ty, block_id, block_id, block_id });
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
 }

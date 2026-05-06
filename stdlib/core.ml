@@ -48,6 +48,18 @@ type clock = {
   unix_timestamp : int;
 }
 
+type rent = {
+  lamports_per_byte_year : int;
+  exemption_threshold : int;
+  burn_percent : int;
+}
+
+type account_data = bytes
+
+type clock_record = clock
+
+type rent_record = rent
+
 module Option = struct
   let map f = function None -> None | Some x -> Some (f x)
 
@@ -470,6 +482,12 @@ module Crypto = struct
 
   external secp256k1_recover : bytes -> int -> bytes -> bytes
     = "sol_secp256k1_recover"
+end
+
+module Sysvar = struct
+  external clock_from_account : account_data -> clock_record = "sysvar.readClock"
+
+  external rent_from_account : account_data -> rent_record = "sysvar.readRent"
 end
 
 module Pubkey = struct

@@ -288,6 +288,10 @@ let builtin_clock_field_names =
       "unix_timestamp";
     ]
 
+let builtin_rent_field_names =
+  StringSet.of_list
+    [ "lamports_per_byte_year"; "exemption_threshold"; "burn_percent" ]
+
 let initial_type_env =
   {
     constructors =
@@ -348,6 +352,26 @@ let builtin_crypto_secp256k1_recover_external_decl =
              (builtin_external_arrow (builtin_external_type_ref "bytes")
                 (builtin_external_type_ref "bytes")));
       external_symbol = "sol_secp256k1_recover_alloc";
+    }
+
+let builtin_sysvar_clock_from_account_external_decl =
+  External_decl
+    {
+      external_name = "Sysvar.clock_from_account";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_type_ref "clock");
+      external_symbol = "sysvar.readClock";
+    }
+
+let builtin_sysvar_rent_from_account_external_decl =
+  External_decl
+    {
+      external_name = "Sysvar.rent_from_account";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_type_ref "rent");
+      external_symbol = "sysvar.readRent";
     }
 
 let builtin_account_record_decl =
@@ -431,6 +455,21 @@ let builtin_clock_record_decl =
           builtin_record_field "epoch" (builtin_type_ref "int");
           builtin_record_field "leader_schedule_epoch" (builtin_type_ref "int");
           builtin_record_field "unix_timestamp" (builtin_type_ref "int");
+        ];
+      record_is_recursive = false;
+      record_is_account = false;
+    }
+
+let builtin_rent_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "rent";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "lamports_per_byte_year" (builtin_type_ref "int");
+          builtin_record_field "exemption_threshold" (builtin_type_ref "int");
+          builtin_record_field "burn_percent" (builtin_type_ref "int");
         ];
       record_is_recursive = false;
       record_is_account = false;
@@ -1518,6 +1557,10 @@ let add_builtin_record_decls decls =
     decls_need_builtin_record ~type_name:"clock"
       ~field_names:builtin_clock_field_names decls
   in
+  let needs_rent =
+    decls_need_builtin_record ~type_name:"rent"
+      ~field_names:builtin_rent_field_names decls
+  in
   let needs_error =
     decls_need_builtin_record ~type_name:"error"
       ~field_names:builtin_error_field_names decls
@@ -1544,6 +1587,7 @@ let add_builtin_record_decls decls =
         (needs_account_meta, builtin_account_meta_record_decl);
         (needs_instruction, builtin_instruction_record_decl);
         (needs_clock, builtin_clock_record_decl);
+        (needs_rent, builtin_rent_record_decl);
       ]
   in
   builtins @ decls
@@ -1557,12 +1601,23 @@ let add_builtin_external_decls decls =
     (not (List.exists (decl_defines_external "Crypto.secp256k1_recover") decls))
     && List.exists (decl_uses_var "Crypto.secp256k1_recover") decls
   in
+  let needs_sysvar_clock_from_account =
+    (not (List.exists (decl_defines_external "Sysvar.clock_from_account") decls))
+    && List.exists (decl_uses_var "Sysvar.clock_from_account") decls
+  in
+  let needs_sysvar_rent_from_account =
+    (not (List.exists (decl_defines_external "Sysvar.rent_from_account") decls))
+    && List.exists (decl_uses_var "Sysvar.rent_from_account") decls
+  in
   let builtins =
     List.filter_map
       (fun (needed, decl) -> if needed then Some decl else None)
       [
         (needs_blake3, builtin_crypto_blake3_external_decl);
         (needs_secp256k1_recover, builtin_crypto_secp256k1_recover_external_decl);
+        ( needs_sysvar_clock_from_account,
+          builtin_sysvar_clock_from_account_external_decl );
+        (needs_sysvar_rent_from_account, builtin_sysvar_rent_from_account_external_decl);
       ]
   in
   builtins @ decls
@@ -1648,4 +1703,4 @@ let of_structure (structure : structure) =
         (env, List.rev_append item_decls acc))
       (initial_type_env, []) structure.str_items
   in
-  Module (List.rev decls |> add_builtin_record_decls |> add_builtin_external_decls)
+  Module (List.rev decls |> add_builtin_external_decls |> add_builtin_record_decls)

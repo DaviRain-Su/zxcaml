@@ -45,6 +45,7 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const runtime_panic = @import("runtime/panic.zig");
         \\const spl_token = @import("runtime/spl_token.zig");
         \\const syscalls = @import("runtime/syscalls.zig");
+        \\const sysvar = @import("runtime/sysvar.zig");
         \\
         \\
     );
