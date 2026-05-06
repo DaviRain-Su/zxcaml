@@ -25,7 +25,8 @@ const VAULT_RENT_LAMPORTS: u64 = 2_039_280;
 const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("11111111111111111111111111111111");
 const TOKEN_PROGRAM_ID: Pubkey =
     solana_pubkey::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const RENT_SYSVAR_ID: Pubkey = solana_pubkey::pubkey!("SysvarRent111111111111111111111111111111111");
+const RENT_SYSVAR_ID: Pubkey =
+    solana_pubkey::pubkey!("SysvarRent111111111111111111111111111111111");
 const NATIVE_LOADER_ID: Pubkey =
     solana_pubkey::pubkey!("NativeLoader1111111111111111111111111111111");
 
@@ -372,7 +373,10 @@ fn token_vault_test_initialize_deposit_withdraws_mocked_spl_tokens() {
                 SYSTEM_PROGRAM_ID,
                 deposit_result.resulting_accounts[4].1.clone(),
             ),
-            (RENT_SYSVAR_ID, deposit_result.resulting_accounts[5].1.clone()),
+            (
+                RENT_SYSVAR_ID,
+                deposit_result.resulting_accounts[5].1.clone(),
+            ),
         ],
     );
 

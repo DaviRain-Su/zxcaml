@@ -240,7 +240,10 @@ fn fill_data(quantity: u64) -> Vec<u8> {
 }
 
 fn post_accounts(order: Pubkey, maker: Pubkey) -> Vec<AccountMeta> {
-    vec![AccountMeta::new(order, false), AccountMeta::new(maker, true)]
+    vec![
+        AccountMeta::new(order, false),
+        AccountMeta::new(maker, true),
+    ]
 }
 
 fn fill_accounts(
@@ -284,7 +287,10 @@ fn post_then_fill_full() {
     };
     let post_result = mollusk.process_instruction(
         &post_ix,
-        &[(order, order_account()), (maker, signer_account(maker_lamports))],
+        &[
+            (order, order_account()),
+            (maker, signer_account(maker_lamports)),
+        ],
     );
     assert!(
         !post_result.program_result.is_err(),
@@ -313,7 +319,10 @@ fn post_then_fill_full() {
         &fill_ix,
         &[
             (order, order_after_post.clone()),
-            (maker_base_ata, token_account(&base_mint, &maker, base_amount)),
+            (
+                maker_base_ata,
+                token_account(&base_mint, &maker, base_amount),
+            ),
             (taker_base_ata, token_account(&base_mint, &taker, 0)),
             (
                 taker_quote_ata,
@@ -397,7 +406,10 @@ fn partial_fill_decrements() {
         &fill_ix,
         &[
             (order, post_result.resulting_accounts[0].1.clone()),
-            (maker_base_ata, token_account(&base_mint, &maker, base_amount)),
+            (
+                maker_base_ata,
+                token_account(&base_mint, &maker, base_amount),
+            ),
             (taker_base_ata, token_account(&base_mint, &taker, 0)),
             (
                 taker_quote_ata,
@@ -424,7 +436,10 @@ fn partial_fill_decrements() {
         order_base_amount(&order_after_fill.data),
         base_amount - fill_amount
     );
-    assert_eq!(token_amount(&maker_base_after.data), base_amount - fill_amount);
+    assert_eq!(
+        token_amount(&maker_base_after.data),
+        base_amount - fill_amount
+    );
     assert_eq!(token_amount(&taker_base_after.data), fill_amount);
     assert_eq!(
         token_amount(&taker_quote_after.data),

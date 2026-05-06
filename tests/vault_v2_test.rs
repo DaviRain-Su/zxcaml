@@ -271,4 +271,3 @@ fn vault_v2_test_deposit_and_withdraw_canonical_pda() {
     assert_eq!(owner_after_withdraw.lamports, initial_owner_lamports);
     assert_eq!(vault_after_withdraw.lamports, 0);
 }
-

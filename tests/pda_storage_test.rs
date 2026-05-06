@@ -283,5 +283,8 @@ fn pda_storage_test_initializes_and_updates_pda_state() {
     let storage_after_update = &update_result.resulting_accounts[0].1;
     assert_eq!(storage_after_update.owner, program_id());
     assert_eq!(&storage_after_update.data[0..32], user.as_ref());
-    assert_eq!(read_storage_value(&storage_after_update.data), updated_value);
+    assert_eq!(
+        read_storage_value(&storage_after_update.data),
+        updated_value
+    );
 }
