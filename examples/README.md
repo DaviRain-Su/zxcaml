@@ -72,3 +72,9 @@ Capability tag vocabulary: `Closure`, `ADT`, `PDA`, `CPI`, `SPL-Token`, `TCO`,
 | [`tuple_basic.ml`](./tuple_basic.ml) | ADT | — |
 | [`vault.ml`](./vault.ml) | ADT, PDA, CPI | [`examples/vault/`](https://github.com/DaviRain-Su/zignocchio/tree/main/examples/vault) |
 | [`vault_v2.ml`](./vault_v2.ml) | PDA, CPI | [`examples/vault/`](https://github.com/DaviRain-Su/zignocchio/tree/main/examples/vault) |
+
+## Tests
+
+- [`examples/tests/list_ops.ml`](./tests/list_ops.ml) — Capability tags: List ops.
+- [`examples/tests/arith_overflow.ml`](./tests/arith_overflow.ml) — Capability tags: Arith.
+- [`examples/tests/pda_helpers.ml`](./tests/pda_helpers.ml) — Capability tags: PDA helpers.
