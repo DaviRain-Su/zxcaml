@@ -13,5 +13,10 @@ pub const Method = enum {
     exit,
     textDocument_didOpen,
     textDocument_didChange,
+    textDocument_codeLens,
     textDocument_publishDiagnostics,
+    workspace_executeCommand,
+    window_logMessage,
+    window_showMessage,
+    omlz_testOutput,
 };

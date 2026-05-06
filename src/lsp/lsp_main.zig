@@ -23,6 +23,32 @@ const JsonDiagnostic = struct {
     snippet: ?[]const u8 = null,
 };
 
+const TestBinding = struct {
+    name: []const u8,
+    line: u32,
+    start_character: u32,
+    end_character: u32,
+};
+
+const TestRunStatus = union(enum) {
+    passed,
+    failed: u32,
+};
+
+const JsonTestOutput = struct {
+    type: []const u8,
+    file: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    status: ?[]const u8 = null,
+    elapsed_ms: ?i64 = null,
+    message: ?[]const u8 = null,
+    line: ?u32 = null,
+    col: ?u32 = null,
+    total: ?usize = null,
+    passed: ?usize = null,
+    failed: ?usize = null,
+};
+
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
@@ -53,6 +79,8 @@ const ServerState = struct {
     /// notification terminates with status 0 only if this flag was set.
     shutdown_received: bool = false,
     documents: std.StringHashMap([]u8),
+    test_statuses: std.StringHashMap(TestRunStatus),
+    writer_mutex: std.atomic.Mutex = .unlocked,
     next_doc_id: u64 = 0,
     temp_dir_created: bool = false,
 
@@ -60,6 +88,7 @@ const ServerState = struct {
         return .{
             .allocator = allocator,
             .documents = std.StringHashMap([]u8).init(allocator),
+            .test_statuses = std.StringHashMap(TestRunStatus).init(allocator),
         };
     }
 
@@ -70,6 +99,11 @@ const ServerState = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.documents.deinit();
+        var status_iter = self.test_statuses.iterator();
+        while (status_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.test_statuses.deinit();
     }
 
     fn putDocument(self: *ServerState, uri: []const u8, text: []const u8) !void {
@@ -83,6 +117,21 @@ const ServerState = struct {
         const owned_text = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(owned_text);
         try self.documents.put(owned_uri, owned_text);
+    }
+
+    fn updateTestStatus(self: *ServerState, uri: []const u8, name: []const u8, status: TestRunStatus) !void {
+        const key = try statusKey(self.allocator, uri, name);
+        errdefer self.allocator.free(key);
+        if (self.test_statuses.fetchRemove(key)) |entry| {
+            self.allocator.free(entry.key);
+        }
+        try self.test_statuses.put(key, status);
+    }
+
+    fn getTestStatus(self: *ServerState, allocator: std.mem.Allocator, uri: []const u8, name: []const u8) !?TestRunStatus {
+        const key = try statusKey(allocator, uri, name);
+        defer allocator.free(key);
+        return self.test_statuses.get(key);
     }
 };
 
@@ -109,6 +158,8 @@ fn runServer(io: Io) !void {
             else => return err,
         };
 
+        lockWriter(&state);
+        defer state.writer_mutex.unlock();
         try handleMessage(io, allocator, stdout_writer, body, &state);
         try stdout_writer.flush();
     }
@@ -180,7 +231,21 @@ fn handleMessage(
         return;
     }
 
+    if (std.mem.eql(u8, method, "textDocument/codeLens")) {
+        if (id) |request_id| try handleCodeLens(allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "workspace/executeCommand")) {
+        if (id) |request_id| try handleExecuteCommand(io, allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
     if (id) |request_id| try writeErrorResponse(allocator, writer, request_id, -32601, "method not found");
+}
+
+fn lockWriter(state: *ServerState) void {
+    while (!state.writer_mutex.tryLock()) std.atomic.spinLoopHint();
 }
 
 fn handleDidOpen(
@@ -216,6 +281,59 @@ fn handleDidChange(
     try publishDiagnosticsForText(io, allocator, writer, state, uri, text);
 }
 
+fn handleCodeLens(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    const text = state.documents.get(uri) orelse "";
+    const bindings = try collectTestBindings(allocator, text);
+    try writeCodeLensResponse(allocator, writer, state, id, uri, bindings);
+}
+
+fn handleExecuteCommand(
+    io: Io,
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const command = try stringField(params_value, "command");
+    if (!std.mem.eql(u8, command, "omlz.runTest")) {
+        try writeErrorResponse(allocator, writer, id, -32602, "unsupported executeCommand");
+        return;
+    }
+
+    const arguments = try arrayField(params_value, "arguments");
+    if (arguments.items.len < 2 or arguments.items[0] != .string or arguments.items[1] != .string) {
+        try writeErrorResponse(allocator, writer, id, -32602, "omlz.runTest expects [uri, name]");
+        return;
+    }
+
+    const uri = arguments.items[0].string;
+    const name = arguments.items[1].string;
+    const path = try filePathFromUri(allocator, uri);
+    defer allocator.free(path);
+
+    const owned_uri = try std.heap.page_allocator.dupe(u8, uri);
+    errdefer std.heap.page_allocator.free(owned_uri);
+    const owned_name = try std.heap.page_allocator.dupe(u8, name);
+    errdefer std.heap.page_allocator.free(owned_name);
+    const owned_path = try std.heap.page_allocator.dupe(u8, path);
+    errdefer std.heap.page_allocator.free(owned_path);
+
+    try writeNullResultResponse(allocator, writer, id);
+    try writer.flush();
+
+    const thread = try std.Thread.spawn(.{}, runTestThread, .{ io, writer, state, owned_uri, owned_name, owned_path });
+    thread.detach();
+}
+
 fn objectField(value: std.json.Value, name: []const u8) !std.json.Value {
     if (value != .object) return error.InvalidLspParams;
     const field = value.object.get(name) orelse return error.InvalidLspParams;
@@ -235,6 +353,80 @@ fn arrayField(value: std.json.Value, name: []const u8) !std.json.Array {
     const field = value.object.get(name) orelse return error.InvalidLspParams;
     if (field != .array) return error.InvalidLspParams;
     return field.array;
+}
+
+fn collectTestBindings(allocator: std.mem.Allocator, text: []const u8) ![]TestBinding {
+    var bindings = std.ArrayList(TestBinding).empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var line_index: u32 = 0;
+    while (lines.next()) |raw_line| : (line_index += 1) {
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
+        var search_start: usize = 0;
+        while (std.mem.indexOfPos(u8, line, search_start, "let%test_unit")) |let_index| {
+            const after_keyword = let_index + "let%test_unit".len;
+            var cursor = after_keyword;
+            while (cursor < line.len and (line[cursor] == ' ' or line[cursor] == '\t')) : (cursor += 1) {}
+            if (cursor >= line.len or line[cursor] != '"') {
+                search_start = after_keyword;
+                continue;
+            }
+
+            const name_start = cursor + 1;
+            cursor = name_start;
+            while (cursor < line.len) : (cursor += 1) {
+                if (line[cursor] == '\\') {
+                    cursor += 1;
+                    continue;
+                }
+                if (line[cursor] == '"') break;
+            }
+            if (cursor >= line.len) break;
+
+            try bindings.append(allocator, .{
+                .name = try allocator.dupe(u8, line[name_start..cursor]),
+                .line = line_index,
+                .start_character = @intCast(name_start),
+                .end_character = @intCast(cursor),
+            });
+            search_start = cursor + 1;
+        }
+    }
+    return bindings.toOwnedSlice(allocator);
+}
+
+fn statusKey(allocator: std.mem.Allocator, uri: []const u8, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}\x00{s}", .{ uri, name });
+}
+
+fn filePathFromUri(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
+    const prefix = "file://";
+    if (!std.mem.startsWith(u8, uri, prefix)) return error.InvalidLspParams;
+    return percentDecode(allocator, uri[prefix.len..]);
+}
+
+fn percentDecode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    var i: usize = 0;
+    while (i < encoded.len) {
+        if (encoded[i] == '%' and i + 2 < encoded.len) {
+            const hi = std.fmt.charToDigit(encoded[i + 1], 16) catch {
+                try out.append(allocator, encoded[i]);
+                i += 1;
+                continue;
+            };
+            const lo = std.fmt.charToDigit(encoded[i + 2], 16) catch {
+                try out.append(allocator, encoded[i]);
+                i += 1;
+                continue;
+            };
+            try out.append(allocator, @intCast(hi * 16 + lo));
+            i += 3;
+        } else {
+            try out.append(allocator, encoded[i]);
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn publishDiagnosticsForText(
@@ -367,6 +559,184 @@ fn isDeadPid(pid: std.posix.pid_t) bool {
     return false;
 }
 
+fn writeCodeLensResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    state: *ServerState,
+    id: std.json.Value,
+    uri: []const u8,
+    bindings: []const TestBinding,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":[");
+    for (bindings, 0..) |binding, index| {
+        if (index != 0) try body.writer.writeByte(',');
+        try body.writer.print(
+            "{{\"range\":{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}},\"command\":{{\"title\":",
+            .{ binding.line, binding.start_character, binding.line, binding.end_character },
+        );
+        const status = try state.getTestStatus(allocator, uri, binding.name);
+        try writeCodeLensTitle(&body.writer, binding.name, status);
+        try body.writer.writeAll(",\"command\":\"omlz.runTest\",\"arguments\":[");
+        try std.json.Stringify.value(uri, .{}, &body.writer);
+        try body.writer.writeByte(',');
+        try std.json.Stringify.value(binding.name, .{}, &body.writer);
+        try body.writer.writeAll("]}}");
+    }
+    try body.writer.writeAll("]}");
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeCodeLensTitle(writer: *Io.Writer, name: []const u8, status: ?TestRunStatus) !void {
+    var title = Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer title.deinit();
+
+    if (status) |known| {
+        switch (known) {
+            .passed => try title.writer.print("✓ {s}", .{name}),
+            .failed => |line| try title.writer.print("✗ {s} (line {d})", .{ name, line }),
+        }
+    } else {
+        try title.writer.print("▶ Run test \"{s}\"", .{name});
+    }
+    try std.json.Stringify.value(title.writer.buffered(), .{}, writer);
+}
+
+fn runTestThread(
+    io: Io,
+    writer: *Io.Writer,
+    state: *ServerState,
+    uri: []u8,
+    name: []u8,
+    path: []u8,
+) void {
+    defer std.heap.page_allocator.free(uri);
+    defer std.heap.page_allocator.free(name);
+    defer std.heap.page_allocator.free(path);
+
+    runTestThreadInner(io, writer, state, uri, name, path) catch |err| {
+        lockWriter(state);
+        defer state.writer_mutex.unlock();
+        writeShowMessage(std.heap.page_allocator, writer, .Error, @errorName(err)) catch {};
+        writer.flush() catch {};
+    };
+}
+
+fn runTestThreadInner(
+    io: Io,
+    writer: *Io.Writer,
+    state: *ServerState,
+    uri: []const u8,
+    name: []const u8,
+    path: []const u8,
+) !void {
+    const allocator = std.heap.page_allocator;
+    const argv = [_][]const u8{ "zig-out/bin/omlz", "test", "--filter", name, "--format=json", path };
+    const completed = try std.process.run(allocator, io, .{ .argv = &argv });
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+
+    const exit_code = testExitCode(completed.term);
+    var first_failure_name: ?[]const u8 = null;
+    var first_failure_line: ?u32 = null;
+
+    lockWriter(state);
+    defer state.writer_mutex.unlock();
+
+    var lines = std.mem.splitScalar(u8, completed.stdout, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0) continue;
+
+        try writeWindowLogMessage(allocator, writer, .Info, line);
+        try writeTestOutputNotification(allocator, writer, uri, name, line);
+
+        var parsed = std.json.parseFromSlice(JsonTestOutput, allocator, line, .{
+            .ignore_unknown_fields = true,
+        }) catch continue;
+        defer parsed.deinit();
+        if (std.mem.eql(u8, parsed.value.type, "test") and
+            parsed.value.status != null and
+            std.mem.eql(u8, parsed.value.status.?, "failed") and
+            first_failure_name == null)
+        {
+            first_failure_name = try allocator.dupe(u8, parsed.value.name orelse name);
+            first_failure_line = parsed.value.line orelse 0;
+        }
+    }
+    defer {
+        if (first_failure_name) |owned| allocator.free(owned);
+    }
+
+    if (exit_code == 0) {
+        try state.updateTestStatus(uri, name, .passed);
+    } else {
+        const failed_name = first_failure_name orelse name;
+        const failed_line = first_failure_line orelse 0;
+        try state.updateTestStatus(uri, name, .{ .failed = failed_line });
+        const message = try std.fmt.allocPrint(allocator, "{s} failed at line {d}", .{ failed_name, failed_line });
+        defer allocator.free(message);
+        try writeShowMessage(allocator, writer, .Error, message);
+    }
+
+    try writer.flush();
+}
+
+fn testExitCode(term: std.process.Child.Term) u8 {
+    return switch (term) {
+        .exited => |code| code,
+        else => 1,
+    };
+}
+
+const MessageType = enum(u8) {
+    Error = 1,
+    Warning = 2,
+    Info = 3,
+    Log = 4,
+};
+
+fn writeWindowLogMessage(allocator: std.mem.Allocator, writer: *Io.Writer, message_type: MessageType, message: []const u8) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.print("{{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{{\"type\":{d},\"message\":", .{@intFromEnum(message_type)});
+    try std.json.Stringify.value(message, .{}, &body.writer);
+    try body.writer.writeAll("}}");
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeShowMessage(allocator: std.mem.Allocator, writer: *Io.Writer, message_type: MessageType, message: []const u8) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.print("{{\"jsonrpc\":\"2.0\",\"method\":\"window/showMessage\",\"params\":{{\"type\":{d},\"message\":", .{@intFromEnum(message_type)});
+    try std.json.Stringify.value(message, .{}, &body.writer);
+    try body.writer.writeAll("}}");
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn writeTestOutputNotification(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    uri: []const u8,
+    name: []const u8,
+    line: []const u8,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"method\":\"$/omlz.testOutput\",\"params\":{\"uri\":");
+    try std.json.Stringify.value(uri, .{}, &body.writer);
+    try body.writer.writeAll(",\"name\":");
+    try std.json.Stringify.value(name, .{}, &body.writer);
+    try body.writer.writeAll(",\"line\":");
+    try std.json.Stringify.value(line, .{}, &body.writer);
+    try body.writer.writeAll("}}");
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
 fn writePublishDiagnostics(
     allocator: std.mem.Allocator,
     writer: *Io.Writer,
@@ -441,7 +811,7 @@ fn writeInitializeResponse(
 
     try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
     try std.json.Stringify.value(id, .{}, &body.writer);
-    try body.writer.writeAll(",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"diagnosticProvider\":null},\"serverInfo\":{\"name\":");
+    try body.writer.writeAll(",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"diagnosticProvider\":null,\"codeLensProvider\":{},\"executeCommandProvider\":{\"commands\":[\"omlz.runTest\"]}},\"serverInfo\":{\"name\":");
     try std.json.Stringify.value(protocol.server_name, .{}, &body.writer);
     try body.writer.writeAll(",\"version\":");
     try std.json.Stringify.value(build_options.version, .{}, &body.writer);

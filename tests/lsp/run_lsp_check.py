@@ -53,6 +53,13 @@ def recv(proc):
     return json.loads(read_exact(proc, length))
 
 
+def recv_response(proc, request_id):
+    while True:
+        msg = recv(proc)
+        if msg.get("id") == request_id:
+            return msg
+
+
 def fixture_path(name):
     return os.path.join(ROOT, "tests", "lsp", name)
 
@@ -87,6 +94,14 @@ def recv_publish_diagnostics(proc, uri):
         assert params["uri"] == uri, params
         assert isinstance(params["diagnostics"], list), params
         return params
+
+
+def open_document(proc, fixture_name, version=1):
+    uri = fixture_uri(fixture_name)
+    send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": version, "text": read_fixture(fixture_name)}}})
+    params = recv_publish_diagnostics(proc, uri)
+    assert params["diagnostics"] == [], params
+    return uri
 
 
 def assert_no_lsp_process():
@@ -246,6 +261,155 @@ def shutdown():
             os.unlink(sentinel)
 
 
+def request_codelens(proc, uri, request_id):
+    send(proc, {"jsonrpc": "2.0", "id": request_id, "method": "textDocument/codeLens", "params": {"textDocument": {"uri": uri}}})
+    response = recv_response(proc, request_id)
+    assert "result" in response, response
+    assert isinstance(response["result"], list), response
+    return response["result"]
+
+
+def assert_run_lens(lens, uri, name, title_prefix="▶ Run test"):
+    rng = lens["range"]
+    assert rng["start"]["line"] >= 0, lens
+    assert rng["start"]["character"] >= 0, lens
+    assert rng["end"]["line"] >= rng["start"]["line"], lens
+    command = lens["command"]
+    assert command["title"].startswith(title_prefix), command
+    assert command["command"] == "omlz.runTest", command
+    assert command["arguments"] == [uri, name], command
+
+
+def codelens():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "codelens_tests.ml")
+        lenses = request_codelens(proc, uri, 20)
+        names = [lens["command"]["arguments"][1] for lens in lenses]
+        assert names == ["lsp codelens first passes", "lsp codelens second fails"], lenses
+        assert_run_lens(lenses[0], uri, "lsp codelens first passes")
+        assert_run_lens(lenses[1], uri, "lsp codelens second fails")
+    finally:
+        stop(proc)
+
+
+def codelens_zero():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "ok.ml")
+        lenses = request_codelens(proc, uri, 21)
+        assert lenses == [], lenses
+    finally:
+        stop(proc)
+
+
+def recv_executecommand(proc, request_id, *, expect_failure):
+    saw_response = False
+    saw_log = False
+    saw_custom_output = False
+    saw_summary = False
+    saw_show_error = False
+    first_failure = None
+    deadline = time.time() + 5.0
+
+    while time.time() < deadline:
+        msg = recv(proc)
+        if msg.get("id") == request_id:
+            assert msg.get("result") is None, msg
+            saw_response = True
+            continue
+
+        method = msg.get("method")
+        if method == "window/logMessage":
+            line = msg["params"]["message"]
+            json.loads(line)
+            saw_log = True
+        elif method == "$/omlz.testOutput":
+            line = msg["params"]["line"]
+            payload = json.loads(line)
+            saw_custom_output = True
+            if payload.get("type") == "test" and payload.get("status") == "failed" and first_failure is None:
+                first_failure = payload
+            if payload.get("type") == "summary":
+                saw_summary = True
+        elif method == "window/showMessage":
+            assert msg["params"]["type"] == 1, msg
+            saw_show_error = True
+
+        if saw_response and saw_log and saw_custom_output and saw_summary and (not expect_failure or saw_show_error):
+            break
+
+    assert saw_response, "missing executeCommand response"
+    assert saw_log, "missing window/logMessage stream"
+    assert saw_custom_output, "missing $/omlz.testOutput stream"
+    assert saw_summary, "missing summary output"
+    if expect_failure:
+        assert saw_show_error, "missing error showMessage"
+        assert first_failure is not None, "missing first failing test output"
+        assert first_failure["name"] == "lsp codelens second fails", first_failure
+        assert first_failure["line"] >= 1, first_failure
+    else:
+        assert first_failure is None, first_failure
+
+
+def executecommand():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "codelens_tests.ml")
+        send(proc, {"jsonrpc": "2.0", "id": 30, "method": "workspace/executeCommand", "params": {"command": "omlz.runTest", "arguments": [uri, "lsp codelens first passes"]}})
+        recv_executecommand(proc, 30, expect_failure=False)
+        lenses = request_codelens(proc, uri, 31)
+        first = next(lens for lens in lenses if lens["command"]["arguments"][1] == "lsp codelens first passes")
+        assert first["command"]["title"] == "✓ lsp codelens first passes", first
+    finally:
+        stop(proc)
+
+
+def executecommand_failure():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "codelens_tests.ml")
+        send(proc, {"jsonrpc": "2.0", "id": 40, "method": "workspace/executeCommand", "params": {"command": "omlz.runTest", "arguments": [uri, "lsp codelens second fails"]}})
+        recv_executecommand(proc, 40, expect_failure=True)
+        lenses = request_codelens(proc, uri, 41)
+        failed = next(lens for lens in lenses if lens["command"]["arguments"][1] == "lsp codelens second fails")
+        assert failed["command"]["title"].startswith("✗ lsp codelens second fails (line "), failed
+    finally:
+        stop(proc)
+
+
+def codelens_latency():
+    uri = fixture_uri("codelens_tests.ml")
+    text = read_fixture("codelens_tests.ml")
+    measured_ms = []
+    raw_samples_ms = []
+    proc = start_and_initialize()
+    try:
+        send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": 1, "text": text}}})
+        params = recv_publish_diagnostics(proc, uri)
+        assert params["diagnostics"] == [], params
+
+        start = time.perf_counter()
+        lenses = request_codelens(proc, uri, 50)
+        raw_samples_ms.append((time.perf_counter() - start) * 1000.0)
+        assert len(lenses) == 2, lenses
+
+        for run in range(5):
+            start = time.perf_counter()
+            lenses = request_codelens(proc, uri, 51 + run)
+            sample_ms = (time.perf_counter() - start) * 1000.0
+            measured_ms.append(sample_ms)
+            raw_samples_ms.append(sample_ms)
+            assert len(lenses) == 2, lenses
+    finally:
+        stop(proc)
+
+    sorted_samples = sorted(measured_ms)
+    median_ms = sorted_samples[len(sorted_samples) // 2]
+    print(f"codelens_latency_median={median_ms:.1f}ms")
+    assert median_ms <= 100.0, f"raw_samples_ms={raw_samples_ms}"
+
+
 def latency():
     # Fork-per-request latency budget and expected ~80 ms steady-state are cited in
     # mission-internal/p9-investigation/report.md §3 and Appendix C.
@@ -289,6 +453,11 @@ def all_checks():
         "didchange_roundtrip",
         "shutdown",
         "latency",
+        "codelens",
+        "codelens_zero",
+        "executecommand",
+        "executecommand_failure",
+        "codelens_latency",
     ]:
         try:
             commands[name]()
@@ -311,6 +480,11 @@ if __name__ == "__main__":
         "didchange_roundtrip": didchange_roundtrip,
         "shutdown": shutdown,
         "latency": latency,
+        "codelens": codelens,
+        "codelens_zero": codelens_zero,
+        "executecommand": executecommand,
+        "executecommand_failure": executecommand_failure,
+        "codelens_latency": codelens_latency,
         "all": all_checks,
     }
     assert len(sys.argv) == 2 and sys.argv[1] in commands, "usage: run_lsp_check.py " + "|".join(commands)
