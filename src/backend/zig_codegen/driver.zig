@@ -36,6 +36,9 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\const escrow_full = @import("runtime/programs/escrow_full.zig");
         \\const dao_voting = @import("runtime/programs/dao_voting.zig");
         \\const ata_transfer = @import("runtime/programs/ata_transfer.zig");
+        \\const spl_burn = @import("runtime/programs/spl_burn.zig");
+        \\const spl_close_account = @import("runtime/programs/spl_close_account.zig");
+        \\const spl_revoke = @import("runtime/programs/spl_revoke.zig");
         \\const order_book = @import("runtime/programs/order_book.zig");
         \\const ata = @import("runtime/programs/ata.zig");
         \\const prelude = @import("runtime/prelude.zig");
@@ -90,5 +93,8 @@ pub fn isCounterHelperName(name: []const u8) bool {
         std.mem.eql(u8, name, "escrow_full_process") or
         std.mem.eql(u8, name, "dao_voting_process") or
         std.mem.eql(u8, name, "ata_transfer_process") or
+        std.mem.eql(u8, name, "spl_burn_process") or
+        std.mem.eql(u8, name, "spl_close_account_process") or
+        std.mem.eql(u8, name, "spl_revoke_process") or
         std.mem.eql(u8, name, "order_book_process");
 }

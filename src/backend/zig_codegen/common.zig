@@ -163,6 +163,9 @@ pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
                         std.mem.eql(u8, callee.name, "escrow_full_process") or
                         std.mem.eql(u8, callee.name, "dao_voting_process") or
                         std.mem.eql(u8, callee.name, "ata_transfer_process") or
+                        std.mem.eql(u8, callee.name, "spl_burn_process") or
+                        std.mem.eql(u8, callee.name, "spl_close_account_process") or
+                        std.mem.eql(u8, callee.name, "spl_revoke_process") or
                         std.mem.eql(u8, callee.name, "order_book_process")) break :blk true;
                 },
                 else => {},

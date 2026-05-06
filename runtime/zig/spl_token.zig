@@ -25,6 +25,24 @@ pub const initialize_account_discriminator: u8 = 1;
 pub const initialize_account_instruction_data_len: usize = 1;
 /// SPL Token InitializeAccount account count: account, mint, owner, rent sysvar.
 pub const initialize_account_account_count: usize = 4;
+/// SPL Token Burn instruction discriminator.
+pub const burn_discriminator: u8 = 8;
+/// SPL Token Burn instruction data length: one u8 discriminator plus u64 amount.
+pub const burn_instruction_data_len: usize = 9;
+/// SPL Token Burn account count: account, mint, authority.
+pub const burn_account_count: usize = 3;
+/// SPL Token CloseAccount instruction discriminator.
+pub const close_account_discriminator: u8 = 9;
+/// SPL Token CloseAccount instruction data length: one u8 discriminator.
+pub const close_account_instruction_data_len: usize = 1;
+/// SPL Token CloseAccount account count: account, destination, authority.
+pub const close_account_account_count: usize = 3;
+/// SPL Token Revoke instruction discriminator.
+pub const revoke_discriminator: u8 = 5;
+/// SPL Token Revoke instruction data length: one u8 discriminator.
+pub const revoke_instruction_data_len: usize = 1;
+/// SPL Token Revoke account count: source, authority.
+pub const revoke_account_count: usize = 2;
 /// Canonical packed SPL Token account length.
 pub const token_account_len: usize = 165;
 const max_cpi_account_infos: usize = 4;
@@ -147,6 +165,110 @@ pub fn initializeAccountInstruction(
 ) cpi.SolInstruction {
     metas.* = initializeAccountMetas(account_pubkey, mint, owner, rent_sysvar);
     data.* = encodeInitializeAccount();
+    return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
+}
+
+/// Encodes SPL Token Burn instruction data into a fixed-size array.
+pub fn encodeBurn(amount: u64) [burn_instruction_data_len]u8 {
+    var out: [burn_instruction_data_len]u8 = undefined;
+    _ = encodeBurnInto(out[0..], amount) catch unreachable;
+    return out;
+}
+
+/// Encodes SPL Token Burn instruction data into `out` and returns the written prefix.
+pub fn encodeBurnInto(out: []u8, amount: u64) Error![]const u8 {
+    if (out.len < burn_instruction_data_len) return error.OutputTooShort;
+    out[0] = burn_discriminator;
+    writeU64Le(out[1..burn_instruction_data_len], amount);
+    return out[0..burn_instruction_data_len];
+}
+
+/// Encodes SPL Token CloseAccount instruction data into a fixed-size array.
+pub fn encodeCloseAccount() [close_account_instruction_data_len]u8 {
+    return .{close_account_discriminator};
+}
+
+/// Encodes SPL Token CloseAccount instruction data into `out` and returns the written prefix.
+pub fn encodeCloseAccountInto(out: []u8) Error![]const u8 {
+    if (out.len < close_account_instruction_data_len) return error.OutputTooShort;
+    out[0] = close_account_discriminator;
+    return out[0..close_account_instruction_data_len];
+}
+
+/// Encodes SPL Token Revoke instruction data into a fixed-size array.
+pub fn encodeRevoke() [revoke_instruction_data_len]u8 {
+    return .{revoke_discriminator};
+}
+
+/// Encodes SPL Token Revoke instruction data into `out` and returns the written prefix.
+pub fn encodeRevokeInto(out: []u8) Error![]const u8 {
+    if (out.len < revoke_instruction_data_len) return error.OutputTooShort;
+    out[0] = revoke_discriminator;
+    return out[0..revoke_instruction_data_len];
+}
+
+/// Builds account metas for Burn: account writable, mint writable, authority signer.
+pub fn burnAccountMetas(account_pubkey: *const Pubkey, mint: *const Pubkey, authority: *const Pubkey) [burn_account_count]cpi.SolAccountMeta {
+    return .{
+        .{ .pubkey = account_pubkey, .is_writable = 1, .is_signer = 0 },
+        .{ .pubkey = mint, .is_writable = 1, .is_signer = 0 },
+        .{ .pubkey = authority, .is_writable = 0, .is_signer = 1 },
+    };
+}
+
+/// Builds an SPL Token Burn instruction using caller-owned meta/data buffers.
+pub fn burnInstruction(
+    account_pubkey: *const Pubkey,
+    mint: *const Pubkey,
+    authority: *const Pubkey,
+    amount: u64,
+    metas: *[burn_account_count]cpi.SolAccountMeta,
+    data: *[burn_instruction_data_len]u8,
+) cpi.SolInstruction {
+    metas.* = burnAccountMetas(account_pubkey, mint, authority);
+    data.* = encodeBurn(amount);
+    return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
+}
+
+/// Builds account metas for CloseAccount: account writable, destination writable, authority signer.
+pub fn closeAccountAccountMetas(account_pubkey: *const Pubkey, destination: *const Pubkey, authority: *const Pubkey) [close_account_account_count]cpi.SolAccountMeta {
+    return .{
+        .{ .pubkey = account_pubkey, .is_writable = 1, .is_signer = 0 },
+        .{ .pubkey = destination, .is_writable = 1, .is_signer = 0 },
+        .{ .pubkey = authority, .is_writable = 0, .is_signer = 1 },
+    };
+}
+
+/// Builds an SPL Token CloseAccount instruction using caller-owned meta/data buffers.
+pub fn closeAccountInstruction(
+    account_pubkey: *const Pubkey,
+    destination: *const Pubkey,
+    authority: *const Pubkey,
+    metas: *[close_account_account_count]cpi.SolAccountMeta,
+    data: *[close_account_instruction_data_len]u8,
+) cpi.SolInstruction {
+    metas.* = closeAccountAccountMetas(account_pubkey, destination, authority);
+    data.* = encodeCloseAccount();
+    return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
+}
+
+/// Builds account metas for Revoke: source writable, authority signer.
+pub fn revokeAccountMetas(source: *const Pubkey, authority: *const Pubkey) [revoke_account_count]cpi.SolAccountMeta {
+    return .{
+        .{ .pubkey = source, .is_writable = 1, .is_signer = 0 },
+        .{ .pubkey = authority, .is_writable = 0, .is_signer = 1 },
+    };
+}
+
+/// Builds an SPL Token Revoke instruction using caller-owned meta/data buffers.
+pub fn revokeInstruction(
+    source: *const Pubkey,
+    authority: *const Pubkey,
+    metas: *[revoke_account_count]cpi.SolAccountMeta,
+    data: *[revoke_instruction_data_len]u8,
+) cpi.SolInstruction {
+    metas.* = revokeAccountMetas(source, authority);
+    data.* = encodeRevoke();
     return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
@@ -408,6 +530,120 @@ test "SPL Token InitializeAccount builder uses canonical metas and data" {
     try std.testing.expect(metas[3].pubkey == &rent_sysvar);
     try std.testing.expectEqual(@as(u8, 0), metas[3].is_writable);
     try std.testing.expectEqual(@as(u8, 0), metas[3].is_signer);
+}
+
+test "SPL Token Burn instruction encoding is discriminator plus u64 little endian" {
+    const encoded = encodeBurn(0x0102_0304_0506_0708);
+    try std.testing.expectEqual(@as(usize, burn_instruction_data_len), encoded.len);
+    try std.testing.expectEqualSlices(u8, &.{ 8, 8, 7, 6, 5, 4, 3, 2, 1 }, &encoded);
+
+    var out: [burn_instruction_data_len]u8 = undefined;
+    const written = try encodeBurnInto(out[0..], 500);
+    try std.testing.expectEqualSlices(u8, &.{ 8, 0xf4, 0x01, 0, 0, 0, 0, 0, 0 }, written);
+    try std.testing.expectError(error.OutputTooShort, encodeBurnInto(out[0 .. burn_instruction_data_len - 1], 1));
+}
+
+test "SPL Token CloseAccount instruction encoding is discriminator only" {
+    const encoded = encodeCloseAccount();
+    try std.testing.expectEqual(@as(usize, close_account_instruction_data_len), encoded.len);
+    try std.testing.expectEqualSlices(u8, &.{9}, &encoded);
+
+    var out: [close_account_instruction_data_len]u8 = undefined;
+    const written = try encodeCloseAccountInto(out[0..]);
+    try std.testing.expectEqualSlices(u8, &.{9}, written);
+    try std.testing.expectError(error.OutputTooShort, encodeCloseAccountInto(out[0..0]));
+}
+
+test "SPL Token Revoke instruction encoding is discriminator only" {
+    const encoded = encodeRevoke();
+    try std.testing.expectEqual(@as(usize, revoke_instruction_data_len), encoded.len);
+    try std.testing.expectEqualSlices(u8, &.{5}, &encoded);
+
+    var out: [revoke_instruction_data_len]u8 = undefined;
+    const written = try encodeRevokeInto(out[0..]);
+    try std.testing.expectEqualSlices(u8, &.{5}, written);
+    try std.testing.expectError(error.OutputTooShort, encodeRevokeInto(out[0..0]));
+}
+
+test "SPL Token Burn account metas use account mint authority flags" {
+    var account_pubkey: Pubkey = [_]u8{1} ** pubkey_len;
+    var mint: Pubkey = [_]u8{2} ** pubkey_len;
+    var authority: Pubkey = [_]u8{3} ** pubkey_len;
+
+    const metas = burnAccountMetas(&account_pubkey, &mint, &authority);
+    try std.testing.expectEqual(@as(usize, burn_account_count), metas.len);
+    try std.testing.expect(metas[0].pubkey == &account_pubkey);
+    try std.testing.expectEqual(@as(u8, 1), metas[0].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[0].is_signer);
+    try std.testing.expect(metas[1].pubkey == &mint);
+    try std.testing.expectEqual(@as(u8, 1), metas[1].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[1].is_signer);
+    try std.testing.expect(metas[2].pubkey == &authority);
+    try std.testing.expectEqual(@as(u8, 0), metas[2].is_writable);
+    try std.testing.expectEqual(@as(u8, 1), metas[2].is_signer);
+}
+
+test "SPL Token CloseAccount account metas use account destination authority flags" {
+    var account_pubkey: Pubkey = [_]u8{1} ** pubkey_len;
+    var destination: Pubkey = [_]u8{2} ** pubkey_len;
+    var authority: Pubkey = [_]u8{3} ** pubkey_len;
+
+    const metas = closeAccountAccountMetas(&account_pubkey, &destination, &authority);
+    try std.testing.expectEqual(@as(usize, close_account_account_count), metas.len);
+    try std.testing.expect(metas[0].pubkey == &account_pubkey);
+    try std.testing.expectEqual(@as(u8, 1), metas[0].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[0].is_signer);
+    try std.testing.expect(metas[1].pubkey == &destination);
+    try std.testing.expectEqual(@as(u8, 1), metas[1].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[1].is_signer);
+    try std.testing.expect(metas[2].pubkey == &authority);
+    try std.testing.expectEqual(@as(u8, 0), metas[2].is_writable);
+    try std.testing.expectEqual(@as(u8, 1), metas[2].is_signer);
+}
+
+test "SPL Token Revoke account metas use source authority flags" {
+    var source: Pubkey = [_]u8{1} ** pubkey_len;
+    var authority: Pubkey = [_]u8{2} ** pubkey_len;
+
+    const metas = revokeAccountMetas(&source, &authority);
+    try std.testing.expectEqual(@as(usize, revoke_account_count), metas.len);
+    try std.testing.expect(metas[0].pubkey == &source);
+    try std.testing.expectEqual(@as(u8, 1), metas[0].is_writable);
+    try std.testing.expectEqual(@as(u8, 0), metas[0].is_signer);
+    try std.testing.expect(metas[1].pubkey == &authority);
+    try std.testing.expectEqual(@as(u8, 0), metas[1].is_writable);
+    try std.testing.expectEqual(@as(u8, 1), metas[1].is_signer);
+}
+
+test "SPL Token Burn CloseAccount and Revoke builders use canonical program id" {
+    var account_pubkey: Pubkey = [_]u8{1} ** pubkey_len;
+    var mint: Pubkey = [_]u8{2} ** pubkey_len;
+    var destination: Pubkey = [_]u8{3} ** pubkey_len;
+    var authority: Pubkey = [_]u8{4} ** pubkey_len;
+
+    var burn_metas: [burn_account_count]cpi.SolAccountMeta = undefined;
+    var burn_data: [burn_instruction_data_len]u8 = undefined;
+    const burn_ix = burnInstruction(&account_pubkey, &mint, &authority, 7, &burn_metas, &burn_data);
+    try std.testing.expect(burn_ix.program_id == &program_id);
+    try std.testing.expectEqual(@as(u64, burn_account_count), burn_ix.account_len);
+    try std.testing.expectEqual(@as(u64, burn_instruction_data_len), burn_ix.data_len);
+    try std.testing.expectEqualSlices(u8, &.{ 8, 7, 0, 0, 0, 0, 0, 0, 0 }, burn_ix.data[0..@intCast(burn_ix.data_len)]);
+
+    var close_metas: [close_account_account_count]cpi.SolAccountMeta = undefined;
+    var close_data: [close_account_instruction_data_len]u8 = undefined;
+    const close_ix = closeAccountInstruction(&account_pubkey, &destination, &authority, &close_metas, &close_data);
+    try std.testing.expect(close_ix.program_id == &program_id);
+    try std.testing.expectEqual(@as(u64, close_account_account_count), close_ix.account_len);
+    try std.testing.expectEqual(@as(u64, close_account_instruction_data_len), close_ix.data_len);
+    try std.testing.expectEqualSlices(u8, &.{9}, close_ix.data[0..@intCast(close_ix.data_len)]);
+
+    var revoke_metas: [revoke_account_count]cpi.SolAccountMeta = undefined;
+    var revoke_data: [revoke_instruction_data_len]u8 = undefined;
+    const revoke_ix = revokeInstruction(&account_pubkey, &authority, &revoke_metas, &revoke_data);
+    try std.testing.expect(revoke_ix.program_id == &program_id);
+    try std.testing.expectEqual(@as(u64, revoke_account_count), revoke_ix.account_len);
+    try std.testing.expectEqual(@as(u64, revoke_instruction_data_len), revoke_ix.data_len);
+    try std.testing.expectEqualSlices(u8, &.{5}, revoke_ix.data[0..@intCast(revoke_ix.data_len)]);
 }
 
 test "SPL Token account parser extracts mint owner amount and options" {
