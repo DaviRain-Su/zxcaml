@@ -459,6 +459,20 @@ pub fn build(b: *std.Build) void {
     run_parser_otest_prop_tests.step.dependOn(&run_parser_otest_tests.step);
     run_parser_otest_prop_tests.setCwd(b.path(""));
 
+    // OTEST2 generator stdlib regression tests: compile stdlib/generators.ml
+    // with upstream OCaml and exercise deterministic sampling/combinators.
+    const property_generators_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/property_generators_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const property_generators_tests = b.addTest(.{
+        .root_module = property_generators_test_module,
+    });
+    const run_property_generators_tests = b.addRunArtifact(property_generators_tests);
+    run_property_generators_tests.step.dependOn(&run_parser_otest_prop_tests.step);
+    run_property_generators_tests.setCwd(b.path(""));
+
     // CLI explanation tests (P9.5 / F-OBS1): verify `omlz check --explain`
     // covers the diagnostics catalog and reports unknown codes cleanly.
     const explain_cli_test_module = b.createModule(.{
@@ -616,6 +630,9 @@ pub fn build(b: *std.Build) void {
     const run_lsp_harness = b.addSystemCommand(&.{ "python3", "tests/lsp/run_lsp_check.py", "all" });
     run_lsp_harness.step.dependOn(&install_omlz.step);
     run_lsp_harness.step.dependOn(&install_lsp.step);
+    // Keep OCaml generator compilation tests from competing with the
+    // latency-sensitive LSP harness.
+    run_property_generators_tests.step.dependOn(&run_lsp_harness.step);
 
     // Renderer tests (P9 / F-DX1-1): verify rustc-style diagnostic rendering.
     const render_test_module = b.createModule(.{
@@ -834,6 +851,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_fmt_golden_tests.step);
     test_step.dependOn(&run_parser_otest_tests.step);
     test_step.dependOn(&run_parser_otest_prop_tests.step);
+    test_step.dependOn(&run_property_generators_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);

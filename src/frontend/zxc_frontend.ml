@@ -777,28 +777,38 @@ let file_exists path =
 
 let first_existing = List.find_opt file_exists
 
-let bundled_stdlib_core_path () =
+let bundled_stdlib_file_path ~env_var ~relative_path ~label () =
   let from_env =
-    match Sys.getenv_opt "ZXC_STDLIB_CORE" with
+    match Sys.getenv_opt env_var with
     | Some path -> [ path ]
     | None -> []
   in
-  let from_cwd = [ Filename.concat (Sys.getcwd ()) "stdlib/core.ml" ] in
+  let from_cwd = [ Filename.concat (Sys.getcwd ()) relative_path ] in
   let from_executable =
     let exe = absolute_path Sys.executable_name in
     let bin_dir = Filename.dirname exe in
     let zig_out_dir = Filename.dirname bin_dir in
     let repo_root = Filename.dirname zig_out_dir in
-    [ Filename.concat repo_root "stdlib/core.ml" ]
+    [ Filename.concat repo_root relative_path ]
   in
   match first_existing (from_env @ from_cwd @ from_executable) with
   | Some path -> path
   | None ->
       emit_internal_error
         ~message:
-          "could not locate bundled stdlib/core.ml; set ZXC_STDLIB_CORE or run \
-           zxc-frontend from the repository root";
+          (Printf.sprintf
+             "could not locate bundled %s; set %s or run zxc-frontend from \
+              the repository root"
+             label env_var);
       exit 3
+
+let bundled_stdlib_core_path () =
+  bundled_stdlib_file_path ~env_var:"ZXC_STDLIB_CORE"
+    ~relative_path:"stdlib/core.ml" ~label:"stdlib/core.ml" ()
+
+let bundled_stdlib_generators_path () =
+  bundled_stdlib_file_path ~env_var:"ZXC_STDLIB_GENERATORS"
+    ~relative_path:"stdlib/generators.ml" ~label:"stdlib/generators.ml" ()
 
 let make_temp_dir prefix =
   let marker = Filename.temp_file prefix ".dir" in
@@ -811,15 +821,25 @@ let cleanup_bundled_stdlib_dir dir =
     (fun name ->
       let path = Filename.concat dir name in
       try Sys.remove path with Sys_error _ -> ())
-    [ "core.cmi"; "core.cmo"; "core.o"; "core.stderr" ];
+    [
+      "core.cmi";
+      "core.cmo";
+      "core.o";
+      "core.stderr";
+      "generators.cmi";
+      "generators.cmo";
+      "generators.o";
+      "generators.stderr";
+    ];
   try Sys.rmdir dir with Sys_error _ -> ()
 
-let compile_bundled_stdlib ~dir =
-  let core_path = bundled_stdlib_core_path () in
-  let stderr_path = Filename.concat dir "core.stderr" in
+let compile_bundled_stdlib_file ~dir ~source_path ~module_name ~extra_flags =
+  let stderr_path = Filename.concat dir (module_name ^ ".stderr") in
+  let output_path = module_name ^ ".cmo" in
   let command =
-    Printf.sprintf "cd %s && %s -c %s -o core.cmo 2> %s"
-      (Filename.quote dir) (ocamlc_command ()) (Filename.quote core_path)
+    Printf.sprintf "cd %s && %s %s -c %s -o %s 2> %s"
+      (Filename.quote dir) (ocamlc_command ()) extra_flags
+      (Filename.quote source_path) (Filename.quote output_path)
       (Filename.quote stderr_path)
   in
   match Sys.command command with
@@ -828,16 +848,25 @@ let compile_bundled_stdlib ~dir =
       let stderr =
         try read_file stderr_path
         with Sys_error message ->
-          Printf.sprintf "ocamlc failed to compile bundled stdlib/core.ml with \
+          Printf.sprintf "ocamlc failed to compile bundled stdlib/%s.ml with \
                           status %d: %s"
-            status message
+            module_name status message
       in
       emit_internal_error
         ~message:
-          (Printf.sprintf "failed to compile bundled stdlib/core.ml: %s"
-             (String.trim stderr));
+          (Printf.sprintf "failed to compile bundled stdlib/%s.ml: %s"
+             module_name (String.trim stderr));
       cleanup_bundled_stdlib_dir dir;
       exit 3
+
+let compile_bundled_stdlib ~dir =
+  let core_path = bundled_stdlib_core_path () in
+  let generators_path = bundled_stdlib_generators_path () in
+  compile_bundled_stdlib_file ~dir ~source_path:core_path ~module_name:"core"
+    ~extra_flags:"";
+  compile_bundled_stdlib_file ~dir ~source_path:generators_path
+    ~module_name:"generators"
+    ~extra_flags:(Printf.sprintf "-I %s -open Core" (Filename.quote dir))
 
 let compile_to_cmt ~diagnostic_input ~extra_cleanup input =
   let tmp_cmo = Filename.temp_file "Zxcaml_" ".cmo" in
@@ -847,7 +876,8 @@ let compile_to_cmt ~diagnostic_input ~extra_cleanup input =
   let stdlib_dir = make_temp_dir "Zxcaml_stdlib_" in
   compile_bundled_stdlib ~dir:stdlib_dir;
   let command =
-    Printf.sprintf "%s -bin-annot -I %s -open Core -c %s -o %s 2> %s"
+    Printf.sprintf
+      "%s -bin-annot -I %s -open Core -open Generators -c %s -o %s 2> %s"
       (ocamlc_command ()) (Filename.quote stdlib_dir) (Filename.quote input)
       (Filename.quote tmp_cmo)
       (Filename.quote tmp_stderr)
