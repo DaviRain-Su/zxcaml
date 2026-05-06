@@ -155,7 +155,7 @@ or emit Anchor-compatible IDL.
 - **Function inlining:** small single-expression functions (≤3 Core IR nodes) are inlined at call sites with alpha-renaming, enabling further constant folding; supports all types including String, ADT, Tuple, and Record
 - **Determinism:** interpreter ≡ Zig native across the sealed P1-P9 examples corpus
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, Mollusk tests, and an examples `omlz check` corpus loop
-- **Mollusk SVM tests:** 21 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, and real-world zignocchio ports)
+- **Mollusk SVM tests:** 24 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, and real-world zignocchio ports)
 - **Diagnostics:** rustc-style diagnostics are the default, with `--error-format=human|json|oneline` and caret spans over source snippets
 - **LSP:** `omlz-lsp` is installed by `zig build` and provides LSP push diagnostics over stdio JSON-RPC
 - **Source maps:** BPF builds emit deterministic source maps, embed `.zxcaml.srcmap`, and let `omlz unmap` resolve BPF PCs back to OCaml locations
