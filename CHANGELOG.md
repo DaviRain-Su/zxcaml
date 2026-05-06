@@ -9,6 +9,22 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — let%%test_prop + property test runner with shrinking
+
+- Added `let%test_prop "name" generator = fun x -> expr` frontend support,
+  including parser diagnostics for missing names/generators, single-identifier
+  and two-identifier tuple body patterns, comment-aware scanning, and registry
+  tagging for property thunks (`34fc8b1`).
+- Added the `stdlib/generators.ml` property-test generator API with deterministic
+  seed threading and the `int_range`, `bool`, `string_of_len`, `list_of`,
+  `option_of`, `tuple2`, `map`, and `filter` combinators (`189e561`).
+- Added paired shrinking helpers with a 100-step budget, including integer,
+  string, list, option, tuple, map, and filter shrink paths plus convergence
+  tests for minimal counterexamples (`733ace5`).
+- Added `omlz test --num-cases` / `--seed` runner support for property cases,
+  cargo and JSON reporter fields for shrunk counterexamples, and the
+  `prop_list_rev`, `prop_string_concat`, and `prop_int_add` demos (`51c9436`).
+
 ### Added — omlz fmt + LSP formatting
 
 - Added the pure formatter core for `.ml` source with two-space indentation,

@@ -248,3 +248,185 @@ Use it before BPF builds when you want fast local confidence.
 Use `zig build test` for Zig compiler and runtime unit tests.
 Use Mollusk for Solana execution semantics.
 Use CodeLens when the desired loop is "run the test under the cursor".
+
+## Property Testing
+
+`let%test_prop` extends the same `omlz test` loop with generated examples.
+It is for algebraic laws, round-trip checks, parser-style invariants, and
+small pure helpers where one hand-written `let%test_unit` case is too narrow.
+A property remains ordinary OCaml source.
+The upstream OCaml frontend still parses and type-checks the file.
+The ZxCaml runner only adds generator sampling, repeated execution, shrinking,
+and reporter fields that make a failing seed reproducible.
+Use Mollusk when the behavior depends on Solana accounts or BPF loader rules.
+Use `let%test_prop` when the behavior is pure enough to run through the
+interpreter many times in a fast local loop.
+
+The accepted surface form is:
+
+```ocaml
+let%test_prop "name" generator = fun x -> property_expr
+```
+
+The binding must be at module top level.
+The name must be a non-empty string literal.
+The expression between the name and `=` is the generator.
+The right-hand side is normally a one-argument `fun` returning `bool`.
+A `true` result passes that generated case.
+A `false` result is treated like an assertion failure.
+A body that explicitly calls `assert` may also fail by raising the normal
+`ZXCAML_PANIC:assert_failure` path.
+The pre-scan rejects unknown `let%...` extensions, missing names, missing
+generators, and nested property bindings with the same diagnostic renderer used
+by `omlz check`.
+Comments are tracked before scanning, so commented-out property text is ignored.
+
+A minimal property can define its own generator as a seed transformer:
+
+```ocaml
+let int seed = (seed, seed + 1)
+
+let%test_prop "add commutative" int = fun x ->
+  x + 7 = 7 + x
+```
+
+The generator receives the current seed and returns `(sample, next_seed)`.
+`omlz test` threads the returned seed into the next sample.
+Passing `--seed` therefore makes the whole sample stream deterministic.
+The runner prints the chosen seed in JSON output and uses it when reporting a
+failed property.
+If no seed is supplied, the default is the current monotonic time.
+Use an explicit seed in CI and in bug reports.
+
+Property bodies also support a pair pattern for generators that produce tuples:
+
+```ocaml
+let int seed = (seed, seed + 1)
+let pair = Generators.tuple2 int int
+
+let%test_prop "pair addition symmetry" pair = fun (x, y) ->
+  x + y = y + x
+```
+
+Internally the pre-scan rewrites a pair pattern into `fst` / `snd` bindings.
+Tuple patterns currently support exactly two identifiers.
+For larger structures, bind a single value and destructure it inside the body.
+Keeping the pattern simple makes source locations and shrunk examples easier to
+report.
+
+The bundled generator API lives in `stdlib/generators.ml` as module
+`Generators`.
+Its core type is:
+
+```ocaml
+type seed = int64
+type 'a generator = seed -> 'a * seed
+```
+
+The shipped combinators are:
+
+| API | What it samples |
+|---|---|
+| `Generators.int_range ~low ~high` | inclusive integer range |
+| `Generators.bool` | booleans |
+| `Generators.string_of_len ~len` | printable ASCII strings of exact length |
+| `Generators.list_of gen max_len` | lists with length `0..max_len` |
+| `Generators.option_of gen` | `None` or `Some sample` |
+| `Generators.tuple2 left right` | pairs sampled left-to-right |
+| `Generators.map f gen` | transformed samples |
+| `Generators.filter pred gen` | samples satisfying `pred`, with a retry budget |
+
+The PRNG is a deterministic 64-bit linear congruential generator.
+The same seed, generator expression, and case order produce the same stream.
+`filter` has a finite retry budget so an impossible predicate fails loudly
+instead of hanging the test process.
+Combinators are ordinary OCaml values, so helper generators can be named,
+composed, and shared across `let%test_prop` bindings.
+
+Shrinking tries to replace the first failing sample with a smaller failing one.
+The stdlib exposes paired shrinkers for the generator families:
+`shrink_int`, `shrink_bool`, `shrink_string`, `shrink_list`,
+`shrink_option`, `shrink_tuple2`, `shrink_map`, and `shrink_filter`.
+The public helper `Generators.shrink_to_minimal` walks candidates until no
+smaller failing value is found.
+The runner also applies its built-in integer shrink path when the property
+sample type is `int`.
+It tries `0` and then binary-search-style candidates toward zero.
+The shrink loop is bounded by `100` steps.
+If the minimal value cannot be found within that budget, the stdlib helper
+raises `Generators.shrink: budget exhausted` rather than looping forever.
+
+Run properties with the same subcommand as unit tests:
+
+```sh
+zig-out/bin/omlz test --num-cases 100 --seed 42 examples/tests/prop_int_add.ml
+```
+
+`--num-cases N` controls how many samples each property receives.
+The default is `100`.
+`N` must be positive; invalid values are invocation errors and exit `2`.
+`--seed N` fixes the first seed used by the property runner.
+The seed is a signed decimal integer in the CLI parser.
+The next seed comes from the generator result, not from the runner itself.
+`--filter SUBSTR` still filters by the human-readable property name.
+Explicit files still replace the default `examples/tests/*.ml` scan.
+
+Cargo-style output marks properties with a `prop_` prefix and shows case count:
+
+```text
+running 1 tests
+test examples/tests/prop_int_add.ml::prop_add commutative ... ok (10 cases)
+test result: ok. 1 passed; 0 failed; finished in 0ms
+```
+
+A failure reports the source location, the executed case count, and the shrunk
+counterexample:
+
+```text
+test /tmp/prop_int_add_fail.ml::prop_broken overflow assertion ... FAILED (10 cases)
+  /tmp/prop_int_add_fail.ml:13:21: ZXCAML_PANIC:assert_failure; FAILED after 1 tests; shrunk to: 0 (in 1 shrink steps)
+test result: FAILED. 0 passed; 1 failed; finished in 0ms
+```
+
+The same run with `--format=json` emits JSON Lines.
+For property cases, each test object includes `kind:"prop"`, `num_cases`, and
+`seed`.
+Failing property objects additionally include `message`, `line`, `col`,
+`shrunk_steps`, and `counterexample`.
+The final summary object keeps the existing `type`, `status`, `total`,
+`passed`, `failed`, and `elapsed_ms` fields.
+Tooling should parse JSON Lines instead of scraping the cargo text.
+
+The default corpus now includes three passing property demos:
+`examples/tests/prop_list_rev.ml`, `examples/tests/prop_string_concat.ml`, and
+`examples/tests/prop_int_add.ml`.
+There is also `examples/tests/prop_int_add.fail.ml.template` for demos and
+regression notes.
+Templates are not scanned by the default `*.ml` discovery rule.
+Copy a template to a temporary `.ml` file when you want to show a failure and a
+shrunk counterexample.
+
+This feature is intentionally smaller than QuickCheck or Hypothesis.
+Like QuickCheck, it treats a property as a predicate over generated samples and
+prints a replay seed when a case fails.
+Like both QuickCheck and Hypothesis, it tries to shrink failing examples before
+reporting them.
+Unlike QuickCheck, ZxCaml does not infer generators from types.
+You pass the generator expression explicitly in the `let%test_prop` header.
+Unlike Hypothesis, ZxCaml does not maintain an example database, adaptive search
+strategy, or coverage-guided exploration.
+The design goal is a deterministic, dependency-free runner that fits the
+existing OCaml frontend and interpreter pipeline.
+
+Recommended practice:
+
+- Keep generators small enough that `100` cases finish quickly.
+- Commit explicit seeds only when reproducing a known failure.
+- Prefer generated values that exercise pure helper logic before BPF builds.
+- Use pair properties for simple relations and destructure larger values inside
+  the body.
+- Use JSON output for editors, CI annotations, and automated triage.
+- Keep `.fail.ml.template` files out of the default scan by preserving the
+  `.template` suffix.
+- Escalate Solana account-state invariants to Mollusk instead of forcing them
+  into property tests.
