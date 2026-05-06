@@ -83,6 +83,14 @@ name = "crypto_demo_test"
 path = "crypto_demo_test.rs"
 
 [[test]]
+name = "keccak_demo_test"
+path = "keccak_demo_test.rs"
+
+[[test]]
+name = "blake3_demo_test"
+path = "blake3_demo_test.rs"
+
+[[test]]
 name = "region_demo_test"
 path = "region_demo_test.rs"
 
