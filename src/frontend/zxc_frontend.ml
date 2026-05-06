@@ -174,6 +174,12 @@ let read_file path =
       let length = in_channel_length channel in
       really_input_string channel length)
 
+let write_file path contents =
+  let channel = open_out_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr channel)
+    (fun () -> output_string channel contents)
+
 let emit_ocamlc_error ~input ~stderr =
   let diagnostic : Zxc_subset.diagnostic =
     {
@@ -186,6 +192,28 @@ let emit_ocamlc_error ~input ~stderr =
     }
   in
   emit_diagnostic diagnostic
+
+let emit_frontend_parse_error ~input ~line ~col ~end_col ~code ~node_kind
+    ~message ?hint () =
+  let diagnostic : Zxc_subset.diagnostic =
+    {
+      severity = "error";
+      code;
+      node_kind;
+      loc =
+        {
+          file = input;
+          line;
+          col;
+          end_line = line;
+          end_col = max col end_col;
+        };
+      message;
+      hint;
+    }
+  in
+  emit_diagnostic diagnostic;
+  exit 2
 
 let usage () =
   prerr_endline "usage: zxc-frontend --emit=sexp [--wire=1.1|--wire=1.2] <input.ml>";
@@ -213,6 +241,163 @@ let ocamlc_command () =
 
 let absolute_path path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
+
+type otest_binding = {
+  index : int;
+  name_literal : string;
+}
+
+let identifier_char = function
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+  | _ -> false
+
+let read_identifier s start =
+  let len = String.length s in
+  let rec loop index =
+    if index < len && identifier_char s.[index] then loop (index + 1) else index
+  in
+  let finish = loop start in
+  String.sub s start (finish - start), finish
+
+let skip_horizontal_space s start =
+  let len = String.length s in
+  let rec loop index =
+    if index < len then
+      match s.[index] with ' ' | '\t' -> loop (index + 1) | _ -> index
+    else index
+  in
+  loop start
+
+let parse_string_literal_end s start =
+  let len = String.length s in
+  if start >= len || s.[start] <> '"' then None
+  else
+    let rec loop index escaped =
+      if index >= len then None
+      else if escaped then loop (index + 1) false
+      else
+        match s.[index] with
+        | '\\' -> loop (index + 1) true
+        | '"' -> Some (index + 1)
+        | _ -> loop (index + 1) false
+    in
+    loop (start + 1) false
+
+let find_let_percent line = find_sub_from line "let%" 0
+
+let top_level_boundary line =
+  starts_with ~prefix:"let " line
+  || starts_with ~prefix:"let\t" line
+  || starts_with ~prefix:"let%" line
+  || starts_with ~prefix:"let rec " line
+  || starts_with ~prefix:"type " line
+  || starts_with ~prefix:"external " line
+
+let parse_otest_header ~input ~line_number line =
+  let ext, after_ext = read_identifier line (String.length "let%") in
+  if not (String.equal ext "test_unit") then
+    emit_frontend_parse_error ~input ~line:line_number ~col:0 ~end_col:after_ext
+      ~code:"OTEST-PARSE" ~node_kind:"let-extension"
+      ~message:
+        (Printf.sprintf
+           "unknown let%% extension `%s`; only let%%test_unit is supported" ext)
+      ~hint:"supported syntax: let%test_unit \"name\" = expr" ();
+  let after_ext = skip_horizontal_space line after_ext in
+  let literal_end =
+    match parse_string_literal_end line after_ext with
+    | Some finish -> finish
+    | None ->
+        emit_frontend_parse_error ~input ~line:line_number ~col:after_ext
+          ~end_col:(max (after_ext + 1) (String.length line))
+          ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
+          ~message:"expected a string literal test name after let%test_unit"
+          ~hint:"write: let%test_unit \"descriptive name\" = expr" ()
+  in
+  let after_literal = skip_horizontal_space line literal_end in
+  if after_literal >= String.length line || line.[after_literal] <> '=' then
+    emit_frontend_parse_error ~input ~line:line_number ~col:after_literal
+      ~end_col:(after_literal + 1)
+      ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
+      ~message:"expected `=` after let%test_unit test name"
+      ~hint:"write: let%test_unit \"descriptive name\" = expr" ();
+  let name_literal = String.sub line after_ext (literal_end - after_ext) in
+  let rhs_tail =
+    String.sub line (after_literal + 1) (String.length line - after_literal - 1)
+  in
+  name_literal, rhs_tail
+
+let reject_nested_or_unknown_extension ~input ~line_number line column =
+  let ext, after_ext = read_identifier line (column + String.length "let%") in
+  if String.equal ext "test_unit" then
+    emit_frontend_parse_error ~input ~line:line_number ~col:column
+      ~end_col:after_ext ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
+      ~message:"let%test_unit is only supported as a top-level binding"
+      ~hint:"move this test to the module top level" ()
+  else
+    emit_frontend_parse_error ~input ~line:line_number ~col:column
+      ~end_col:after_ext ~code:"OTEST-PARSE" ~node_kind:"let-extension"
+      ~message:
+        (Printf.sprintf
+           "unknown let%% extension `%s`; only let%%test_unit is supported" ext)
+      ~hint:"supported syntax: let%test_unit \"name\" = expr" ()
+
+let append_otest_registry buffer bindings =
+  Buffer.add_string buffer
+    "\nlet __otest_registry__ : (string * (unit -> unit)) list =\n";
+  Buffer.add_string buffer "  [\n";
+  List.iter
+    (fun binding ->
+      Buffer.add_string buffer
+        (Printf.sprintf "    (%s, __otest_unit_%d__);\n" binding.name_literal
+           binding.index))
+    bindings;
+  Buffer.add_string buffer "  ]\n"
+
+let preprocess_otest_source input =
+  let source = read_file input in
+  let lines = String.split_on_char '\n' source in
+  let buffer = Buffer.create (String.length source + 256) in
+  let bindings = ref [] in
+  let rec loop line_number = function
+    | [] -> ()
+    | line :: rest ->
+        if starts_with ~prefix:"let%" line then (
+          let index = List.length !bindings in
+          let name_literal, rhs_tail = parse_otest_header ~input ~line_number line in
+          bindings := !bindings @ [ { index; name_literal } ];
+          Buffer.add_string buffer
+            (Printf.sprintf "let __otest_unit_%d__ _ : unit =%s\n" index
+               rhs_tail);
+          let rec append_body current_line = function
+            | next :: remaining when not (top_level_boundary next) ->
+                (match find_let_percent next with
+                | Some column ->
+                    reject_nested_or_unknown_extension ~input
+                      ~line_number:current_line next column
+                | None -> ());
+                Buffer.add_string buffer next;
+                Buffer.add_char buffer '\n';
+                append_body (current_line + 1) remaining
+            | remaining -> loop current_line remaining
+          in
+          append_body (line_number + 1) rest)
+        else (
+          (match find_let_percent line with
+          | Some column ->
+              reject_nested_or_unknown_extension ~input ~line_number line column
+          | None -> ());
+          Buffer.add_string buffer line;
+          (match rest with [] -> () | _ -> Buffer.add_char buffer '\n');
+          loop (line_number + 1) rest)
+  in
+  loop 1 lines;
+  if !bindings = [] then None
+  else (
+    append_otest_registry buffer !bindings;
+    let path = Filename.temp_file "Zxcaml_otest_" ".ml" in
+    write_file path
+      (Printf.sprintf "# 1 %S\n%s" (absolute_path input) (Buffer.contents buffer));
+    Some path)
 
 let file_exists path =
   try Sys.file_exists path && not (Sys.is_directory path)
@@ -282,7 +467,7 @@ let compile_bundled_stdlib ~dir =
       cleanup_bundled_stdlib_dir dir;
       exit 3
 
-let compile_to_cmt input =
+let compile_to_cmt ~diagnostic_input ~extra_cleanup input =
   let tmp_cmo = Filename.temp_file "Zxcaml_" ".cmo" in
   let tmp_prefix = Filename.remove_extension tmp_cmo in
   let tmp_cmt = tmp_prefix ^ ".cmt" in
@@ -307,10 +492,11 @@ let compile_to_cmt input =
           Printf.sprintf "ocamlc -bin-annot failed for %s with status %d: %s"
             input status message
       in
-      emit_ocamlc_error ~input ~stderr;
+      emit_ocamlc_error ~input:diagnostic_input ~stderr;
       List.iter
         (fun path -> try Sys.remove path with Sys_error _ -> ())
-        [ tmp_cmo; tmp_cmt; Filename.remove_extension tmp_cmo ^ ".cmi"; tmp_stderr ];
+        ([ tmp_cmo; tmp_cmt; Filename.remove_extension tmp_cmo ^ ".cmi"; tmp_stderr ]
+        @ extra_cleanup);
       cleanup_bundled_stdlib_dir stdlib_dir;
       exit 2
 
@@ -331,17 +517,25 @@ let load_implementation cmt_path =
 
 let () =
   let input, wire = parse_args () in
-  let tmp_cmo, tmp_cmt = compile_to_cmt input in
+  let compile_input, extra_cleanup =
+    match preprocess_otest_source input with
+    | None -> (input, [])
+    | Some transformed -> (transformed, [ transformed ])
+  in
+  let tmp_cmo, tmp_cmt =
+    compile_to_cmt ~diagnostic_input:input ~extra_cleanup compile_input
+  in
   let tmp_cmi = Filename.remove_extension tmp_cmo ^ ".cmi" in
+  let cleanup_files = [ tmp_cmo; tmp_cmt; tmp_cmi ] @ extra_cleanup in
   try
     let structure = load_implementation tmp_cmt in
     let modul = Zxc_subset.of_structure structure in
     print_string (Zxc_sexp.to_string ~wire modul);
-    cleanup [ tmp_cmo; tmp_cmt; tmp_cmi ]
+    cleanup cleanup_files
   with
   | Zxc_subset.Unsupported diagnostic ->
       emit_diagnostic diagnostic;
-      cleanup [ tmp_cmo; tmp_cmt; tmp_cmi ];
+      cleanup cleanup_files;
       exit 1
   | Cmt_format.Error error ->
       let message =
@@ -351,9 +545,9 @@ let () =
       in
       emit_internal_error
         ~message;
-      cleanup [ tmp_cmo; tmp_cmt; tmp_cmi ];
+      cleanup cleanup_files;
       exit 3
   | Sys_error message ->
       emit_internal_error ~message;
-      cleanup [ tmp_cmo; tmp_cmt; tmp_cmi ];
+      cleanup cleanup_files;
       exit 3

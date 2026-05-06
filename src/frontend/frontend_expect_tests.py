@@ -625,6 +625,48 @@ CASES: list[tuple[str, str, str]] = [
         "(prim \"+\" (const-int 1) (app (var f) (prim - (var n) (const-int 1))))))))) "
         "(let entrypoint (lambda (_) (app (var f) (const-int 9))))))\n",
     ),
+    (
+        "otest one test desugars to thunk and registry",
+        'let%test_unit "one passes" = ()\n',
+        "(zxcaml-cir 1.1 (module "
+        "(let __otest_unit_0__ (lambda (_) (ctor \"()\"))) "
+        "(let __otest_registry__ "
+        "(ctor \"::\" (tuple (items (const-string \"one passes\") "
+        "(var __otest_unit_0__))) (ctor \"[]\")))))\n",
+    ),
+    (
+        "otest preserves two-test source order",
+        (
+            'let%test_unit "first" = assert (1 = 1)\n'
+            'let%test_unit "second" = assert (2 = 2)\n'
+        ),
+        "(zxcaml-cir 1.1 (module "
+        "(let __otest_unit_0__ (lambda (_) "
+        "(Assert (prim \"=\" (const-int 1) (const-int 1))))) "
+        "(let __otest_unit_1__ (lambda (_) "
+        "(Assert (prim \"=\" (const-int 2) (const-int 2))))) "
+        "(let __otest_registry__ "
+        "(ctor \"::\" (tuple (items (const-string \"first\") "
+        "(var __otest_unit_0__))) "
+        "(ctor \"::\" (tuple (items (const-string \"second\") "
+        "(var __otest_unit_1__))) (ctor \"[]\"))))))\n",
+    ),
+    (
+        "otest mixed let interleaving appends registry",
+        (
+            "let before = 41\n"
+            'let%test_unit "middle" = assert ((before + 1) = 42)\n'
+            "let after _ = before + 1\n"
+        ),
+        "(zxcaml-cir 1.1 (module (let before (const-int 41)) "
+        "(let __otest_unit_0__ (lambda (_) "
+        "(Assert (prim \"=\" (prim \"+\" (var before) (const-int 1)) "
+        "(const-int 42))))) "
+        "(let after (lambda (_) (prim \"+\" (var before) (const-int 1)))) "
+        "(let __otest_registry__ "
+        "(ctor \"::\" (tuple (items (const-string \"middle\") "
+        "(var __otest_unit_0__))) (ctor \"[]\")))))\n",
+    ),
 ]
 
 
@@ -695,6 +737,26 @@ REJECT_CASES: list[tuple[str, str, str]] = [
         "type alias rejects undefined rhs type",
         "type t = undefined_type\nlet entrypoint _ = 0\n",
         'Unbound type constructor \\"undefined_type\\"',
+    ),
+    (
+        "otest rejects missing name",
+        "let%test_unit = ()\n",
+        "expected a string literal test name after let%test_unit",
+    ),
+    (
+        "otest rejects unknown extension",
+        "let%" "foo \"x\" = ()\n",
+        "unknown let% extension `foo`; only let%test_unit is supported",
+    ),
+    (
+        "otest rejects bool form extension",
+        "let%" "test \"bool form is out of scope\" = true\n",
+        "unknown let% extension `test`; only let%test_unit is supported",
+    ),
+    (
+        "otest rejects nested test unit",
+        "let entrypoint _ =\n  let%test_unit \"nested\" = () in\n  ()\n",
+        "let%test_unit is only supported as a top-level binding",
     ),
 ]
 
