@@ -473,6 +473,20 @@ pub fn build(b: *std.Build) void {
     run_property_generators_tests.step.dependOn(&run_parser_otest_prop_tests.step);
     run_property_generators_tests.setCwd(b.path(""));
 
+    // OTEST2 shrinking stdlib regression tests: compile stdlib/generators.ml
+    // with upstream OCaml and exercise deterministic shrink convergence.
+    const property_shrinking_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/property_shrinking_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const property_shrinking_tests = b.addTest(.{
+        .root_module = property_shrinking_test_module,
+    });
+    const run_property_shrinking_tests = b.addRunArtifact(property_shrinking_tests);
+    run_property_shrinking_tests.step.dependOn(&run_property_generators_tests.step);
+    run_property_shrinking_tests.setCwd(b.path(""));
+
     // CLI explanation tests (P9.5 / F-OBS1): verify `omlz check --explain`
     // covers the diagnostics catalog and reports unknown codes cleanly.
     const explain_cli_test_module = b.createModule(.{
@@ -852,6 +866,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_parser_otest_tests.step);
     test_step.dependOn(&run_parser_otest_prop_tests.step);
     test_step.dependOn(&run_property_generators_tests.step);
+    test_step.dependOn(&run_property_shrinking_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
