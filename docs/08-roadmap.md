@@ -4,9 +4,10 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.2`, the examples corpus contains 54
+frontend bridge accepts sexp wire format `1.2`, the examples corpus contains 57
 `.ml` programs, the Mollusk SVM suite contains 21 integration tests, and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
+Real-world Examples Batch 2 is tracked in [`CHANGELOG.md`](../CHANGELOG.md#real-world-examples-batch-2---2026-05-05).
 The public Zig runtime surface is documented in [`docs/runtime-api.md`](./runtime-api.md).
 
 ## Completed phases (P1–P9)
