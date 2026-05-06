@@ -34,6 +34,7 @@ const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
 const arena_lower = @import("lower/arena.zig");
 const region_infer = @import("lower/region_infer.zig");
+const omlz_test = @import("omlz/test.zig");
 
 /// Parses top-level CLI flags and dispatches implemented bootstrap commands.
 pub fn main(init: std.process.Init) !void {
@@ -68,6 +69,10 @@ pub fn main(init: std.process.Init) !void {
             try writeRunHelp(init.io);
             return;
         }
+        if (std.mem.eql(u8, args[1], "test")) {
+            try omlz_test.writeHelp(init.io);
+            return;
+        }
         if (std.mem.eql(u8, args[1], "unmap")) {
             try writeUnmapHelp(init.io);
             return;
@@ -97,6 +102,11 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         }
         try runBench(init, args[0]);
+        return;
+    }
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "test")) {
+        try omlz_test.run(init, args[0], args);
         return;
     }
 
@@ -258,6 +268,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\  omlz run <file.ml>
+        \\  omlz test [--filter SUBSTR] [--format=cargo|json] [FILE...]
         \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
         \\  omlz bench
         \\  omlz doctor
@@ -1736,6 +1747,7 @@ test {
     _ = @import("lower/lir.zig");
     _ = @import("lower/region_infer.zig");
     _ = @import("lower/strategy.zig");
+    _ = @import("omlz/test.zig");
     _ = pipeline;
     _ = @import("frontend_bridge/sexp_lexer.zig");
     _ = @import("frontend_bridge/sexp_parser.zig");

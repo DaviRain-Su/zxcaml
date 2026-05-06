@@ -346,6 +346,21 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_cli_tests.setCwd(b.path(""));
 
+    // OTEST CLI integration tests: verify `omlz test` discovery, reporting,
+    // filtering, JSON Lines output, colors, and exit codes.
+    const otest_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/omlz_test_subcommand_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const otest_cli_tests = b.addTest(.{
+        .root_module = otest_cli_test_module,
+    });
+    const run_otest_cli_tests = b.addRunArtifact(otest_cli_tests);
+    run_otest_cli_tests.step.dependOn(b.getInstallStep());
+    run_otest_cli_tests.step.dependOn(&run_cli_tests.step);
+    run_otest_cli_tests.setCwd(b.path(""));
+
     // CLI explanation tests (P9.5 / F-OBS1): verify `omlz check --explain`
     // covers the diagnostics catalog and reports unknown codes cleanly.
     const explain_cli_test_module = b.createModule(.{
@@ -660,6 +675,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_otest_cli_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
