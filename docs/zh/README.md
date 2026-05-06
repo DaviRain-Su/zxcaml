@@ -141,11 +141,11 @@ Anchor-compatible IDL。
 - **Function inlining：** 小型单表达式函数（≤3 个 Core IR nodes）会带 alpha-renaming 地 inline 到 call site，触发更多 constant folding；String、ADT、Tuple 和 Record 等类型都受支持
 - **确定性：** sealed P1-P9 examples corpus 上，interpreter ≡ Zig native
 - **CI：** GitHub Actions 工作流以 `macos-latest` + `ubuntu-latest` matrix 运行 `./init.sh`、`zig build`、`zig build test`、`cargo test`（Mollusk SVM）、P3 `no_alloc` 与 IDL smoke checks、Mollusk tests，以及 examples `omlz check` corpus loop
-- **Mollusk SVM tests：** `tests/` 下有 21 个使用 Mollusk SVM v0.12.1 的 integration tests（hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet，以及 real-world zignocchio ports）
+- **Mollusk SVM tests：** `tests/` 下有 24 个使用 Mollusk SVM v0.12.1 的 integration tests（hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet，以及 real-world zignocchio ports）
 - **诊断信息：** 默认是 rustc-style 诊断，并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注
 - **LSP：** `zig build` 会安装 `omlz-lsp`，它通过 stdio JSON-RPC 提供 LSP push diagnostics
 - **Source maps：** BPF 构建会发出确定性的 source map，嵌入 `.zxcaml.srcmap`，并可用 `omlz unmap` 把 BPF PC 映回 OCaml 位置
-- **示例：** `examples/` 下 54 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion（TCO）、hackathon greeting 和 zignocchio-port programs
+- **示例：** `examples/` 下 57 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion（TCO）、hackathon greeting、zignocchio-port programs、dao_voting、ata_transfer 和 order_book
 - **Golden/UI 测试：** Core IR/sexp snapshot 和 UI tests 通过 `zig build test` 运行
 - **安装：** `./init.sh && zig build`（见 [INSTALLING.md](./INSTALLING.md)）
 
