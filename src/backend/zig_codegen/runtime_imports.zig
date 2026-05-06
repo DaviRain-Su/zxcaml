@@ -67,6 +67,14 @@ pub fn emitExternalAppExpr(
         try emitSysvarInstructionAtExpr(out, allocator, app, indent_level, ctx);
         return;
     }
+    if (std.mem.eql(u8, external.symbol, "sysvar.readStakeHistory") and app.args.len == 2) {
+        try emitSysvarStakeHistoryLatestExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
+    if (std.mem.eql(u8, external.symbol, "sysvar.readEpochSchedule") and app.args.len == 1) {
+        try emitSysvarEpochScheduleFromAccountExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
 
     if (externalReturnIsBytes(external)) {
         const block_id = ctx.next_block_id;
@@ -1437,6 +1445,72 @@ pub fn emitSysvarInstructionAtExpr(
     try appendPrint(out, allocator, "for (omlz_instruction_info_{d}.accounts, 0..) |omlz_meta, omlz_meta_index| omlz_instruction_accounts_{d}[omlz_meta_index] = .{{ .pubkey = omlz_meta.pubkey, .is_writable = prelude.Bool.fromNative(omlz_meta.is_writable), .is_signer = prelude.Bool.fromNative(omlz_meta.is_signer) }};\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "break :blk{d} {s}{{ .program_id = omlz_instruction_info_{d}.program_id, .accounts = omlz_instruction_accounts_{d}, .data = omlz_instruction_info_{d}.data }};\n", .{ block_id, instruction_ty, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitSysvarStakeHistoryLatestExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const entry_ty = try userTypeName(allocator, "stake_history_entry");
+    defer allocator.free(entry_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_stake_history_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_stake_history_latest_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_stake_history_cursor_{d} = sysvar.stakeHistoryCursor(omlz_stake_history_data_{d}, if (omlz_stake_history_latest_{d} < 0) 0 else @intCast(omlz_stake_history_latest_{d}));\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_stake_history_len_{d} = omlz_stake_history_cursor_{d}.remaining;\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_stake_history_entries_{d}: []{s} = undefined;\n", .{ block_id, entry_ty });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap({s}, omlz_stake_history_len_{d}, &omlz_stake_history_entries_{d});\n", .{ entry_ty, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_stake_history_index_{d}: usize = 0;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "while (sysvar.readStakeHistory(omlz_stake_history_data_{d}, &omlz_stake_history_cursor_{d})) |omlz_stake_history_record_{d}| : (omlz_stake_history_index_{d} += 1) {{\n", .{ block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 2);
+    try appendPrint(out, allocator, "omlz_stake_history_entries_{d}[omlz_stake_history_index_{d}] = .{{ .epoch = @intCast(omlz_stake_history_record_{d}.epoch), .effective = @intCast(omlz_stake_history_record_{d}.entry.effective), .activating = @intCast(omlz_stake_history_record_{d}.entry.activating), .deactivating = @intCast(omlz_stake_history_record_{d}.entry.deactivating) }};\n", .{ block_id, block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "}\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} omlz_stake_history_entries_{d}[0..omlz_stake_history_index_{d}];\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitSysvarEpochScheduleFromAccountExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const schedule_ty = try zigTypeName(allocator, app.ty);
+    defer allocator.free(schedule_ty);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_epoch_schedule_data_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_epoch_schedule_{d} = sysvar.readEpochSchedule(omlz_epoch_schedule_data_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .slots_per_epoch = @intCast(omlz_epoch_schedule_{d}.slots_per_epoch), .leader_schedule_slot_offset = @intCast(omlz_epoch_schedule_{d}.leader_schedule_slot_offset), .warmup = prelude.Bool.fromNative(omlz_epoch_schedule_{d}.warmup), .first_normal_epoch = @intCast(omlz_epoch_schedule_{d}.first_normal_epoch), .first_normal_slot = @intCast(omlz_epoch_schedule_{d}.first_normal_slot) }};\n", .{ block_id, schedule_ty, block_id, block_id, block_id, block_id, block_id });
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
 }

@@ -295,6 +295,19 @@ let builtin_rent_field_names =
 let builtin_instructions_header_field_names =
   StringSet.of_list [ "instruction_count"; "offsets" ]
 
+let builtin_stake_history_entry_field_names =
+  StringSet.of_list [ "epoch"; "effective"; "activating"; "deactivating" ]
+
+let builtin_epoch_schedule_field_names =
+  StringSet.of_list
+    [
+      "slots_per_epoch";
+      "leader_schedule_slot_offset";
+      "warmup";
+      "first_normal_epoch";
+      "first_normal_slot";
+    ]
+
 let initial_type_env =
   {
     constructors =
@@ -329,6 +342,10 @@ let builtin_type_ref name =
 
 let builtin_external_type_ref name =
   External_type_constr { external_type_name = name; external_type_args = [] }
+
+let builtin_external_array element =
+  External_type_constr
+    { external_type_name = "array"; external_type_args = [ element ] }
 
 let builtin_external_arrow arg result = External_type_arrow (arg, result)
 
@@ -396,6 +413,28 @@ let builtin_sysvar_instruction_at_external_decl =
           (builtin_external_arrow (builtin_external_type_ref "int")
              (builtin_external_type_ref "instruction"));
       external_symbol = "sysvar.readInstructionAt";
+    }
+
+let builtin_sysvar_stake_history_latest_from_account_external_decl =
+  External_decl
+    {
+      external_name = "Sysvar.stake_history_latest_from_account";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_arrow (builtin_external_type_ref "int")
+             (builtin_external_array
+                (builtin_external_type_ref "stake_history_entry")));
+      external_symbol = "sysvar.readStakeHistory";
+    }
+
+let builtin_sysvar_epoch_schedule_from_account_external_decl =
+  External_decl
+    {
+      external_name = "Sysvar.epoch_schedule_from_account";
+      external_type =
+        builtin_external_arrow (builtin_external_type_ref "bytes")
+          (builtin_external_type_ref "epoch_schedule");
+      external_symbol = "sysvar.readEpochSchedule";
     }
 
 let builtin_account_record_decl =
@@ -514,6 +553,39 @@ let builtin_instructions_header_record_decl =
                  args = [ builtin_type_ref "int" ];
                  is_recursive_ref = false;
                });
+        ];
+      record_is_recursive = false;
+      record_is_account = false;
+    }
+
+let builtin_stake_history_entry_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "stake_history_entry";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "epoch" (builtin_type_ref "int");
+          builtin_record_field "effective" (builtin_type_ref "int");
+          builtin_record_field "activating" (builtin_type_ref "int");
+          builtin_record_field "deactivating" (builtin_type_ref "int");
+        ];
+      record_is_recursive = false;
+      record_is_account = false;
+    }
+
+let builtin_epoch_schedule_record_decl =
+  Record_type_decl
+    {
+      record_type_name = "epoch_schedule";
+      record_params = [];
+      record_fields =
+        [
+          builtin_record_field "slots_per_epoch" (builtin_type_ref "int");
+          builtin_record_field "leader_schedule_slot_offset" (builtin_type_ref "int");
+          builtin_record_field "warmup" (builtin_type_ref "bool");
+          builtin_record_field "first_normal_epoch" (builtin_type_ref "int");
+          builtin_record_field "first_normal_slot" (builtin_type_ref "int");
         ];
       record_is_recursive = false;
       record_is_account = false;
@@ -1609,6 +1681,14 @@ let add_builtin_record_decls decls =
     decls_need_builtin_record ~type_name:"instructions_header"
       ~field_names:builtin_instructions_header_field_names decls
   in
+  let needs_stake_history_entry =
+    decls_need_builtin_record ~type_name:"stake_history_entry"
+      ~field_names:builtin_stake_history_entry_field_names decls
+  in
+  let needs_epoch_schedule =
+    decls_need_builtin_record ~type_name:"epoch_schedule"
+      ~field_names:builtin_epoch_schedule_field_names decls
+  in
   let needs_error =
     decls_need_builtin_record ~type_name:"error"
       ~field_names:builtin_error_field_names decls
@@ -1637,6 +1717,8 @@ let add_builtin_record_decls decls =
         (needs_clock, builtin_clock_record_decl);
         (needs_rent, builtin_rent_record_decl);
         (needs_instructions_header, builtin_instructions_header_record_decl);
+        (needs_stake_history_entry, builtin_stake_history_entry_record_decl);
+        (needs_epoch_schedule, builtin_epoch_schedule_record_decl);
       ]
   in
   builtins @ decls
@@ -1669,6 +1751,20 @@ let add_builtin_external_decls decls =
     (not (List.exists (decl_defines_external "Sysvar.instruction_at") decls))
     && List.exists (decl_uses_var "Sysvar.instruction_at") decls
   in
+  let needs_sysvar_stake_history_latest_from_account =
+    (not
+       (List.exists
+          (decl_defines_external "Sysvar.stake_history_latest_from_account")
+          decls))
+    && List.exists (decl_uses_var "Sysvar.stake_history_latest_from_account") decls
+  in
+  let needs_sysvar_epoch_schedule_from_account =
+    (not
+       (List.exists
+          (decl_defines_external "Sysvar.epoch_schedule_from_account")
+          decls))
+    && List.exists (decl_uses_var "Sysvar.epoch_schedule_from_account") decls
+  in
   let builtins =
     List.filter_map
       (fun (needed, decl) -> if needed then Some decl else None)
@@ -1681,6 +1777,10 @@ let add_builtin_external_decls decls =
         ( needs_sysvar_instructions_header_from_account,
           builtin_sysvar_instructions_header_from_account_external_decl );
         (needs_sysvar_instruction_at, builtin_sysvar_instruction_at_external_decl);
+        ( needs_sysvar_stake_history_latest_from_account,
+          builtin_sysvar_stake_history_latest_from_account_external_decl );
+        ( needs_sysvar_epoch_schedule_from_account,
+          builtin_sysvar_epoch_schedule_from_account_external_decl );
       ]
   in
   builtins @ decls

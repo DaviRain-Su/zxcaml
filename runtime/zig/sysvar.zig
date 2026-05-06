@@ -4,6 +4,8 @@
 //! - `solana-program/src/sysvar/clock.rs` (`Clock`)
 //! - `solana-program/src/sysvar/rent.rs` (`Rent`)
 //! - `solana-program/src/sysvar/instructions.rs` (`Instructions`)
+//! - `solana-program/src/sysvar/stake_history.rs` (`StakeHistory`)
+//! - `solana-program/src/epoch_schedule.rs` (`EpochSchedule`)
 //!
 //! Sysvar account data is serialized field-by-field in little-endian order.
 //! These readers do not cast from account bytes, so they are safe for
@@ -13,6 +15,9 @@ const std = @import("std");
 
 pub const clock_account_data_len: usize = 40;
 pub const rent_account_data_len: usize = 17;
+pub const stake_history_len_prefix_len: usize = 8;
+pub const stake_history_entry_len: usize = 32;
+pub const epoch_schedule_account_data_len: usize = 33;
 pub const pubkey_len: usize = 32;
 pub const instruction_account_meta_len: usize = 1 + pubkey_len;
 pub const max_instruction_accounts: usize = 256;
@@ -68,6 +73,51 @@ pub const InstructionInfo = struct {
 };
 
 var instruction_account_meta_buffer: [max_instruction_accounts]AccountMeta = undefined;
+
+/// Stake activation amounts for one epoch in StakeHistory.
+pub const StakeHistoryEntry = struct {
+    effective: u64 = 0,
+    activating: u64 = 0,
+    deactivating: u64 = 0,
+};
+
+/// StakeHistory row paired with its epoch.
+pub const StakeHistoryRecord = struct {
+    epoch: u64 = 0,
+    entry: StakeHistoryEntry = .{},
+};
+
+/// Cursor over the latest StakeHistory rows.
+///
+/// StakeHistory account entries are serialized oldest-first; Solana callers
+/// conventionally ask for newest rows first. `latest` starts at the newest
+/// available row and `readStakeHistory` advances backwards.
+pub const StakeHistoryCursor = struct {
+    next_index: usize = 0,
+    remaining: usize = 0,
+
+    pub fn latest(account_data: []const u8, latest_count: usize) StakeHistoryCursor {
+        const available_count = stakeHistoryEntryCount(account_data);
+        const remaining = @min(available_count, latest_count);
+        return .{
+            .next_index = available_count,
+            .remaining = remaining,
+        };
+    }
+
+    pub fn hasNext(self: StakeHistoryCursor) bool {
+        return self.remaining > 0 and self.next_index > 0;
+    }
+};
+
+/// Solana EpochSchedule sysvar fields in SVM serialized order.
+pub const EpochSchedule = struct {
+    slots_per_epoch: u64 = 0,
+    leader_schedule_slot_offset: u64 = 0,
+    warmup: bool = false,
+    first_normal_epoch: u64 = 0,
+    first_normal_slot: u64 = 0,
+};
 
 /// Reads a Clock sysvar account payload. Short data returns the zero value.
 pub fn readClock(account_data: []const u8) Clock {
@@ -132,6 +182,53 @@ pub fn readInstructionAt(account_data: []const u8, idx: usize) InstructionInfo {
         .program_id = program_id,
         .accounts = instruction_account_meta_buffer[0..account_count],
         .data = instruction_data,
+    };
+}
+
+/// Creates a newest-first cursor for up to `latest_count` StakeHistory rows.
+pub fn stakeHistoryCursor(account_data: []const u8, latest_count: usize) StakeHistoryCursor {
+    return StakeHistoryCursor.latest(account_data, latest_count);
+}
+
+/// Reads the next newest StakeHistory row and advances `cursor` backwards.
+/// Returns null when the cursor is exhausted or the target row is malformed.
+pub fn readStakeHistory(account_data: []const u8, cursor: *StakeHistoryCursor) ?StakeHistoryRecord {
+    if (!cursor.hasNext()) return null;
+    cursor.next_index -= 1;
+    cursor.remaining -= 1;
+    return readStakeHistoryAt(account_data, cursor.next_index);
+}
+
+/// Reads EpochSchedule's packed 5-field payload.
+/// Short data returns the zero value; `warmup` is true only for byte value 1.
+pub fn readEpochSchedule(account_data: []const u8) EpochSchedule {
+    if (account_data.len < epoch_schedule_account_data_len) return .{};
+    return .{
+        .slots_per_epoch = readU64Le(account_data, 0).?,
+        .leader_schedule_slot_offset = readU64Le(account_data, 8).?,
+        .warmup = account_data[16] == 1,
+        .first_normal_epoch = readU64Le(account_data, 17).?,
+        .first_normal_slot = readU64Le(account_data, 25).?,
+    };
+}
+
+fn stakeHistoryEntryCount(account_data: []const u8) usize {
+    const declared_count = readU64Le(account_data, 0) orelse return 0;
+    const payload_len = account_data.len - stake_history_len_prefix_len;
+    const available_count = payload_len / stake_history_entry_len;
+    return @min(@as(usize, @intCast(declared_count)), available_count);
+}
+
+fn readStakeHistoryAt(account_data: []const u8, index: usize) ?StakeHistoryRecord {
+    if (index >= stakeHistoryEntryCount(account_data)) return null;
+    const offset = stake_history_len_prefix_len + (index * stake_history_entry_len);
+    return .{
+        .epoch = readU64Le(account_data, offset).?,
+        .entry = .{
+            .effective = readU64Le(account_data, offset + 8).?,
+            .activating = readU64Le(account_data, offset + 16).?,
+            .deactivating = readU64Le(account_data, offset + 24).?,
+        },
     };
 }
 
@@ -259,6 +356,12 @@ fn appendU16(out: *std.ArrayList(u8), value: u16) !void {
     try out.appendSlice(std.testing.allocator, &bytes);
 }
 
+fn appendU64(out: *std.ArrayList(u8), value: u64) !void {
+    var bytes = [_]u8{0} ** @sizeOf(u64);
+    writeU64Le(&bytes, 0, value);
+    try out.appendSlice(std.testing.allocator, &bytes);
+}
+
 fn appendPubkey(out: *std.ArrayList(u8), seed: u8) !void {
     var pubkey = [_]u8{0} ** pubkey_len;
     for (&pubkey, 0..) |*byte, index| byte.* = seed +% @as(u8, @intCast(index));
@@ -286,6 +389,34 @@ fn buildInstructionsSysvar(instruction_count: u16) !std.ArrayList(u8) {
     var out = std.ArrayList(u8).empty;
     try appendU16(&out, instruction_count);
     try out.appendNTimes(std.testing.allocator, 0, @as(usize, instruction_count) * @sizeOf(u16));
+    return out;
+}
+
+fn appendStakeHistoryRecord(
+    out: *std.ArrayList(u8),
+    epoch: u64,
+    effective: u64,
+    activating: u64,
+    deactivating: u64,
+) !void {
+    try appendU64(out, epoch);
+    try appendU64(out, effective);
+    try appendU64(out, activating);
+    try appendU64(out, deactivating);
+}
+
+fn buildStakeHistorySysvar(records: []const StakeHistoryRecord) !std.ArrayList(u8) {
+    var out = std.ArrayList(u8).empty;
+    try appendU64(&out, @intCast(records.len));
+    for (records) |record| {
+        try appendStakeHistoryRecord(
+            &out,
+            record.epoch,
+            record.entry.effective,
+            record.entry.activating,
+            record.entry.deactivating,
+        );
+    }
     return out;
 }
 
@@ -371,4 +502,121 @@ test "readInstructionAt returns error sentinel for out-of-bounds index" {
     try std.testing.expectEqual(@as(usize, 0), info.program_id.len);
     try std.testing.expectEqual(@as(usize, 0), info.accounts.len);
     try std.testing.expectEqual(@as(usize, 0), info.data.len);
+}
+
+test "readStakeHistory cursor returns latest entries newest first" {
+    const records = [_]StakeHistoryRecord{
+        .{ .epoch = 10, .entry = .{ .effective = 100, .activating = 1, .deactivating = 2 } },
+        .{ .epoch = 11, .entry = .{ .effective = 200, .activating = 3, .deactivating = 4 } },
+        .{ .epoch = 12, .entry = .{ .effective = 300, .activating = 5, .deactivating = 6 } },
+    };
+    var data = try buildStakeHistorySysvar(&records);
+    defer data.deinit(std.testing.allocator);
+
+    var cursor = stakeHistoryCursor(data.items, 2);
+    try std.testing.expect(cursor.hasNext());
+    const newest = readStakeHistory(data.items, &cursor).?;
+    const next = readStakeHistory(data.items, &cursor).?;
+    try std.testing.expectEqual(@as(u64, 12), newest.epoch);
+    try std.testing.expectEqual(@as(u64, 300), newest.entry.effective);
+    try std.testing.expectEqual(@as(u64, 11), next.epoch);
+    try std.testing.expectEqual(@as(u64, 3), next.entry.activating);
+    try std.testing.expect(readStakeHistory(data.items, &cursor) == null);
+}
+
+test "readStakeHistory cursor clamps latest count to available entries" {
+    const records = [_]StakeHistoryRecord{
+        .{ .epoch = 1, .entry = .{ .effective = 10, .activating = 20, .deactivating = 30 } },
+        .{ .epoch = 2, .entry = .{ .effective = 40, .activating = 50, .deactivating = 60 } },
+    };
+    var data = try buildStakeHistorySysvar(&records);
+    defer data.deinit(std.testing.allocator);
+
+    var cursor = stakeHistoryCursor(data.items, 99);
+    try std.testing.expectEqual(@as(usize, 2), cursor.remaining);
+    try std.testing.expectEqual(@as(u64, 2), readStakeHistory(data.items, &cursor).?.epoch);
+    try std.testing.expectEqual(@as(u64, 1), readStakeHistory(data.items, &cursor).?.epoch);
+    try std.testing.expect(!cursor.hasNext());
+}
+
+test "readStakeHistory ignores truncated trailing records" {
+    var data = std.ArrayList(u8).empty;
+    defer data.deinit(std.testing.allocator);
+    try appendU64(&data, 2);
+    try appendStakeHistoryRecord(&data, 7, 70, 71, 72);
+    try appendU64(&data, 8);
+
+    var cursor = stakeHistoryCursor(data.items, 2);
+    try std.testing.expectEqual(@as(usize, 1), cursor.remaining);
+    const only = readStakeHistory(data.items, &cursor).?;
+    try std.testing.expectEqual(@as(u64, 7), only.epoch);
+    try std.testing.expectEqual(@as(u64, 72), only.entry.deactivating);
+    try std.testing.expect(readStakeHistory(data.items, &cursor) == null);
+}
+
+test "readStakeHistory empty and short account data are exhausted" {
+    const short = [_]u8{ 1, 2, 3, 4, 5, 6, 7 };
+    var short_cursor = stakeHistoryCursor(&short, 1);
+    try std.testing.expect(!short_cursor.hasNext());
+    try std.testing.expect(readStakeHistory(&short, &short_cursor) == null);
+
+    var empty = std.ArrayList(u8).empty;
+    defer empty.deinit(std.testing.allocator);
+    try appendU64(&empty, 0);
+    var empty_cursor = stakeHistoryCursor(empty.items, 1);
+    try std.testing.expect(!empty_cursor.hasNext());
+    try std.testing.expect(readStakeHistory(empty.items, &empty_cursor) == null);
+}
+
+test "readEpochSchedule parses packed fields with one-byte warmup bool" {
+    var data = [_]u8{0} ** epoch_schedule_account_data_len;
+    writeU64Le(&data, 0, 432_000);
+    writeU64Le(&data, 8, 432_000);
+    data[16] = 1;
+    writeU64Le(&data, 17, 14);
+    writeU64Le(&data, 25, 524_256);
+
+    const schedule = readEpochSchedule(&data);
+    try std.testing.expectEqual(@as(u64, 432_000), schedule.slots_per_epoch);
+    try std.testing.expectEqual(@as(u64, 432_000), schedule.leader_schedule_slot_offset);
+    try std.testing.expect(schedule.warmup);
+    try std.testing.expectEqual(@as(u64, 14), schedule.first_normal_epoch);
+    try std.testing.expectEqual(@as(u64, 524_256), schedule.first_normal_slot);
+}
+
+test "readEpochSchedule warmup is false for byte value zero" {
+    var data = [_]u8{0} ** epoch_schedule_account_data_len;
+    writeU64Le(&data, 0, 64);
+    writeU64Le(&data, 8, 32);
+    data[16] = 0;
+    writeU64Le(&data, 17, 3);
+    writeU64Le(&data, 25, 9);
+
+    const schedule = readEpochSchedule(&data);
+    try std.testing.expect(!schedule.warmup);
+    try std.testing.expectEqual(@as(u64, 64), schedule.slots_per_epoch);
+    try std.testing.expectEqual(@as(u64, 3), schedule.first_normal_epoch);
+}
+
+test "readEpochSchedule returns zero value for short account data" {
+    const short = [_]u8{0xaa} ** (epoch_schedule_account_data_len - 1);
+    const schedule = readEpochSchedule(&short);
+    try std.testing.expectEqual(@as(u64, 0), schedule.slots_per_epoch);
+    try std.testing.expectEqual(@as(u64, 0), schedule.leader_schedule_slot_offset);
+    try std.testing.expect(!schedule.warmup);
+    try std.testing.expectEqual(@as(u64, 0), schedule.first_normal_epoch);
+    try std.testing.expectEqual(@as(u64, 0), schedule.first_normal_slot);
+}
+
+test "readEpochSchedule treats non-one warmup byte as false" {
+    var data = [_]u8{0} ** epoch_schedule_account_data_len;
+    writeU64Le(&data, 0, 1);
+    writeU64Le(&data, 8, 2);
+    data[16] = 2;
+    writeU64Le(&data, 17, 3);
+    writeU64Le(&data, 25, 4);
+
+    const schedule = readEpochSchedule(&data);
+    try std.testing.expect(!schedule.warmup);
+    try std.testing.expectEqual(@as(u64, 4), schedule.first_normal_slot);
 }

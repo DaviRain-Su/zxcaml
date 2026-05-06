@@ -59,6 +59,21 @@ type instructions_header = {
   offsets : int array;
 }
 
+type stake_history_entry = {
+  epoch : int;
+  effective : int;
+  activating : int;
+  deactivating : int;
+}
+
+type epoch_schedule = {
+  slots_per_epoch : int;
+  leader_schedule_slot_offset : int;
+  warmup : bool;
+  first_normal_epoch : int;
+  first_normal_slot : int;
+}
+
 type account_data = bytes
 
 type clock_record = clock
@@ -66,6 +81,10 @@ type clock_record = clock
 type rent_record = rent
 
 type instruction_info = instruction
+
+type stake_history_record = stake_history_entry
+
+type epoch_schedule_record = epoch_schedule
 
 module Option = struct
   let map f = function None -> None | Some x -> Some (f x)
@@ -501,6 +520,12 @@ module Sysvar = struct
 
   external instruction_at : account_data -> int -> instruction_info
     = "sysvar.readInstructionAt"
+
+  external stake_history_latest_from_account : account_data -> int -> stake_history_record array
+    = "sysvar.readStakeHistory"
+
+  external epoch_schedule_from_account : account_data -> epoch_schedule_record
+    = "sysvar.readEpochSchedule"
 end
 
 module Pubkey = struct
