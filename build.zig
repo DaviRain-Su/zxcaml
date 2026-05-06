@@ -371,6 +371,24 @@ pub fn build(b: *std.Build) void {
     run_otest_cli_tests.step.dependOn(&run_cli_tests.step);
     run_otest_cli_tests.setCwd(b.path(""));
 
+    // FMT CLI integration tests: verify `omlz fmt` help, stdout, check,
+    // write, stdin, JSON summary, directory recursion, and exit-code behavior.
+    const fmt_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/omlz_fmt_subcommand_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fmt_cli_options = b.addOptions();
+    fmt_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    fmt_cli_test_module.addOptions("cli_options", fmt_cli_options);
+    const fmt_cli_tests = b.addTest(.{
+        .root_module = fmt_cli_test_module,
+    });
+    const run_fmt_cli_tests = b.addRunArtifact(fmt_cli_tests);
+    run_fmt_cli_tests.step.dependOn(b.getInstallStep());
+    run_fmt_cli_tests.step.dependOn(&run_otest_cli_tests.step);
+    run_fmt_cli_tests.setCwd(b.path(""));
+
     // OTEST parser regression tests: verify frontend pre-scan behavior for
     // comment-contained let% text before the CLI runner executes.
     const parser_otest_test_module = b.createModule(.{
@@ -756,6 +774,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_otest_cli_tests.step);
+    test_step.dependOn(&run_fmt_cli_tests.step);
     test_step.dependOn(&run_parser_otest_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
