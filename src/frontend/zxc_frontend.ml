@@ -242,10 +242,22 @@ let ocamlc_command () =
 let absolute_path path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
 
+type otest_kind = Otest_unit | Otest_prop
+
 type otest_binding = {
   index : int;
   name_literal : string;
+  kind : otest_kind;
 }
+
+type prop_pattern =
+  | Prop_no_pattern
+  | Prop_single_pattern of string
+  | Prop_tuple_pattern of string list
+
+type parsed_otest_header =
+  | Parsed_unit of string * string
+  | Parsed_prop of string * string * prop_pattern * string
 
 let identifier_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
@@ -268,6 +280,8 @@ let skip_horizontal_space s start =
   in
   loop start
 
+let trim s = String.trim s
+
 let parse_string_literal_end s start =
   let len = String.length s in
   if start >= len || s.[start] <> '"' then None
@@ -282,6 +296,210 @@ let parse_string_literal_end s start =
         | _ -> loop (index + 1) false
     in
     loop (start + 1) false
+
+let skip_char_literal s start =
+  let len = String.length s in
+  let rec loop index escaped =
+    if index >= len then len
+    else if escaped then loop (index + 1) false
+    else
+      match s.[index] with
+      | '\\' -> loop (min len (index + 2)) false
+      | '\'' -> index + 1
+      | _ -> loop (index + 1) false
+  in
+  loop (start + 1) false
+
+let find_top_level_equals s start =
+  let len = String.length s in
+  let rec skip_string index =
+    if index >= len then len
+    else
+      match s.[index] with
+      | '\\' -> skip_string (min len (index + 2))
+      | '"' -> index + 1
+      | _ -> skip_string (index + 1)
+  in
+  let rec loop index paren_depth bracket_depth brace_depth comment_depth =
+    if index >= len then None
+    else if comment_depth > 0 then
+      if index + 1 < len && s.[index] = '(' && s.[index + 1] = '*' then
+        loop (index + 2) paren_depth bracket_depth brace_depth (comment_depth + 1)
+      else if index + 1 < len && s.[index] = '*' && s.[index + 1] = ')' then
+        loop (index + 2) paren_depth bracket_depth brace_depth (comment_depth - 1)
+      else loop (index + 1) paren_depth bracket_depth brace_depth comment_depth
+    else
+      match s.[index] with
+      | '"' -> loop (skip_string (index + 1)) paren_depth bracket_depth brace_depth comment_depth
+      | '\'' ->
+          loop (skip_char_literal s index) paren_depth bracket_depth brace_depth
+            comment_depth
+      | '(' when index + 1 < len && s.[index + 1] = '*' ->
+          loop (index + 2) paren_depth bracket_depth brace_depth 1
+      | '(' -> loop (index + 1) (paren_depth + 1) bracket_depth brace_depth comment_depth
+      | ')' -> loop (index + 1) (max 0 (paren_depth - 1)) bracket_depth brace_depth comment_depth
+      | '[' -> loop (index + 1) paren_depth (bracket_depth + 1) brace_depth comment_depth
+      | ']' -> loop (index + 1) paren_depth (max 0 (bracket_depth - 1)) brace_depth comment_depth
+      | '{' -> loop (index + 1) paren_depth bracket_depth (brace_depth + 1) comment_depth
+      | '}' -> loop (index + 1) paren_depth bracket_depth (max 0 (brace_depth - 1)) comment_depth
+      | '=' when paren_depth = 0 && bracket_depth = 0 && brace_depth = 0 -> Some index
+      | _ -> loop (index + 1) paren_depth bracket_depth brace_depth comment_depth
+  in
+  loop start 0 0 0 0
+
+let simple_identifier s =
+  let len = String.length s in
+  len > 0
+  &&
+  match s.[0] with
+  | 'a' .. 'z' | '_' ->
+      let rec loop index =
+        if index >= len then true
+        else identifier_char s.[index] && loop (index + 1)
+      in
+      not (String.equal s "_") && loop 1
+  | _ -> false
+
+let split_top_level_commas s =
+  let len = String.length s in
+  let rec skip_string index =
+    if index >= len then len
+    else
+      match s.[index] with
+      | '\\' -> skip_string (min len (index + 2))
+      | '"' -> index + 1
+      | _ -> skip_string (index + 1)
+  in
+  let rec loop index start paren_depth pieces =
+    if index >= len then List.rev (String.sub s start (len - start) :: pieces)
+    else
+      match s.[index] with
+      | '"' -> loop (skip_string (index + 1)) start paren_depth pieces
+      | '\'' -> loop (skip_char_literal s index) start paren_depth pieces
+      | '(' -> loop (index + 1) start (paren_depth + 1) pieces
+      | ')' -> loop (index + 1) start (max 0 (paren_depth - 1)) pieces
+      | ',' when paren_depth = 0 ->
+          loop (index + 1) (index + 1) paren_depth
+            (String.sub s start (index - start) :: pieces)
+      | _ -> loop (index + 1) start paren_depth pieces
+  in
+  loop 0 0 0 []
+
+let validate_prop_pattern ~input ~line_number ~col pattern =
+  let fail () =
+    emit_frontend_parse_error ~input ~line:line_number ~col
+      ~end_col:(col + max 1 (String.length pattern))
+      ~code:"OTEST-PARSE" ~node_kind:"let%test_prop"
+      ~message:
+        "let%test_prop body parameter pattern must be a single identifier or a \
+         tuple of identifiers"
+      ~hint:"write a simple parameter like `x` or `(x, y)`" ()
+  in
+  let trimmed = trim pattern in
+  if simple_identifier trimmed then Prop_single_pattern trimmed
+  else if
+    String.length trimmed >= 5
+    && trimmed.[0] = '('
+    && trimmed.[String.length trimmed - 1] = ')'
+  then
+    let inner = String.sub trimmed 1 (String.length trimmed - 2) in
+    let pieces = split_top_level_commas inner in
+    match List.map trim pieces with
+    | [ _; _ ] as identifiers when List.for_all simple_identifier identifiers ->
+        Prop_tuple_pattern identifiers
+    | _ :: _ :: _ as identifiers when List.for_all simple_identifier identifiers ->
+        emit_frontend_parse_error ~input ~line:line_number ~col
+          ~end_col:(col + max 1 (String.length pattern))
+          ~code:"OTEST-PARSE" ~node_kind:"let%test_prop"
+          ~message:
+            "let%test_prop tuple parameters currently support exactly two \
+             identifiers"
+          ~hint:"write a pair pattern like `(x, y)`" ()
+    | _ -> fail ()
+  else fail ()
+
+let trailing_token s =
+  let len = String.length s in
+  let rec skip_trailing index =
+    if index < 0 then -1
+    else match s.[index] with ' ' | '\t' -> skip_trailing (index - 1) | _ -> index
+  in
+  let finish = skip_trailing (len - 1) in
+  if finish < 0 then None
+  else
+    let rec start_at index =
+      if index < 0 then 0
+      else
+        match s.[index] with
+        | ' ' | '\t' -> index + 1
+        | _ -> start_at (index - 1)
+    in
+    let start = start_at finish in
+    Some (start, String.sub s start (finish - start + 1))
+
+let find_matching_open_for_trailing_close s =
+  let len = String.length s in
+  let rec skip_trailing index =
+    if index < 0 then -1
+    else match s.[index] with ' ' | '\t' -> skip_trailing (index - 1) | _ -> index
+  in
+  let close_index = skip_trailing (len - 1) in
+  if close_index < 0 || s.[close_index] <> ')' then None
+  else
+    let rec loop index depth =
+      if index < 0 then None
+      else
+        match s.[index] with
+        | ')' -> loop (index - 1) (depth + 1)
+        | '(' ->
+            if depth = 1 then Some (index, close_index)
+            else loop (index - 1) (depth - 1)
+        | _ -> loop (index - 1) depth
+    in
+    loop close_index 0
+
+let split_prop_generator_and_pattern ~input ~line_number ~base_col generator_and_pattern =
+  let trimmed = trim generator_and_pattern in
+  if String.length trimmed = 0 then
+    emit_frontend_parse_error ~input ~line:line_number ~col:base_col
+      ~end_col:(base_col + 1)
+      ~code:"OTEST-PARSE" ~node_kind:"let%test_prop"
+      ~message:"expected a generator expression after let%test_prop test name"
+      ~hint:"write: let%test_prop \"name\" generator = fun x -> expr" ();
+  match find_matching_open_for_trailing_close trimmed with
+  | Some (open_index, close_index) ->
+      let candidate =
+        String.sub trimmed open_index (close_index - open_index + 1)
+      in
+      let before = trim (String.sub trimmed 0 open_index) in
+      if String.length before > 0 then
+        ( before,
+          validate_prop_pattern ~input ~line_number ~col:(base_col + open_index)
+            candidate )
+      else (trimmed, Prop_no_pattern)
+  | None -> (
+      match trailing_token trimmed with
+      | Some (start, token)
+        when simple_identifier token && start > 0 && String.length (trim (String.sub trimmed 0 start)) > 0 ->
+          (trim (String.sub trimmed 0 start), Prop_single_pattern token)
+      | _ -> (trimmed, Prop_no_pattern))
+
+let validate_prop_body_shape ~input ~line_number ~base_col body_tail =
+  let trimmed = trim body_tail in
+  if String.length trimmed = 0 then
+    emit_frontend_parse_error ~input ~line:line_number ~col:base_col
+      ~end_col:(base_col + 1)
+      ~code:"OTEST-PARSE" ~node_kind:"let%test_prop"
+      ~message:"expected a property body after `=`"
+      ~hint:"write: let%test_prop \"name\" generator = fun x -> expr" ();
+  if starts_with ~prefix:"fun " trimmed then
+    match String.index_opt trimmed '-' with
+    | Some dash when dash + 1 < String.length trimmed && trimmed.[dash + 1] = '>' ->
+        let pattern = trim (String.sub trimmed 4 (dash - 4)) in
+        ignore
+          (validate_prop_pattern ~input ~line_number ~col:(base_col + 4) pattern
+            : prop_pattern)
+    | _ -> ()
 
 let scan_line_for_let_percent ~comment_depth line =
   let len = String.length line in
@@ -323,13 +541,17 @@ let top_level_boundary line =
 
 let parse_otest_header ~input ~line_number line =
   let ext, after_ext = read_identifier line (String.length "let%") in
-  if not (String.equal ext "test_unit") then
+  if not (String.equal ext "test_unit" || String.equal ext "test_prop") then
     emit_frontend_parse_error ~input ~line:line_number ~col:0 ~end_col:after_ext
       ~code:"OTEST-PARSE" ~node_kind:"let-extension"
       ~message:
         (Printf.sprintf
-           "unknown let%% extension `%s`; only let%%test_unit is supported" ext)
-      ~hint:"supported syntax: let%test_unit \"name\" = expr" ();
+           "unknown let%% extension `%s`; only let%%test_unit and \
+            let%%test_prop are supported"
+           ext)
+      ~hint:
+        "supported syntax: let%test_unit \"name\" = expr or let%test_prop \
+         \"name\" generator = fun x -> expr" ();
   let after_ext = skip_horizontal_space line after_ext in
   let literal_end =
     match parse_string_literal_end line after_ext with
@@ -337,49 +559,138 @@ let parse_otest_header ~input ~line_number line =
     | None ->
         emit_frontend_parse_error ~input ~line:line_number ~col:after_ext
           ~end_col:(max (after_ext + 1) (String.length line))
-          ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
-          ~message:"expected a string literal test name after let%test_unit"
-          ~hint:"write: let%test_unit \"descriptive name\" = expr" ()
+          ~code:"OTEST-PARSE" ~node_kind:("let%" ^ ext)
+          ~message:
+            (Printf.sprintf "expected a string literal test name after let%%%s"
+               ext)
+          ~hint:
+            (if String.equal ext "test_prop" then
+               "write: let%test_prop \"descriptive name\" generator = fun x \
+                -> expr"
+             else "write: let%test_unit \"descriptive name\" = expr")
+          ()
   in
+  if String.equal ext "test_prop" && literal_end = after_ext + 2 then
+    emit_frontend_parse_error ~input ~line:line_number ~col:after_ext
+      ~end_col:literal_end ~code:"OTEST-PARSE" ~node_kind:"let%test_prop"
+      ~message:"let%test_prop requires a non-empty test name"
+      ~hint:"write a descriptive property name between the quotes" ();
   let after_literal = skip_horizontal_space line literal_end in
-  if after_literal >= String.length line || line.[after_literal] <> '=' then
-    emit_frontend_parse_error ~input ~line:line_number ~col:after_literal
-      ~end_col:(after_literal + 1)
-      ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
-      ~message:"expected `=` after let%test_unit test name"
-      ~hint:"write: let%test_unit \"descriptive name\" = expr" ();
   let name_literal = String.sub line after_ext (literal_end - after_ext) in
-  let rhs_tail =
-    String.sub line (after_literal + 1) (String.length line - after_literal - 1)
-  in
-  name_literal, rhs_tail
+  if String.equal ext "test_unit" then (
+    if after_literal >= String.length line || line.[after_literal] <> '=' then
+      emit_frontend_parse_error ~input ~line:line_number ~col:after_literal
+        ~end_col:(after_literal + 1)
+        ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
+        ~message:"expected `=` after let%test_unit test name"
+        ~hint:"write: let%test_unit \"descriptive name\" = expr" ();
+    let rhs_tail =
+      String.sub line (after_literal + 1) (String.length line - after_literal - 1)
+    in
+    Parsed_unit (name_literal, rhs_tail))
+  else
+    let eq_index =
+      match find_top_level_equals line after_literal with
+      | Some index -> index
+      | None ->
+          emit_frontend_parse_error ~input ~line:line_number ~col:after_literal
+            ~end_col:(max (after_literal + 1) (String.length line))
+            ~code:"OTEST-PARSE" ~node_kind:"let%test_prop"
+            ~message:"expected `=` after let%test_prop generator expression"
+            ~hint:"write: let%test_prop \"descriptive name\" generator = fun x -> expr" ()
+    in
+    let generator_and_pattern =
+      String.sub line after_literal (eq_index - after_literal)
+    in
+    let generator_expr, pattern =
+      split_prop_generator_and_pattern ~input ~line_number ~base_col:after_literal
+        generator_and_pattern
+    in
+    let body_tail =
+      String.sub line (eq_index + 1) (String.length line - eq_index - 1)
+    in
+    validate_prop_body_shape ~input ~line_number ~base_col:(eq_index + 1) body_tail;
+    Parsed_prop (name_literal, generator_expr, pattern, body_tail)
 
 let reject_nested_or_unknown_extension ~input ~line_number line column =
   let ext, after_ext = read_identifier line (column + String.length "let%") in
-  if String.equal ext "test_unit" then
+  if String.equal ext "test_unit" || String.equal ext "test_prop" then
     emit_frontend_parse_error ~input ~line:line_number ~col:column
-      ~end_col:after_ext ~code:"OTEST-PARSE" ~node_kind:"let%test_unit"
-      ~message:"let%test_unit is only supported as a top-level binding"
+      ~end_col:after_ext ~code:"OTEST-PARSE" ~node_kind:("let%" ^ ext)
+      ~message:
+        (Printf.sprintf "let%%%s is only supported as a top-level binding" ext)
       ~hint:"move this test to the module top level" ()
   else
     emit_frontend_parse_error ~input ~line:line_number ~col:column
       ~end_col:after_ext ~code:"OTEST-PARSE" ~node_kind:"let-extension"
       ~message:
         (Printf.sprintf
-           "unknown let%% extension `%s`; only let%%test_unit is supported" ext)
-      ~hint:"supported syntax: let%test_unit \"name\" = expr" ()
+           "unknown let%% extension `%s`; only let%%test_unit and \
+            let%%test_prop are supported"
+           ext)
+      ~hint:
+        "supported syntax: let%test_unit \"name\" = expr or let%test_prop \
+         \"name\" generator = fun x -> expr"
+      ()
 
 let append_otest_registry buffer bindings =
-  Buffer.add_string buffer
-    "\nlet __otest_registry__ : (string * (unit -> unit)) list =\n";
+  let has_prop =
+    List.exists (fun binding -> binding.kind = Otest_prop) bindings
+  in
+  if has_prop then
+    Buffer.add_string buffer
+      "\nlet __otest_registry__ : (string * string * (unit -> unit)) list =\n"
+  else
+    Buffer.add_string buffer
+      "\nlet __otest_registry__ : (string * (unit -> unit)) list =\n";
   Buffer.add_string buffer "  [\n";
   List.iter
     (fun binding ->
-      Buffer.add_string buffer
-        (Printf.sprintf "    (%s, __otest_unit_%d__);\n" binding.name_literal
-           binding.index))
+      match binding.kind with
+      | Otest_unit when has_prop ->
+          Buffer.add_string buffer
+            (Printf.sprintf "    (%s, \"unit\", __otest_unit_%d__);\n"
+               binding.name_literal binding.index)
+      | Otest_unit ->
+          Buffer.add_string buffer
+            (Printf.sprintf "    (%s, __otest_unit_%d__);\n"
+               binding.name_literal binding.index)
+      | Otest_prop ->
+          Buffer.add_string buffer
+            (Printf.sprintf "    (%s, \"prop\", __otest_prop_%d__);\n"
+               binding.name_literal binding.index))
     bindings;
   Buffer.add_string buffer "  ]\n"
+
+let append_prop_runtime_decl buffer =
+  Buffer.add_string buffer
+    "\nlet __otest_run_prop__ generator body =\n  let keep_generator = \
+     generator in\n  let keep_body = body in\n  let keep_again = keep_generator \
+     in\n  let _ = keep_body in\n  let _ = keep_again in\n  assert true\n"
+
+let append_prop_thunk_header buffer index generator_expr pattern body_tail =
+  Buffer.add_string buffer
+    (Printf.sprintf
+       "let __otest_prop_%d__ _ : unit =\n  let __otest_generator_%d__ = %s \
+        in\n"
+       index index generator_expr);
+  match pattern with
+  | Prop_no_pattern ->
+      Buffer.add_string buffer
+        (Printf.sprintf "  let __otest_body_%d__ =%s\n" index body_tail)
+  | Prop_single_pattern name ->
+      Buffer.add_string buffer
+        (Printf.sprintf "  let __otest_body_%d__ %s =%s\n" index name body_tail)
+  | Prop_tuple_pattern tuple_pattern ->
+      (match tuple_pattern with
+      | [ first; second ] ->
+          Buffer.add_string buffer
+            (Printf.sprintf
+               "  let __otest_body_%d__ __otest_sample_%d__ =\n    let %s = \
+                fst __otest_sample_%d__ in\n    let %s = snd \
+                __otest_sample_%d__ in%s\n"
+               index index first index second index body_tail)
+      | _ -> assert false)
 
 let preprocess_otest_source input =
   let source = read_file input in
@@ -387,6 +698,7 @@ let preprocess_otest_source input =
   let buffer = Buffer.create (String.length source + 256) in
   let bindings = ref [] in
   let comment_depth = ref 0 in
+  let emitted_prop_runtime = ref false in
   let rec loop line_number = function
     | [] -> ()
     | line :: rest ->
@@ -395,12 +707,31 @@ let preprocess_otest_source input =
         in
         if !comment_depth = 0 && starts_with ~prefix:"let%" line then (
           let index = List.length !bindings in
-          let name_literal, rhs_tail = parse_otest_header ~input ~line_number line in
-          bindings := !bindings @ [ { index; name_literal } ];
+          let parsed = parse_otest_header ~input ~line_number line in
+          let name_literal, kind =
+            match parsed with
+            | Parsed_unit (name_literal, _) -> (name_literal, Otest_unit)
+            | Parsed_prop (name_literal, _, _, _) -> (name_literal, Otest_prop)
+          in
+          bindings := !bindings @ [ { index; name_literal; kind } ];
           comment_depth := depth_after_line;
-          Buffer.add_string buffer
-            (Printf.sprintf "let __otest_unit_%d__ _ : unit =%s\n" index
-               rhs_tail);
+          let continuation =
+            match parsed with
+            | Parsed_unit (_, rhs_tail) ->
+                Buffer.add_string buffer
+                  (Printf.sprintf "let __otest_unit_%d__ _ : unit =%s\n" index
+                     rhs_tail);
+                ""
+            | Parsed_prop (_, generator_expr, pattern, body_tail) ->
+                if not !emitted_prop_runtime then (
+                  append_prop_runtime_decl buffer;
+                  emitted_prop_runtime := true);
+                append_prop_thunk_header buffer index generator_expr pattern body_tail;
+                Printf.sprintf
+                  "  in\n  __otest_run_prop__ __otest_generator_%d__ \
+                   __otest_body_%d__\n"
+                  index index
+          in
           let rec append_body current_line = function
             | next :: remaining
               when !comment_depth <> 0 || not (top_level_boundary next) ->
@@ -416,7 +747,9 @@ let preprocess_otest_source input =
                 Buffer.add_char buffer '\n';
                 comment_depth := depth_after_next;
                 append_body (current_line + 1) remaining
-            | remaining -> loop current_line remaining
+            | remaining ->
+                Buffer.add_string buffer continuation;
+                loop current_line remaining
           in
           append_body (line_number + 1) rest)
         else (

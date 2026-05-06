@@ -300,6 +300,23 @@ pub fn build(b: *std.Build) void {
     // Set working directory to the project root so relative paths resolve.
     run_golden_tests.setCwd(b.path(""));
 
+    // OTEST2 property-test golden snapshots live in a subdirectory so the
+    // sealed M-OTEST snapshots remain untouched.
+    const otest_prop_golden_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/golden/otest_prop/run.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    otest_prop_golden_test_module.addOptions("golden_options", golden_options);
+    otest_prop_golden_test_module.addImport("test_util", test_util_module);
+    const otest_prop_golden_tests = b.addTest(.{
+        .root_module = otest_prop_golden_test_module,
+    });
+    const run_otest_prop_golden_tests = b.addRunArtifact(otest_prop_golden_tests);
+    run_otest_prop_golden_tests.step.dependOn(b.getInstallStep());
+    run_otest_prop_golden_tests.step.dependOn(&run_golden_tests.step);
+    run_otest_prop_golden_tests.setCwd(b.path(""));
+
     // UI tests (F18 / G11): end-to-end `omlz run` checks against `.expected`
     // files in tests/ui/.  Positive tests (exit 0) diff stdout; negative tests
     // (exit non-zero) diff stderr.
@@ -426,6 +443,21 @@ pub fn build(b: *std.Build) void {
     run_parser_otest_tests.step.dependOn(b.getInstallStep());
     run_parser_otest_tests.step.dependOn(&run_otest_cli_tests.step);
     run_parser_otest_tests.setCwd(b.path(""));
+
+    // OTEST2 property parser regression tests: accept top-level let%test_prop
+    // and reject malformed names/generators/body patterns before runner wiring.
+    const parser_otest_prop_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/fixtures/otest_prop/parser_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const parser_otest_prop_tests = b.addTest(.{
+        .root_module = parser_otest_prop_test_module,
+    });
+    const run_parser_otest_prop_tests = b.addRunArtifact(parser_otest_prop_tests);
+    run_parser_otest_prop_tests.step.dependOn(b.getInstallStep());
+    run_parser_otest_prop_tests.step.dependOn(&run_parser_otest_tests.step);
+    run_parser_otest_prop_tests.setCwd(b.path(""));
 
     // CLI explanation tests (P9.5 / F-OBS1): verify `omlz check --explain`
     // covers the diagnostics catalog and reports unknown codes cleanly.
@@ -793,6 +825,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_core_no_alloc_tests.step);
     test_step.dependOn(&run_determinism_tests.step);
     test_step.dependOn(&run_golden_tests.step);
+    test_step.dependOn(&run_otest_prop_golden_tests.step);
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_idl_tests.step);
     test_step.dependOn(&run_cli_tests.step);
@@ -800,6 +833,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_fmt_cli_tests.step);
     test_step.dependOn(&run_fmt_golden_tests.step);
     test_step.dependOn(&run_parser_otest_tests.step);
+    test_step.dependOn(&run_parser_otest_prop_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
