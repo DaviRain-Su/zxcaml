@@ -389,6 +389,24 @@ pub fn build(b: *std.Build) void {
     run_fmt_cli_tests.step.dependOn(&run_otest_cli_tests.step);
     run_fmt_cli_tests.setCwd(b.path(""));
 
+    // FMT golden idempotency tests (FMT / F-FMT3): verify committed
+    // input/expected pairs are byte-stable under `omlz fmt`.
+    const fmt_golden_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/omlz_fmt_golden_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fmt_golden_options = b.addOptions();
+    fmt_golden_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    fmt_golden_test_module.addOptions("cli_options", fmt_golden_options);
+    const fmt_golden_tests = b.addTest(.{
+        .root_module = fmt_golden_test_module,
+    });
+    const run_fmt_golden_tests = b.addRunArtifact(fmt_golden_tests);
+    run_fmt_golden_tests.step.dependOn(b.getInstallStep());
+    run_fmt_golden_tests.step.dependOn(&run_fmt_cli_tests.step);
+    run_fmt_golden_tests.setCwd(b.path(""));
+
     // OTEST parser regression tests: verify frontend pre-scan behavior for
     // comment-contained let% text before the CLI runner executes.
     const parser_otest_test_module = b.createModule(.{
@@ -775,6 +793,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_otest_cli_tests.step);
     test_step.dependOn(&run_fmt_cli_tests.step);
+    test_step.dependOn(&run_fmt_golden_tests.step);
     test_step.dependOn(&run_parser_otest_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
