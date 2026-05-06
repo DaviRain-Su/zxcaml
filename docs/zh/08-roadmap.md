@@ -2,7 +2,7 @@
 
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
-这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.2`，examples 语料包含 54 个 `.ml` 程序，Mollusk SVM 套件包含 21 个集成测试，并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
+这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.2`，examples 语料包含 57 个 `.ml` 程序，Mollusk SVM 套件包含 24 个集成测试，并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
 Zig runtime 公契面见 [`docs/zh/runtime-api.md`](./runtime-api.md)。
 
 ## 已完成阶段（P1–P9）
