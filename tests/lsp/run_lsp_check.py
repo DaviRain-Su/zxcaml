@@ -201,20 +201,32 @@ def latency():
     uri = fixture_uri("latency.ml")
     text = read_fixture("latency.ml")
     elapsed_ms = []
+    raw_samples_ms = []
     proc = start_and_initialize()
     try:
-        for run in range(3):
+        # One warm-up didOpen performs the full diagnostics roundtrip but is
+        # excluded from the p50 median so cold-start variance does not skew it.
+        start = time.perf_counter()
+        send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": 1, "text": text}}})
+        params = recv_publish_diagnostics(proc, uri)
+        raw_samples_ms.append((time.perf_counter() - start) * 1000.0)
+        assert params["diagnostics"] == [], params
+
+        for run in range(5):
             start = time.perf_counter()
-            send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": run + 1, "text": text}}})
+            send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": run + 2, "text": text}}})
             params = recv_publish_diagnostics(proc, uri)
-            elapsed_ms.append((time.perf_counter() - start) * 1000.0)
+            sample_ms = (time.perf_counter() - start) * 1000.0
+            elapsed_ms.append(sample_ms)
+            raw_samples_ms.append(sample_ms)
             assert params["diagnostics"] == [], params
     finally:
         stop(proc)
 
-    median_ms = sorted(elapsed_ms)[len(elapsed_ms) // 2]
+    sorted_samples = sorted(elapsed_ms)
+    median_ms = sorted_samples[len(sorted_samples) // 2]
     print(f"latency_median={median_ms:.1f}ms")
-    assert median_ms <= 200.0, elapsed_ms
+    assert median_ms <= 200.0, f"raw_samples_ms={raw_samples_ms}"
 
 
 def all_checks():
