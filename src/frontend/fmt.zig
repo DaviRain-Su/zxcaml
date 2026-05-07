@@ -337,6 +337,13 @@ fn lexLine(allocator: std.mem.Allocator, line: []const u8) ![]Token {
             try tokens.append(allocator, .{ .kind = .number, .text = line[start..index] });
             continue;
         }
+        if (c == '~' and index + 1 < line.len and isIdentStart(line[index + 1])) {
+            const start = index;
+            index += 2;
+            while (index < line.len and isIdentChar(line[index])) : (index += 1) {}
+            try tokens.append(allocator, .{ .kind = .word, .text = line[start..index] });
+            continue;
+        }
         if (isOperatorChar(c)) {
             const start = index;
             index += 1;
