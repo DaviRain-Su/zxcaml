@@ -541,3 +541,80 @@ M-FMT-3 只负责文档和 corpus 证据，不修改 formatter implementation。
 这些修复应进入未来的 M-FMT-FIXES milestone。
 更新本 corpus 时不要顺手修掉它们。
 本阶段的正确做法是如实记录当前 formatter output，并让未来 work 有意识地改变它。
+
+## 第 20 阶段 — lex wart fixes (M-FMT-FIXES)
+
+M-FMT-FIXES 关闭了第 19 阶段末尾记录的 `TD-FMT-LEX-WARTS` cluster。
+这一次和 M-FMT-3 不同，不只是新增 corpus，而是有意修正 formatter lexer 与 spacing 规则。
+相关实现 commit 是 `d4a9974`、`b3976e3`、`b77d92a` 和 `41bce59`。
+每个 wart 都对应 `tests/golden/fmt/` 下的一组 golden input / expected 文件。
+每个 expected file 都通过 `./zig-out/bin/omlz fmt` 捕获，然后由 bytewise idempotency test 固定下来。
+`tests/omlz_fmt_golden_test.zig` 的 snapshot registry 现在包含二十个 formatter cases。
+安全下限同步提高为 `snapshots.len >= 20`，旧的 `>= 16` floor 不再可能掩盖第 20 阶段 fixture 被误删。
+
+第一个 wart 是 `poly_type_var`。
+本阶段之前，`type 'a box = Box of 'a` 会被误判为未结束的 character literal。
+命令在产生 formatted output 之前就以 `UnterminatedChar` 失败。
+
+```ocaml
+(* M-FMT-FIXES 之前：exit 2, UnterminatedChar *)
+type 'a box = Box of 'a
+```
+
+`d4a9974` 之后，apostrophe 开头的 type variable 会和 character literal 分开 token 化。
+固定后的 expected output 保持普通 OCaml 写法，并且只有一个 trailing newline。
+
+```ocaml
+type 'a box = Box of 'a
+```
+
+第二个 wart 是 `labelled_args`。
+本阶段之前，相邻 labelled parameters 之间需要的空格可能被吞掉。
+错误输出是 `let f~x~y = x + y`，函数名和 labels 在视觉上粘在一起。
+
+```ocaml
+(* M-FMT-FIXES 之前的输出 *)
+let f~x~y = x + y
+```
+
+`b3976e3` 之后，`~ident` 会作为一个 label token 保留，同时普通 word-to-word spacing 仍会分隔 arguments。
+新的 golden output 稳定且容易 review。
+
+```ocaml
+let f ~x ~y = x + y
+```
+
+第三个 wart 是 `optional_args`。
+本阶段之前，带 default expression 的 optional binder 会在 `?` 后被拆开，又在下一个 argument 前丢失空格。
+错误输出是 `let f ? (x = 1)y = x + y`。
+
+```ocaml
+(* M-FMT-FIXES 之前的输出 *)
+let f ? (x = 1)y = x + y
+```
+
+`b77d92a` 之后，窄化的 `?(...)` binder scanner 会保留 optional-argument token shape。
+后面的普通 argument 与它之间保留且只保留一个空格。
+
+```ocaml
+let f ?(x = 1) y = x + y
+```
+
+第四个 wart 是 `ppx_lwt`。
+本阶段之前，dense PPX let input 会保留 `let%lwt` token，但把 `) in` keyword boundary 压成 `)in`。
+错误输出是 `let%lwt x = fetch (y)in return (x)`。
+
+```ocaml
+(* M-FMT-FIXES 之前的输出 *)
+let%lwt x = fetch (y)in return (x)
+```
+
+`41bce59` 之后，formatter 使用 scout report 建议的 PPX-local keyword-boundary 规则。
+这能修复 dense `let%lwt` 行，同时不需要重新 bless 旧的非 PPX goldens。
+
+```ocaml
+let%lwt x = fetch (y) in return (x)
+```
+
+因此，第 20 阶段把这些问题从“known deferred”变成“已由 regression suite 覆盖”。
+后续 formatter work 应继续保留这四个 input 在 golden list 中，并把对应 expected files 当作 fixed points 对待。

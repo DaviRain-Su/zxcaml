@@ -539,3 +539,80 @@ That cluster covers labelled arguments, optional arguments, polymorphic type var
 Those fixes belong to a future M-FMT-FIXES milestone.
 Do not silently resolve them while updating this corpus.
 The correct behavior in this phase is to record the current formatter output exactly and let future work change it deliberately.
+
+## Phase 20 — lex wart fixes (M-FMT-FIXES)
+
+M-FMT-FIXES closes the deferred `TD-FMT-LEX-WARTS` cluster named at the end of Phase 19.
+Unlike M-FMT-3, this phase intentionally changed the formatter lexer and spacing rules.
+The affected implementation commits are `d4a9974`, `b3976e3`, `b77d92a`, and `41bce59`.
+Each wart also landed as a golden pair under `tests/golden/fmt/`.
+Each expected file was captured through `./zig-out/bin/omlz fmt` and then fixed by bytewise idempotency tests.
+The snapshot registry in `tests/omlz_fmt_golden_test.zig` now contains twenty formatter cases.
+The safety floor is now `snapshots.len >= 20`, so the old `>= 16` corpus floor cannot hide a dropped Phase 20 fixture.
+
+The first wart is `poly_type_var`.
+Before this phase, `type 'a box = Box of 'a` was lexed as the start of an unterminated character literal.
+The command failed before producing formatted output.
+
+```ocaml
+(* before M-FMT-FIXES: exit 2, UnterminatedChar *)
+type 'a box = Box of 'a
+```
+
+After `d4a9974`, apostrophe-prefixed type variables are tokenized separately from character literals.
+The expected fixed point is the same readable OCaml spelling with one trailing newline.
+
+```ocaml
+type 'a box = Box of 'a
+```
+
+The second wart is `labelled_args`.
+Before this phase, adjacent labelled parameters could collapse across their required spaces.
+The compacted output was `let f~x~y = x + y`, which makes the function name and labels visually merge.
+
+```ocaml
+(* before M-FMT-FIXES output *)
+let f~x~y = x + y
+```
+
+After `b3976e3`, `~ident` is kept as one label token while ordinary word-to-word spacing still separates arguments.
+The golden output is now stable and reviewable.
+
+```ocaml
+let f ~x ~y = x + y
+```
+
+The third wart is `optional_args`.
+Before this phase, an optional binder with a default expression could split after `?` and then collapse before the following argument.
+The bad output was `let f ? (x = 1)y = x + y`.
+
+```ocaml
+(* before M-FMT-FIXES output *)
+let f ? (x = 1)y = x + y
+```
+
+After `b77d92a`, the narrow `?(...)` binder scanner preserves the optional-argument token shape.
+The following ordinary argument is separated by exactly one space.
+
+```ocaml
+let f ?(x = 1) y = x + y
+```
+
+The fourth wart is `ppx_lwt`.
+Before this phase, dense PPX let input preserved the `let%lwt` token but collapsed the `) in` keyword boundary.
+The bad output was `let%lwt x = fetch (y)in return (x)`.
+
+```ocaml
+(* before M-FMT-FIXES output *)
+let%lwt x = fetch (y)in return (x)
+```
+
+After `41bce59`, the formatter applies the PPX-local keyword-boundary rule recommended by the scout report.
+The rule fixes dense `let%lwt` lines without reblessing older non-PPX goldens.
+
+```ocaml
+let%lwt x = fetch (y) in return (x)
+```
+
+The Phase 20 corpus therefore changes the wart status from "known deferred" to "covered regression suite".
+Future formatter work should keep these four inputs in the golden list and preserve their expected files as fixed points.

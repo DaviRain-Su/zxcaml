@@ -70,7 +70,7 @@ test "omlz_fmt_golden: snapshot outputs are bytewise idempotent" {
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
 
-    try std.testing.expect(snapshots.len >= 16);
+    try std.testing.expect(snapshots.len >= 20);
 
     for (snapshots) |snapshot| {
         const input_path = try std.fmt.allocPrint(allocator, "tests/golden/fmt/{s}.input.ml", .{snapshot});

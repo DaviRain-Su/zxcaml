@@ -9,6 +9,13 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Fixed — formatter lex warts (M-FMT-FIXES)
+
+- `d4a9974` — fixed polymorphic type-variable lexing so `type 'a box = Box of 'a` no longer trips `UnterminatedChar`.
+- `b3976e3` — fixed labelled argument spacing so `let f ~x ~y = x + y` no longer collapses to `let f~x~y = x + y`.
+- `b77d92a` — fixed optional argument binders so `?(x = 1) y` keeps the compact optional binder and the following argument boundary.
+- `41bce59` — fixed dense `let%lwt` formatting so `fetch (y) in return (x)` keeps the PPX-local `) in` keyword boundary.
+
 ### Added — fmt corpus expansion (M-FMT-3)
 
 - `54cc85d` — gadt_decl: GADT declarations (`type _ t = A : ... | B : ...`).
