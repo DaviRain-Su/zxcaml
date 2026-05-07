@@ -36,6 +36,7 @@ const arena_lower = @import("lower/arena.zig");
 const region_infer = @import("lower/region_infer.zig");
 const omlz_test = @import("omlz/test.zig");
 const omlz_fmt = @import("omlz/fmt.zig");
+const omlz_lsp_bench = @import("omlz/lsp_bench.zig");
 
 /// Parses top-level CLI flags and dispatches implemented bootstrap commands.
 pub fn main(init: std.process.Init) !void {
@@ -78,6 +79,10 @@ pub fn main(init: std.process.Init) !void {
             try omlz_fmt.writeHelp(init.io);
             return;
         }
+        if (std.mem.eql(u8, args[1], "lsp-bench")) {
+            try omlz_lsp_bench.writeHelp(init.io);
+            return;
+        }
         if (std.mem.eql(u8, args[1], "unmap")) {
             try writeUnmapHelp(init.io);
             return;
@@ -117,6 +122,11 @@ pub fn main(init: std.process.Init) !void {
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "fmt")) {
         try omlz_fmt.run(init, args[0], args);
+        return;
+    }
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "lsp-bench")) {
+        try omlz_lsp_bench.run(init, args[0], args);
         return;
     }
 
@@ -280,6 +290,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz run <file.ml>
         \\  omlz test [--filter SUBSTR] [--format=cargo|json] [FILE...]
         \\  omlz fmt [--check|--write|--stdin] [--format=text|json] [FILE_OR_DIR...]
+        \\  omlz lsp-bench [--warmup N] [--rounds K] [--p50 MS] [--p99 MS]
         \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
         \\  omlz bench
         \\  omlz doctor

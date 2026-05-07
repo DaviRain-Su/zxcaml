@@ -425,6 +425,25 @@ pub fn build(b: *std.Build) void {
     run_fmt_cli_tests.step.dependOn(&run_otest_cli_tests.step);
     run_fmt_cli_tests.setCwd(b.path(""));
 
+    // LSP bench CLI integration tests (LSPFIX2 / F-LSPFIX2-4): verify the
+    // `omlz lsp-bench` wrapper help, defaults, forwarded flags, and env
+    // threshold propagation.
+    const omlz_lsp_bench_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/omlz_lsp_bench_subcommand_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const omlz_lsp_bench_cli_options = b.addOptions();
+    omlz_lsp_bench_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    omlz_lsp_bench_cli_test_module.addOptions("cli_options", omlz_lsp_bench_cli_options);
+    const omlz_lsp_bench_cli_tests = b.addTest(.{
+        .root_module = omlz_lsp_bench_cli_test_module,
+    });
+    const run_omlz_lsp_bench_cli_tests = b.addRunArtifact(omlz_lsp_bench_cli_tests);
+    run_omlz_lsp_bench_cli_tests.step.dependOn(b.getInstallStep());
+    run_omlz_lsp_bench_cli_tests.step.dependOn(&run_fmt_cli_tests.step);
+    run_omlz_lsp_bench_cli_tests.setCwd(b.path(""));
+
     // FMT golden idempotency tests (FMT / F-FMT3): verify committed
     // input/expected pairs are byte-stable under `omlz fmt`.
     const fmt_golden_test_module = b.createModule(.{
@@ -675,6 +694,9 @@ pub fn build(b: *std.Build) void {
     // Keep OCaml generator compilation tests from competing with the
     // latency-sensitive LSP harness.
     run_property_generators_tests.step.dependOn(&run_lsp_harness.step);
+    // Keep the public `omlz lsp-bench` CLI integration tests from spawning
+    // benchmark LSP servers in parallel with the latency-sensitive harness.
+    run_omlz_lsp_bench_cli_tests.step.dependOn(&run_lsp_harness.step);
 
     // Renderer tests (P9 / F-DX1-1): verify rustc-style diagnostic rendering.
     const render_test_module = b.createModule(.{
@@ -890,6 +912,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_otest_cli_tests.step);
     test_step.dependOn(&run_fmt_cli_tests.step);
+    test_step.dependOn(&run_omlz_lsp_bench_cli_tests.step);
     test_step.dependOn(&run_fmt_golden_tests.step);
     test_step.dependOn(&run_parser_otest_tests.step);
     test_step.dependOn(&run_parser_otest_prop_tests.step);

@@ -3,6 +3,11 @@
 demo:
 	./scripts/demo/run_full_demo.sh
 
+.PHONY: lsp-bench
+lsp-bench:
+	zig build
+	./zig-out/bin/omlz lsp-bench --warmup 3 --rounds 10
+
 demo-record-prep:
 	@if command -v opam >/dev/null 2>&1; then eval "$$(opam env --switch=zxcaml-p1)"; fi; zig build
 	./scripts/demo/00_setup.sh
