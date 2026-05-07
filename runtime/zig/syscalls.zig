@@ -208,6 +208,29 @@ pub inline fn sol_secp256k1_recover(hash: []const u8, recovery_id: i64, signatur
     return out;
 }
 
+/// Recovers a secp256k1 pubkey directly into account data.
+///
+/// This helper intentionally avoids a 64-byte intermediate stack or arena
+/// buffer. The BPF path passes `account_data.ptr` to the Solana syscall as the
+/// result pointer, and the hosted fallback writes the deterministic
+/// success-shaped bytes directly into `account_data[0..64]`.
+pub inline fn sol_secp256k1_recover_into_account_data(account_data: []u8, hash: []const u8, recid: i64, signature: []const u8) i64 {
+    if (account_data.len < secp256k1_pubkey_len) return 1;
+    if (hash.len != secp256k1_hash_len) return 1;
+    if (signature.len != secp256k1_signature_len) return 1;
+    if (recid < 0 or recid > 3) return 1;
+
+    if (comptime is_bpf) {
+        const syscall: SolSecp256k1RecoverFn = @ptrFromInt(sol_secp256k1_recover_address);
+        return @intCast(syscall(hash.ptr, @intCast(recid), signature.ptr, account_data.ptr));
+    }
+
+    const out = account_data[0..secp256k1_pubkey_len];
+    @memset(out, 0);
+    out[0] = @intCast(recid);
+    return 0;
+}
+
 /// Recovers a secp256k1 pubkey and returns arena-owned OCaml `bytes`.
 ///
 /// On success the returned slice is exactly 64 bytes. On any runtime failure
@@ -359,4 +382,34 @@ test "secp256k1_recover arena wrapper maps invalid input lengths to zero-length 
     try std.testing.expectEqual(@as(usize, 0), sol_secp256k1_recover_alloc(&arena, &hash_short, 1, &signature_short).len);
     try std.testing.expectEqual(@as(usize, 0), sol_secp256k1_recover_alloc(&arena, &hash, 1, &signature_short).len);
     try std.testing.expectEqual(@as(usize, 0), arena.offset);
+}
+
+test "secp256k1_recover_into_account_data rejects recovery id out of range" {
+    var account_data: [secp256k1_pubkey_len]u8 = undefined;
+    const hash = [_]u8{0x11} ** secp256k1_hash_len;
+    const signature = [_]u8{0x22} ** secp256k1_signature_len;
+
+    try std.testing.expect(sol_secp256k1_recover_into_account_data(&account_data, &hash, 4, &signature) != 0);
+    try std.testing.expect(sol_secp256k1_recover_into_account_data(&account_data, &hash, -1, &signature) != 0);
+}
+
+test "secp256k1_recover_into_account_data rejects short account data" {
+    var account_data: [secp256k1_pubkey_len - 1]u8 = undefined;
+    const hash = [_]u8{0x11} ** secp256k1_hash_len;
+    const signature = [_]u8{0x22} ** secp256k1_signature_len;
+
+    try std.testing.expect(sol_secp256k1_recover_into_account_data(&account_data, &hash, 1, &signature) != 0);
+}
+
+test "secp256k1_recover_into_account_data hosted stub fills account data" {
+    var account_data = [_]u8{0xaa} ** (secp256k1_pubkey_len + 4);
+    const hash = [_]u8{0x11} ** secp256k1_hash_len;
+    const signature = [_]u8{0x22} ** secp256k1_signature_len;
+
+    const rc = sol_secp256k1_recover_into_account_data(&account_data, &hash, 2, &signature);
+    try std.testing.expectEqual(@as(i64, 0), rc);
+    try std.testing.expectEqual(@as(u8, 2), account_data[0]);
+    try std.testing.expectEqual(@as(u8, 0), account_data[1]);
+    try std.testing.expectEqual(@as(u8, 0), account_data[secp256k1_pubkey_len - 1]);
+    try std.testing.expectEqual(@as(u8, 0xaa), account_data[secp256k1_pubkey_len]);
 }

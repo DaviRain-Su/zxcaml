@@ -51,6 +51,12 @@ pub fn emitExternalAppExpr(
         try append(out, allocator, ")");
         return;
     }
+    if ((std.mem.eql(u8, external.name, "Crypto.secp256k1_recover_into_account") or
+        std.mem.eql(u8, external.symbol, "sol_secp256k1_recover_into_account_data")) and app.args.len == 4)
+    {
+        try emitSecpRecoverIntoAccountDataExpr(out, allocator, app, indent_level, ctx);
+        return;
+    }
     if (std.mem.eql(u8, external.symbol, "sysvar.readClock") and app.args.len == 1) {
         try emitSysvarClockFromAccountExpr(out, allocator, app, indent_level, ctx);
         return;
@@ -219,6 +225,7 @@ pub fn isSyscallExternalSymbol(symbol: []const u8) bool {
         std.mem.eql(u8, symbol, "sol_blake3") or
         std.mem.eql(u8, symbol, "sol_blake3_alloc") or
         std.mem.eql(u8, symbol, "sol_secp256k1_recover_alloc") or
+        std.mem.eql(u8, symbol, "sol_secp256k1_recover_into_account_data") or
         std.mem.eql(u8, symbol, "sol_get_clock_sysvar") or
         std.mem.eql(u8, symbol, "sol_get_rent_sysvar") or
         std.mem.eql(u8, symbol, "sol_log_compute_units_") or
@@ -347,6 +354,11 @@ pub fn emitSyscallAppExpr(
         try append(out, allocator, ")");
         return true;
     }
+    if (std.mem.eql(u8, name, "Crypto.secp256k1_recover_into_account")) {
+        if (app.args.len != 4) return error.UnsupportedExpr;
+        try emitSecpRecoverIntoAccountDataExpr(out, allocator, app, indent_level, ctx);
+        return true;
+    }
     if (std.mem.eql(u8, name, "Syscall.sol_get_clock_sysvar")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         try emitSyscallClockExpr(out, allocator, app, indent_level, ctx);
@@ -383,6 +395,35 @@ pub fn emitSyscallAppExpr(
         return true;
     }
     return false;
+}
+
+pub fn emitSecpRecoverIntoAccountDataExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_secp_account_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try append(out, allocator, "_ = syscalls.sol_secp256k1_recover_into_account_data(");
+    try appendPrint(out, allocator, "omlz_secp_account_{d}.data, ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ", ");
+    try emitExpr(out, allocator, app.args[2].*, indent_level + 1, ctx);
+    try append(out, allocator, ", ");
+    try emitExpr(out, allocator, app.args[3].*, indent_level + 1, ctx);
+    try append(out, allocator, ");\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 pub fn emitCounterAppExpr(
