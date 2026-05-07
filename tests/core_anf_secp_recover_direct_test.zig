@@ -211,6 +211,44 @@ test "negative — different field lamports is preserved" {
     try expectPreservedRecoverLet(rewritten.*);
 }
 
+test "secp_recover_direct: unrelated App consumer preserves alloc form" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const r = try varPtr(&arena, "r", .String);
+    const unrelated = try appPtr(&arena, "hash", &.{r}, .String);
+    const externals = [_]ir.ExternalDecl{.{ .name = "recover", .ty = try arrowTy(&arena, &.{ .String, .Int, .String }, .String), .symbol = "sol_secp256k1_recover_alloc" }};
+    const rewritten = try rewriteTop(&arena, try recoverLet(&arena, "recover", unrelated), &externals);
+
+    const let_expr = switch (rewritten.*) {
+        .Let => |value| value,
+        else => return error.ExpectedRecoverLet,
+    };
+    try std.testing.expectEqualStrings("r", let_expr.name);
+
+    const recover_app = switch (let_expr.value.*) {
+        .App => |value| value,
+        else => return error.ExpectedRecoverLet,
+    };
+    const recover_callee = switch (recover_app.callee.*) {
+        .Var => |value| value,
+        else => return error.ExpectedRecoverLet,
+    };
+    try std.testing.expectEqualStrings("recover", recover_callee.name);
+
+    const unrelated_app = switch (let_expr.body.*) {
+        .App => |value| value,
+        else => return error.ExpectedDirectApp,
+    };
+    const unrelated_callee = switch (unrelated_app.callee.*) {
+        .Var => |value| value,
+        else => return error.ExpectedDirectApp,
+    };
+    try std.testing.expectEqualStrings("hash", unrelated_callee.name);
+    try std.testing.expectEqual(@as(usize, 1), unrelated_app.args.len);
+    try expectVarName(unrelated_app.args[0].*, "r");
+}
+
 test "negative — different syscall producer is preserved" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
