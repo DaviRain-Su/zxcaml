@@ -269,6 +269,7 @@ fn commentDepthAfterLine(line: []const u8, initial_depth: usize) usize {
 fn formatCodeSegment(allocator: std.mem.Allocator, code: []const u8) ![]u8 {
     const tokens = try lexLine(allocator, code);
     defer allocator.free(tokens);
+    const force_ppx_keyword_boundaries = std.mem.startsWith(u8, std.mem.trim(u8, code, " \t"), "let%");
 
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -277,7 +278,7 @@ fn formatCodeSegment(allocator: std.mem.Allocator, code: []const u8) ![]u8 {
     for (tokens) |token| {
         if (token.text.len == 0) continue;
         if (previous) |prev| {
-            if (needsSpace(prev, token) and out.items.len > 0 and out.items[out.items.len - 1] != ' ') {
+            if (needsSpace(prev, token, force_ppx_keyword_boundaries) and out.items.len > 0 and out.items[out.items.len - 1] != ' ') {
                 try out.append(allocator, ' ');
             }
         }
@@ -365,8 +366,9 @@ fn lexLine(allocator: std.mem.Allocator, line: []const u8) ![]Token {
     return tokens.toOwnedSlice(allocator);
 }
 
-fn needsSpace(prev: Token, current: Token) bool {
+fn needsSpace(prev: Token, current: Token, force_ppx_keyword_boundaries: bool) bool {
     if (current.kind == .comment or prev.kind == .comment) return true;
+    if (force_ppx_keyword_boundaries and std.mem.eql(u8, prev.text, ")") and std.mem.eql(u8, current.text, "in")) return true;
     if (current.kind == .punct and isClosingOrSeparator(current.text)) return false;
     if (prev.kind == .punct and isOpening(prev.text)) return false;
     if (current.kind == .punct and std.mem.eql(u8, current.text, ".")) return false;

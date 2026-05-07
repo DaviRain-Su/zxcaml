@@ -37,6 +37,7 @@ const snapshots = [_][]const u8{
     "poly_type_var",
     "labelled_args",
     "optional_args",
+    "ppx_lwt",
 };
 
 fn runFmt(allocator: Allocator, io: Io, path: []const u8) !CommandResult {
@@ -253,6 +254,28 @@ test "omlz_fmt_golden: optional_args snapshot is bytewise idempotent" {
 
     const input_path = "tests/golden/fmt/optional_args.input.ml";
     const expected_path = "tests/golden/fmt/optional_args.expected.ml";
+
+    const expected = try cwd.readFileAlloc(io, expected_path, allocator, .limited(65536));
+    defer allocator.free(expected);
+
+    const formatted_input = try runFmt(allocator, io, input_path);
+    defer freeResult(allocator, formatted_input);
+    try expectFmtSuccess(formatted_input, input_path);
+    try std.testing.expectEqualStrings(expected, formatted_input.stdout);
+
+    const formatted_expected = try runFmt(allocator, io, expected_path);
+    defer freeResult(allocator, formatted_expected);
+    try expectFmtSuccess(formatted_expected, expected_path);
+    try std.testing.expectEqualStrings(expected, formatted_expected.stdout);
+}
+
+test "omlz_fmt_golden: ppx_lwt snapshot is bytewise idempotent" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+
+    const input_path = "tests/golden/fmt/ppx_lwt.input.ml";
+    const expected_path = "tests/golden/fmt/ppx_lwt.expected.ml";
 
     const expected = try cwd.readFileAlloc(io, expected_path, allocator, .limited(65536));
     defer allocator.free(expected);
