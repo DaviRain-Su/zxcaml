@@ -114,96 +114,6 @@ fn apply_platform_env(command: &mut Command) {
     }
 }
 
-fn run_command_or_panic(command: &mut Command, display: &str) {
-    let result = command
-        .output()
-        .unwrap_or_else(|error| panic!("failed to spawn `{display}`: {error}"));
-    assert!(
-        result.status.success(),
-        "`{display}` failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-}
-
-fn relink_secp_recover_demo_with_direct_syscall(root: &Path, output_path: &Path) {
-    let program_path = root.join("out").join("program.zig");
-    let mut program = fs::read_to_string(&program_path).unwrap_or_else(|error| {
-        panic!(
-            "failed to read generated {} for secp fallback: {error}",
-            program_path.display()
-        )
-    });
-
-    let start_marker =
-        "// source span: unavailable (M0 frontend bridge does not emit spans yet)\nfn omlz_user_recover_into_account";
-    let end_marker =
-        "\n\n// source span: unavailable (M0 frontend bridge does not emit spans yet)\npub inline fn omlz_user_entrypoint";
-    let start = program
-        .find(start_marker)
-        .expect("generated secp demo helper should be present");
-    let end = program[start..]
-        .find(end_marker)
-        .map(|offset| start + offset)
-        .expect("generated secp demo entrypoint should follow helper");
-    let replacement = r#"// source span: unavailable (M0 frontend bridge does not emit spans yet)
-fn omlz_user_recover_into_account(arena: *Arena, output_account: AccountRuntime.AccountView, instruction_data: []const u8, recovery_id: i64) i64 {
-    _ = arena;
-    if (instruction_data.len < 97) return 1;
-    if (recovery_id < 0 or recovery_id > 3) return 1;
-    if (output_account.data.len < syscalls.secp256k1_pubkey_len) return 1;
-    const hash = instruction_data[0..syscalls.secp256k1_hash_len];
-    const signature = instruction_data[33..][0..syscalls.secp256k1_signature_len];
-    const syscall: *align(1) const fn ([*]const u8, u64, [*]const u8, [*]u8) u64 = @ptrFromInt(syscalls.sol_secp256k1_recover_address);
-    const rc = syscall(hash.ptr, @intCast(recovery_id), signature.ptr, output_account.data.ptr);
-    return @intCast(rc);
-}"#;
-    program.replace_range(start..end, replacement);
-    fs::write(&program_path, program).unwrap_or_else(|error| {
-        panic!(
-            "failed to patch generated {} for secp fallback: {error}",
-            program_path.display()
-        )
-    });
-
-    let bitcode_path = root.join("build").join("secp_recover_demo.bc");
-    let bitcode_arg = format!("-femit-llvm-bc={}", bitcode_path.display());
-    let mut zig = Command::new("zig");
-    zig.current_dir(root).args([
-        "build-lib",
-        "-target",
-        "bpfel-freestanding",
-        "-O",
-        "ReleaseSmall",
-        "-fno-stack-check",
-        "-fno-PIC",
-        "-fno-PIE",
-        "-fstrip",
-        bitcode_arg.as_str(),
-        "-fno-emit-bin",
-        "out/bpf_entry.zig",
-    ]);
-    run_command_or_panic(&mut zig, "zig build-lib secp_recover_demo fallback");
-
-    let mut linker = Command::new("sbpf-linker");
-    linker.current_dir(root).args([
-        "--cpu",
-        "v2",
-        "--llvm-args=-bpf-stack-size=4096",
-        "--export",
-        "entrypoint",
-        "-o",
-        output_path
-            .to_str()
-            .expect("BPF output path should be UTF-8"),
-        bitcode_path
-            .to_str()
-            .expect("BPF bitcode path should be UTF-8"),
-    ]);
-    apply_platform_env(&mut linker);
-    run_command_or_panic(&mut linker, "sbpf-linker secp_recover_demo fallback");
-}
-
 fn compile_program(example: &str) -> PathBuf {
     let root = repo_root();
     let _lock = acquire_build_lock(&root);
@@ -226,16 +136,12 @@ fn compile_program(example: &str) -> PathBuf {
             "failed to spawn `zig-out/bin/omlz build --target=bpf {source} -o {output}`: {error}"
         )
     });
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(
-            stderr.contains("BPF stack limit is exceeded"),
-            "`zig-out/bin/omlz build --target=bpf {source} -o {output}` failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&result.stdout),
-            stderr
-        );
-        relink_secp_recover_demo_with_direct_syscall(&root, &output_path);
-    }
+    assert!(
+        result.status.success(),
+        "`zig-out/bin/omlz build --target=bpf {source} -o {output}` failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(
         output_path.exists(),
         "expected BPF artifact at {}",

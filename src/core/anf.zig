@@ -5,11 +5,13 @@ const std = @import("std");
 const ttree = @import("../frontend_bridge/ttree.zig");
 const ir = @import("ir.zig");
 const module_lower = @import("anf/module.zig");
+const secp_recover_direct = @import("anf/secp_recover_direct.zig");
 
 pub const LowerError = module_lower.LowerError;
 
 pub fn lowerModule(arena: *std.heap.ArenaAllocator, module: ttree.Module) LowerError!ir.Module {
-    return module_lower.lowerModule(arena, module);
+    const lowered = try module_lower.lowerModule(arena, module);
+    return secp_recover_direct.rewriteSecpRecoverIntoAccountWrite(arena, lowered);
 }
 
 fn lowerSexpForTest(frontend_arena: *std.heap.ArenaAllocator, core_arena: *std.heap.ArenaAllocator, bytes: []const u8) !ir.Module {
