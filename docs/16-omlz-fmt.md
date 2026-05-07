@@ -421,3 +421,121 @@ Migration note: scripts that used `omlz fmt` as a proxy for "is this file in the
 Use `omlz check`, `omlz build --check` where a wrapper provides that mode, or the relevant `omlz build|run|test` command for the artifact you actually need.
 Keep `omlz fmt --check` for style enforcement only.
 After M-FMT-2, a successful `fmt --check` means "the bytes already match formatter style"; it no longer means "the program is accepted by the ZxCaml subset checker."
+
+## Phase 19 — corpus expansion (M-FMT-3)
+
+M-FMT-3 expanded the formatter corpus after P17 / F-FMT2-1 removed the full subset-checker gate from `omlz fmt`.
+That earlier change made formatting a lexical token-stream operation again.
+Once tokenizable-but-not-buildable OCaml stopped being rejected by `fmt`, the corpus needed examples from outside the current backend subset.
+The goal of this phase is evidence, not new formatter behavior.
+The formatter source remains frozen while the golden suite proves the existing rules on broader OCaml syntax.
+Each new case was captured once with `./zig-out/bin/omlz fmt INPUT > EXPECTED`.
+Each expected file is then treated as a fixed point by `tests/omlz_fmt_golden_test.zig`.
+The five commits are listed in `CHANGELOG.md` under `### Added — fmt corpus expansion (M-FMT-3)`.
+The first golden is `gadt_decl`.
+Its input locks a compact GADT declaration:
+
+```ocaml
+type _ witness=
+|Int:int witness
+|Bool:bool witness
+```
+
+Its expected output proves constructor bars and result-type colons receive stable spacing:
+
+```ocaml
+type _ witness =
+  | Int : int witness
+  | Bool : bool witness
+```
+
+The second golden is `module_decl`.
+Its input covers a plain module declaration with dense bindings:
+
+```ocaml
+module M=struct
+let x=1
+let y=x+1
+end
+```
+
+Its expected output keeps the module shell intact and normalizes token spacing:
+
+```ocaml
+module M = struct
+let x = 1
+let y = x + 1
+end
+```
+
+The third golden is `poly_variant`.
+Its input covers polymorphic variant constructors:
+
+```ocaml
+type color=
+|`Red
+|`Green
+|`Blue of int
+```
+
+Its expected output keeps backtick constructors intact while spacing the rows:
+
+```ocaml
+type color =
+  | `Red
+  | `Green
+  | `Blue of int
+```
+
+The fourth golden is `functor_decl`.
+Its input covers a functor parameter with a compact signature:
+
+```ocaml
+module F(X:sig val x:int end)=struct
+let y=X.x+1
+end
+```
+
+Its expected output proves the formatter can space the parameter, signature, field access, and body expression:
+
+```ocaml
+module F (X : sig val x : int end) = struct
+let y = X.x + 1
+end
+```
+
+The fifth golden is `class_decl`.
+Its input covers a class declaration and object body:
+
+```ocaml
+class counter=object
+val mutable n=0
+method bump=n+1
+end
+```
+
+Its expected output normalizes class, field, and method spacing:
+
+```ocaml
+class counter = object
+val mutable n = 0
+method bump = n + 1
+end
+```
+
+The class golden also bumped the snapshot floor from the previous corpus size to `snapshots.len >= 16`.
+That floor catches accidental removal of the expanded corpus.
+The trailing-newline contract still applies to every `*.expected.ml` file.
+The formatter strips trailing whitespace and appends exactly one `\n`.
+There must not be zero final newlines.
+There must not be two final newlines.
+This matters because idempotency is bytewise, not merely visual.
+The M-FMT-3 off-limits rule is equally important.
+`src/frontend/fmt.zig` is locked by `FMT3-LEX-GUARD-UNCHANGED-001`.
+`src/omlz/fmt.zig` is also part of that guard.
+M-FMT-3 documents and broadens coverage without changing the formatter implementation.
+Known lex-level warts remain deferred under `TD-FMT-LEX-WARTS`.
+That cluster covers labelled arguments, optional arguments, polymorphic type variables, and dense `let%lwt` input.
+Those fixes belong to a future M-FMT-FIXES milestone.
+Do not silently resolve them while updating this corpus.
+The correct behavior in this phase is to record the current formatter output exactly and let future work change it deliberately.

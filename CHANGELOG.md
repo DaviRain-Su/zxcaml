@@ -9,6 +9,14 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — fmt corpus expansion (M-FMT-3)
+
+- `54cc85d` — gadt_decl: GADT declarations (`type _ t = A : ... | B : ...`).
+- `7b0286b` — module_decl: module declarations (`module M = struct … end`).
+- `00c2eee` — poly_variant: polymorphic variants (``type t = [ `A | `B of int ]``).
+- `3c27d9c` — functor_decl: functor declarations (`module F (X : sig … end) = struct … end`).
+- `6c92ca3` — class_decl: class declarations + snapshot floor bump (`class … = object … end`).
+
 ### Changed — Python LSP harness latency assertions removed/relaxed
 
 - Changed `tests/lsp/run_lsp_check.py latency` so the legacy Python timing

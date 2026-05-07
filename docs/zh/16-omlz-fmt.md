@@ -421,3 +421,123 @@ let s = "unterminated
 可以使用 `omlz check`、由 wrapper 提供时的 `omlz build --check`，或者与你实际 artifact 对应的 `omlz build|run|test` 命令。
 `omlz fmt --check` 应只用于 style enforcement。
 M-FMT-2 之后，`fmt --check` 成功只表示“bytes 已符合 formatter style”；它不再表示“program 已被 ZxCaml subset checker 接受”。
+
+## Phase 19 — corpus expansion (M-FMT-3)
+
+M-FMT-3 在 P17 / F-FMT2-1 解除 `omlz fmt` 与完整 subset checker 的绑定之后，扩展了 formatter corpus。
+那次变更让 formatting 回到 lexical token-stream 操作。
+只要 OCaml 输入能够 token 化，即使暂时不是 backend 可编译的 ZxCaml subset，`fmt` 也不应先拒绝它。
+因此，本阶段需要把更多普通 OCaml 形态纳入 golden 证据。
+这次扩展的目标是锁定现有行为，而不是修改 formatter 行为。
+formatter source 在本阶段保持冻结。
+新增 golden 用来证明既有 spacing、indentation 与 newline 规则能覆盖更宽的 OCaml syntax。
+每个 expected file 都只用 `./zig-out/bin/omlz fmt INPUT > EXPECTED` 捕获一次。
+随后 `tests/omlz_fmt_golden_test.zig` 会把 expected file 当作 fixed point 检查。
+五个对应 commit 已写入 `CHANGELOG.md` 的 `### Added — fmt corpus expansion (M-FMT-3)` 小节。
+第一个 golden 是 `gadt_decl`。
+它的 input 锁定紧凑写法的 GADT declaration：
+
+```ocaml
+type _ witness=
+|Int:int witness
+|Bool:bool witness
+```
+
+它的 expected output 证明 constructor bars 与 result-type colons 的 spacing 是稳定的：
+
+```ocaml
+type _ witness =
+  | Int : int witness
+  | Bool : bool witness
+```
+
+第二个 golden 是 `module_decl`。
+它的 input 覆盖普通 module declaration 和紧凑 bindings：
+
+```ocaml
+module M=struct
+let x=1
+let y=x+1
+end
+```
+
+它的 expected output 保留 module 外壳，同时规范化 token spacing：
+
+```ocaml
+module M = struct
+let x = 1
+let y = x + 1
+end
+```
+
+第三个 golden 是 `poly_variant`。
+它的 input 覆盖 polymorphic variant constructors：
+
+```ocaml
+type color=
+|`Red
+|`Green
+|`Blue of int
+```
+
+它的 expected output 保留 backtick constructors，并规范化每一行 variant：
+
+```ocaml
+type color =
+  | `Red
+  | `Green
+  | `Blue of int
+```
+
+第四个 golden 是 `functor_decl`。
+它的 input 覆盖带 compact signature 参数的 functor：
+
+```ocaml
+module F(X:sig val x:int end)=struct
+let y=X.x+1
+end
+```
+
+它的 expected output 证明 formatter 会规范化参数、signature、field access 与 body expression：
+
+```ocaml
+module F (X : sig val x : int end) = struct
+let y = X.x + 1
+end
+```
+
+第五个 golden 是 `class_decl`。
+它的 input 覆盖 class declaration 和 object body：
+
+```ocaml
+class counter=object
+val mutable n=0
+method bump=n+1
+end
+```
+
+它的 expected output 会规范化 class、field 与 method 的 spacing：
+
+```ocaml
+class counter = object
+val mutable n = 0
+method bump = n + 1
+end
+```
+
+`class_decl` 同时把 snapshot floor 提升到 `snapshots.len >= 16`。
+这个 floor 用来防止 expanded corpus 被意外删减。
+trailing-newline contract 仍适用于每一个 `*.expected.ml` 文件。
+formatter 会去掉 trailing whitespace，然后且只然后追加一个 `\n`。
+文件末尾不能没有 newline。
+文件末尾也不能出现两个 newline。
+这很重要，因为 idempotency 是 bytewise 契约，而不只是视觉上相同。
+M-FMT-3 的 off-limits 规则同样关键。
+`src/frontend/fmt.zig` 由 `FMT3-LEX-GUARD-UNCHANGED-001` 锁定。
+`src/omlz/fmt.zig` 也属于同一个 guard 的范围。
+M-FMT-3 只负责文档和 corpus 证据，不修改 formatter implementation。
+已知的 lex-level warts 继续放在 `TD-FMT-LEX-WARTS` 下延后处理。
+这个 cluster 包含 labelled args、optional args、poly type vars，以及 dense `let%lwt` input。
+这些修复应进入未来的 M-FMT-FIXES milestone。
+更新本 corpus 时不要顺手修掉它们。
+本阶段的正确做法是如实记录当前 formatter output，并让未来 work 有意识地改变它。
