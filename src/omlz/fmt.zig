@@ -3,8 +3,8 @@
 //! RESPONSIBILITIES:
 //! - Parse formatter CLI flags and discover file inputs (including directory
 //!   recursion over `*.ml` files).
-//! - Validate inputs through the existing OCaml frontend boundary so malformed
-//!   sources report exit code 2.
+//! - Run a lightweight lex-only guard so malformed literals/comments report
+//!   exit code 2 without invoking the compiler frontend.
 //! - Call the pure formatter core from `src/frontend/fmt.zig`.
 //! - Implement check/write/stdin modes without coupling callers to `src/main`.
 
@@ -12,8 +12,6 @@ const std = @import("std");
 const Io = std.Io;
 
 const frontend_fmt = @import("../frontend/fmt.zig");
-const pipeline = @import("../driver/pipeline.zig");
-const render = @import("../util/render.zig");
 
 const max_input_bytes = 16 * 1024 * 1024;
 
@@ -58,13 +56,14 @@ pub fn writeHelp(io: Io) !void {
 }
 
 pub fn run(init: std.process.Init, argv0: []const u8, raw_args: []const []const u8) !void {
+    _ = argv0;
     const args = parseArgs(init.gpa, raw_args) catch {
         try writeStderr(init.io, "error: unsupported fmt option; run `omlz fmt --help` for usage.\n");
         std.process.exit(2);
     };
 
     if (args.stdin) {
-        try runStdin(init, argv0, args);
+        try runStdin(init, args);
         return;
     }
 
@@ -88,8 +87,7 @@ pub fn run(init: std.process.Init, argv0: []const u8, raw_args: []const []const 
 
     var any_changed = false;
     for (files.items) |path| {
-        const summary = processFile(init, argv0, args, path) catch |err| {
-            if (err == error.FrontendFailed) std.process.exit(2);
+        const summary = processFile(init, args, path) catch |err| {
             try writePathError(init.io, path, err);
             std.process.exit(2);
         };
@@ -153,7 +151,7 @@ fn parseOutputFormat(value: []const u8) !OutputFormat {
     return error.UnsupportedArgs;
 }
 
-fn runStdin(init: std.process.Init, argv0: []const u8, args: Args) !void {
+fn runStdin(init: std.process.Init, args: Args) !void {
     var stdin_buffer: [8192]u8 = undefined;
     var stdin_reader: Io.File.Reader = .init(.stdin(), init.io, &stdin_buffer);
     const source = stdin_reader.interface.allocRemaining(init.gpa, .limited(max_input_bytes)) catch {
@@ -162,17 +160,12 @@ fn runStdin(init: std.process.Init, argv0: []const u8, args: Args) !void {
     };
     defer init.gpa.free(source);
 
-    const tmp_path = try std.fmt.allocPrint(init.gpa, "/tmp/omlz_fmt_{d}.ml", .{std.posix.system.getpid()});
-    defer init.gpa.free(tmp_path);
-    defer std.Io.Dir.cwd().deleteFile(init.io, tmp_path) catch {};
-
-    try std.Io.Dir.cwd().writeFile(init.io, .{
-        .sub_path = tmp_path,
-        .data = source,
-        .flags = .{ .truncate = true },
-    });
-
-    try validateFile(init, argv0, args, tmp_path);
+    frontend_fmt.analyze(source) catch |err| {
+        try writeStderr(init.io, "error: failed to format stdin: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(2);
+    };
 
     const formatted = frontend_fmt.formatAlloc(init.gpa, source) catch {
         try writeStderr(init.io, "error: failed to format stdin\n");
@@ -193,14 +186,14 @@ fn runStdin(init: std.process.Init, argv0: []const u8, args: Args) !void {
     std.process.exit(0);
 }
 
-fn processFile(init: std.process.Init, argv0: []const u8, args: Args, path: []const u8) !FileSummary {
-    try validateFile(init, argv0, args, path);
-
+fn processFile(init: std.process.Init, args: Args, path: []const u8) !FileSummary {
     const source = std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .limited(max_input_bytes)) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => |e| return e,
     };
     defer init.gpa.free(source);
+
+    try frontend_fmt.analyze(source);
 
     const formatted = try frontend_fmt.formatAlloc(init.gpa, source);
     defer init.gpa.free(formatted);
@@ -222,23 +215,6 @@ fn processFile(init: std.process.Init, argv0: []const u8, args: Args, path: []co
         .original_bytes = source.len,
         .formatted_bytes = formatted.len,
     };
-}
-
-fn validateFile(init: std.process.Init, argv0: []const u8, args: Args, path: []const u8) !void {
-    var result = pipeline.runFrontendFromArgv0WithOptions(init.gpa, init.io, init.minimal.environ, argv0, path, .{
-        .diagnostics = .{
-            .error_format = .human,
-            .color = if (args.no_color) render.Color.never else render.Color.auto,
-            .stderr_is_tty = false,
-            .no_color_env = args.no_color,
-        },
-    }) catch return error.FrontendFailed;
-    defer result.deinit();
-
-    switch (result) {
-        .success => {},
-        .failed => return error.FrontendFailed,
-    }
 }
 
 fn collectInputPath(allocator: std.mem.Allocator, io: Io, files: *std.ArrayList([]const u8), path: []const u8) !void {

@@ -39,6 +39,40 @@ pub fn format(source: []const u8) []u8 {
         @panic("out of memory while formatting OCaml source");
 }
 
+/// Lightweight syntax guard for the formatter-only path.
+///
+/// This intentionally remains lex-only: it rejects unterminated string
+/// literals, character literals, and nested `(* ... *)` comments while avoiding
+/// the Typedtree/subset validator used by `omlz build|run|test`.
+pub fn analyze(source: []const u8) !void {
+    var index: usize = 0;
+    while (index < source.len) {
+        if (source[index] == '"') {
+            const end = scanString(source, index);
+            if (!stringScanTerminated(source, index, end)) return error.UnterminatedString;
+            index = end;
+            continue;
+        }
+        if (source[index] == '\'') {
+            if (!looksLikeCharLiteralStart(source, index)) {
+                index += 1;
+                continue;
+            }
+            const end = scanCharLiteral(source, index);
+            if (!charScanTerminated(source, index, end)) return error.UnterminatedChar;
+            index = end;
+            continue;
+        }
+        if (index + 1 < source.len and source[index] == '(' and source[index + 1] == '*') {
+            const end = scanComment(source, index);
+            if (!commentScanTerminated(source, index, end)) return error.UnterminatedComment;
+            index = end;
+            continue;
+        }
+        index += 1;
+    }
+}
+
 /// Zig-style formatter entrypoint.  The caller owns the returned slice.
 pub fn formatAlloc(allocator: std.mem.Allocator, source: []const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
@@ -439,6 +473,65 @@ fn scanComment(line: []const u8, start: usize) usize {
     return line.len;
 }
 
+fn stringScanTerminated(source: []const u8, start: usize, end: usize) bool {
+    if (end < source.len) return true;
+    var index = start + 1;
+    while (index < source.len) {
+        if (source[index] == '\\') {
+            index = @min(source.len, index + 2);
+        } else if (source[index] == '"') {
+            return index + 1 == end;
+        } else {
+            index += 1;
+        }
+    }
+    return false;
+}
+
+fn looksLikeCharLiteralStart(source: []const u8, start: usize) bool {
+    if (start + 1 >= source.len) return true;
+    const next = source[start + 1];
+    if (next == '\n' or next == '\r') return true;
+    if (next == '\\') return true;
+    if (start + 2 >= source.len) return true;
+    if (source[start + 2] == '\'') return true;
+    if (source[start + 2] == '\n' or source[start + 2] == '\r') return true;
+    return false;
+}
+
+fn charScanTerminated(source: []const u8, start: usize, end: usize) bool {
+    if (end < source.len) return true;
+    var index = start + 1;
+    while (index < source.len) {
+        if (source[index] == '\\') {
+            index = @min(source.len, index + 2);
+        } else if (source[index] == '\'') {
+            return index + 1 == end;
+        } else {
+            index += 1;
+        }
+    }
+    return false;
+}
+
+fn commentScanTerminated(source: []const u8, start: usize, end: usize) bool {
+    var depth: usize = 1;
+    var index = start + 2;
+    while (index < end) {
+        if (index + 1 < end and source[index] == '(' and source[index + 1] == '*') {
+            depth += 1;
+            index += 2;
+        } else if (index + 1 < end and source[index] == '*' and source[index + 1] == ')') {
+            depth -= 1;
+            index += 2;
+            if (depth == 0) return index == end;
+        } else {
+            index += 1;
+        }
+    }
+    return false;
+}
+
 fn isWhitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\r' or c == '\n';
 }
@@ -474,6 +567,22 @@ fn expectDoubleApply(input: []const u8) !void {
     const twice = try formatAlloc(std.testing.allocator, once);
     defer std.testing.allocator.free(twice);
     try std.testing.expectEqualStrings(once, twice);
+}
+
+test "analyze accepts tokenizable input without subset validation" {
+    try analyze("let manhattan {x;y}=x+y\nmodule M = struct let x = 1 end\n");
+}
+
+test "analyze rejects unterminated string literal" {
+    try std.testing.expectError(error.UnterminatedString, analyze("let x = \"unterminated\n"));
+}
+
+test "analyze rejects unterminated char literal" {
+    try std.testing.expectError(error.UnterminatedChar, analyze("let c = 'x\n"));
+}
+
+test "analyze rejects unterminated nested comment" {
+    try std.testing.expectError(error.UnterminatedComment, analyze("let x = 1 (* outer (* inner *)\n"));
 }
 
 test "formats simple top-level lets with two-space body indentation" {
