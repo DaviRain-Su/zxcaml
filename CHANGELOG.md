@@ -9,6 +9,23 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — LSP latency hardening
+
+- Added the hand-written Zig LSP latency probe, replacing the flaky Python
+  timing path while preserving the functional LSP harness markers (`503e8ab`).
+- Added warmup trimming plus nearest-rank p50/p99/min/max statistics over
+  post-warmup samples (`3cba046`).
+- Added env-configurable p50/p99 thresholds through
+  `ZXCAML_LSP_LATENCY_P50_MS` and `ZXCAML_LSP_LATENCY_P99_MS`, with defaults
+  of 350 ms and 800 ms (`2ec2a28`).
+- Added `omlz lsp-bench` and `make lsp-bench` entry points, including CLI
+  `--warmup`, `--rounds`, `--p50`, and `--p99` plumbing (`b6e6ed1`).
+- Added the 30-round / 5-warmup baseline capture script and gitignored JSON
+  baseline under `mission-internal/lsp-bench-baseline.json` (`d67f392`).
+- Anchored the documented project range at the post-OTEST2 boundary and the
+  generated-artifact hygiene commit used by the hardening sweep (`3a88ee2`,
+  `58ba655`).
+
 ### Added — let%%test_prop + property test runner with shrinking
 
 - Added `let%test_prop "name" generator = fun x -> expr` frontend support,
