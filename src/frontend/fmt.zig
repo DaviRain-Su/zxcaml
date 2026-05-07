@@ -344,6 +344,12 @@ fn lexLine(allocator: std.mem.Allocator, line: []const u8) ![]Token {
             try tokens.append(allocator, .{ .kind = .word, .text = line[start..index] });
             continue;
         }
+        if (c == '?' and index + 1 < line.len and line[index + 1] == '(') {
+            const end = scanOptionalArgumentBinder(line, index);
+            try tokens.append(allocator, .{ .kind = .word, .text = line[index..end] });
+            index = end;
+            continue;
+        }
         if (isOperatorChar(c)) {
             const start = index;
             index += 1;
@@ -484,6 +490,34 @@ fn scanTypeVariable(line: []const u8, start: usize) usize {
     var index = start + 2;
     while (index < line.len and isTypeVariableChar(line[index])) : (index += 1) {}
     return index;
+}
+
+fn scanOptionalArgumentBinder(line: []const u8, start: usize) usize {
+    var depth: usize = 0;
+    var index = start + 1;
+    while (index < line.len) {
+        if (line[index] == '"') {
+            index = scanString(line, index);
+            continue;
+        }
+        if (line[index] == '\'') {
+            index = scanCharLiteral(line, index);
+            continue;
+        }
+        if (index + 1 < line.len and line[index] == '(' and line[index + 1] == '*') {
+            index = scanComment(line, index);
+            continue;
+        }
+        if (line[index] == '(') {
+            depth += 1;
+        } else if (line[index] == ')') {
+            if (depth == 0) return index + 1;
+            depth -= 1;
+            if (depth == 0) return index + 1;
+        }
+        index += 1;
+    }
+    return line.len;
 }
 
 fn scanComment(line: []const u8, start: usize) usize {
