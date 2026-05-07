@@ -411,37 +411,18 @@ def codelens_latency():
 
 
 def latency():
-    # Fork-per-request latency budget and expected ~80 ms steady-state are cited in
-    # mission-internal/p9-investigation/report.md §3 and Appendix C.
-    uri = fixture_uri("latency.ml")
-    text = read_fixture("latency.ml")
-    elapsed_ms = []
-    raw_samples_ms = []
-    proc = start_and_initialize()
-    try:
-        # One warm-up didOpen performs the full diagnostics roundtrip but is
-        # excluded from the p50 median so cold-start variance does not skew it.
-        start = time.perf_counter()
-        send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": 1, "text": text}}})
-        params = recv_publish_diagnostics(proc, uri)
-        raw_samples_ms.append((time.perf_counter() - start) * 1000.0)
-        assert params["diagnostics"] == [], params
+    """Delegate diagnostics latency enforcement to the canonical Zig probe."""
 
-        for run in range(5):
-            start = time.perf_counter()
-            send(proc, {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri, "languageId": "ocaml", "version": run + 2, "text": text}}})
-            params = recv_publish_diagnostics(proc, uri)
-            sample_ms = (time.perf_counter() - start) * 1000.0
-            elapsed_ms.append(sample_ms)
-            raw_samples_ms.append(sample_ms)
-            assert params["diagnostics"] == [], params
-    finally:
-        stop(proc)
+    bench = os.path.join(ROOT, "zig-out", "bin", "lsp-bench")
+    if not os.path.exists(bench):
+        subprocess.run(["zig", "build"], cwd=ROOT, check=True)
 
-    sorted_samples = sorted(elapsed_ms)
-    median_ms = sorted_samples[len(sorted_samples) // 2]
-    print(f"latency_median={median_ms:.1f}ms")
-    assert median_ms <= 200.0, f"raw_samples_ms={raw_samples_ms}"
+    completed = subprocess.run([bench], cwd=ROOT, check=False, text=True, capture_output=True)
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+    assert completed.returncode == 0, f"lsp-bench exited {completed.returncode}"
 
 
 def all_checks():
