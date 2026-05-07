@@ -54,6 +54,10 @@ pub fn analyze(source: []const u8) !void {
             continue;
         }
         if (source[index] == '\'') {
+            if (looksLikeTypeVariableStart(source, index)) {
+                index = scanTypeVariable(source, index);
+                continue;
+            }
             if (!looksLikeCharLiteralStart(source, index)) {
                 index += 1;
                 continue;
@@ -216,6 +220,10 @@ fn splitInlineComment(line: []const u8) LineParts {
             continue;
         }
         if (line[index] == '\'') {
+            if (looksLikeTypeVariableStart(line, index)) {
+                index = scanTypeVariable(line, index);
+                continue;
+            }
             index = scanCharLiteral(line, index);
             continue;
         }
@@ -236,6 +244,10 @@ fn commentDepthAfterLine(line: []const u8, initial_depth: usize) usize {
             continue;
         }
         if (depth == 0 and line[index] == '\'') {
+            if (looksLikeTypeVariableStart(line, index)) {
+                index = scanTypeVariable(line, index);
+                continue;
+            }
             index = scanCharLiteral(line, index);
             continue;
         }
@@ -294,6 +306,12 @@ fn lexLine(allocator: std.mem.Allocator, line: []const u8) ![]Token {
             continue;
         }
         if (c == '\'') {
+            if (looksLikeTypeVariableStart(line, index)) {
+                const end = scanTypeVariable(line, index);
+                try tokens.append(allocator, .{ .kind = .word, .text = line[index..end] });
+                index = end;
+                continue;
+            }
             const end = scanCharLiteral(line, index);
             try tokens.append(allocator, .{ .kind = .char, .text = line[index..end] });
             index = end;
@@ -455,6 +473,12 @@ fn scanCharLiteral(line: []const u8, start: usize) usize {
     return line.len;
 }
 
+fn scanTypeVariable(line: []const u8, start: usize) usize {
+    var index = start + 2;
+    while (index < line.len and isTypeVariableChar(line[index])) : (index += 1) {}
+    return index;
+}
+
 fn scanComment(line: []const u8, start: usize) usize {
     var depth: usize = 1;
     var index = start + 2;
@@ -488,6 +512,13 @@ fn stringScanTerminated(source: []const u8, start: usize, end: usize) bool {
     return false;
 }
 
+fn looksLikeTypeVariableStart(source: []const u8, start: usize) bool {
+    if (start + 1 >= source.len) return false;
+    if (!isTypeVariableStart(source[start + 1])) return false;
+    if (start + 2 < source.len and source[start + 2] == '\'') return false;
+    return !previousSignificantByteIs(source, start, '=');
+}
+
 fn looksLikeCharLiteralStart(source: []const u8, start: usize) bool {
     if (start + 1 >= source.len) return true;
     const next = source[start + 1];
@@ -496,6 +527,16 @@ fn looksLikeCharLiteralStart(source: []const u8, start: usize) bool {
     if (start + 2 >= source.len) return true;
     if (source[start + 2] == '\'') return true;
     if (source[start + 2] == '\n' or source[start + 2] == '\r') return true;
+    return false;
+}
+
+fn previousSignificantByteIs(source: []const u8, start: usize, target: u8) bool {
+    var index = start;
+    while (index > 0) {
+        index -= 1;
+        if (isWhitespace(source[index])) continue;
+        return source[index] == target;
+    }
     return false;
 }
 
@@ -546,6 +587,14 @@ fn isIdentStart(c: u8) bool {
 
 fn isIdentChar(c: u8) bool {
     return isIdentStart(c) or isDigit(c) or c == '\'';
+}
+
+fn isTypeVariableStart(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or c == '_';
+}
+
+fn isTypeVariableChar(c: u8) bool {
+    return isIdentStart(c) or isDigit(c);
 }
 
 fn isOperatorChar(c: u8) bool {
