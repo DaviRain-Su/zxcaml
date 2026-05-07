@@ -406,8 +406,10 @@ def codelens_latency():
 
     sorted_samples = sorted(measured_ms)
     median_ms = sorted_samples[len(sorted_samples) // 2]
-    print(f"codelens_latency_median={median_ms:.1f}ms")
-    assert median_ms <= 100.0, f"raw_samples_ms={raw_samples_ms}"
+    threshold_ms = float(os.environ.get("LATENCY_CODELENS_THRESHOLD_MS", "100"))
+    print(f"codelens_latency_median={median_ms:.1f}ms threshold={threshold_ms}")
+    assert threshold_ms > 1.0, f"raw_samples_ms={raw_samples_ms} threshold={threshold_ms}"
+    assert median_ms <= threshold_ms, f"raw_samples_ms={raw_samples_ms} threshold={threshold_ms}"
 
 
 def latency():
