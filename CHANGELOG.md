@@ -9,6 +9,14 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Maintenance hold — Phase 22
+
+Phase 22 enters a maintenance hold after Phases 19+20+21 were sealed through
+the consolidated baselines `post-fmt3-baseline`, `post-fmt-fixes-baseline`,
+and `post-fmt-deepnested-baseline`; TD-FMT-LEX-WARTS is closed by
+`post-fmt-fixes-baseline`, and codegen/runtime new directions are deferred to
+Phase 23+ so this window remains documentation-only.
+
 ### Fixed — generic ')' spacing rule (M-FMT-DEEPNESTED)
 
 - `dfddb75` — fixed the generic closing-parenthesis-to-word boundary so dense
