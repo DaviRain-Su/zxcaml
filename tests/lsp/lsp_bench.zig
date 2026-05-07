@@ -1,10 +1,16 @@
 const std = @import("std");
 const Io = std.Io;
 
-const default_rounds = 3;
+const default_warmup = 3;
+const default_rounds = 10;
 const default_doc_lines = 100;
 const lsp_bin = "zig-out/bin/omlz-lsp";
 const bench_uri = "file:///tmp/zxcaml_lsp_bench.ml";
+
+const Config = struct {
+    warmup: usize = default_warmup,
+    rounds: usize = default_rounds,
+};
 
 const Stats = struct {
     p50_ms: u64,
@@ -16,13 +22,74 @@ const Stats = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
 
-    const samples_ms = try allocator.alloc(u64, default_rounds);
+    const args = try init.minimal.args.toSlice(allocator);
+
+    const config = parseArgs(args) catch |err| switch (err) {
+        error.HelpRequested => {
+            emitHelp();
+            return;
+        },
+        else => return err,
+    };
+    validateConfig(config) catch |err| switch (err) {
+        error.NotEnoughMeasuredSamples => {
+            std.debug.print(
+                "error: --rounds ({d}) must be greater than --warmup ({d}); no post-warmup samples would remain\n",
+                .{ config.rounds, config.warmup },
+            );
+            std.process.exit(1);
+        },
+    };
+
+    const samples_ms = try allocator.alloc(u64, config.rounds);
     for (samples_ms, 0..) |*sample, round_index| {
         sample.* = try runDiagnosticsRound(init.io, allocator, round_index);
     }
 
-    const stats = try computeStats(allocator, samples_ms);
-    emitSummary(samples_ms, stats);
+    const stats = try computeStatsDiscardingWarmup(allocator, samples_ms, config.warmup);
+    emitSummary(config, samples_ms, stats);
+}
+
+fn parseArgs(args: []const []const u8) !Config {
+    var config: Config = .{};
+    var index: usize = 1;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            return error.HelpRequested;
+        } else if (std.mem.eql(u8, arg, "--warmup")) {
+            index += 1;
+            if (index >= args.len) return error.MissingWarmupValue;
+            config.warmup = try parseUsizeArg(args[index]);
+        } else if (std.mem.eql(u8, arg, "--rounds")) {
+            index += 1;
+            if (index >= args.len) return error.MissingRoundsValue;
+            config.rounds = try parseUsizeArg(args[index]);
+        } else {
+            return error.UnknownArgument;
+        }
+    }
+    return config;
+}
+
+fn parseUsizeArg(value: []const u8) !usize {
+    return std.fmt.parseInt(usize, value, 10) catch error.InvalidIntegerArgument;
+}
+
+fn validateConfig(config: Config) !void {
+    if (config.rounds <= config.warmup) return error.NotEnoughMeasuredSamples;
+}
+
+fn emitHelp() void {
+    std.debug.print(
+        \\Usage: lsp-bench [--warmup N] [--rounds K]
+        \\
+        \\Options:
+        \\  --warmup N   Number of initial samples to discard before percentiles (default: 3)
+        \\  --rounds K   Total diagnostics samples to collect, including warmup (default: 10)
+        \\  --help       Show this help text
+        \\
+    , .{});
 }
 
 fn runDiagnosticsRound(io: Io, allocator: std.mem.Allocator, round_index: usize) !u64 {
@@ -259,6 +326,15 @@ fn computeStats(allocator: std.mem.Allocator, samples_ms: []const u64) !Stats {
     };
 }
 
+fn computeStatsDiscardingWarmup(
+    allocator: std.mem.Allocator,
+    samples_ms: []const u64,
+    warmup: usize,
+) !Stats {
+    if (samples_ms.len <= warmup) return error.NotEnoughMeasuredSamples;
+    return computeStats(allocator, samples_ms[warmup..]);
+}
+
 fn percentileNearestRank(sorted_samples_ms: []const u64, percentile: u8) u64 {
     std.debug.assert(sorted_samples_ms.len > 0);
     const rank = @max(@as(usize, 1), (@as(usize, percentile) * sorted_samples_ms.len + 99) / 100);
@@ -269,7 +345,7 @@ fn lessThanU64(_: void, lhs: u64, rhs: u64) bool {
     return lhs < rhs;
 }
 
-fn emitSummary(samples_ms: []const u64, stats: Stats) void {
+fn emitSummary(config: Config, samples_ms: []const u64, stats: Stats) void {
     std.debug.print("samples_ms=[", .{});
     for (samples_ms, 0..) |sample, index| {
         if (index != 0) std.debug.print(",", .{});
@@ -277,8 +353,8 @@ fn emitSummary(samples_ms: []const u64, stats: Stats) void {
     }
     std.debug.print("]\n", .{});
     std.debug.print(
-        "p50_ms={d} p99_ms={d} min_ms={d} max_ms={d}\n",
-        .{ stats.p50_ms, stats.p99_ms, stats.min_ms, stats.max_ms },
+        "warmup={d} rounds={d} p50_ms={d} p99_ms={d} min_ms={d} max_ms={d}\n",
+        .{ config.warmup, config.rounds, stats.p50_ms, stats.p99_ms, stats.min_ms, stats.max_ms },
     );
 }
 
@@ -344,4 +420,37 @@ test "large doc builder emits exactly 500 lines" {
     try std.testing.expectEqual(@as(usize, 500), lineCount(doc));
     try std.testing.expect(std.mem.indexOf(u8, doc, "let helper_498 = 498") != null);
     try std.testing.expect(std.mem.endsWith(u8, doc, "let entrypoint _ = 1 + true\n"));
+}
+
+test "warmup defaults to three samples and rounds defaults to ten" {
+    const config = try parseArgs(&.{"lsp-bench"});
+
+    try std.testing.expectEqual(@as(usize, 3), config.warmup);
+    try std.testing.expectEqual(@as(usize, 10), config.rounds);
+}
+
+test "custom warmup and rounds flags override defaults" {
+    const config = try parseArgs(&.{ "lsp-bench", "--warmup", "5", "--rounds", "30" });
+
+    try std.testing.expectEqual(@as(usize, 5), config.warmup);
+    try std.testing.expectEqual(@as(usize, 30), config.rounds);
+}
+
+test "percentiles are computed from synthetic samples after warmup is discarded" {
+    const samples = [_]u64{ 999, 1000, 10, 20, 30, 40, 50, 60, 70, 80 };
+    const stats = try computeStatsDiscardingWarmup(std.testing.allocator, &samples, 2);
+
+    try std.testing.expectEqual(@as(u64, 40), stats.p50_ms);
+    try std.testing.expectEqual(@as(u64, 80), stats.p99_ms);
+    try std.testing.expectEqual(@as(u64, 10), stats.min_ms);
+    try std.testing.expectEqual(@as(u64, 80), stats.max_ms);
+}
+
+test "rounds less than warmup reports a clear error" {
+    const samples = [_]u64{ 1, 2 };
+
+    try std.testing.expectError(
+        error.NotEnoughMeasuredSamples,
+        computeStatsDiscardingWarmup(std.testing.allocator, &samples, 3),
+    );
 }
