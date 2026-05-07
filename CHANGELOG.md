@@ -9,6 +9,13 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Fixed — generic ')' spacing rule (M-FMT-DEEPNESTED)
+
+- `dfddb75` — fixed the generic closing-parenthesis-to-word boundary so dense
+  nested formatter output now writes `) in` instead of collapsing the keyword
+  boundary to `)in`, with `deeply_nested.expected.ml` re-captured as the
+  single golden delta.
+
 ### Fixed — formatter lex warts (M-FMT-FIXES)
 
 - `d4a9974` — fixed polymorphic type-variable lexing so `type 'a box = Box of 'a` no longer trips `UnterminatedChar`.

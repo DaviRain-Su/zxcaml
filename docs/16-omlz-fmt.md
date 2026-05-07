@@ -616,3 +616,47 @@ let%lwt x = fetch (y) in return (x)
 
 The Phase 20 corpus therefore changes the wart status from "known deferred" to "covered regression suite".
 Future formatter work should keep these four inputs in the golden list and preserve their expected files as fixed points.
+
+## Phase 21 — generic ')' spacing (M-FMT-DEEPNESTED)
+
+M-FMT-DEEPNESTED generalizes the Phase 20 `) in` fix from a PPX-local rule into an ordinary token-spacing rule.
+Whenever a closing parenthesis is immediately followed by a word-like token, the formatter inserts exactly one separating space.
+The rule is intentionally lexical: it does not ask whether the word is a keyword, an identifier, a constructor, or a labelled argument payload.
+This keeps dense OCaml source readable after any parenthesized subexpression.
+It also prevents a class of hard-to-review output where two valid tokens become visually glued together.
+The formatter still does not insert a space before punctuation after `)`.
+It still preserves `).field` and similar punctuation-sensitive boundaries according to the existing dot and punctuation rules.
+The behavior change is limited to `prev.text == ")"` followed by a word-like token.
+The canonical regression witness is the existing `deeply_nested` golden.
+That golden was already part of the formatter idempotency suite before Phase 21.
+Phase 21 changed its expected output by exactly one byte: a single space before `in`.
+No new syntax feature is introduced by this change.
+No parser, type checker, Core IR, backend, runtime, or LSP protocol behavior changes with it.
+The user-visible effect is only cleaner formatter output.
+The implementation commit for this rule is `dfddb75`.
+
+Before Phase 21, dense nested input could format with a collapsed keyword boundary:
+
+```diff
+-let deeply_nested a b c = if a > 0 then (let x = (a + (b * (c - 1))) in x + 1) else (let y = (if b > 0 then (let z = c + 2 in z) else (let w = c + 3 in w))in y)
+```
+
+The problematic fragment is the end of the else branch: `... w))in y`.
+The closing parenthesis ends the nested `let w = ... in w` expression.
+The following `in` belongs to the outer `let y = ... in y` expression.
+Without a space, reviewers see `))in` even though the intended token stream is `)) in`.
+
+After Phase 21, the same fragment has the generic `) word` boundary:
+
+```diff
++let deeply_nested a b c = if a > 0 then (let x = (a + (b * (c - 1))) in x + 1) else (let y = (if b > 0 then (let z = c + 2 in z) else (let w = c + 3 in w)) in y)
+```
+
+The full expected file remains a formatter fixed point.
+Running `./zig-out/bin/omlz fmt tests/golden/fmt/deeply_nested.input.ml` now matches `tests/golden/fmt/deeply_nested.expected.ml` byte-for-byte.
+Formatting the expected file again produces no diff.
+The expected file still ends with a single trailing newline.
+The other nineteen formatter expected files remain byte-identical to the `post-fmt-fixes-baseline` tag.
+That narrow blast radius is why the broad rule is safe to document as a generic spacing rule.
+Future formatter work should treat `) word` as part of the baseline token-spacing contract.
+If a future exception is needed, it should be documented with a golden that shows why the word-like token must attach to the parenthesis.

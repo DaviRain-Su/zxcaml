@@ -618,3 +618,47 @@ let%lwt x = fetch (y) in return (x)
 
 因此，第 20 阶段把这些问题从“known deferred”变成“已由 regression suite 覆盖”。
 后续 formatter work 应继续保留这四个 input 在 golden list 中，并把对应 expected files 当作 fixed points 对待。
+
+## Phase 21 — generic ')' spacing (M-FMT-DEEPNESTED)
+
+M-FMT-DEEPNESTED 把第 20 阶段的 `) in` 修复从 PPX-local 规则提升为普通 token-spacing 规则。
+只要 closing parenthesis 后面紧跟 word-like token，formatter 就插入且只插入一个分隔空格。
+这条规则是 lexical 的：它不需要判断后面的 word 是 keyword、identifier、constructor，还是 labelled argument payload。
+这样可以让任意 parenthesized subexpression 后面的 dense OCaml source 保持可读。
+它也避免了两枚合法 token 在输出里视觉上粘连、导致 review 困难的问题。
+formatter 仍然不会在 `)` 后面遇到 punctuation 时强行加空格。
+例如 `).field` 这类 dot-sensitive boundary 仍由既有 dot 与 punctuation 规则处理。
+本阶段的行为变化只覆盖 `prev.text == ")"` 后接 word-like token 的场景。
+canonical regression witness 是已有的 `deeply_nested` golden。
+这个 golden 在第 21 阶段之前已经属于 formatter idempotency suite。
+第 21 阶段只让它的 expected output 增加了一个 byte：`in` 前面的单个空格。
+这不是新的语法特性。
+parser、type checker、Core IR、backend、runtime 与 LSP protocol 都不因此改变。
+用户能看到的变化只是 formatter 输出更清楚。
+本规则的实现 commit 是 `dfddb75`。
+
+第 21 阶段之前，dense nested input 可能把 keyword boundary 压在一起：
+
+```diff
+-let deeply_nested a b c = if a > 0 then (let x = (a + (b * (c - 1))) in x + 1) else (let y = (if b > 0 then (let z = c + 2 in z) else (let w = c + 3 in w))in y)
+```
+
+出问题的是 else branch 末尾的片段：`... w))in y`。
+closing parenthesis 结束内部的 `let w = ... in w` expression。
+后面的 `in` 属于外层 `let y = ... in y` expression。
+没有空格时，reviewer 看到的是 `))in`，虽然真实 token stream 应该是 `)) in`。
+
+第 21 阶段之后，同一段输出会使用 generic `) word` boundary：
+
+```diff
++let deeply_nested a b c = if a > 0 then (let x = (a + (b * (c - 1))) in x + 1) else (let y = (if b > 0 then (let z = c + 2 in z) else (let w = c + 3 in w)) in y)
+```
+
+完整 expected file 仍然是 formatter fixed point。
+运行 `./zig-out/bin/omlz fmt tests/golden/fmt/deeply_nested.input.ml` 现在会和 `tests/golden/fmt/deeply_nested.expected.ml` byte-for-byte 一致。
+再次格式化 expected file 不会产生 diff。
+expected file 仍然以且只以一个 trailing newline 结束。
+其他十九个 formatter expected files 相对 `post-fmt-fixes-baseline` 保持 byte-identical。
+这种很小的 blast radius 是把它记录为 generic spacing rule 的依据。
+后续 formatter work 应把 `) word` 当作 baseline token-spacing contract 的一部分。
+如果将来确实需要 exception，应新增 golden 来说明为什么这个 word-like token 必须贴着 parenthesis。
