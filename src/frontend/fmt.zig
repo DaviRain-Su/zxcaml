@@ -369,6 +369,7 @@ fn lexLine(allocator: std.mem.Allocator, line: []const u8) ![]Token {
 fn needsSpace(prev: Token, current: Token, force_ppx_keyword_boundaries: bool) bool {
     if (current.kind == .comment or prev.kind == .comment) return true;
     if (force_ppx_keyword_boundaries and std.mem.eql(u8, prev.text, ")") and std.mem.eql(u8, current.text, "in")) return true;
+    if (std.mem.eql(u8, prev.text, ")") and current.kind == .word) return true;
     if (current.kind == .punct and isClosingOrSeparator(current.text)) return false;
     if (prev.kind == .punct and isOpening(prev.text)) return false;
     if (current.kind == .punct and std.mem.eql(u8, current.text, ".")) return false;
