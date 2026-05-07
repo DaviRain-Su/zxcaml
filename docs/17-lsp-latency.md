@@ -343,3 +343,67 @@ Do not move benchmark troubleshooting into the protocol guide unless it affects 
 Update this document when defaults, output fields, or threshold names change.
 Update the Chinese mirror in the same change.
 Keep heading parity between this file and the Chinese mirror.
+
+## Python harness env thresholds (M-LSPFIX-3)
+
+M-LSPFIX-3 closes the remaining Python-harness latency debt from Phase 17.
+The old Python `latency` scenario no longer owns a 200 ms diagnostics budget.
+That 200 ms assertion was removed because it duplicated a contract that now has a better owner.
+The single source of truth for diagnostics latency is `omlz lsp-bench`.
+The Zig probe already performs warmup trimming.
+The Zig probe already reports p50 and p99.
+The Zig probe already enforces the canonical 350 ms p50 and 800 ms p99 defaults.
+Keeping a separate Python median threshold made parallel `zig build test` depend on host load.
+It also forced workers into the Phase 17 `-j1` fallback even when the canonical probe was healthy.
+The Python `latency` command now acts as a shim rather than a benchmark authority.
+It locates the installed low-level binary at `zig-out/bin/lsp-bench`.
+If that binary is missing, the harness builds the project first.
+It runs the bench from the repository root.
+It forwards the bench stdout and stderr so operators still see timings.
+It asserts that the completed process returns code zero.
+It does not compute its own median.
+It does not compare against the old 200 ms number.
+A failing `latency` check therefore means the Zig latency contract failed or the probe could not run.
+The PASS marker remains in the Python all-checks loop.
+This preserves functional harness accounting while moving latency policy to the Zig probe.
+
+Two adjacent Python micro-benchmarks still keep local thresholds.
+`LATENCY_CODELENS_THRESHOLD_MS` controls `python3 tests/lsp/run_lsp_check.py codelens_latency`.
+Its default is `100`.
+`LATENCY_FORMATTING_THRESHOLD_MS` controls `python3 runtime/lsp/test_harness.py formatting_latency`.
+Its default is `30`.
+These thresholds cover narrow feature-specific paths, not diagnostics latency.
+They remain in Python because CodeLens and formatting are measured by the Python harnesses directly.
+They are now environment-tunable so loaded hosts can be diagnosed without editing source.
+For example:
+
+```sh
+LATENCY_CODELENS_THRESHOLD_MS=200 python3 tests/lsp/run_lsp_check.py codelens_latency
+LATENCY_FORMATTING_THRESHOLD_MS=60 python3 runtime/lsp/test_harness.py formatting_latency
+```
+
+The failure messages cite the configured threshold.
+Use lower values when testing the negative path.
+Use higher values only as an explicit local comparison on a busy machine.
+Do not commit relaxed values into project defaults.
+Do not treat these Python variables as replacements for the canonical diagnostics contract.
+
+The M-LSPFIX2 variables have a different scope.
+`ZXCAML_LSP_LATENCY_P50_MS` and `ZXCAML_LSP_LATENCY_P99_MS` configure the Zig diagnostics probe.
+Those variables define the canonical latency contract used by `omlz lsp-bench`.
+They map to the p50 and p99 checks over post-warmup diagnostics samples.
+The new `LATENCY_*_THRESHOLD_MS` variables only tune Python micro-benchmarks.
+They are single-scenario escape valves for CodeLens and formatting checks.
+The Zig variables describe editor diagnostics feedback.
+The Python variables describe feature-specific harness budgets.
+Keep that boundary clear when debugging failures.
+
+Migration is strict after M-LSPFIX-3.
+The Phase 17 `zig build -j1 test` fallback is withdrawn.
+Strict parallel `zig build test` is the only no-regress path.
+If the old Python `latency` check fails, investigate `omlz lsp-bench`.
+If `codelens_latency` or `formatting_latency` fails, inspect the scenario-specific threshold.
+Record any override in the command line used for reproduction.
+Keep `pgrep -f omlz-lsp` clean after manual stress tests.
+Update this section whenever the Python threshold names or defaults change.
+Update the Chinese mirror in the same commit.

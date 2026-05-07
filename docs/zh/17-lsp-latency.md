@@ -342,3 +342,67 @@ CodeLens latency 有自己的 LSP harness path。
 当 defaults、output fields 或 threshold names 改变时，更新本文。
 同一次 change 中也要更新 Chinese mirror。
 保持本文与英文文档的 heading parity。
+
+## Python harness env thresholds（M-LSPFIX-3）
+
+M-LSPFIX-3 关闭了 Phase 17 留下的 Python harness latency 技术债。
+旧的 Python `latency` 场景不再拥有 200 ms 的 diagnostics 预算。
+删除这个 200 ms assertion，是因为它重复了一个已经有更合适 owner 的 contract。
+diagnostics latency 的单一事实来源是 `omlz lsp-bench`。
+Zig probe 已经执行 warmup trimming。
+Zig probe 已经报告 p50 和 p99。
+Zig probe 已经执行默认的 350 ms p50 与 800 ms p99 规范。
+保留另一个 Python median threshold 会让并行 `zig build test` 受 host load 影响。
+它也会迫使 worker 在 canonical probe 健康时仍然走 Phase 17 的 `-j1` fallback。
+现在 Python `latency` command 是 shim，而不是 benchmark authority。
+它会查找安装后的底层 binary：`zig-out/bin/lsp-bench`。
+如果这个 binary 不存在，harness 会先构建项目。
+它从 repository root 运行 bench。
+它转发 bench 的 stdout 和 stderr，所以 operator 仍能看到真实 timings。
+它只断言 completed process 的 return code 是 zero。
+它不再计算自己的 median。
+它不再和旧的 200 ms 数字比较。
+因此 `latency` check 失败表示 Zig latency contract 失败，或 probe 本身无法运行。
+Python all-checks loop 中的 PASS marker 保持不变。
+这样既保留了 functional harness accounting，也把 latency policy 移交给 Zig probe。
+
+相邻的两个 Python micro-benchmark 仍保留本地阈值。
+`LATENCY_CODELENS_THRESHOLD_MS` 控制 `python3 tests/lsp/run_lsp_check.py codelens_latency`。
+它的默认值是 `100`。
+`LATENCY_FORMATTING_THRESHOLD_MS` 控制 `python3 runtime/lsp/test_harness.py formatting_latency`。
+它的默认值是 `30`。
+这些 thresholds 覆盖的是窄的 feature-specific 路径，不是 diagnostics latency。
+它们继续留在 Python 中，因为 CodeLens 和 formatting 是由 Python harness 直接测量的。
+现在它们可以通过环境变量调整，便于在 loaded host 上诊断，而不需要改源码。
+例如：
+
+```sh
+LATENCY_CODELENS_THRESHOLD_MS=200 python3 tests/lsp/run_lsp_check.py codelens_latency
+LATENCY_FORMATTING_THRESHOLD_MS=60 python3 runtime/lsp/test_harness.py formatting_latency
+```
+
+failure message 会写出实际配置的 threshold。
+验证 negative path 时使用更低的值。
+只有在繁忙机器上做显式本地比较时，才使用更高的值。
+不要把放宽后的值提交为项目默认值。
+不要把这些 Python 变量当成 canonical diagnostics contract 的替代品。
+
+M-LSPFIX2 的变量属于另一个层级。
+`ZXCAML_LSP_LATENCY_P50_MS` 和 `ZXCAML_LSP_LATENCY_P99_MS` 配置 Zig diagnostics probe。
+这些变量定义 `omlz lsp-bench` 使用的 canonical latency contract。
+它们映射到 warmup 后 diagnostics samples 的 p50 和 p99 checks。
+新的 `LATENCY_*_THRESHOLD_MS` 变量只调节 Python micro-benchmarks。
+它们是 CodeLens 和 formatting checks 的单场景 escape valves。
+Zig 变量描述 editor diagnostics feedback。
+Python 变量描述 feature-specific harness budgets。
+排查 failure 时要保持这条边界清晰。
+
+M-LSPFIX-3 之后的迁移规则是 strict。
+Phase 17 的 `zig build -j1 test` fallback 已经撤回。
+strict parallel `zig build test` 是唯一 no-regress 路径。
+如果旧的 Python `latency` check 失败，请调查 `omlz lsp-bench`。
+如果 `codelens_latency` 或 `formatting_latency` 失败，请检查场景自己的 threshold。
+复现命令里要记录所有 override。
+手动 stress tests 后保持 `pgrep -f omlz-lsp` 干净。
+当 Python threshold 名称或默认值变化时，更新本节。
+同一次 commit 中也要更新英文镜像。

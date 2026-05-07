@@ -9,6 +9,18 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Changed — Python LSP harness latency assertions removed/relaxed
+
+- Changed `tests/lsp/run_lsp_check.py latency` so the legacy Python timing
+  assertion is shimmed to the canonical `omlz lsp-bench` / `lsp-bench`
+  latency probe (`6f29d7c`).
+- Changed `codelens_latency` so its Python micro-benchmark threshold is
+  env-tunable via `LATENCY_CODELENS_THRESHOLD_MS`, preserving the 100 ms
+  default while making loaded-host overrides explicit (`2253cb4`).
+- Changed `formatting_latency` so its Python micro-benchmark threshold is
+  env-tunable via `LATENCY_FORMATTING_THRESHOLD_MS`, preserving the 30 ms
+  default while keeping diagnostics latency owned by the Zig probe (`a55d8cd`).
+
 ### Added — codegen direct-write
 
 - Added the ANF rewrite that detects the single-use `Crypto.secp256k1_recover`
