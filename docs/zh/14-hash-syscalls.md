@@ -356,3 +356,81 @@ BPF account-write 失败通常意味着 account data 太小，或 test fixture �
 `tests/secp_recover_demo_test.rs` 验证 recovery 与 fixture provenance。
 `CHANGELOG.md` 在 `[Unreleased]` 下记录五个 milestone commit。
 `mission-internal/canonical-facts.md` 记录当前 post-M-HASH 值。
+
+## 直写优化
+
+`Crypto.secp256k1_recover` 的公开 OCaml 类型没有改变。
+普通的 allocation 形态仍然是基准语义。
+在这个形态下，frontend 看到的是 `bytes -> int -> bytes -> bytes`。
+bundled external 会降低为 `sol_secp256k1_recover_alloc`。
+生成的 Zig 会把 BPF entry arena 传给这个 helper。
+helper 会验证 32 字节 hash、`0..3` 的 recovery id，以及 64 字节 compact signature。
+成功时，它在 arena 中生成 64 字节 recovered public key，并把它作为 OCaml `bytes` 返回。
+失败时，它返回空 byte slice。
+当用户代码需要比较结果、根据长度分支、稍后再保存、传给另一个 helper，或确实需要一个 `bytes` 值时，这个 allocation 形态仍然正确。
+
+M-CODEGEN-OPT 新增的是更窄的 backend-only 直写路径。
+ANF post-pass 会识别一个 recovered pubkey，而它唯一的消费者正好是 account-data 写入。
+源码仍然调用 `Crypto.secp256k1_recover`；用户可见 API 不变。
+这个 pass 会把内部表达式改写为 `Crypto.secp256k1_recover_into_account`。
+Zig backend 会把该 intrinsic 映射到
+`syscalls.sol_secp256k1_recover_into_account_data`。
+runtime helper 接收 `account.data` 这个可变 slice，并直接把
+`account.data.ptr` 作为 Solana syscall 的输出指针。
+这样不会创建 64 字节 arena buffer。
+也不需要再把 recovered bytes 二次复制到 account data。
+hosted fallback 会把确定性的 success-shaped bytes 直接写进同一个 account-data slice，让 native/codegen 测试仍覆盖相同形状。
+
+这个 pass 只在 single-use 模式下触发。
+producer 必须是 `Crypto.secp256k1_recover` 调用，或者解析到
+`sol_secp256k1_recover_alloc` 的 external。
+绑定出来的 recovered 值在 continuation 中必须只出现一次。
+这唯一一次出现必须是 `set_account_data account r` 的 value，或者是
+`field_name` 恰好为 `data` 的 `AccountFieldSet` value。
+account 表达式会作为新 intrinsic 的第一个参数保留下来。
+hash、recovery id、signature 三个表达式会按原顺序保留。
+程序顺序仍然显式，因为替换后的节点仍在同一个 ANF 位置执行 effectful call。
+
+这个 pass 会有意避开很多情况。
+当 recovered 值没有被使用时，它不触发。
+当 recovered 值被读取超过一次时，它不触发。
+当这个值被 closure 捕获时，它不触发。
+当消费者写入的不是 account 的 `data` 字段时，它不触发。
+它也不会优化 SHA-256、Keccak-256 或 BLAKE3 的 digest writer。
+如果用户代码先检查 `Bytes.length recovered` 再写入，它也不会触发，因为那需要真实的 allocation-shaped `bytes` 值。
+它不会删除 alloc helper；两个 codegen path 会同时保留。
+旧的 `crypto_secp_recover` golden 继续覆盖非直写场景。
+新的 `crypto_secp_recover_direct` golden 固化直写场景。
+
+这个优化重要，是因为通用 recovered-bytes 形态对一个常见 BPF account writer 来说太重。
+过去 Mollusk fixture 需要在 `omlz build` 之后 patch 生成的 Zig，并在 sbpf-linker 报告 BPF stack limit exceeded 后，用更大的 BPF stack allowance 重新链接。
+有了 direct-write codegen，`examples/secp_recover_demo.ml` 可以走正常 BPF build 路径，不再需要 relink workaround。
+SVM fixture 现在验证的是用户实际构建出的同一份 generated program。
+这个优化也保持了源码的自然写法：程序员仍然写 recover-then-write。
+
+源码中的典型形态：
+
+```ocaml
+let recover_into_account (acc : account) h k s =
+  let r = Crypto.secp256k1_recover h k s in
+  let _ = set_account_data acc r in
+  0
+```
+
+ANF rewrite 后发出的 Zig 形态：
+
+```zig
+_ = syscalls.sol_secp256k1_recover_into_account_data(
+    omlz_secp_account_1.data,
+    h,
+    k,
+    s,
+);
+```
+
+直写 helper 会把 syscall status 当作整数形态的 effect 返回。
+根据周围 lowered expression 的形状，生成的程序代码可以继续返回 `0`，也可以返回 helper 的结果。
+account-data 长度检查发生在 runtime helper 内部。
+如果输出 account 太小，helper 会返回非零，而不是写入部分 pubkey bytes。
+当 recovered key 不是立即且唯一复制进 `account.data` 时，请继续使用 allocation 形态。
+

@@ -363,3 +363,97 @@ writable in the test fixture.
 `tests/secp_recover_demo_test.rs` validates recovery and fixture provenance.
 `CHANGELOG.md` records the five milestone commits under `[Unreleased]`.
 `mission-internal/canonical-facts.md` records current post-M-HASH values.
+
+## Direct-write optimization
+
+`Crypto.secp256k1_recover` still has the same public OCaml type.
+The ordinary, allocation-shaped form is still the baseline semantics.
+In that form the frontend sees `bytes -> int -> bytes -> bytes`.
+The bundled external lowers to `sol_secp256k1_recover_alloc`.
+Generated Zig passes the BPF entry arena to that helper.
+The helper validates the 32-byte hash, the `0..3` recovery id, and the
+64-byte compact signature.
+On success it materializes a 64-byte recovered public key in arena-owned
+memory and returns it as OCaml `bytes`.
+On failure it returns an empty byte slice.
+This allocation form remains correct when user code compares the result,
+branches on its length, stores it for later, passes it through another helper,
+or otherwise needs a real `bytes` value.
+
+M-CODEGEN-OPT adds a narrower backend-only direct-write path.
+The ANF post-pass recognizes a recovered pubkey whose only consumer is an
+account-data write.
+The source still calls `Crypto.secp256k1_recover`; no user-facing API changes.
+The pass rewrites the internal expression to
+`Crypto.secp256k1_recover_into_account`.
+The Zig backend maps that intrinsic to
+`syscalls.sol_secp256k1_recover_into_account_data`.
+That runtime helper receives `account.data` as a mutable slice and passes
+`account.data.ptr` directly as the Solana syscall output pointer.
+No 64-byte arena buffer is created.
+No second copy from recovered bytes into account data is needed.
+The hosted fallback writes the deterministic success-shaped bytes directly into
+the same account-data slice so native/codegen tests still exercise the shape.
+
+The pass fires only for a single-use pattern.
+The producer must be a `Crypto.secp256k1_recover` call, or an external that
+resolves to `sol_secp256k1_recover_alloc`.
+The bound recovered value must appear exactly once in the continuation.
+That one appearance must be the value passed to `set_account_data account r`,
+or the value of an `AccountFieldSet` whose field name is exactly `data`.
+The account expression is preserved as the first argument to the new intrinsic.
+The hash, recovery id, and signature expressions are preserved in order.
+Program order remains explicit because the replacement is still an effectful
+call in the same ANF position as the account write.
+
+The pass deliberately does not fire when the recovered value is unused.
+It does not fire when the recovered value is read more than once.
+It does not fire when the value is captured by a closure.
+It does not fire when the consumer writes a non-`data` account field.
+It does not fire for SHA-256, Keccak-256, or BLAKE3 digest writers.
+It does not fire when user code needs to inspect `Bytes.length recovered` before
+writing, because that requires the allocation-shaped `bytes` value.
+It does not remove the alloc helper; both codegen paths remain available.
+The old `crypto_secp_recover` golden continues to cover the non-direct case.
+The new `crypto_secp_recover_direct` golden freezes the direct case.
+
+This matters because the generic recovered-bytes shape was too expensive for
+one common BPF account writer.
+The previous Mollusk fixture had to patch generated Zig after `omlz build` and
+relink with a larger BPF stack allowance after sbpf-linker reported that the
+BPF stack limit was exceeded.
+With direct-write codegen, `examples/secp_recover_demo.ml` builds through the
+normal BPF path without that relink workaround.
+The SVM fixture can now validate the same generated program that users build.
+The optimization also keeps the public source code simple: the programmer still
+writes the natural recover-then-write shape.
+
+Worked source pattern:
+
+```ocaml
+let recover_into_account (acc : account) h k s =
+  let r = Crypto.secp256k1_recover h k s in
+  let _ = set_account_data acc r in
+  0
+```
+
+Emitted Zig shape after the ANF rewrite:
+
+```zig
+_ = syscalls.sol_secp256k1_recover_into_account_data(
+    omlz_secp_account_1.data,
+    h,
+    k,
+    s,
+);
+```
+
+The direct helper returns the syscall status as an integer-shaped effect.
+Generated program code can keep returning `0` or the helper result depending on
+the surrounding lowered expression.
+The account-data length check happens inside the runtime helper.
+If the output account is too small, the helper returns non-zero instead of
+writing partial pubkey bytes.
+Keep using the allocation form when the recovered key is not immediately and
+exclusively copied into `account.data`.
+

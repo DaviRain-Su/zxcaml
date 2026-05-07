@@ -9,6 +9,20 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Added — codegen direct-write
+
+- Added the ANF rewrite that detects the single-use `Crypto.secp256k1_recover`
+  followed by an account-data write and lowers it to the backend-only
+  `Crypto.secp256k1_recover_into_account` intrinsic (`4553965`).
+- Added `sol_secp256k1_recover_into_account_data`, reusing the pinned Solana
+  secp256k1 syscall address while writing the 64-byte pubkey directly into
+  `account.data` (`02fae9a`).
+- Enabled the Zig codegen direct-write emission path so the BPF build no longer
+  needs the Mollusk relink workaround for `secp_recover_demo` (`4b1cec2`).
+- Added the `crypto_secp_recover_direct` golden pair that asserts generated Zig
+  contains `sol_secp256k1_recover_into_account_data` and not the alloc helper
+  (`de4e222`).
+
 ### Added — LSP latency hardening
 
 - Added the hand-written Zig LSP latency probe, replacing the flaky Python
