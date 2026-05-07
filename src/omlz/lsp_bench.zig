@@ -18,12 +18,13 @@ const Args = struct {
     rounds: ?[]const u8 = null,
     p50: ?[]const u8 = null,
     p99: ?[]const u8 = null,
+    json: bool = false,
 };
 
 pub fn writeHelp(io: Io) !void {
     try writeStdout(io,
         \\Usage:
-        \\  omlz lsp-bench [--warmup N] [--rounds K] [--p50 MS] [--p99 MS]
+        \\  omlz lsp-bench [--warmup N] [--rounds K] [--p50 MS] [--p99 MS] [--json]
         \\
         \\Runs the Zig LSP latency probe against zig-out/bin/omlz-lsp and
         \\prints samples_ms plus p50/p99/min/max latency statistics.
@@ -33,6 +34,7 @@ pub fn writeHelp(io: Io) !void {
         \\  --rounds K   Total diagnostics samples to collect, including warmup (default: 10)
         \\  --p50 MS     p50 latency threshold in milliseconds (default: 350)
         \\  --p99 MS     p99 latency threshold in milliseconds (default: 800)
+        \\  --json       Emit one machine-readable JSON object to stdout
         \\  --help       Show this help text
         \\
         \\Environment:
@@ -72,6 +74,7 @@ pub fn run(init: std.process.Init, argv0: []const u8, raw_args: []const []const 
         try bench_argv.append(allocator, "--rounds");
         try bench_argv.append(allocator, rounds);
     }
+    if (args.json) try bench_argv.append(allocator, "--json");
 
     const completed = try std.process.run(allocator, init.io, .{
         .argv = bench_argv.items,
@@ -118,6 +121,8 @@ fn parseArgs(raw_args: []const []const u8) !Args {
             args.p99 = raw_args[index];
         } else if (std.mem.startsWith(u8, arg, "--p99=")) {
             args.p99 = arg["--p99=".len..];
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            args.json = true;
         } else {
             return error.UnsupportedArgs;
         }

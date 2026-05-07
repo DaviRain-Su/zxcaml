@@ -14,6 +14,7 @@ const bench_uri = "file:///tmp/zxcaml_lsp_bench.ml";
 const Config = struct {
     warmup: usize = default_warmup,
     rounds: usize = default_rounds,
+    json: bool = false,
 };
 
 const Stats = struct {
@@ -71,9 +72,14 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         },
     };
-    emitSummary(config, samples_ms, stats);
-    if (evaluateThresholds(stats, thresholds)) |failure| {
-        emitThresholdFailure(failure);
+    const failure = evaluateThresholds(stats, thresholds);
+    if (config.json) {
+        try emitJsonSummary(init.io, config, samples_ms, stats, failure == null);
+    } else {
+        emitSummary(config, samples_ms, stats);
+    }
+    if (failure) |threshold_failure| {
+        emitThresholdFailure(threshold_failure);
         std.process.exit(1);
     }
 }
@@ -93,6 +99,8 @@ fn parseArgs(args: []const []const u8) !Config {
             index += 1;
             if (index >= args.len) return error.MissingRoundsValue;
             config.rounds = try parseUsizeArg(args[index]);
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            config.json = true;
         } else {
             return error.UnknownArgument;
         }
@@ -115,6 +123,7 @@ fn emitHelp() void {
         \\Options:
         \\  --warmup N   Number of initial samples to discard before percentiles (default: 3)
         \\  --rounds K   Total diagnostics samples to collect, including warmup (default: 10)
+        \\  --json       Emit one machine-readable JSON object to stdout
         \\  --help       Show this help text
         \\
     , .{});
@@ -420,6 +429,27 @@ fn emitSummary(config: Config, samples_ms: []const u64, stats: Stats) void {
     );
 }
 
+fn emitJsonSummary(io: Io, config: Config, samples_ms: []const u64, stats: Stats, passed: bool) !void {
+    var out = Io.Writer.Allocating.init(std.heap.page_allocator);
+    defer out.deinit();
+
+    try out.writer.print("{{\"warmup\":{d},\"rounds\":{d},\"samples_ms\":[", .{ config.warmup, config.rounds });
+    for (samples_ms, 0..) |sample, index| {
+        if (index != 0) try out.writer.writeAll(",");
+        try out.writer.print("{d}", .{sample});
+    }
+    try out.writer.print(
+        "],\"p50_ms\":{d},\"p99_ms\":{d},\"min_ms\":{d},\"max_ms\":{d},\"passed\":{s}}}\n",
+        .{ stats.p50_ms, stats.p99_ms, stats.min_ms, stats.max_ms, if (passed) "true" else "false" },
+    );
+
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(.stdout(), io, &buffer);
+    const writer = &file_writer.interface;
+    try writer.writeAll(out.writer.buffered());
+    try writer.flush();
+}
+
 fn emitThresholdFailure(failure: ThresholdFailure) void {
     if (std.mem.eql(u8, failure.label, "p50")) {
         std.debug.print(
@@ -510,6 +540,12 @@ test "custom warmup and rounds flags override defaults" {
 
     try std.testing.expectEqual(@as(usize, 5), config.warmup);
     try std.testing.expectEqual(@as(usize, 30), config.rounds);
+}
+
+test "json flag selects machine-readable output" {
+    const config = try parseArgs(&.{ "lsp-bench", "--json" });
+
+    try std.testing.expect(config.json);
 }
 
 test "percentiles are computed from synthetic samples after warmup is discarded" {
