@@ -1,0 +1,1 @@
+_ = syscalls.sol_secp256k1_recover_into_account_data(omlz_secp_account_1.data, h, k, s);

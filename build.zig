@@ -868,6 +868,20 @@ pub fn build(b: *std.Build) void {
     run_secp_recover_codegen_tests.step.dependOn(b.getInstallStep());
     run_secp_recover_codegen_tests.setCwd(b.path(""));
 
+    const secp_recover_direct_codegen_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/golden/secp_recover/codegen_direct_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    secp_recover_direct_codegen_test_module.addOptions("codegen_options", codegen_options);
+    const secp_recover_direct_codegen_tests = b.addTest(.{
+        .root_module = secp_recover_direct_codegen_test_module,
+    });
+    const run_secp_recover_direct_codegen_tests = b.addRunArtifact(secp_recover_direct_codegen_tests);
+    run_secp_recover_direct_codegen_tests.step.dependOn(&run_secp_recover_codegen_tests.step);
+    run_secp_recover_direct_codegen_tests.step.dependOn(b.getInstallStep());
+    run_secp_recover_direct_codegen_tests.setCwd(b.path(""));
+
     const anf_test_module = b.createModule(.{
         .root_source_file = b.path("anf_tests.zig"),
         .target = target,
@@ -938,4 +952,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_keccak_codegen_tests.step);
     test_step.dependOn(&run_blake3_codegen_tests.step);
     test_step.dependOn(&run_secp_recover_codegen_tests.step);
+    test_step.dependOn(&run_secp_recover_direct_codegen_tests.step);
 }
