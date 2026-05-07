@@ -61,6 +61,41 @@ milestones:
   P1-P9 compiler state and post-P8 hackathon assets without treating the demo as
   a new compiler phase.
 
+## Phase 19–21 wrap-up ledger
+
+The Phase 19, Phase 20, and Phase 21 operational/documentation pass is sealed.
+These milestones did not reopen P1-P9 scope; they hardened formatter coverage,
+refreshed the Factory wiki, and closed the formatter lex-wart debt surfaced by
+the fmt corpus expansion.
+
+| Milestone | Status | Seal marker / tag | Completed | Notes |
+|---|---|---|---|---|
+| M-WIKI-2 | ✅ sealed | `post-lspfix3-baseline` + Factory wiki run [`a114e5ee`](https://app.factory.ai/wiki/a114e5ee-acef-458a-bcb7-91c1f95c1c7a) | 2026-05-07 | Refreshed the cloud wiki at the Phase 18 / M-LSPFIX-3 baseline. |
+| M-FMT-3 | ✅ sealed | `post-fmt3-baseline` | 2026-05-07 | Expanded the `omlz fmt` corpus to the 20-golden trajectory while keeping the formatter source locked. |
+| M-LSPFIX-3 | ✅ sealed | `post-lspfix3-baseline` | 2026-05-07 | Removed the legacy Python latency assertion path and restored strict-parallel no-regress validation. |
+| M-FMT-FIXES | ✅ sealed | `post-fmt-fixes-baseline` | 2026-05-08 | Fixed polymorphic type-variable, labelled/optional argument, and PPX-local formatter lex warts. |
+| M-WIKI-3 | ✅ sealed | `post-fmt-fixes-baseline` + Factory wiki run [`52ce54d4`](https://app.factory.ai/wiki/52ce54d4-145a-4bc1-b530-bd947c501564) | 2026-05-07 | Refreshed the cloud wiki with Phase 19 + Phase 20 content. |
+| M-FMT-DEEPNESTED | ✅ sealed | `post-fmt-deepnested-baseline` | 2026-05-08 | Landed the generic `) word` spacing rule and re-captured the single `deeply_nested` golden delta. |
+
+### Closed tech debt
+
+- **TD-FMT-LEX-WARTS — ✅ closed/resolved** at `post-fmt-fixes-baseline`
+  (2026-05-08). The Phase 19 formatter scout's four lex-level warts are now
+  fixed and represented in the fmt golden corpus; Phase 21's
+  `post-fmt-deepnested-baseline` then sealed the final generic `) word`
+  spacing follow-up.
+
+### Phase 22+ candidates
+
+- **Codegen/runtime new directions:** only schedule concrete work with a named
+  runtime, BPF, or codegen acceptance target; speculative multi-target or
+  allocator changes still require an ADR-sized proposal.
+- **M-WIKI-5 wiki refresh:** refresh the Factory wiki after the next meaningful
+  compiler/runtime/docs baseline rather than after every small docs-only commit.
+- **Maintenance hold:** pause new feature scope and keep the repository on
+  validator, drift, and process-hygiene work if no high-confidence runtime or
+  codegen direction is ready.
+
 ## Future / optional
 
 The prose below is retained for optional ideas that are outside the sealed P1-P9
