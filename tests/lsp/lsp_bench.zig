@@ -4,6 +4,10 @@ const Io = std.Io;
 const default_warmup = 3;
 const default_rounds = 10;
 const default_doc_lines = 100;
+const default_p50_threshold_ms: u64 = 350;
+const default_p99_threshold_ms: u64 = 800;
+const env_p50_threshold = "ZXCAML_LSP_LATENCY_P50_MS";
+const env_p99_threshold = "ZXCAML_LSP_LATENCY_P99_MS";
 const lsp_bin = "zig-out/bin/omlz-lsp";
 const bench_uri = "file:///tmp/zxcaml_lsp_bench.ml";
 
@@ -17,6 +21,17 @@ const Stats = struct {
     p99_ms: u64,
     min_ms: u64,
     max_ms: u64,
+};
+
+const Thresholds = struct {
+    p50_ms: u64,
+    p99_ms: u64,
+};
+
+const ThresholdFailure = struct {
+    label: []const u8,
+    observed_ms: u64,
+    threshold_ms: u64,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -47,7 +62,20 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const stats = try computeStatsDiscardingWarmup(allocator, samples_ms, config.warmup);
+    const thresholds = loadThresholdsFromEnv(init.environ_map) catch |err| switch (err) {
+        error.InvalidLatencyThreshold => {
+            std.debug.print(
+                "error: {s} and {s} must be unsigned millisecond values\n",
+                .{ env_p50_threshold, env_p99_threshold },
+            );
+            std.process.exit(1);
+        },
+    };
     emitSummary(config, samples_ms, stats);
+    if (evaluateThresholds(stats, thresholds)) |failure| {
+        emitThresholdFailure(failure);
+        std.process.exit(1);
+    }
 }
 
 fn parseArgs(args: []const []const u8) !Config {
@@ -335,6 +363,40 @@ fn computeStatsDiscardingWarmup(
     return computeStats(allocator, samples_ms[warmup..]);
 }
 
+fn loadThresholdsFromEnv(environ_map: *const std.process.Environ.Map) !Thresholds {
+    return .{
+        .p50_ms = try thresholdFromEnv(environ_map, env_p50_threshold, default_p50_threshold_ms),
+        .p99_ms = try thresholdFromEnv(environ_map, env_p99_threshold, default_p99_threshold_ms),
+    };
+}
+
+fn thresholdFromEnv(
+    environ_map: *const std.process.Environ.Map,
+    name: []const u8,
+    default_value: u64,
+) !u64 {
+    const value = environ_map.get(name) orelse return default_value;
+    return std.fmt.parseInt(u64, value, 10) catch error.InvalidLatencyThreshold;
+}
+
+fn evaluateThresholds(stats: Stats, thresholds: Thresholds) ?ThresholdFailure {
+    if (stats.p50_ms >= thresholds.p50_ms) {
+        return .{
+            .label = "p50",
+            .observed_ms = stats.p50_ms,
+            .threshold_ms = thresholds.p50_ms,
+        };
+    }
+    if (stats.p99_ms >= thresholds.p99_ms) {
+        return .{
+            .label = "p99",
+            .observed_ms = stats.p99_ms,
+            .threshold_ms = thresholds.p99_ms,
+        };
+    }
+    return null;
+}
+
 fn percentileNearestRank(sorted_samples_ms: []const u64, percentile: u8) u64 {
     std.debug.assert(sorted_samples_ms.len > 0);
     const rank = @max(@as(usize, 1), (@as(usize, percentile) * sorted_samples_ms.len + 99) / 100);
@@ -356,6 +418,20 @@ fn emitSummary(config: Config, samples_ms: []const u64, stats: Stats) void {
         "warmup={d} rounds={d} p50_ms={d} p99_ms={d} min_ms={d} max_ms={d}\n",
         .{ config.warmup, config.rounds, stats.p50_ms, stats.p99_ms, stats.min_ms, stats.max_ms },
     );
+}
+
+fn emitThresholdFailure(failure: ThresholdFailure) void {
+    if (std.mem.eql(u8, failure.label, "p50")) {
+        std.debug.print(
+            "FAIL: p50={d} exceeds threshold {d}\n",
+            .{ failure.observed_ms, failure.threshold_ms },
+        );
+    } else {
+        std.debug.print(
+            "FAIL: p99={d} exceeds threshold {d}\n",
+            .{ failure.observed_ms, failure.threshold_ms },
+        );
+    }
 }
 
 fn objectField(value: std.json.Value, name: []const u8) !std.json.Value {
@@ -453,4 +529,43 @@ test "rounds less than warmup reports a clear error" {
         error.NotEnoughMeasuredSamples,
         computeStatsDiscardingWarmup(std.testing.allocator, &samples, 3),
     );
+}
+
+test "latency thresholds default to p50 350 and p99 800" {
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+
+    const thresholds = try loadThresholdsFromEnv(&env);
+
+    try std.testing.expectEqual(@as(u64, 350), thresholds.p50_ms);
+    try std.testing.expectEqual(@as(u64, 800), thresholds.p99_ms);
+}
+
+test "custom latency thresholds are read from env" {
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("ZXCAML_LSP_LATENCY_P50_MS", "123");
+    try env.put("ZXCAML_LSP_LATENCY_P99_MS", "456");
+
+    const thresholds = try loadThresholdsFromEnv(&env);
+
+    try std.testing.expectEqual(@as(u64, 123), thresholds.p50_ms);
+    try std.testing.expectEqual(@as(u64, 456), thresholds.p99_ms);
+}
+
+test "threshold env override passes below-threshold stats" {
+    var env = std.process.Environ.Map.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("ZXCAML_LSP_LATENCY_P50_MS", "501");
+    try env.put("ZXCAML_LSP_LATENCY_P99_MS", "901");
+
+    const thresholds = try loadThresholdsFromEnv(&env);
+    const stats: Stats = .{
+        .p50_ms = 500,
+        .p99_ms = 900,
+        .min_ms = 100,
+        .max_ms = 900,
+    };
+
+    try std.testing.expect(evaluateThresholds(stats, thresholds) == null);
 }
