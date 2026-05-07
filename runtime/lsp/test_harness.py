@@ -195,8 +195,9 @@ def formatting_latency():
         BASE.stop(proc)
 
     median_ms = sorted(measured_ms)[len(measured_ms) // 2]
-    print(f"formatting_latency_median={median_ms:.1f}ms")
-    assert median_ms <= 30.0, f"raw_samples_ms={measured_ms}"
+    threshold_ms = float(os.environ.get("LATENCY_FORMATTING_THRESHOLD_MS", "30"))
+    print(f"formatting_latency_median={median_ms:.1f}ms threshold={threshold_ms}")
+    assert median_ms <= threshold_ms, f"raw_samples_ms={measured_ms} threshold={threshold_ms}"
 
 
 FORMAT_COMMANDS = {
