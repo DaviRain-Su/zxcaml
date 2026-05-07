@@ -93,6 +93,16 @@ pub fn build(b: *std.Build) void {
         .root_module = lsp_root_module,
     });
 
+    const lsp_bench_module = b.createModule(.{
+        .root_source_file = b.path("tests/lsp/lsp_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const lsp_bench_exe = b.addExecutable(.{
+        .name = "lsp-bench",
+        .root_module = lsp_bench_module,
+    });
+
     const frontend_output = b.getInstallPath(.bin, "zxc-frontend");
     const install_bin_dir = std.fs.path.dirname(frontend_output).?;
     const make_install_bin = b.addSystemCommand(&.{ "mkdir", "-p", install_bin_dir });
@@ -129,6 +139,10 @@ pub fn build(b: *std.Build) void {
     const install_lsp = b.addInstallArtifact(lsp_exe, .{});
     install_lsp.step.dependOn(&cleanup_frontend.step);
     b.getInstallStep().dependOn(&install_lsp.step);
+
+    const install_lsp_bench = b.addInstallArtifact(lsp_bench_exe, .{});
+    install_lsp_bench.step.dependOn(&install_lsp.step);
+    b.getInstallStep().dependOn(&install_lsp_bench.step);
 
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
@@ -637,6 +651,20 @@ pub fn build(b: *std.Build) void {
     const run_lsp_jsonrpc_tests = b.addRunArtifact(lsp_jsonrpc_tests);
     run_lsp_jsonrpc_tests.setCwd(b.path(""));
 
+    // LSP latency probe tests (LSPFIX2 / F-LSPFIX2-1): verify generated probe
+    // documents before the runtime harness delegates latency checks to the
+    // compiled Zig stdio client.
+    const lsp_bench_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/lsp/lsp_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const lsp_bench_tests = b.addTest(.{
+        .root_module = lsp_bench_test_module,
+    });
+    const run_lsp_bench_tests = b.addRunArtifact(lsp_bench_tests);
+    run_lsp_bench_tests.setCwd(b.path(""));
+
     // End-to-end LSP harness (P9 / F-LSP-7): exercise every Python stdlib
     // client scenario through the installed omlz-lsp binary.  The harness
     // invokes both zig-out/bin/omlz-lsp and omlz check, so depend explicitly
@@ -874,6 +902,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_srcmap_determinism_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);
+    test_step.dependOn(&run_lsp_bench_tests.step);
     test_step.dependOn(&run_lsp_harness.step);
     test_step.dependOn(&run_render_tests.step);
     test_step.dependOn(&run_bridge_wire_compat_tests.step);

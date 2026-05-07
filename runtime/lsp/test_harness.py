@@ -2,8 +2,9 @@
 """Runtime LSP harness entrypoint.
 
 The original M-LSP harness lives in tests/lsp/run_lsp_check.py and remains the
-canonical source for initialize, diagnostics, lifecycle, latency, CodeLens, and
-executeCommand scenarios. FMT4 extends this runtime-facing harness with:
+canonical source for initialize, diagnostics, lifecycle, CodeLens, and
+executeCommand scenarios. LSPFIX2 delegates diagnostics latency to the Zig
+probe while FMT4 extends this runtime-facing harness with:
 - PASS formatting
 - PASS rangeFormatting
 - PASS formatting_malformed
@@ -12,6 +13,7 @@ executeCommand scenarios. FMT4 extends this runtime-facing harness with:
 
 import importlib.util
 import os
+import subprocess
 import sys
 import time
 
@@ -36,7 +38,7 @@ BASE_COMMANDS = {
     "didopen_clean": BASE.didopen_clean,
     "didchange_roundtrip": BASE.didchange_roundtrip,
     "shutdown": BASE.shutdown,
-    "latency": BASE.latency,
+    "latency": None,
     "codelens": BASE.codelens,
     "codelens_zero": BASE.codelens_zero,
     "executecommand": BASE.executecommand,
@@ -56,6 +58,29 @@ def runtime_fixture_uri(name):
 def read_runtime_fixture(name):
     with open(runtime_fixture_path(name), "r", encoding="utf-8") as f:
         return f.read()
+
+
+def latency():
+    """Deprecated Python latency scenario shim.
+
+    LSPFIX2 moves diagnostics latency measurement into the compiled Zig probe
+    so the Python runtime harness keeps the PASS latency marker without owning
+    timing math or samples.
+    """
+
+    bench = os.path.join(ROOT, "zig-out", "bin", "lsp-bench")
+    if not os.path.exists(bench):
+        subprocess.run(["zig", "build"], cwd=ROOT, check=True)
+
+    completed = subprocess.run([bench], cwd=ROOT, text=True, capture_output=True)
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+    assert completed.returncode == 0, f"lsp-bench exited {completed.returncode}"
+
+
+BASE_COMMANDS["latency"] = latency
 
 
 def open_text(proc, uri, text, version=1):
