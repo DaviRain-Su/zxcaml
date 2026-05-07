@@ -27,6 +27,7 @@ const snapshots = [_][]const u8{
     "deeply_nested",
     "multi_arg_function",
     "record_pattern",
+    "record_destructure_let",
     "string_escapes",
 };
 
