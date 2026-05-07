@@ -12,6 +12,18 @@
 > [`tests/omlz_fmt_golden_test.zig`](../tests/omlz_fmt_golden_test.zig), and
 > [`runtime/lsp/test_harness.py`](../runtime/lsp/test_harness.py).
 
+## Index
+
+See also: [Factory wiki — formatter](https://app.factory.ai/wiki/52ce54d4-145a-4bc1-b530-bd947c501564).
+
+- [M-FMT — formatter core, CLI, golden corpus, and LSP formatting](#m-fmt)
+- [M-FMT-2 — format-only mode decoupled from subset checking](#m-fmt-2)
+- [M-FMT-3 — Phase 19 corpus expansion](#m-fmt-3)
+- [M-FMT-FIXES — Phase 20 lex wart fixes](#m-fmt-fixes)
+- [M-FMT-DEEPNESTED — Phase 21 generic `)` spacing](#m-fmt-deepnested)
+
+<a id="m-fmt"></a>
+
 ## 1. Position
 
 `omlz fmt` formats ordinary ZxCaml `.ml` source.
@@ -346,6 +358,8 @@ If `--check` exits `1`, run `--write` or inspect stdout from default mode.
 Keep formatter changes in focused commits so style churn is easy to review.
 Do not mix formatter-only rewrites with semantic compiler work unless a feature explicitly requires it.
 
+<a id="m-fmt-2"></a>
+
 ## Format-only mode (decoupled from subset checker)
 
 M-FMT-2 changed `omlz fmt` into a format-only surface.
@@ -421,6 +435,8 @@ Migration note: scripts that used `omlz fmt` as a proxy for "is this file in the
 Use `omlz check`, `omlz build --check` where a wrapper provides that mode, or the relevant `omlz build|run|test` command for the artifact you actually need.
 Keep `omlz fmt --check` for style enforcement only.
 After M-FMT-2, a successful `fmt --check` means "the bytes already match formatter style"; it no longer means "the program is accepted by the ZxCaml subset checker."
+
+<a id="m-fmt-3"></a>
 
 ## Phase 19 — corpus expansion (M-FMT-3)
 
@@ -540,6 +556,8 @@ Those fixes belong to a future M-FMT-FIXES milestone.
 Do not silently resolve them while updating this corpus.
 The correct behavior in this phase is to record the current formatter output exactly and let future work change it deliberately.
 
+<a id="m-fmt-fixes"></a>
+
 ## Phase 20 — lex wart fixes (M-FMT-FIXES)
 
 M-FMT-FIXES closes the deferred `TD-FMT-LEX-WARTS` cluster named at the end of Phase 19.
@@ -616,6 +634,8 @@ let%lwt x = fetch (y) in return (x)
 
 The Phase 20 corpus therefore changes the wart status from "known deferred" to "covered regression suite".
 Future formatter work should keep these four inputs in the golden list and preserve their expected files as fixed points.
+
+<a id="m-fmt-deepnested"></a>
 
 ## Phase 21 — generic ')' spacing (M-FMT-DEEPNESTED)
 

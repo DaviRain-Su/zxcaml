@@ -12,6 +12,18 @@
 > [`tests/omlz_fmt_golden_test.zig`](../../tests/omlz_fmt_golden_test.zig)、
 > [`runtime/lsp/test_harness.py`](../../runtime/lsp/test_harness.py)。
 
+## 索引
+
+另见：[Factory wiki — formatter](https://app.factory.ai/wiki/52ce54d4-145a-4bc1-b530-bd947c501564)。
+
+- [M-FMT — formatter core、CLI、golden corpus 与 LSP formatting](#m-fmt)
+- [M-FMT-2 — format-only mode，不再依赖 subset checking](#m-fmt-2)
+- [M-FMT-3 — 第 19 阶段 corpus expansion](#m-fmt-3)
+- [M-FMT-FIXES — 第 20 阶段 lex wart fixes](#m-fmt-fixes)
+- [M-FMT-DEEPNESTED — 第 21 阶段 generic `)` spacing](#m-fmt-deepnested)
+
+<a id="m-fmt"></a>
+
 ## 1. 定位
 
 `omlz fmt` 用来格式化普通的 ZxCaml `.ml` 源码。
@@ -346,6 +358,8 @@ comment-heavy diffs 需要人工 review。
 formatter changes 应保持 focused commits，方便 review style churn。
 除非 feature 明确要求，不要把 formatter-only rewrites 和 semantic compiler work 混在一起。
 
+<a id="m-fmt-2"></a>
+
 ## 仅格式化模式（与子集检查器解耦）
 
 M-FMT-2 把 `omlz fmt` 调整为真正的 format-only surface。
@@ -421,6 +435,8 @@ let s = "unterminated
 可以使用 `omlz check`、由 wrapper 提供时的 `omlz build --check`，或者与你实际 artifact 对应的 `omlz build|run|test` 命令。
 `omlz fmt --check` 应只用于 style enforcement。
 M-FMT-2 之后，`fmt --check` 成功只表示“bytes 已符合 formatter style”；它不再表示“program 已被 ZxCaml subset checker 接受”。
+
+<a id="m-fmt-3"></a>
 
 ## Phase 19 — corpus expansion (M-FMT-3)
 
@@ -542,6 +558,8 @@ M-FMT-3 只负责文档和 corpus 证据，不修改 formatter implementation。
 更新本 corpus 时不要顺手修掉它们。
 本阶段的正确做法是如实记录当前 formatter output，并让未来 work 有意识地改变它。
 
+<a id="m-fmt-fixes"></a>
+
 ## 第 20 阶段 — lex wart fixes (M-FMT-FIXES)
 
 M-FMT-FIXES 关闭了第 19 阶段末尾记录的 `TD-FMT-LEX-WARTS` cluster。
@@ -618,6 +636,8 @@ let%lwt x = fetch (y) in return (x)
 
 因此，第 20 阶段把这些问题从“known deferred”变成“已由 regression suite 覆盖”。
 后续 formatter work 应继续保留这四个 input 在 golden list 中，并把对应 expected files 当作 fixed points 对待。
+
+<a id="m-fmt-deepnested"></a>
 
 ## Phase 21 — generic ')' spacing (M-FMT-DEEPNESTED)
 
