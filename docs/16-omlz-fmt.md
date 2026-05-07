@@ -3,8 +3,8 @@
 > **Languages / 语言**: **English** · [简体中文](./zh/16-omlz-fmt.md)
 >
 > **Scope:** the canonical `omlz fmt` formatter, its CLI contract, editor-facing
-> LSP formatting methods, and the bytewise idempotency guarantee shipped in
-> Milestone M-FMT.
+> LSP formatting methods, and the bytewise idempotency guarantee shipped across
+> Milestones M-FMT and M-FMT-2.
 >
 > **See also:** [`docs/lsp.md`](./lsp.md),
 > [`docs/diagnostics.md`](./diagnostics.md),
@@ -62,9 +62,9 @@ It preserves blank lines while processing the document.
 At the end, it removes trailing whitespace from the whole output.
 It then appends exactly one newline.
 The core formatter does not run the OCaml frontend by itself.
-The CLI validates files and stdin through the frontend boundary before formatting.
+The CLI runs the same lightweight lexical malformed-input check before formatting.
 The LSP path uses a lightweight structural malformed-input check before returning edits.
-This split lets the CLI show compiler diagnostics while keeping editor formatting fast.
+This split keeps formatting fast while leaving semantic diagnostics to `check`, `build`, `run`, and `test`.
 The current formatter is not a full OCaml AST pretty-printer.
 It is AST-faithful in the sense that it does not intentionally change program meaning.
 More precisely, it is conservative token-stream canonicalization.
@@ -191,12 +191,12 @@ Use JSON summaries for tooling.
 `--format=text` is the default text-oriented output mode.
 `--format=json` emits one JSON object per processed input.
 The JSON object includes `path`, `changed`, `original_bytes`, and `formatted_bytes`.
-`--no-color` disables ANSI color when frontend validation reports diagnostics.
+`--no-color` disables ANSI color when malformed-input diagnostics are reported.
 A positional file input formats that file.
 A positional directory input recurses over `*.ml` files.
 Directory results are sorted lexicographically before processing.
 Unsupported options exit `2`.
-Malformed OCaml input exits `2` in the CLI because frontend validation fails.
+Lexically malformed OCaml input exits `2` in the CLI because the `analyze` guard fails.
 Missing files exit `2`.
 
 ## 9. Exit codes and automation
@@ -208,7 +208,7 @@ For `--stdin`, `0` means stdin was formatted successfully.
 For `--check`, `0` means no input would be changed.
 Exit code `1` is reserved for `--check` finding reformattable input.
 Exit code `1` is not used for parse errors.
-Exit code `2` means usage, file, or frontend validation failure.
+Exit code `2` means usage, file, or malformed-input failure.
 CI should run `omlz fmt --check` and treat `1` as a style failure.
 CI should treat `2` as a tool or source validity failure.
 Pre-commit hooks should prefer `--write` for a developer-owned working tree.
@@ -225,19 +225,20 @@ The guarantee is about bytes, not visual similarity alone.
 The formatter always writes one final newline, so the fixed point includes that newline.
 The formatter strips trailing whitespace before reaching the fixed point.
 The formatter has inline double-apply tests in `src/frontend/fmt.zig`.
-The formatter has ten golden snapshot pairs under `tests/golden/fmt/`.
+The formatter has eleven golden snapshot pairs under `tests/golden/fmt/`.
 The golden test formats each `*.input.ml` file and compares it to `*.expected.ml`.
 The same golden test formats each `*.expected.ml` file and expects no byte change.
-The ten cases cover simple lets.
-The ten cases cover let-in chains.
-The ten cases cover match expressions.
-The ten cases cover mutual recursion.
-The ten cases cover `let%test_unit`.
-The ten cases cover comments.
-The ten cases cover deeply nested expressions.
-The ten cases cover multi-argument functions.
-The ten cases cover record patterns.
-The ten cases cover string escapes.
+The eleven cases cover simple lets.
+The eleven cases cover let-in chains.
+The eleven cases cover match expressions.
+The eleven cases cover mutual recursion.
+The eleven cases cover `let%test_unit`.
+The eleven cases cover comments.
+The eleven cases cover deeply nested expressions.
+The eleven cases cover multi-argument functions.
+The eleven cases cover record patterns.
+The eleven cases cover binding-position record destructuring.
+The eleven cases cover string escapes.
 Editors rely on this guarantee to avoid repeated format churn.
 CI relies on this guarantee to keep `--check` stable.
 
@@ -292,7 +293,7 @@ Like `prettier`, it favors a small number of consistent layout choices.
 Unlike `prettier`, it is not trying to support many unrelated languages.
 Unlike `prettier`, it does not expose a large style configuration surface.
 Unlike `rustfmt`, it does not yet perform a deep AST rewrite of every construct.
-ZxCaml's priority is deterministic formatting for the accepted OCaml subset.
+ZxCaml's priority is deterministic formatting for tokenizable OCaml source.
 The formatter is intentionally conservative around comments and partial ranges.
 The 100-column rule is a wrapping trigger, not a promise that every output line is shorter than 100 columns.
 The two-space indent is canonical and not configurable.
@@ -310,8 +311,8 @@ Do not combine `--stdin` with positional files.
 The CLI rejects that combination with exit code `2`.
 Do not expect `--stdin --check` to work.
 Use a temporary file or direct file mode for check workflows.
-Do not expect the core formatter alone to validate OCaml syntax.
-The CLI validates syntax before formatting.
+Do not expect the formatter to validate the full OCaml syntax or ZxCaml subset.
+The CLI checks only lexical malformed-input cases before formatting.
 The LSP path returns no formatting edits for structurally malformed text.
 Do not expect comments to be reflowed.
 Long comments stay long.
@@ -340,7 +341,83 @@ Check that a second formatter run produces no diff.
 If a second run changes bytes, file a bug against the idempotency contract.
 If LSP formatting returns no edits on valid unformatted source, compare the same source through `omlz fmt`.
 If CLI formatting succeeds but LSP formatting does not, inspect structural malformed-input checks and LSP ranges.
-If `--check` exits `2`, fix parse errors or missing paths before investigating style.
+If `--check` exits `2`, fix malformed literals, unterminated comments, or missing paths before investigating style.
 If `--check` exits `1`, run `--write` or inspect stdout from default mode.
 Keep formatter changes in focused commits so style churn is easy to review.
 Do not mix formatter-only rewrites with semantic compiler work unless a feature explicitly requires it.
+
+## Format-only mode (decoupled from subset checker)
+
+M-FMT-2 changed `omlz fmt` into a format-only surface.
+The formatter now accepts any OCaml input that is tokenizable by the formatter lexer.
+It no longer requires the input to be a valid ZxCaml-subset program.
+That distinction is deliberate: formatting is a whitespace operation, not a buildability proof.
+Before M-FMT-2, `omlz fmt` called the frontend subset validator before pretty-printing.
+That meant a file could be rejected by `fmt` even when the token-stream formatter could format it safely.
+The canonical bug was binding-position record destructuring.
+The ordinary OCaml source `let manhattan {x;y}=x+y` was lexically clear to the formatter.
+The full subset checker still rejected that binding pattern because the compiler pipeline did not lower that construct.
+As a result, users saw a semantic compiler-subset failure while asking for whitespace formatting.
+The decoupling removes that mismatch.
+`src/omlz/fmt.zig` no longer runs the full `validateFile` path for `fmt`.
+`src/frontend/fmt.zig` now exposes `analyze(source) !void` as the guard in front of `formatAlloc`.
+`analyze` is intentionally lex-only.
+It reuses the formatter scanner paths for strings, char literals, and comments.
+It preserves the malformed-input exit-2 contract that automation already depended on.
+It does not type-check.
+It does not ask whether a construct is supported by the ZxCaml backend.
+The full subset validator still runs for semantic commands such as `omlz check`, `omlz build`, `omlz run`, and `omlz test`.
+Those commands remain the right way to prove that a file can pass through the compiler pipeline.
+`omlz fmt` is now the right way to normalize whitespace for broader OCaml syntax.
+
+Worked example 1: binding-position record patterns are now formattable.
+
+```ocaml
+let manhattan {x;y}=x+y
+```
+
+formats to the canonical M-FMT-2 golden:
+
+```ocaml
+let manhattan {x; y} = x + y
+```
+
+Worked example 2: module-shaped source can be formatted before it is a ZxCaml build target.
+
+```ocaml
+module M=struct let x=1 let y=x+1 end
+```
+
+becomes token-spaced source suitable for review, even though module declarations remain a build/run subset question.
+
+```ocaml
+module M = struct let x = 1 let y = x + 1 end
+```
+
+Worked example 3: labelled arguments, class declarations, and GADT declarations are no longer rejected merely because they are outside the current backend subset.
+
+```ocaml
+let dist ~x ~y=x+y
+type _ witness = Int : int witness
+class counter = object val mutable n=0 method bump=n<-n+1 end
+```
+
+The formatter treats these as tokenizable OCaml and normalizes spacing around identifiers, operators, and punctuation.
+Whether such declarations can be built for Solana BPF is still answered by the compiler commands, not by `fmt`.
+This makes `fmt` useful in mixed OCaml workspaces, examples under construction, and editor buffers that contain non-ZxCaml helper code.
+
+Malformed input still exits `2`.
+The canonical malformed case is an unterminated string literal:
+
+```ocaml
+let s = "unterminated
+```
+
+In that case `analyze` reports the lexical error before any formatted output is accepted.
+The same rule applies to unterminated char literals and unterminated block comments.
+The key boundary is lexical tokenization: malformed tokens fail, unsupported-but-tokenizable OCaml formats.
+
+Migration note: scripts that used `omlz fmt` as a proxy for "is this file in the ZxCaml subset?" should switch to a semantic gate.
+Use `omlz check`, `omlz build --check` where a wrapper provides that mode, or the relevant `omlz build|run|test` command for the artifact you actually need.
+Keep `omlz fmt --check` for style enforcement only.
+After M-FMT-2, a successful `fmt --check` means "the bytes already match formatter style"; it no longer means "the program is accepted by the ZxCaml subset checker."

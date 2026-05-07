@@ -2,8 +2,9 @@
 
 > **Languages / 语言**: [English](../16-omlz-fmt.md) · **简体中文**
 >
-> **范围：** Milestone M-FMT 交付的 canonical `omlz fmt` 源码格式化器、CLI
-> 契约、面向编辑器的 LSP formatting 方法，以及 bytewise idempotency 保证。
+> **范围：** Milestone M-FMT 与 M-FMT-2 共同交付的 canonical `omlz fmt`
+> 源码格式化器、CLI 契约、面向编辑器的 LSP formatting 方法，以及
+> bytewise idempotency 保证。
 >
 > **相关文档：** [`docs/lsp.md`](../lsp.md)、
 > [`docs/diagnostics.md`](../diagnostics.md)、
@@ -61,9 +62,9 @@ formatter 是 fixed point：已经格式化的输出再次格式化不应变化�
 文档末尾会移除 trailing whitespace。
 然后追加且只追加一个 newline。
 core formatter 本身不运行 OCaml frontend。
-CLI 会在 formatting 前通过 frontend boundary 校验 files 和 stdin。
+CLI 会在 formatting 前运行同一类轻量 lexical malformed-input check。
 LSP 路径在返回 edits 前使用轻量 structural malformed-input check。
-这种拆分让 CLI 可以显示 compiler diagnostics，同时保持 editor formatting 很快。
+这种拆分让 formatting 保持快速，并把 semantic diagnostics 留给 `check`、`build`、`run` 和 `test`。
 当前 formatter 不是完整的 OCaml AST pretty-printer。
 所谓 AST-faithful，是指它不会有意改变程序含义。
 更精确地说，它是 conservative token-stream canonicalization。
@@ -190,12 +191,12 @@ text mode 下，`--stdin` 把 formatted text 写到 stdout。
 `--format=text` 是默认 text-oriented output mode。
 `--format=json` 每个 processed input 输出一个 JSON object。
 JSON object 包含 `path`、`changed`、`original_bytes`、`formatted_bytes`。
-`--no-color` 在 frontend validation 报 diagnostics 时关闭 ANSI color。
+`--no-color` 在 malformed-input diagnostics 输出时关闭 ANSI color。
 positional file input 会格式化该文件。
 positional directory input 会递归收集 `*.ml` 文件。
 directory results 在 processing 前按 lexicographic order 排序。
 unsupported options exit `2`。
-CLI 遇到 malformed OCaml input 时 exit `2`，因为 frontend validation 失败。
+CLI 遇到 lexical malformed OCaml input 时 exit `2`，因为 `analyze` guard 失败。
 missing files exit `2`。
 
 ## 9. Exit codes 与 automation
@@ -207,7 +208,7 @@ Exit code `0` 表示命令成功完成。
 `--check` 中，`0` 表示没有 input 会变化。
 Exit code `1` 专门表示 `--check` 发现可重新格式化的 input。
 Exit code `1` 不用于 parse errors。
-Exit code `2` 表示 usage、file 或 frontend validation failure。
+Exit code `2` 表示 usage、file 或 malformed-input failure。
 CI 应运行 `omlz fmt --check`，并把 `1` 当作 style failure。
 CI 应把 `2` 当作 tool 或 source validity failure。
 pre-commit hooks 在 developer-owned working tree 中应优先使用 `--write`。
@@ -224,19 +225,20 @@ formatter 承诺 bytewise idempotency。
 formatter 始终写入一个 final newline，所以 fixed point 也包含这个 newline。
 formatter 会在到达 fixed point 前去掉 trailing whitespace。
 `src/frontend/fmt.zig` 中有 inline double-apply tests。
-`tests/golden/fmt/` 下有十组 golden snapshot pairs。
+`tests/golden/fmt/` 下有十一组 golden snapshot pairs。
 golden test 会格式化每个 `*.input.ml` 并与 `*.expected.ml` 比较。
 同一个 golden test 还会格式化每个 `*.expected.ml` 并要求 bytes 不变。
-十组 cases 覆盖 simple lets。
-十组 cases 覆盖 let-in chains。
-十组 cases 覆盖 match expressions。
-十组 cases 覆盖 mutual recursion。
-十组 cases 覆盖 `let%test_unit`。
-十组 cases 覆盖 comments。
-十组 cases 覆盖 deeply nested expressions。
-十组 cases 覆盖 multi-argument functions。
-十组 cases 覆盖 record patterns。
-十组 cases 覆盖 string escapes。
+十一组 cases 覆盖 simple lets。
+十一组 cases 覆盖 let-in chains。
+十一组 cases 覆盖 match expressions。
+十一组 cases 覆盖 mutual recursion。
+十一组 cases 覆盖 `let%test_unit`。
+十一组 cases 覆盖 comments。
+十一组 cases 覆盖 deeply nested expressions。
+十一组 cases 覆盖 multi-argument functions。
+十一组 cases 覆盖 record patterns。
+十一组 cases 覆盖 binding-position record destructuring。
+十一组 cases 覆盖 string escapes。
 editors 依赖这个保证避免 repeated format churn。
 CI 依赖这个保证保持 `--check` 稳定。
 
@@ -291,7 +293,7 @@ repository-wide cleanup 应使用 CLI，而不是手动打开每个文件。
 不同于 `prettier`，它不试图支持很多无关语言。
 不同于 `prettier`，它不暴露大量 style configuration surface。
 不同于 `rustfmt`，它目前还不是覆盖每个 construct 的 deep AST rewrite。
-ZxCaml 的优先级是 accepted OCaml subset 的 deterministic formatting。
+ZxCaml 的优先级是 tokenizable OCaml source 的 deterministic formatting。
 formatter 对 comments 和 partial ranges 保持 conservative。
 100-column rule 是 wrapping trigger，不保证每个输出行都短于 100 columns。
 two-space indent 是 canonical，不可配置。
@@ -309,8 +311,8 @@ CLI 会用 exit code `2` 拒绝这个组合。
 CLI 会用 exit code `2` 拒绝这个组合。
 不要期待 `--stdin --check` 可用。
 check workflows 请使用临时文件或 direct file mode。
-不要期待 core formatter 本身校验 OCaml syntax。
-CLI 会在 formatting 前校验 syntax。
+不要期待 formatter 校验完整 OCaml syntax 或 ZxCaml subset。
+CLI 在 formatting 前只检查 lexical malformed-input cases。
 LSP 路径对 structurally malformed text 返回 no formatting edits。
 不要期待 comments 被 reflow。
 长 comments 会保持长 comments。
@@ -339,7 +341,83 @@ comment-heavy diffs 需要人工 review。
 如果第二次运行仍改变 bytes，应按 idempotency contract 提 bug。
 如果 LSP formatting 对有效但未格式化源码返回 no edits，请用 `omlz fmt` 对比同一份源码。
 如果 CLI formatting 成功但 LSP formatting 不成功，请检查 structural malformed-input checks 和 LSP ranges。
-如果 `--check` exit `2`，先修复 parse errors 或 missing paths，再调查 style。
+如果 `--check` exit `2`，先修复 malformed literals、未结束 comments 或 missing paths，再调查 style。
 如果 `--check` exit `1`，运行 `--write`，或检查 default mode 的 stdout。
 formatter changes 应保持 focused commits，方便 review style churn。
 除非 feature 明确要求，不要把 formatter-only rewrites 和 semantic compiler work 混在一起。
+
+## 仅格式化模式（与子集检查器解耦）
+
+M-FMT-2 把 `omlz fmt` 调整为真正的 format-only surface。
+现在，只要输入能够被 formatter lexer token 化，formatter 就会尝试格式化。
+输入不再必须是一个可由 ZxCaml subset 编译的程序。
+这个边界是有意设计的：formatting 是 whitespace 操作，不是 buildability proof。
+在 M-FMT-2 之前，`omlz fmt` 会在 pretty-printing 前调用 frontend subset validator。
+这意味着某个文件即使能被 token-stream formatter 安全格式化，也可能先被 `fmt` 拒绝。
+最典型的问题是 binding-position record destructuring。
+普通 OCaml 源码 `let manhattan {x;y}=x+y` 对 formatter 来说 lexical structure 很清楚。
+但 full subset checker 仍会拒绝这个 binding pattern，因为当前 compiler pipeline 还没有 lowering 该 construct。
+于是用户只是请求 whitespace formatting，却收到了 semantic compiler-subset failure。
+这次解耦移除了这个不匹配。
+`src/omlz/fmt.zig` 不再为 `fmt` happy path 运行完整的 `validateFile`。
+`src/frontend/fmt.zig` 现在暴露 `analyze(source) !void`，作为 `formatAlloc` 前面的 guard。
+`analyze` 有意保持 lex-only。
+它复用 formatter scanner 中处理 strings、char literals、comments 的路径。
+它保留 automation 已经依赖的 malformed-input exit-2 contract。
+它不做 type-check。
+它也不判断某个 construct 是否被 ZxCaml backend 支持。
+完整 subset validator 仍然由 semantic commands 运行，例如 `omlz check`、`omlz build`、`omlz run` 和 `omlz test`。
+这些命令仍然是证明文件能穿过 compiler pipeline 的正确入口。
+`omlz fmt` 现在只负责为更广的 OCaml syntax 规范化 whitespace。
+
+示例 1：binding-position record patterns 现在可以格式化。
+
+```ocaml
+let manhattan {x;y}=x+y
+```
+
+会格式化为 M-FMT-2 golden 锁定的 canonical form：
+
+```ocaml
+let manhattan {x; y} = x + y
+```
+
+示例 2：module-shaped source 可以先格式化，再决定它是否是 ZxCaml build target。
+
+```ocaml
+module M=struct let x=1 let y=x+1 end
+```
+
+formatter 会把 token spacing 规范化，方便 review；module declarations 是否可 build 仍是 build/run subset question。
+
+```ocaml
+module M = struct let x = 1 let y = x + 1 end
+```
+
+示例 3：labelled arguments、class declarations、GADT declarations 不会再仅仅因为超出当前 backend subset 而被 `fmt` 拒绝。
+
+```ocaml
+let dist ~x ~y=x+y
+type _ witness = Int : int witness
+class counter = object val mutable n=0 method bump=n<-n+1 end
+```
+
+formatter 会把这些内容当成 tokenizable OCaml，并规范化 identifiers、operators、punctuation 周围的 spacing。
+这些 declarations 能否编译到 Solana BPF，仍由 compiler commands 回答，而不是由 `fmt` 回答。
+这样一来，`fmt` 可以用于 mixed OCaml workspaces、正在编写中的 examples，以及包含 non-ZxCaml helper code 的 editor buffers。
+
+Malformed input 仍然 exit `2`。
+canonical malformed case 是未结束的 string literal：
+
+```ocaml
+let s = "unterminated
+```
+
+这种情况下，`analyze` 会在接受任何 formatted output 之前报告 lexical error。
+同样的规则也适用于未结束 char literals 和未结束 block comments。
+关键边界是 lexical tokenization：malformed tokens 会失败，unsupported-but-tokenizable OCaml 会格式化。
+
+迁移说明：如果 tools/scripts 过去把 `omlz fmt` 当作“这个文件是否属于 ZxCaml subset”的代理，应切换到 semantic gate。
+可以使用 `omlz check`、由 wrapper 提供时的 `omlz build --check`，或者与你实际 artifact 对应的 `omlz build|run|test` 命令。
+`omlz fmt --check` 应只用于 style enforcement。
+M-FMT-2 之后，`fmt --check` 成功只表示“bytes 已符合 formatter style”；它不再表示“program 已被 ZxCaml subset checker 接受”。

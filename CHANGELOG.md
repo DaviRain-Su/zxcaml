@@ -23,6 +23,17 @@ evidence for each major bullet.
   contains `sol_secp256k1_recover_into_account_data` and not the alloc helper
   (`de4e222`).
 
+### Changed — omlz fmt decoupled from subset checker
+
+- Changed `omlz fmt` so it formats tokenizable OCaml source without invoking
+  the full ZxCaml subset validator, while preserving the malformed-input
+  exit-2 contract through the lex-only `analyze` guard (`83dac26`).
+- Added the canonical binding-position record destructure golden
+  `record_destructure_let`, locking `let manhattan {x;y}=x+y` to
+  `let manhattan {x; y} = x + y` (`e76c515`).
+- Removed the old record-pattern workaround comment now that natural record
+  destructuring syntax is format-only safe (`0a9cae3`).
+
 ### Added — LSP latency hardening
 
 - Added the hand-written Zig LSP latency probe, replacing the flaky Python
