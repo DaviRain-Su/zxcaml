@@ -113,6 +113,8 @@ const SolGetReturnDataFn = *align(1) const fn ([*]u8, u64, *Pubkey) u64;
 var hosted_return_program_id: Pubkey = [_]u8{0} ** 32;
 var hosted_return_data: [return_data_capacity]u8 = undefined;
 var hosted_return_data_len: usize = 0;
+var bpf_return_program_id: Pubkey = undefined;
+var bpf_return_data: [return_data_capacity]u8 = undefined;
 
 /// Converts a parsed account view into a CPI account-info descriptor.
 pub fn accountInfoFromView(view: account.AccountView) SolAccountInfo {
@@ -380,6 +382,11 @@ pub inline fn sol_get_return_data(out: []u8, program_id: *Pubkey) u64 {
 
 /// Returns return data as an arena-owned byte slice for generated code.
 pub inline fn sol_get_return_data_alloc(arena: *Arena) []const u8 {
+    if (comptime is_bpf) {
+        const total_len = sol_get_return_data(bpf_return_data[0..], &bpf_return_program_id);
+        const copy_len: usize = @intCast(@min(total_len, @as(u64, bpf_return_data.len)));
+        return bpf_return_data[0..copy_len];
+    }
     var scratch: [return_data_capacity]u8 = undefined;
     var program_id: Pubkey = undefined;
     const total_len = sol_get_return_data(scratch[0..], &program_id);
