@@ -830,9 +830,21 @@ pub fn emitLetExpr(
     const is_discard = std.mem.eql(u8, let_expr.name, "_");
     var binding_snapshot: ?LetBindingSnapshot = null;
     if (is_discard) {
-        try append(out, allocator, "_ = ");
-        try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
-        try append(out, allocator, ";\n");
+        const skip_cpi_get = switch (let_expr.value.*) {
+            .App => |app| blk: {
+                const callee = switch (app.callee.*) { .Var => |value| value, else => break :blk false };
+                const external = findExternalDecl(ctx.externals, callee.name) orelse break :blk false;
+                break :blk std.mem.eql(u8, external.symbol, "Cpi.get_return_data");
+            },
+            else => false,
+        };
+        if (skip_cpi_get) {
+            try append(out, allocator, "_ = @as([]const u8, &.{});\n");
+        } else {
+            try append(out, allocator, "_ = ");
+            try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+            try append(out, allocator, ";\n");
+        }
     } else {
         const storage: LetBindingStorage = switch (let_expr.layout.region) {
             .Arena => .ArenaPointer,

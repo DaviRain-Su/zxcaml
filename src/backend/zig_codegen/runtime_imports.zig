@@ -22,6 +22,17 @@ pub fn emitExternalAppExpr(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
+    if (std.mem.eql(u8, external.symbol, "Cpi.set_return_data") and app.args.len == 1) {
+        if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "cpi.sol_set_return_data", false, false)) return;
+        try append(out, allocator, "cpi.sol_set_return_data(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return;
+    }
+    if (std.mem.eql(u8, external.symbol, "Cpi.get_return_data") and app.args.len == 1) {
+        try append(out, allocator, "cpi.sol_get_return_data_alloc(arena)");
+        return;
+    }
     if (std.mem.eql(u8, external.symbol, "sol_log_") and app.args.len == 1) {
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_log_", false, false)) return;
     }
