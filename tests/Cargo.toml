@@ -103,6 +103,10 @@ name = "stake_epoch_demo_test"
 path = "stake_epoch_demo_test.rs"
 
 [[test]]
+name = "return_data_demo_test"
+path = "return_data_demo_test.rs"
+
+[[test]]
 name = "instruction_introspect_demo_test"
 path = "instruction_introspect_demo_test.rs"
 
