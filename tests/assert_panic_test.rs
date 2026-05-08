@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const PROGRAM_ID_BYTES: [u8; 32] = [12u8; 32];
@@ -32,9 +32,20 @@ impl Drop for BuildLock {
     }
 }
 
+struct ScratchDir {
+    path: PathBuf,
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 struct CompiledProgram {
     elf_path: PathBuf,
     generated_source: String,
+    _scratch_dir: ScratchDir,
 }
 
 fn repo_root() -> PathBuf {
@@ -60,6 +71,24 @@ fn acquire_build_lock(root: &Path) -> BuildLock {
     }
 
     panic!("timed out waiting for build lock at {}", path.display());
+}
+
+fn create_scratch_dir() -> ScratchDir {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after Unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "zxcaml-assert-panic-{}-{stamp}",
+        std::process::id()
+    ));
+    fs::create_dir(&path).unwrap_or_else(|error| {
+        panic!(
+            "failed to create scratch dir at {}: {error}",
+            path.display()
+        )
+    });
+    ScratchDir { path }
 }
 
 fn llvm20_lib_dir() -> Option<PathBuf> {
@@ -101,8 +130,9 @@ fn apply_platform_env(command: &mut Command) {
 fn compile_program() -> CompiledProgram {
     let root = repo_root();
     let _lock = acquire_build_lock(&root);
-    let source_path = root.join("build").join("assert_false.ml");
-    let output_path = root.join("build").join("assert_false.so");
+    let scratch_dir = create_scratch_dir();
+    let source_path = scratch_dir.path.join("assert_false.ml");
+    let output_path = scratch_dir.path.join("assert_false.so");
 
     fs::write(&source_path, "let entrypoint _ =\n  assert false;\n  0\n").unwrap_or_else(|error| {
         panic!(
@@ -112,21 +142,27 @@ fn compile_program() -> CompiledProgram {
     });
 
     let mut command = Command::new(root.join("zig-out").join("bin").join("omlz"));
-    command.current_dir(&root).args([
-        "build",
-        "--target=bpf",
-        "build/assert_false.ml",
-        "-o",
-        "build/assert_false.so",
-    ]);
+    command
+        .current_dir(&root)
+        .arg("build")
+        .arg("--target=bpf")
+        .arg(&source_path)
+        .arg("-o")
+        .arg(&output_path);
     apply_platform_env(&mut command);
 
     let result = command.output().unwrap_or_else(|error| {
-        panic!("failed to spawn `zig-out/bin/omlz build --target=bpf build/assert_false.ml -o build/assert_false.so`: {error}")
+        panic!(
+            "failed to spawn `zig-out/bin/omlz build --target=bpf {} -o {}`: {error}",
+            source_path.display(),
+            output_path.display()
+        )
     });
     assert!(
         result.status.success(),
-        "`zig-out/bin/omlz build --target=bpf build/assert_false.ml -o build/assert_false.so` failed\nstdout:\n{}\nstderr:\n{}",
+        "`zig-out/bin/omlz build --target=bpf {} -o {}` failed\nstdout:\n{}\nstderr:\n{}",
+        source_path.display(),
+        output_path.display(),
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
@@ -147,6 +183,7 @@ fn compile_program() -> CompiledProgram {
     CompiledProgram {
         elf_path: output_path,
         generated_source,
+        _scratch_dir: scratch_dir,
     }
 }
 
