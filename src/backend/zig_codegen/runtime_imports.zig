@@ -81,6 +81,34 @@ pub fn emitExternalAppExpr(
         try emitSysvarEpochScheduleFromAccountExpr(out, allocator, app, indent_level, ctx);
         return;
     }
+    if (std.mem.eql(u8, external.symbol, "array.get") and app.args.len == 2) {
+        const source_app = switch (app.args[0].*) { .App => |value| value, else => return error.UnsupportedExpr };
+        const source_callee = switch (source_app.callee.*) { .Var => |value| value, else => return error.UnsupportedExpr };
+        const source_external = findExternalDecl(ctx.externals, source_callee.name) orelse return error.UnsupportedExpr;
+        if (!std.mem.eql(u8, source_external.symbol, "sysvar.readStakeHistory") or source_app.args.len != 2) return error.UnsupportedExpr;
+        const entry_ty = try userTypeName(allocator, "stake_history_entry");
+        defer allocator.free(entry_ty);
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_stake_history_data_{d} = ", .{block_id});
+        try emitExpr(out, allocator, source_app.args[0].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_stake_history_latest_{d} = ", .{block_id});
+        try emitExpr(out, allocator, source_app.args[1].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "var omlz_stake_history_cursor_{d} = sysvar.stakeHistoryCursor(omlz_stake_history_data_{d}, if (omlz_stake_history_latest_{d} < 0) 0 else @intCast(omlz_stake_history_latest_{d}));\n", .{ block_id, block_id, block_id, block_id });
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_stake_history_record_{d} = sysvar.readStakeHistory(omlz_stake_history_data_{d}, &omlz_stake_history_cursor_{d}) orelse sysvar.StakeHistoryRecord{{}};\n", .{ block_id, block_id, block_id });
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "break :blk{d} {s}{{ .epoch = @intCast(omlz_stake_history_record_{d}.epoch), .effective = @intCast(omlz_stake_history_record_{d}.entry.effective), .activating = @intCast(omlz_stake_history_record_{d}.entry.activating), .deactivating = @intCast(omlz_stake_history_record_{d}.entry.deactivating) }};\n", .{ block_id, entry_ty, block_id, block_id, block_id, block_id });
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return;
+    }
 
     if (externalReturnIsBytes(external)) {
         const block_id = ctx.next_block_id;
