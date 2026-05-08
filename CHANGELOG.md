@@ -9,13 +9,36 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
-### Maintenance hold — Phase 22
+### Sealed — Phase 22 maintenance hold
 
 Phase 22 enters a maintenance hold after Phases 19+20+21 were sealed through
 the consolidated baselines `post-fmt3-baseline`, `post-fmt-fixes-baseline`,
 and `post-fmt-deepnested-baseline`; TD-FMT-LEX-WARTS is closed by
 `post-fmt-fixes-baseline`, and codegen/runtime new directions are deferred to
 Phase 23+ so this window remains documentation-only.
+
+### Sealed — Phase 23
+
+Phase 23 sealed the CGRT23 runtime-example cut under
+`post-cgrt23-baseline` (`f90323c`), keeping the codegen/runtime fixes focused
+on Solana sysvar and return-data coverage before the import-gating cleanup.
+
+- `03b1784` — added `stake_epoch_demo` plus Mollusk coverage for
+  StakeHistory latest-row and EpochSchedule account readers.
+- `722814e` / `2f8377f` — routed `Cpi.set_return_data` external bindings and
+  moved `sol_get_return_data` scratch storage off the BPF stack.
+- `f90323c` — added `return_data_demo` plus Mollusk coverage and tagged the
+  sealed Phase 23 baseline as `post-cgrt23-baseline`.
+
+### Sealed — Phase 24
+
+Phase 24 sealed CGIMP24-1 import gating under `post-cgimp24-baseline`
+(`7c8ee20`), ensuring generated BPF Zig imports only the runtime modules
+referenced by the program body.
+
+- `7c8ee20` — gated generated runtime imports by body references, preserving
+  required imports for SPL Token examples while removing unrelated
+  `runtime/programs/*`, CPI, and sysvar imports from small programs.
 
 ### Fixed — generic ')' spacing rule (M-FMT-DEEPNESTED)
 
