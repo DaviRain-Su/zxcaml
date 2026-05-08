@@ -353,12 +353,129 @@ pub fn emitAppExpr(
         },
         else => return error.UnsupportedExpr,
     }
-    try append(out, allocator, "(arena");
+    if (ctx.is_entrypoint and directFunctionCanSkipEntrypointArena(ctx, app)) {
+        try append(out, allocator, "(@as(*Arena, undefined)");
+    } else {
+        try append(out, allocator, "(arena");
+    }
     for (app.args) |arg| {
         try append(out, allocator, ", ");
         try emitExpr(out, allocator, arg.*, indent_level, ctx);
     }
     try append(out, allocator, ")");
+}
+
+fn directFunctionCanSkipEntrypointArena(ctx: *EmitContext, app: lir.LApp) bool {
+    const callee = switch (app.callee.*) {
+        .Var => |value| value,
+        else => return false,
+    };
+    const callee_func = findFunction(ctx.functions, callee.name) orelse return false;
+    if (!functionHasAggregateParam(callee_func)) return false;
+    return !exprMayRequireArena(callee_func.body, ctx.functions, callee.name, 0);
+}
+
+fn findFunction(functions: []const lir.LFunc, name: []const u8) ?lir.LFunc {
+    for (functions) |func| {
+        if (std.mem.eql(u8, func.name, name)) return func;
+    }
+    return null;
+}
+
+fn functionHasAggregateParam(func: lir.LFunc) bool {
+    for (func.params) |param| {
+        if (tyUsesEntrypointAggregateStorage(param.ty)) return true;
+    }
+    return false;
+}
+
+fn tyUsesEntrypointAggregateStorage(ty: lir.LTy) bool {
+    return switch (ty) {
+        .Adt, .Tuple, .Record, .Closure => true,
+        .Int, .Bool, .Unit, .String, .Var => false,
+    };
+}
+
+fn exprMayRequireArena(expr: lir.LExpr, functions: []const lir.LFunc, current_function: []const u8, depth: usize) bool {
+    if (depth > 32) return true;
+    return switch (expr) {
+        .Constant, .Var => false,
+        .App => |app| blk: {
+            switch (app.callee.*) {
+                .Var => |callee| {
+                    if (findFunction(functions, callee.name)) |callee_func| {
+                        if (!std.mem.eql(u8, callee.name, current_function) and
+                            exprMayRequireArena(callee_func.body, functions, callee.name, depth + 1))
+                        {
+                            break :blk true;
+                        }
+                    } else {
+                        break :blk true;
+                    }
+                },
+                else => break :blk true,
+            }
+            for (app.args) |arg| {
+                if (exprMayRequireArena(arg.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| let_expr.layout.region == .Arena or
+            exprMayRequireArena(let_expr.value.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(let_expr.body.*, functions, current_function, depth + 1),
+        .Assert => |assert_expr| exprMayRequireArena(assert_expr.condition.*, functions, current_function, depth + 1),
+        .If => |if_expr| exprMayRequireArena(if_expr.cond.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(if_expr.then_branch.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(if_expr.else_branch.*, functions, current_function, depth + 1),
+        .Prim => |prim| blk: {
+            if (prim.op == .StringConcat) break :blk true;
+            for (prim.args) |arg| {
+                if (exprMayRequireArena(arg.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Ctor => |ctor_expr| blk: {
+            if (ctor_expr.layout.region == .Arena) break :blk true;
+            for (ctor_expr.args) |arg| {
+                if (exprMayRequireArena(arg.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Match => |match_expr| blk: {
+            if (exprMayRequireArena(match_expr.scrutinee.*, functions, current_function, depth + 1)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (arm.guard) |guard_expr| {
+                    if (exprMayRequireArena(guard_expr.*, functions, current_function, depth + 1)) break :blk true;
+                }
+                if (exprMayRequireArena(arm.body.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| {
+                if (exprMayRequireArena(item.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| exprMayRequireArena(tuple_proj.tuple_expr.*, functions, current_function, depth + 1),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| {
+                if (exprMayRequireArena(field.value.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .RecordField => |record_field| exprMayRequireArena(record_field.record_expr.*, functions, current_function, depth + 1),
+        .RecordUpdate => |record_update| blk: {
+            if (exprMayRequireArena(record_update.base_expr.*, functions, current_function, depth + 1)) break :blk true;
+            for (record_update.fields) |field| {
+                if (exprMayRequireArena(field.value.*, functions, current_function, depth + 1)) break :blk true;
+            }
+            break :blk false;
+        },
+        .AccountFieldSet => |field_set| exprMayRequireArena(field_set.account_expr.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(field_set.value.*, functions, current_function, depth + 1),
+        .Closure => true,
+    };
 }
 
 pub fn emitTailCallContinueExpr(
@@ -632,17 +749,29 @@ pub fn emitCtorExpr(
             const child_ty_name = try zigInstantiatedTypeRefName(allocator, ref, type_decl.params, ctor_expr.ty);
             defer allocator.free(child_ty_name);
             try emitIndent(out, allocator, indent_level + 1);
-            try appendPrint(out, allocator, "const omlz_recursive_payload_{d}_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, index, child_ty_name });
-            try emitIndent(out, allocator, indent_level + 1);
-            try appendPrint(out, allocator, "omlz_recursive_payload_{d}_{d}.* = ", .{ block_id, index });
-            try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
-            try append(out, allocator, ";\n");
+            if (ctx.is_entrypoint) {
+                try appendPrint(out, allocator, "var omlz_recursive_payload_{d}_{d}: {s} = ", .{ block_id, index, child_ty_name });
+                try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+                try append(out, allocator, ";\n");
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "_ = &omlz_recursive_payload_{d}_{d};\n", .{ block_id, index });
+            } else {
+                try appendPrint(out, allocator, "const omlz_recursive_payload_{d}_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, index, child_ty_name });
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "omlz_recursive_payload_{d}_{d}.* = ", .{ block_id, index });
+                try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
+                try append(out, allocator, ";\n");
+            }
         }
         try emitIndent(out, allocator, indent_level + 1);
         try appendPrint(out, allocator, "break :blk{d} {s}{{ .tag = .{s}, .payload = .{{ .{s} = ", .{ block_id, ty_name, variant, variant });
         if (ctor_expr.args.len == 1) {
             if (isRecursivePayload(variant_info.payload_types[0])) {
-                try appendPrint(out, allocator, "omlz_recursive_payload_{d}_0", .{block_id});
+                if (ctx.is_entrypoint) {
+                    try appendPrint(out, allocator, "&omlz_recursive_payload_{d}_0", .{block_id});
+                } else {
+                    try appendPrint(out, allocator, "omlz_recursive_payload_{d}_0", .{block_id});
+                }
             } else {
                 try emitExpr(out, allocator, ctor_expr.args[0].*, indent_level + 1, ctx);
             }
@@ -652,7 +781,11 @@ pub fn emitCtorExpr(
                 if (index != 0) try append(out, allocator, ", ");
                 try appendPrint(out, allocator, "._{d} = ", .{index});
                 if (isRecursivePayload(payload_ty)) {
-                    try appendPrint(out, allocator, "omlz_recursive_payload_{d}_{d}", .{ block_id, index });
+                    if (ctx.is_entrypoint) {
+                        try appendPrint(out, allocator, "&omlz_recursive_payload_{d}_{d}", .{ block_id, index });
+                    } else {
+                        try appendPrint(out, allocator, "omlz_recursive_payload_{d}_{d}", .{ block_id, index });
+                    }
                 } else {
                     try emitExpr(out, allocator, arg.*, indent_level + 1, ctx);
                 }
@@ -791,7 +924,11 @@ pub fn emitConsCtorExpr(
     try append(out, allocator, ";\n");
 
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "const omlz_list_tail_box_{d} = {s}.Box(arena, omlz_list_tail_{d});\n", .{ block_id, ty_name, block_id });
+    if (ctx.is_entrypoint) {
+        try appendPrint(out, allocator, "const omlz_list_tail_box_{d} = &omlz_list_tail_{d};\n", .{ block_id, block_id });
+    } else {
+        try appendPrint(out, allocator, "const omlz_list_tail_box_{d} = {s}.Box(arena, omlz_list_tail_{d});\n", .{ block_id, ty_name, block_id });
+    }
 
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "const omlz_ctor_payload_{d} = {s}.ConsFromTailPtr(omlz_list_head_{d}, omlz_list_tail_box_{d});\n", .{ block_id, ty_name, block_id, block_id });
@@ -799,11 +936,15 @@ pub fn emitConsCtorExpr(
     switch (ctor_expr.layout.region) {
         .Arena => {
             try emitIndent(out, allocator, indent_level + 1);
-            try appendPrint(out, allocator, "const omlz_ctor_box_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, ty_name });
-            try emitIndent(out, allocator, indent_level + 1);
-            try appendPrint(out, allocator, "omlz_ctor_box_{d}.* = omlz_ctor_payload_{d};\n", .{ block_id, block_id });
-            try emitIndent(out, allocator, indent_level + 1);
-            try appendPrint(out, allocator, "break :blk{d} omlz_ctor_box_{d}.*;\n", .{ block_id, block_id });
+            if (ctx.is_entrypoint) {
+                try appendPrint(out, allocator, "break :blk{d} omlz_ctor_payload_{d};\n", .{ block_id, block_id });
+            } else {
+                try appendPrint(out, allocator, "const omlz_ctor_box_{d} = arena.allocOneOrTrap({s});\n", .{ block_id, ty_name });
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "omlz_ctor_box_{d}.* = omlz_ctor_payload_{d};\n", .{ block_id, block_id });
+                try emitIndent(out, allocator, indent_level + 1);
+                try appendPrint(out, allocator, "break :blk{d} omlz_ctor_box_{d}.*;\n", .{ block_id, block_id });
+            }
         },
         .Static, .Stack => {
             try emitIndent(out, allocator, indent_level + 1);
@@ -832,7 +973,10 @@ pub fn emitLetExpr(
     if (is_discard) {
         const skip_cpi_get = switch (let_expr.value.*) {
             .App => |app| blk: {
-                const callee = switch (app.callee.*) { .Var => |value| value, else => break :blk false };
+                const callee = switch (app.callee.*) {
+                    .Var => |value| value,
+                    else => break :blk false,
+                };
                 const external = findExternalDecl(ctx.externals, callee.name) orelse break :blk false;
                 break :blk std.mem.eql(u8, external.symbol, "Cpi.get_return_data");
             },
@@ -846,22 +990,35 @@ pub fn emitLetExpr(
             try append(out, allocator, ";\n");
         }
     } else {
+        const use_entrypoint_stack_storage = ctx.is_entrypoint and tyUsesEntrypointAggregateStorage(let_expr.ty);
         const storage: LetBindingStorage = switch (let_expr.layout.region) {
-            .Arena => .ArenaPointer,
+            .Arena => if (use_entrypoint_stack_storage) .Direct else .ArenaPointer,
             .Static, .Stack => .Direct,
         };
         const ty_name = try zigLetStorageTypeName(allocator, let_expr);
         defer allocator.free(ty_name);
         switch (let_expr.layout.region) {
             .Arena => {
-                try append(out, allocator, "const ");
-                try emitIdentifier(out, allocator, let_expr.name);
-                try appendPrint(out, allocator, " = arena.allocOneOrTrap({s});\n", .{ty_name});
-                try emitIndent(out, allocator, indent_level + 1);
-                try emitIdentifier(out, allocator, let_expr.name);
-                try append(out, allocator, ".* = ");
-                try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
-                try append(out, allocator, ";\n");
+                if (use_entrypoint_stack_storage) {
+                    try append(out, allocator, "var ");
+                    try emitIdentifier(out, allocator, let_expr.name);
+                    try appendPrint(out, allocator, ": {s} = ", .{ty_name});
+                    try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+                    try append(out, allocator, ";\n");
+                    try emitIndent(out, allocator, indent_level + 1);
+                    try append(out, allocator, "_ = &");
+                    try emitIdentifier(out, allocator, let_expr.name);
+                    try append(out, allocator, ";\n");
+                } else {
+                    try append(out, allocator, "const ");
+                    try emitIdentifier(out, allocator, let_expr.name);
+                    try appendPrint(out, allocator, " = arena.allocOneOrTrap({s});\n", .{ty_name});
+                    try emitIndent(out, allocator, indent_level + 1);
+                    try emitIdentifier(out, allocator, let_expr.name);
+                    try append(out, allocator, ".* = ");
+                    try emitExpr(out, allocator, let_expr.value.*, indent_level + 1, ctx);
+                    try append(out, allocator, ";\n");
+                }
             },
             .Stack => {
                 try append(out, allocator, "var ");
