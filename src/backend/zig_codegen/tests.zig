@@ -7,6 +7,14 @@ const emitConstArrayAddressWorkaround = common.emitConstArrayAddressWorkaround;
 const driver = @import("driver.zig");
 const emitModule = driver.emitModule;
 
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) != null);
+}
+
+fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
+}
+
 test "ZigBackend emits the M0 ABI entrypoint signature" {
     const module: lir.LModule = .{ .entrypoint = .{
         .name = "entrypoint",
@@ -23,6 +31,53 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
         "omlz_user_entrypoint(arena: *Arena, omlz_runtime_input: [*]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(@as(i64, 0));") != null);
+}
+
+test "ZigBackend gates unused runtime imports from simple modules" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .Constant = .{ .Int = 0 } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try expectContains(source, "const std = @import(\"std\");");
+    try expectContains(source, "const Arena = @import(\"runtime/arena.zig\").Arena;");
+    try expectContains(source, "const prelude = @import(\"runtime/prelude.zig\");");
+    try expectContains(source, "const runtime_panic = @import(\"runtime/panic.zig\");");
+
+    try expectNotContains(source, "const cpi = @import(\"runtime/cpi.zig\");");
+    try expectNotContains(source, "const spl_token = @import(\"runtime/spl_token.zig\");");
+    try expectNotContains(source, "const syscalls = @import(\"runtime/syscalls.zig\");");
+    try expectNotContains(source, "const sysvar = @import(\"runtime/sysvar.zig\");");
+    try expectNotContains(source, "runtime/programs/");
+}
+
+test "ZigBackend keeps only referenced runtime program imports" {
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .body = .{ .App = .{
+            .callee = &.{ .Var = .{ .name = "spl_burn_process" } },
+            .args = &.{
+                &.{ .Constant = .{ .String = "mint_pubkey_32_bytes_____________" } },
+                &.{ .Constant = .{ .String = "source_pubkey_32_bytes___________" } },
+                &.{ .Constant = .{ .String = "auth_pubkey_32_bytes_____________" } },
+                &.{ .Constant = .{ .Int = 1 } },
+                &.{ .Constant = .{ .String = "token_program_pubkey_32_bytes___" } },
+            },
+            .ty = .Int,
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try expectContains(source, "const spl_burn = @import(\"runtime/programs/spl_burn.zig\");");
+    try expectNotContains(source, "runtime/programs/spl_close_account.zig");
+    try expectNotContains(source, "runtime/programs/spl_revoke.zig");
+    try expectNotContains(source, "runtime/programs/order_book.zig");
+    try expectNotContains(source, "runtime/programs/escrow_full.zig");
 }
 
 test "ZigBackend binds entrypoint instruction_data parameter from runtime bytes" {
@@ -243,7 +298,7 @@ test "ZigBackend emits Syscall module calls through runtime bindings" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "const syscalls = @import(\"runtime/syscalls.zig\");") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "const cpi = @import(\"runtime/cpi.zig\");") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "const cpi = @import(\"runtime/cpi.zig\");") == null);
     try std.testing.expect(std.mem.indexOf(u8, source, "var omlz_syscall_bytes_") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "[0] = 104") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "[4] = 111") != null);

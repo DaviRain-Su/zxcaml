@@ -14,7 +14,67 @@ const emitFunction = decl_emission.emitFunction;
 const emitBuiltinAccountRecordType = decl_emission.emitBuiltinAccountRecordType;
 const emitAccountViewHelper = decl_emission.emitAccountViewHelper;
 
+const GeneratedImport = struct {
+    alias: []const u8,
+    line: []const u8,
+    always: bool = false,
+};
+
+const generated_imports = [_]GeneratedImport{
+    .{ .alias = "std", .line = "const std = @import(\"std\");\n", .always = true },
+    .{ .alias = "Arena", .line = "const Arena = @import(\"runtime/arena.zig\").Arena;\n", .always = true },
+    .{ .alias = "AccountRuntime", .line = "const AccountRuntime = @import(\"runtime/account.zig\");\n" },
+    .{ .alias = "cpi", .line = "const cpi = @import(\"runtime/cpi.zig\");\n" },
+    .{ .alias = "transfer_sol", .line = "const transfer_sol = @import(\"runtime/programs/transfer_sol.zig\");\n" },
+    .{ .alias = "vault", .line = "const vault = @import(\"runtime/programs/vault.zig\");\n" },
+    .{ .alias = "vault_v2", .line = "const vault_v2 = @import(\"runtime/programs/vault_v2.zig\");\n" },
+    .{ .alias = "hackathon_greet", .line = "const hackathon_greet = @import(\"runtime/programs/hackathon_greet.zig\");\n" },
+    .{ .alias = "token_vault", .line = "const token_vault = @import(\"runtime/programs/token_vault.zig\");\n" },
+    .{ .alias = "escrow_full", .line = "const escrow_full = @import(\"runtime/programs/escrow_full.zig\");\n" },
+    .{ .alias = "dao_voting", .line = "const dao_voting = @import(\"runtime/programs/dao_voting.zig\");\n" },
+    .{ .alias = "ata_transfer", .line = "const ata_transfer = @import(\"runtime/programs/ata_transfer.zig\");\n" },
+    .{ .alias = "spl_burn", .line = "const spl_burn = @import(\"runtime/programs/spl_burn.zig\");\n" },
+    .{ .alias = "spl_close_account", .line = "const spl_close_account = @import(\"runtime/programs/spl_close_account.zig\");\n" },
+    .{ .alias = "spl_revoke", .line = "const spl_revoke = @import(\"runtime/programs/spl_revoke.zig\");\n" },
+    .{ .alias = "order_book", .line = "const order_book = @import(\"runtime/programs/order_book.zig\");\n" },
+    .{ .alias = "ata", .line = "const ata = @import(\"runtime/programs/ata.zig\");\n" },
+    .{ .alias = "prelude", .line = "const prelude = @import(\"runtime/prelude.zig\");\n", .always = true },
+    .{ .alias = "runtime_panic", .line = "const runtime_panic = @import(\"runtime/panic.zig\");\n", .always = true },
+    .{ .alias = "spl_token", .line = "const spl_token = @import(\"runtime/spl_token.zig\");\n" },
+    .{ .alias = "syscalls", .line = "const syscalls = @import(\"runtime/syscalls.zig\");\n" },
+    .{ .alias = "sysvar", .line = "const sysvar = @import(\"runtime/sysvar.zig\");\n" },
+};
+
 pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![]const u8 {
+    var body = std.ArrayList(u8).empty;
+    defer body.deinit(allocator);
+
+    for (module.type_decls) |type_decl| {
+        try emitVariantType(&body, allocator, type_decl);
+        try append(&body, allocator, "\n");
+    }
+    const has_account_record = hasAccountRecordType(module.record_type_decls);
+    const needs_account_support = has_account_record or paramsNeedEntrypointAccounts(module.entrypoint.params);
+    for (module.record_type_decls) |type_decl| {
+        try emitRecordType(&body, allocator, type_decl);
+        try append(&body, allocator, "\n");
+    }
+    if (!has_account_record and needs_account_support) {
+        try emitBuiltinAccountRecordType(&body, allocator);
+        try append(&body, allocator, "\n");
+    }
+    if (needs_account_support) {
+        try emitAccountViewHelper(&body, allocator);
+        try append(&body, allocator, "\n");
+    }
+    try emitClosureCaptureStructs(&body, allocator, module.functions);
+    for (module.functions) |func| {
+        if (isCounterHelperName(func.name)) continue;
+        try emitFunction(&body, allocator, func, module.functions, module.type_decls, module.record_type_decls, module.externals);
+        try append(&body, allocator, "\n");
+    }
+    try emitFunction(&body, allocator, module.entrypoint, module.functions, module.type_decls, module.record_type_decls, module.externals);
+
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
@@ -24,58 +84,41 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
         \\// any module-scope const array, it must copy that array to a local
         \\// stack slot and take the stack copy's address. Otherwise LLVM may
         \\// place the array at low addresses (0x0/0x20) rejected by Solana.
-        \\const std = @import("std");
-        \\const Arena = @import("runtime/arena.zig").Arena;
-        \\const AccountRuntime = @import("runtime/account.zig");
-        \\const cpi = @import("runtime/cpi.zig");
-        \\const transfer_sol = @import("runtime/programs/transfer_sol.zig");
-        \\const vault = @import("runtime/programs/vault.zig");
-        \\const vault_v2 = @import("runtime/programs/vault_v2.zig");
-        \\const hackathon_greet = @import("runtime/programs/hackathon_greet.zig");
-        \\const token_vault = @import("runtime/programs/token_vault.zig");
-        \\const escrow_full = @import("runtime/programs/escrow_full.zig");
-        \\const dao_voting = @import("runtime/programs/dao_voting.zig");
-        \\const ata_transfer = @import("runtime/programs/ata_transfer.zig");
-        \\const spl_burn = @import("runtime/programs/spl_burn.zig");
-        \\const spl_close_account = @import("runtime/programs/spl_close_account.zig");
-        \\const spl_revoke = @import("runtime/programs/spl_revoke.zig");
-        \\const order_book = @import("runtime/programs/order_book.zig");
-        \\const ata = @import("runtime/programs/ata.zig");
-        \\const prelude = @import("runtime/prelude.zig");
-        \\const runtime_panic = @import("runtime/panic.zig");
-        \\const spl_token = @import("runtime/spl_token.zig");
-        \\const syscalls = @import("runtime/syscalls.zig");
-        \\const sysvar = @import("runtime/sysvar.zig");
-        \\
-        \\
     );
-    for (module.type_decls) |type_decl| {
-        try emitVariantType(&out, allocator, type_decl);
-        try append(&out, allocator, "\n");
-    }
-    const has_account_record = hasAccountRecordType(module.record_type_decls);
-    const needs_account_support = has_account_record or paramsNeedEntrypointAccounts(module.entrypoint.params);
-    for (module.record_type_decls) |type_decl| {
-        try emitRecordType(&out, allocator, type_decl);
-        try append(&out, allocator, "\n");
-    }
-    if (!has_account_record and needs_account_support) {
-        try emitBuiltinAccountRecordType(&out, allocator);
-        try append(&out, allocator, "\n");
-    }
-    if (needs_account_support) {
-        try emitAccountViewHelper(&out, allocator);
-        try append(&out, allocator, "\n");
-    }
-    try emitClosureCaptureStructs(&out, allocator, module.functions);
-    for (module.functions) |func| {
-        if (isCounterHelperName(func.name)) continue;
-        try emitFunction(&out, allocator, func, module.functions, module.type_decls, module.record_type_decls, module.externals);
-        try append(&out, allocator, "\n");
-    }
-    try emitFunction(&out, allocator, module.entrypoint, module.functions, module.type_decls, module.record_type_decls, module.externals);
+    try append(&out, allocator, "\n");
+    try emitGeneratedImports(&out, allocator, body.items);
+    try append(&out, allocator, "\n");
+    try append(&out, allocator, body.items);
 
     return out.toOwnedSlice(allocator);
+}
+
+fn emitGeneratedImports(out: *std.ArrayList(u8), allocator: std.mem.Allocator, body: []const u8) EmitError!void {
+    for (generated_imports) |import| {
+        if (import.always or containsWholeWord(body, import.alias)) {
+            try append(out, allocator, import.line);
+        }
+    }
+}
+
+fn containsWholeWord(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return false;
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, start, needle)) |index| {
+        const before_is_word = index > 0 and isWordByte(haystack[index - 1]);
+        const after_index = index + needle.len;
+        const after_is_word = after_index < haystack.len and isWordByte(haystack[after_index]);
+        if (!before_is_word and !after_is_word) return true;
+        start = index + 1;
+    }
+    return false;
+}
+
+fn isWordByte(byte: u8) bool {
+    return (byte >= 'a' and byte <= 'z') or
+        (byte >= 'A' and byte <= 'Z') or
+        (byte >= '0' and byte <= '9') or
+        byte == '_';
 }
 
 pub fn isCounterHelperName(name: []const u8) bool {
