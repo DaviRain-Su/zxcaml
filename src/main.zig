@@ -107,11 +107,17 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (args.len >= 2 and std.mem.eql(u8, args[1], "bench")) {
-        if (args.len != 2) {
-            try writeStderr(init.io, "error: unsupported bench option; run `omlz bench --help` for usage.\n");
-            std.process.exit(1);
-        }
-        try runBench(init, args[0]);
+        const bench_args = parseBenchArgs(args) catch |err| switch (err) {
+            error.HelpRequested => {
+                try writeBenchHelp(init.io);
+                return;
+            },
+            else => {
+                try writeStderr(init.io, "error: unsupported bench option; run `omlz bench --help` for usage.\n");
+                std.process.exit(1);
+            },
+        };
+        try runBench(init, args[0], bench_args);
         return;
     }
 
@@ -292,7 +298,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz fmt [--check|--write|--stdin] [--format=text|json] [FILE_OR_DIR...]
         \\  omlz lsp-bench [--warmup N] [--rounds K] [--p50 MS] [--p99 MS]
         \\  omlz unmap --pc <addr> [--map <file.map> | --so <file.so>]
-        \\  omlz bench
+        \\  omlz bench [--warmup-rounds N] [--rounds M]
         \\  omlz doctor
         \\
     );
@@ -406,11 +412,16 @@ fn writeUnmapHelp(io: Io) !void {
 fn writeBenchHelp(io: Io) !void {
     try writeStdout(io,
         \\Usage:
-        \\  omlz bench
+        \\  omlz bench [--warmup-rounds N] [--rounds M]
         \\
         \\Builds the default local benchmark fixtures with --target=bpf and
         \\prints a markdown table of compile_ms, .so bytes, and source-map
         \\entry counts.  The command does not spawn surfpool or run Mollusk.
+        \\
+        \\Flags:
+        \\  --warmup-rounds <N>  Warm builds to discard before measured warm runs (default: 0)
+        \\  --rounds <M>         Warm builds to measure and summarize as warm-median (default: 0)
+        \\  --help               Show this help text
         \\
         \\Fixtures:
         \\  examples/hackathon_greet.ml
@@ -1496,7 +1507,53 @@ const BenchResult = struct {
     entries: usize,
 };
 
-fn runBench(init: std.process.Init, argv0: []const u8) !void {
+const BenchArgs = struct {
+    warmup_rounds: usize = 0,
+    rounds: usize = 0,
+    explicit_rounds: bool = false,
+};
+
+fn parseBenchArgs(raw_args: []const []const u8) !BenchArgs {
+    var args: BenchArgs = .{};
+    var index: usize = 2;
+    while (index < raw_args.len) : (index += 1) {
+        const arg = raw_args[index];
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            return error.HelpRequested;
+        } else if (std.mem.eql(u8, arg, "--warmup-rounds")) {
+            index += 1;
+            if (index >= raw_args.len) return error.UnsupportedArgs;
+            args.warmup_rounds = try parseBenchCount(raw_args[index]);
+            args.explicit_rounds = true;
+        } else if (std.mem.startsWith(u8, arg, "--warmup-rounds=")) {
+            args.warmup_rounds = try parseBenchCount(arg["--warmup-rounds=".len..]);
+            args.explicit_rounds = true;
+        } else if (std.mem.eql(u8, arg, "--rounds")) {
+            index += 1;
+            if (index >= raw_args.len) return error.UnsupportedArgs;
+            args.rounds = try parseBenchCount(raw_args[index]);
+            args.explicit_rounds = true;
+        } else if (std.mem.startsWith(u8, arg, "--rounds=")) {
+            args.rounds = try parseBenchCount(arg["--rounds=".len..]);
+            args.explicit_rounds = true;
+        } else {
+            return error.UnsupportedArgs;
+        }
+    }
+    return args;
+}
+
+fn parseBenchCount(text: []const u8) !usize {
+    if (text.len == 0) return error.UnsupportedArgs;
+    return std.fmt.parseUnsigned(usize, text, 10) catch error.UnsupportedArgs;
+}
+
+fn runBench(init: std.process.Init, argv0: []const u8, args: BenchArgs) !void {
+    if (args.explicit_rounds) {
+        try runBenchWithWarmRows(init, argv0, args);
+        return;
+    }
+
     var results: [bench_fixtures.len]BenchResult = undefined;
     for (bench_fixtures, 0..) |fixture, index| {
         results[index] = try runBenchFixture(init, argv0, fixture);
@@ -1515,6 +1572,55 @@ fn runBench(init: std.process.Init, argv0: []const u8) !void {
     const bytes = try table.toOwnedSlice();
     defer init.gpa.free(bytes);
     try writeStdout(init.io, bytes);
+}
+
+fn runBenchWithWarmRows(init: std.process.Init, argv0: []const u8, args: BenchArgs) !void {
+    var table = std.Io.Writer.Allocating.init(init.gpa);
+    errdefer table.deinit();
+    try table.writer.writeAll("| program | mode | compile_ms | so_bytes | entries |\n");
+    try table.writer.writeAll("| --- | --- | ---: | ---: | ---: |\n");
+
+    for (bench_fixtures) |fixture| {
+        const cold = try runBenchFixture(init, argv0, fixture);
+        try writeBenchModeRow(&table, cold, "cold");
+
+        var warmup_index: usize = 0;
+        while (warmup_index < args.warmup_rounds) : (warmup_index += 1) {
+            _ = try runBenchFixture(init, argv0, fixture);
+        }
+
+        if (args.rounds > 0) {
+            const warm_results = try init.gpa.alloc(BenchResult, args.rounds);
+            defer init.gpa.free(warm_results);
+            for (warm_results) |*warm_result| {
+                warm_result.* = try runBenchFixture(init, argv0, fixture);
+            }
+            try writeBenchModeRow(&table, try medianBenchResult(init.gpa, warm_results), "warm-median");
+        }
+    }
+
+    const bytes = try table.toOwnedSlice();
+    defer init.gpa.free(bytes);
+    try writeStdout(init.io, bytes);
+}
+
+fn writeBenchModeRow(table: *std.Io.Writer.Allocating, result: BenchResult, mode: []const u8) !void {
+    try table.writer.print(
+        "| {s} | {s} | {d} | {d} | {d} |\n",
+        .{ result.program, mode, result.compile_ms, result.so_bytes, result.entries },
+    );
+}
+
+fn medianBenchResult(allocator: std.mem.Allocator, results: []const BenchResult) !BenchResult {
+    if (results.len == 0) return error.UnsupportedArgs;
+    const sorted = try allocator.dupe(BenchResult, results);
+    defer allocator.free(sorted);
+    std.mem.sort(BenchResult, sorted, {}, struct {
+        fn lessThan(_: void, a: BenchResult, b: BenchResult) bool {
+            return a.compile_ms < b.compile_ms;
+        }
+    }.lessThan);
+    return sorted[sorted.len / 2];
 }
 
 fn runBenchFixture(init: std.process.Init, argv0: []const u8, fixture: BenchFixture) !BenchResult {

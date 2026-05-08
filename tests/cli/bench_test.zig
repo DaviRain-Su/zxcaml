@@ -105,4 +105,27 @@ test "cli: bench --help describes the BPF target" {
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "--target") != null or
         std.mem.indexOf(u8, result.stderr, "--target") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "--warmup-rounds") != null or
+        std.mem.indexOf(u8, result.stderr, "--warmup-rounds") != null);
+}
+
+test "cli: bench warmup flags print cold and warm median rows" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const argv = [_][]const u8{ cli_options.omlz_bin, "bench", "--warmup-rounds", "0", "--rounds", "1" };
+    const result = try runCommand(allocator, io, &argv);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.exit_code != 0) {
+        std.debug.print(
+            "omlz bench warmup invocation failed\nexit={d}\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ result.exit_code, result.stdout, result.stderr },
+        );
+    }
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "| program | mode | compile_ms | so_bytes | entries |") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "| hackathon_greet | cold |") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "| hackathon_greet | warm-median |") != null);
 }
