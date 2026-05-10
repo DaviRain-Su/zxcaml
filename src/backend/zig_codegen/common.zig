@@ -876,7 +876,10 @@ pub fn primOpToken(op: lir.LPrimOp) []const u8 {
         .Le => "<=",
         .Gt => ">",
         .Ge => ">=",
-        .Div, .Mod, .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => unreachable,
+        .BitAnd => "&",
+        .BitOr => "|",
+        .BitXor => "^",
+        .Div, .Mod, .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr, .ShiftLeft, .ShiftRight, .BitNot, .BytesCreate, .BytesSet, .BytesBlit, .BytesFill => unreachable,
     };
 }
 

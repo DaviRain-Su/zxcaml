@@ -760,6 +760,13 @@ pub fn builtinCallOp(callee: ttree.Expr, arg_count: usize) ?ir.PrimOp {
     if (std.mem.eql(u8, var_ref.name, "String.length") and arg_count == 1) return .StringLength;
     if (std.mem.eql(u8, var_ref.name, "String.get") and arg_count == 2) return .StringGet;
     if (std.mem.eql(u8, var_ref.name, "String.sub") and arg_count == 3) return .StringSub;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.length") and arg_count == 1) return .StringLength;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.get") and arg_count == 2) return .StringGet;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.sub") and arg_count == 3) return .StringSub;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.create") and arg_count == 1) return .BytesCreate;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.set") and arg_count == 3) return .BytesSet;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.blit") and arg_count == 5) return .BytesBlit;
+    if (std.mem.eql(u8, var_ref.name, "Bytes.fill") and arg_count == 4) return .BytesFill;
     if (std.mem.eql(u8, var_ref.name, "^") and arg_count == 2) return .StringConcat;
     if (std.mem.eql(u8, var_ref.name, "Char.code") and arg_count == 1) return .CharCode;
     if (std.mem.eql(u8, var_ref.name, "Char.chr") and arg_count == 1) return .CharChr;
@@ -773,6 +780,10 @@ pub fn builtinCallArgTys(arena: *std.heap.ArenaAllocator, op: ir.PrimOp) LowerEr
         .StringSub => try tySlice(arena, &.{ .String, .Int, .Int }),
         .StringConcat => try tySlice(arena, &.{ .String, .String }),
         .CharCode, .CharChr => try tySlice(arena, &.{.Int}),
+        .BytesCreate => try tySlice(arena, &.{.Int}),
+        .BytesSet => try tySlice(arena, &.{ .String, .Int, .Int }),
+        .BytesBlit => try tySlice(arena, &.{ .String, .Int, .String, .Int, .Int }),
+        .BytesFill => try tySlice(arena, &.{ .String, .Int, .Int, .Int }),
         else => return error.UnsupportedPrim,
     };
 }
@@ -780,7 +791,8 @@ pub fn builtinCallArgTys(arena: *std.heap.ArenaAllocator, op: ir.PrimOp) LowerEr
 pub fn builtinCallReturnTy(op: ir.PrimOp) ir.Ty {
     return switch (op) {
         .StringLength, .StringGet, .CharCode, .CharChr => .Int,
-        .StringSub, .StringConcat => .String,
+        .StringSub, .StringConcat, .BytesCreate => .String,
+        .BytesSet, .BytesBlit, .BytesFill => .Unit,
         else => unreachable,
     };
 }
@@ -1268,22 +1280,31 @@ pub fn lowerPrimOp(op: []const u8) LowerError!ir.PrimOp {
     if (std.mem.eql(u8, op, "<=")) return .Le;
     if (std.mem.eql(u8, op, ">")) return .Gt;
     if (std.mem.eql(u8, op, ">=")) return .Ge;
+    if (std.mem.eql(u8, op, "land")) return .BitAnd;
+    if (std.mem.eql(u8, op, "lor")) return .BitOr;
+    if (std.mem.eql(u8, op, "lxor")) return .BitXor;
+    if (std.mem.eql(u8, op, "lsl")) return .ShiftLeft;
+    if (std.mem.eql(u8, op, "lsr")) return .ShiftRight;
+    if (std.mem.eql(u8, op, "lnot")) return .BitNot;
     return error.UnsupportedPrim;
 }
 
 pub fn primOpArity(op: ir.PrimOp) usize {
     return switch (op) {
-        .StringLength, .CharCode, .CharChr => 1,
-        .Add, .Sub, .Mul, .Div, .Mod, .Eq, .Ne, .Lt, .Le, .Gt, .Ge, .StringGet, .StringConcat => 2,
-        .StringSub => 3,
+        .StringLength, .CharCode, .CharChr, .BitNot, .BytesCreate => 1,
+        .Add, .Sub, .Mul, .Div, .Mod, .Eq, .Ne, .Lt, .Le, .Gt, .Ge, .StringGet, .StringConcat, .BitAnd, .BitOr, .BitXor, .ShiftLeft, .ShiftRight => 2,
+        .StringSub, .BytesSet => 3,
+        .BytesFill => 4,
+        .BytesBlit => 5,
     };
 }
 
 pub fn primOpReturnTy(op: ir.PrimOp) ir.Ty {
     return switch (op) {
-        .Add, .Sub, .Mul, .Div, .Mod, .StringLength, .StringGet, .CharCode, .CharChr => .Int,
+        .Add, .Sub, .Mul, .Div, .Mod, .StringLength, .StringGet, .CharCode, .CharChr, .BitAnd, .BitOr, .BitXor, .ShiftLeft, .ShiftRight, .BitNot => .Int,
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => .Bool,
-        .StringSub, .StringConcat => .String,
+        .StringSub, .StringConcat, .BytesCreate => .String,
+        .BytesSet, .BytesBlit, .BytesFill => .Unit,
     };
 }
 

@@ -1014,6 +1014,16 @@ fn lowerPrimOp(op: ir.PrimOp) lir.LPrimOp {
         .StringConcat => .StringConcat,
         .CharCode => .CharCode,
         .CharChr => .CharChr,
+        .BitAnd => .BitAnd,
+        .BitOr => .BitOr,
+        .BitXor => .BitXor,
+        .ShiftLeft => .ShiftLeft,
+        .ShiftRight => .ShiftRight,
+        .BitNot => .BitNot,
+        .BytesCreate => .BytesCreate,
+        .BytesSet => .BytesSet,
+        .BytesBlit => .BytesBlit,
+        .BytesFill => .BytesFill,
     };
 }
 

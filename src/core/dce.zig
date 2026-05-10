@@ -399,7 +399,7 @@ fn hasSideEffects(expr: ir.Expr) bool {
             hasSideEffects(if_expr.cond.*) or if (value) hasSideEffects(if_expr.then_branch.*) else hasSideEffects(if_expr.else_branch.*)
         else
             hasSideEffects(if_expr.cond.*) or hasSideEffects(if_expr.then_branch.*) or hasSideEffects(if_expr.else_branch.*),
-        .Prim => |prim| primMayTrap(prim.op) or anyExprHasSideEffects(prim.args),
+        .Prim => |prim| primHasEffect(prim.op) or anyExprHasSideEffects(prim.args),
         .Ctor => |ctor| anyExprHasSideEffects(ctor.args),
         .Match => |match_expr| hasSideEffects(match_expr.scrutinee.*) or anyArmHasSideEffects(match_expr.arms),
         .Tuple => |tuple_expr| anyExprHasSideEffects(tuple_expr.items),
@@ -438,6 +438,13 @@ fn primMayTrap(op: ir.PrimOp) bool {
     return switch (op) {
         .Div, .Mod => true,
         else => false,
+    };
+}
+
+fn primHasEffect(op: ir.PrimOp) bool {
+    return switch (op) {
+        .BytesSet, .BytesBlit, .BytesFill => true,
+        else => primMayTrap(op),
     };
 }
 

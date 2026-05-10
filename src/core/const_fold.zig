@@ -349,13 +349,18 @@ const FoldContext = struct {
             .Mul => intExpr(wrappingMul(lhs, rhs), prim.ty, prim.layout),
             .Div => if (rhs == 0) null else intExpr(truncatingDiv(lhs, rhs), prim.ty, prim.layout),
             .Mod => if (rhs == 0) null else intExpr(truncatingMod(lhs, rhs), prim.ty, prim.layout),
+            .BitAnd => intExpr(lhs & rhs, prim.ty, prim.layout),
+            .BitOr => intExpr(lhs | rhs, prim.ty, prim.layout),
+            .BitXor => intExpr(lhs ^ rhs, prim.ty, prim.layout),
+            .ShiftLeft => if (rhs < 0 or rhs >= 64) intExpr(0, prim.ty, prim.layout) else intExpr(lhs << @intCast(rhs), prim.ty, prim.layout),
+            .ShiftRight => if (rhs < 0 or rhs >= 64) intExpr(0, prim.ty, prim.layout) else intExpr(@bitCast(@as(u64, @bitCast(lhs)) >> @as(u6, @intCast(rhs))), prim.ty, prim.layout),
             .Eq => boolExpr(lhs == rhs),
             .Ne => boolExpr(lhs != rhs),
             .Lt => boolExpr(lhs < rhs),
             .Le => boolExpr(lhs <= rhs),
             .Gt => boolExpr(lhs > rhs),
             .Ge => boolExpr(lhs >= rhs),
-            .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => null,
+            .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr, .BitNot, .BytesCreate, .BytesSet, .BytesBlit, .BytesFill => null,
         };
     }
 

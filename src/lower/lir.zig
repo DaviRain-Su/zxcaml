@@ -141,6 +141,16 @@ pub const LPrimOp = enum {
     StringConcat,
     CharCode,
     CharChr,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    BitNot,
+    BytesCreate,
+    BytesSet,
+    BytesBlit,
+    BytesFill,
 };
 
 /// Lowered variable reference.

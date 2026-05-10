@@ -3,6 +3,48 @@
 All notable user-visible changes to ZxCaml are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## Route B — 2025-05-11
+
+### Added — Bitwise Operations (Step 1)
+- 6 bitwise primitives: `land`, `lor`, `lxor`, `lsl`, `lsr`, `lnot`
+- Compile-time constant folding for all bitwise ops
+- Whitelisted in frontend as infix operators
+- New `PrimOp` variants: `BitAnd`, `BitOr`, `BitXor`, `ShiftLeft`, `ShiftRight`, `BitNot`
+
+### Added — Read-only Bytes Operations (Step 2)
+- `Bytes.get`, `Bytes.length`, `Bytes.sub` — reuse existing `StringGet`/`StringLength`/`StringSub` PrimOps
+- `Bytes.of_string` in interpreter (was codegen-only)
+
+### Added — Mutable Bytes Operations (Step 3)
+- `Bytes.create n` — arena-allocated mutable buffer, zero-initialized
+- `Bytes.set s i v` — in-place byte write via `@constCast`
+- DCE: `BytesSet` marked as side-effecting (prevents dead-code elimination)
+
+### Added — Batch Bytes Operations (Step 4)
+- `Bytes.blit src srcoff dst dstoff len` — `@memcpy`-based batch copy
+- `Bytes.fill s off len c` — `@memset`-based batch fill
+
+### Added — Example Validation (Step 5)
+- Pure OCaml Solana instruction encoders:
+  - System Program Transfer (discriminator 2, u64 LE amount)
+  - SPL Token Transfer (discriminator 3, u64 LE amount)
+  - SPL Token TransferChecked (discriminator 12, u64 LE amount + u8 decimals)
+  - System Program CreateAccount (discriminator 0, u64 LE lamports + u64 LE space + 32-byte owner)
+- All examples pass check/run/native targets; BPF passes for non-oversized examples
+
+### Changed
+- `src/core/dce.zig`: `primHasEffect()` replaces `primMayTrap()` for side-effect classification
+- `src/backend/zig_codegen/expr_emission.zig`: `BytesCreate` recognized as arena-requiring
+
+### New Examples
+- `examples/bitwise_ops.ml`, `examples/bytes_read.ml`, `examples/bytes_le_decode.ml`
+- `examples/bytes_mutable.ml`, `examples/bytes_le_codec.ml`, `examples/spl_transfer_encode.ml`
+- `examples/bytes_blit_fill.ml`, `examples/solana_instruction_encode.ml`
+- `examples/spl_transfer_pure_ocaml.ml`, `examples/system_transfer_pure_ocaml.ml`
+
+### Test Baseline
+- 671/672 tests passed (1 skipped) — zero regressions across all 5 steps
 Entries are grouped by project phase because this repository has shipped phase
 milestones rather than semver releases so far. Commit hashes cite the `git log`
 evidence for each major bullet.

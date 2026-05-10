@@ -428,7 +428,7 @@ fn exprMayRequireArena(expr: lir.LExpr, functions: []const lir.LFunc, current_fu
             exprMayRequireArena(if_expr.then_branch.*, functions, current_function, depth + 1) or
             exprMayRequireArena(if_expr.else_branch.*, functions, current_function, depth + 1),
         .Prim => |prim| blk: {
-            if (prim.op == .StringConcat) break :blk true;
+            if (prim.op == .StringConcat or prim.op == .BytesCreate) break :blk true;
             for (prim.args) |arg| {
                 if (exprMayRequireArena(arg.*, functions, current_function, depth + 1)) break :blk true;
             }
@@ -627,6 +627,132 @@ pub fn emitPrimExpr(
             try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
             try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
             try append(out, allocator, ")");
+        },
+        .BitAnd, .BitOr, .BitXor => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
+            try append(out, allocator, "(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try appendPrint(out, allocator, " {s} ", .{primOpToken(prim.op)});
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, ")");
+        },
+        .ShiftLeft => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
+            try append(out, allocator, "(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, " << @as(u6, @intCast(");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, ")))" );
+        },
+        .ShiftRight => {
+            if (prim.args.len != 2) return error.UnsupportedExpr;
+            try append(out, allocator, "@as(i64, @bitCast(@as(u64, @bitCast(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, ")) >> @as(u6, @intCast(");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level, ctx);
+            try append(out, allocator, "))))" );
+        },
+        .BitNot => {
+            if (prim.args.len != 1) return error.UnsupportedExpr;
+            try append(out, allocator, "(~");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level, ctx);
+            try append(out, allocator, ")" );
+        },
+        .BytesCreate => {
+            if (prim.args.len != 1) return error.UnsupportedExpr;
+            const block_id = ctx.next_block_id;
+            ctx.next_block_id += 1;
+            try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "var omlz_bytes_buf_{d}: []u8 = undefined;\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try append(out, allocator, "arena.allocIntoOrTrap(u8, @as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level + 1, ctx);
+            try appendPrint(out, allocator, ")), &omlz_bytes_buf_{d});\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "@memset(omlz_bytes_buf_{d}, 0);\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} omlz_bytes_buf_{d};\n", .{ block_id, block_id });
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "}");
+        },
+        .BytesSet => {
+            if (prim.args.len != 3) return error.UnsupportedExpr;
+            const block_id = ctx.next_block_id;
+            ctx.next_block_id += 1;
+            try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_bytes_set_buf_{d}: []u8 = @constCast(", .{block_id});
+            try emitExpr(out, allocator, prim.args[0].*, indent_level + 1, ctx);
+            try append(out, allocator, ");\n");
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "omlz_bytes_set_buf_{d}[@as(usize, @intCast(", .{block_id});
+            try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+            try append(out, allocator, "))] = @as(u8, @intCast(");
+            try emitExpr(out, allocator, prim.args[2].*, indent_level + 1, ctx);
+            try appendPrint(out, allocator, "));\n", .{});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "}");
+        },
+        .BytesBlit => {
+            if (prim.args.len != 5) return error.UnsupportedExpr;
+            const block_id = ctx.next_block_id;
+            ctx.next_block_id += 1;
+            try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_blit_dst_{d}: []u8 = @constCast(", .{block_id});
+            try emitExpr(out, allocator, prim.args[2].*, indent_level + 1, ctx);
+            try append(out, allocator, ");\n");
+            // dst slice: omlz_blit_dst_{d}[dst_off..dst_off+len]
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "@memcpy(omlz_blit_dst_{d}[", .{block_id});
+            try append(out, allocator, "@as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[3].*, indent_level + 1, ctx);
+            try append(out, allocator, "))..@as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[3].*, indent_level + 1, ctx);
+            try append(out, allocator, ")) + @as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[4].*, indent_level + 1, ctx);
+            try append(out, allocator, "))], ");
+            // src slice: src[src_off..src_off+len]
+            try append(out, allocator, "(");
+            try emitExpr(out, allocator, prim.args[0].*, indent_level + 1, ctx);
+            try append(out, allocator, ")[@as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+            try append(out, allocator, "))..@as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+            try append(out, allocator, ")) + @as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[4].*, indent_level + 1, ctx);
+            try appendPrint(out, allocator, "))]);\n", .{});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "}");
+        },
+        .BytesFill => {
+            if (prim.args.len != 4) return error.UnsupportedExpr;
+            const block_id = ctx.next_block_id;
+            ctx.next_block_id += 1;
+            try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_fill_dst_{d}: []u8 = @constCast(", .{block_id});
+            try emitExpr(out, allocator, prim.args[0].*, indent_level + 1, ctx);
+            try append(out, allocator, ");\n");
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "@memset(omlz_fill_dst_{d}[@as(usize, @intCast(", .{block_id});
+            try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+            try append(out, allocator, "))..@as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[1].*, indent_level + 1, ctx);
+            try append(out, allocator, ")) + @as(usize, @intCast(");
+            try emitExpr(out, allocator, prim.args[2].*, indent_level + 1, ctx);
+            try appendPrint(out, allocator, "))], @as(u8, @intCast(", .{});
+            try emitExpr(out, allocator, prim.args[3].*, indent_level + 1, ctx);
+            try appendPrint(out, allocator, ")));\n", .{});
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d};\n", .{block_id});
+            try emitIndent(out, allocator, indent_level);
+            try append(out, allocator, "}");
         },
     }
 }

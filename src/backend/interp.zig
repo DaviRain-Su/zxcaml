@@ -254,7 +254,28 @@ fn evalStdlibApp(
         const index: usize = @intCast(try intValue(try evalExpr(allocator, args[1].*, env)));
         return .{ .Int = @intCast(value[index]) };
     }
+    if (std.mem.eql(u8, name, "Bytes.get")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const value = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const index: usize = @intCast(try intValue(try evalExpr(allocator, args[1].*, env)));
+        return .{ .Int = @intCast(value[index]) };
+    }
     if (std.mem.eql(u8, name, "String.sub")) {
+        if (args.len != 3) return error.ArityMismatch;
+        const value = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const start: usize = @intCast(try intValue(try evalExpr(allocator, args[1].*, env)));
+        const len: usize = @intCast(try intValue(try evalExpr(allocator, args[2].*, env)));
+        return .{ .String = value[start..][0..len] };
+    }
+    if (std.mem.eql(u8, name, "Bytes.of_string")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return try evalExpr(allocator, args[0].*, env);
+    }
+    if (std.mem.eql(u8, name, "Bytes.length")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = @intCast((try stringValue(try evalExpr(allocator, args[0].*, env))).len) };
+    }
+    if (std.mem.eql(u8, name, "Bytes.sub")) {
         if (args.len != 3) return error.ArityMismatch;
         const value = try stringValue(try evalExpr(allocator, args[0].*, env));
         const start: usize = @intCast(try intValue(try evalExpr(allocator, args[1].*, env)));
@@ -511,6 +532,57 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
             if (prim.args.len != 1) return error.ArityMismatch;
             return .{ .Int = try intValue(try evalExpr(allocator, prim.args[0].*, env)) };
         },
+        .BitNot => {
+            if (prim.args.len != 1) return error.ArityMismatch;
+            const v = try intValue(try evalExpr(allocator, prim.args[0].*, env));
+            return .{ .Int = ~v };
+        },
+        .BytesCreate => {
+            if (prim.args.len != 1) return error.ArityMismatch;
+            const size: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[0].*, env)));
+            const buf = try allocator.alloc(u8, size);
+            @memset(buf, 0);
+            return .{ .String = buf };
+        },
+        .BytesSet => {
+            if (prim.args.len != 3) return error.ArityMismatch;
+            const data = try stringValue(try evalExpr(allocator, prim.args[0].*, env));
+            const index: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[1].*, env)));
+            const value: u8 = @intCast(try intValue(try evalExpr(allocator, prim.args[2].*, env)));
+            if (index < data.len) {
+                // Bytes values may be mutable buffers from Bytes.create;
+                // constCast is safe because we own the allocation.
+                const mutable: []u8 = @constCast(data.ptr)[0..data.len];
+                mutable[index] = value;
+            }
+            return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+        },
+        .BytesBlit => {
+            if (prim.args.len != 5) return error.ArityMismatch;
+            const src = try stringValue(try evalExpr(allocator, prim.args[0].*, env));
+            const src_off: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[1].*, env)));
+            const dst = try stringValue(try evalExpr(allocator, prim.args[2].*, env));
+            const dst_off: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[3].*, env)));
+            const len: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[4].*, env)));
+            const dst_mut: []u8 = @constCast(dst.ptr)[0..dst.len];
+            const src_mut: []const u8 = src;
+            if (src_off + len <= src.len and dst_off + len <= dst.len) {
+                @memcpy(dst_mut[dst_off .. dst_off + len], src_mut[src_off .. src_off + len]);
+            }
+            return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+        },
+        .BytesFill => {
+            if (prim.args.len != 4) return error.ArityMismatch;
+            const dst = try stringValue(try evalExpr(allocator, prim.args[0].*, env));
+            const off: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[1].*, env)));
+            const len: usize = @intCast(try intValue(try evalExpr(allocator, prim.args[2].*, env)));
+            const value: u8 = @intCast(try intValue(try evalExpr(allocator, prim.args[3].*, env)));
+            const dst_mut: []u8 = @constCast(dst.ptr)[0..dst.len];
+            if (off + len <= dst.len) {
+                @memset(dst_mut[off .. off + len], value);
+            }
+            return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+        },
         else => {
             if (prim.args.len != 2) return error.ArityMismatch;
             const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
@@ -521,13 +593,18 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
                 .Mul => .{ .Int = wrappingMul(lhs, rhs) },
                 .Div => .{ .Int = try truncatingDiv(lhs, rhs) },
                 .Mod => .{ .Int = try truncatingMod(lhs, rhs) },
+                .BitAnd => .{ .Int = lhs & rhs },
+                .BitOr => .{ .Int = lhs | rhs },
+                .BitXor => .{ .Int = lhs ^ rhs },
+                .ShiftLeft => .{ .Int = wrappingShl(lhs, rhs) },
+                .ShiftRight => .{ .Int = wrappingShr(lhs, rhs) },
                 .Eq => boolCtor(lhs == rhs),
                 .Ne => boolCtor(lhs != rhs),
                 .Lt => boolCtor(lhs < rhs),
                 .Le => boolCtor(lhs <= rhs),
                 .Gt => boolCtor(lhs > rhs),
                 .Ge => boolCtor(lhs >= rhs),
-                .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => unreachable,
+                .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr, .BitNot, .BytesCreate, .BytesSet, .BytesBlit, .BytesFill => unreachable,
             };
         },
     };
@@ -574,6 +651,16 @@ fn truncatingMod(lhs: i64, rhs: i64) EvalError!i64 {
     if (rhs == 0) return error.DivisionByZero;
     if (lhs == std.math.minInt(i64) and rhs == -1) return 0;
     return @rem(lhs, rhs);
+}
+
+fn wrappingShl(lhs: i64, rhs: i64) i64 {
+    if (rhs < 0 or rhs >= 64) return 0;
+    return lhs << @intCast(rhs);
+}
+
+fn wrappingShr(lhs: i64, rhs: i64) i64 {
+    if (rhs < 0 or rhs >= 64) return 0;
+    return @bitCast(@as(u64, @bitCast(lhs)) >> @intCast(rhs));
 }
 
 fn intValue(value: Value) EvalError!i64 {

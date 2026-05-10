@@ -774,6 +774,7 @@ let longident_name (lid : Longident.t Location.loc) =
 
 let is_whitelisted_prim = function
   | "+" | "-" | "*" | "/" | "mod" | "=" | "<>" | "<" | "<=" | ">" | ">=" -> true
+  | "land" | "lor" | "lxor" | "lsl" | "lsr" | "lnot" -> true
   | _ -> false
 
 let is_mutation_primitive = function

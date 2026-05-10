@@ -269,9 +269,9 @@ pub fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys
         .Prim => |prim| {
             const op = try lowerPrimOp(prim.op);
             const arg_ty: ?ir.Ty = switch (op) {
-                .Add, .Sub, .Mul, .Div, .Mod, .Lt, .Le, .Gt, .Ge => .Int,
+                .Add, .Sub, .Mul, .Div, .Mod, .Lt, .Le, .Gt, .Ge, .BitAnd, .BitOr, .BitXor, .ShiftLeft, .ShiftRight, .BitNot => .Int,
                 .Eq, .Ne => null,
-                .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr => null,
+                .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr, .BytesCreate, .BytesSet, .BytesBlit, .BytesFill => null,
             };
             for (prim.args) |arg| try inferExprVarExpectations(arena, pattern_var_tys, arg, arg_ty);
         },

@@ -560,6 +560,16 @@ fn primOpName(op: ir.PrimOp) []const u8 {
         .StringConcat => "^",
         .CharCode => "Char.code",
         .CharChr => "Char.chr",
+        .BitAnd => "land",
+        .BitOr => "lor",
+        .BitXor => "lxor",
+        .ShiftLeft => "lsl",
+        .ShiftRight => "lsr",
+        .BitNot => "lnot",
+        .BytesCreate => "Bytes.create",
+        .BytesSet => "Bytes.set",
+        .BytesBlit => "Bytes.blit",
+        .BytesFill => "Bytes.fill",
     };
 }
 

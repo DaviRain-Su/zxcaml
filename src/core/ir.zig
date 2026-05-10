@@ -264,6 +264,16 @@ pub const PrimOp = enum {
     StringConcat,
     CharCode,
     CharChr,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    BitNot,
+    BytesCreate,
+    BytesSet,
+    BytesBlit,
+    BytesFill,
 };
 
 /// Integer constant expression with type and layout annotations.
