@@ -72,6 +72,10 @@ pub fn build(b: *std.Build) void {
         .name = "omlz",
         .root_module = root_module,
     });
+    // std.c.clock_gettime requires explicit libc linkage on Linux (Zig 0.16+).
+    if (target.result.os.tag == .linux) {
+        exe.root_module.link_libc = true;
+    }
 
     const install_omlz = b.addInstallArtifact(exe, .{});
     b.getInstallStep().dependOn(&install_omlz.step);
