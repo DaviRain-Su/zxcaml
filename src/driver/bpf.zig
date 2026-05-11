@@ -453,32 +453,44 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
             defer allocator.free(prefix);
             const candidate = try std.fs.path.join(allocator, &.{ prefix, "bin", "llvm-objcopy" });
             errdefer allocator.free(candidate);
-            if (isExecutable(io, candidate)) return candidate;
+            if (commandAvailable(allocator, io, candidate)) return candidate;
             allocator.free(candidate);
         }
-    }
-
-    // On Linux, check if llvm-objcopy is on PATH; if not, return FileNotFound
-    // so embedSourceMapSection can gracefully skip the embedding step.
-    if (builtin.os.tag == .linux) {
-        const name = "llvm-objcopy";
-        const argv = [_][]const u8{ name, "--version" };
-        const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return error.FileNotFound;
-        defer allocator.free(completed.stdout);
-        defer allocator.free(completed.stderr);
-        switch (completed.term) {
-            .exited => |code| if (code != 0) return error.FileNotFound,
-            .signal, .stopped, .unknown => return error.FileNotFound,
+        if (commandAvailable(allocator, io, "llvm-objcopy")) {
+            return allocator.dupe(u8, "llvm-objcopy");
         }
-        return allocator.dupe(u8, name);
+        return error.FileNotFound;
     }
 
-    // Non-Linux fallback: if llvm-objcopy is on PATH, use it; otherwise
-    // return FileNotFound so callers can gracefully skip source-map embedding.
-    if (isExecutable(io, "llvm-objcopy")) {
-        return allocator.dupe(u8, "llvm-objcopy");
+    const candidates = [_][]const u8{
+        "llvm-objcopy",
+        "/usr/bin/llvm-objcopy",
+        "objcopy",
+        "/usr/bin/objcopy",
+    };
+    for (candidates) |path| {
+        if (commandAvailable(allocator, io, path)) {
+            return allocator.dupe(u8, path);
+        }
     }
+
     return error.FileNotFound;
+}
+
+fn commandAvailable(allocator: Allocator, io: Io, path: []const u8) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch return false;
+        return true;
+    }
+
+    const argv = [_][]const u8{ path, "--version" };
+    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return false;
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+    return switch (completed.term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
 }
 
 fn detectHomebrewLlvm20Prefix(allocator: Allocator, io: Io) !?[]const u8 {
@@ -497,15 +509,6 @@ fn detectHomebrewLlvm20Prefix(allocator: Allocator, io: Io) !?[]const u8 {
     const prefix = std.mem.trim(u8, completed.stdout, " \t\r\n");
     if (prefix.len == 0) return null;
     return try allocator.dupe(u8, prefix);
-}
-
-fn isExecutable(io: Io, path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
-        std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch return false;
-        return true;
-    }
-    std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch return false;
-    return true;
 }
 
 fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, schema: srcmap.Schema) !void {
