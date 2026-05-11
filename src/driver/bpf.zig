@@ -120,7 +120,10 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
 pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
     // Only activate when explicitly opted in via SOLANA_ZIG=1 or SOLANA_ZIG=path
     const env_val = std.process.Environ.getAlloc(options.environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return false,
+        error.EnvironmentVariableMissing => {
+            try writeStderr(io, "note: SOLANA_ZIG not set, using sbpf-linker fallback\n");
+            return false;
+        },
         else => return false,
     };
     defer allocator.free(env_val);
