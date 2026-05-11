@@ -74,7 +74,7 @@ jobs:
         run: zig build test
 
       - name: Prepare legacy linker for Mollusk fallback
-        if: runner.os == 'ubuntu-latest'
+        if: ${{ runner.os == 'ubuntu-latest' }}
         env:
           SOLANA_ZIG: "0"
         run: ./init.sh
