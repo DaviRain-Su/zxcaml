@@ -28,8 +28,10 @@ jobs:
       # SOLANA_BPF=1, but GitHub macOS runners currently lack a compatible
       # OpenSSL Ed25519 signing path for the no-op invocation helper.
       SOLANA_BPF: ${{ vars.SOLANA_BPF }}
-      # Enable solana-zig direct BPF compilation (bypasses sbpf-linker/LLVM).
-      SOLANA_ZIG: "1"
+      # Enable solana-zig direct BPF compilation on Linux only.
+      # macOS uses sbpf-linker (which works with Homebrew LLVM).
+      # solana-zig's std lacks getrandom/IOV_MAX on macOS.
+      SOLANA_ZIG: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
     steps:
       - name: Checkout
