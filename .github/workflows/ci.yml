@@ -73,6 +73,8 @@ jobs:
         run: zig build test
 
       - name: Mollusk SVM tests
+        env:
+          SOLANA_ZIG: ""
         run: cd tests && cargo test
 
       - name: P3 no_alloc smoke
