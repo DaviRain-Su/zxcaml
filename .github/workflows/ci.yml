@@ -73,9 +73,15 @@ jobs:
       - name: Test
         run: zig build test
 
+      - name: Prepare legacy linker for Mollusk fallback
+        if: runner.os == 'ubuntu-latest'
+        env:
+          SOLANA_ZIG: "0"
+        run: ./init.sh
+
       - name: Mollusk SVM tests
         env:
-          SOLANA_ZIG: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+          SOLANA_ZIG: ""
         run: cd tests && cargo test
 
       - name: P3 no_alloc smoke
