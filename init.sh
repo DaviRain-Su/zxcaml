@@ -227,7 +227,6 @@ setup_solana_zig() {
     for d in "$zig_home"/zig-*; do
       if [[ -x "$d/zig" ]]; then zig_dir="$d"; break; fi
     done
-    echo "    debug: zig_dir=$zig_dir, ls_zig_home=$(ls "$zig_home"/ 2>/dev/null)"
     mkdir -p "$HOME/.local/bin"
     if [[ -n "$zig_dir" ]]; then
       ln -sf "$solana_zig_dir/zig" "$zig_dir/solana-zig" 2>/dev/null || true
@@ -268,7 +267,6 @@ setup_solana_zig() {
     for d in "$zig_home"/zig-*; do
       if [[ -x "$d/zig" ]]; then zig_dir="$d"; break; fi
     done
-    echo "    debug: zig_dir=$zig_dir, ls_zig_home=$(ls "$zig_home"/ 2>/dev/null)"
     mkdir -p "$HOME/.local/bin"
     if [[ -n "$zig_dir" ]]; then
       ln -sf "$solana_zig_dir/zig" "$zig_dir/solana-zig" 2>/dev/null || true

@@ -99,17 +99,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try materializeRuntime(allocator, io);
 
     // Try solana-zig direct compilation (preferred, no sbpf-linker needed)
-    const direct_result = try buildBpfDirect(allocator, io, options);
-    try writeStderr(io, "note: buildBpfDirect returned ");
-    try writeStderr(io, if (direct_result) "true" else "false");
-    try writeStderr(io, "\n");
-    if (direct_result) {
-        try writeStderr(io, "DBG: direct result true, source_map_hook=");
-        if (options.source_map_hook) |_| {
-            try writeStderr(io, "some\n");
-        } else {
-            try writeStderr(io, "null\n");
-        }
+    if (try buildBpfDirect(allocator, io, options)) {
         if (options.source_map_hook) |hook| {
             const input = options.source_map orelse return error.MissingSourceMapInput;
             const source_map = try buildSourceMapSchema(allocator, input);
@@ -117,7 +107,6 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
             try hook.emit(hook.context, source_map);
             try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
         }
-        try writeStderr(io, "DBG: buildBpf returning success\n");
         return;
     }
 
@@ -131,10 +120,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
 pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
     // Only activate when explicitly opted in via SOLANA_ZIG=1 or SOLANA_ZIG=path
     const env_val = std.process.Environ.getAlloc(options.environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => {
-            try writeStderr(io, "note: SOLANA_ZIG not set, using sbpf-linker fallback\n");
-            return false;
-        },
+        error.EnvironmentVariableMissing => return false,
         else => return false,
     };
     defer allocator.free(env_val);
@@ -175,12 +161,7 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
     };
 
     runAndForward(allocator, io, &zig_argv, null, error.BpfDirectBuildFailed, !options.quiet) catch |err| switch (err) {
-        error.FileNotFound => {
-            try writeStderr(io, "note: solana-zig '");
-            try writeStderr(io, solana_zig);
-            try writeStderr(io, "' not found (FileNotFound)\n");
-            return false;
-        },
+        error.FileNotFound => return false, // solana-zig not found on PATH
         else => return err,
     };
     return true;
@@ -477,7 +458,17 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
         }
     }
 
-    return allocator.dupe(u8, "llvm-objcopy");
+    const name = "llvm-objcopy";
+    // Check if llvm-objcopy is actually accessible on PATH
+    const argv = [_][]const u8{ name, "--version" };
+    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return error.FileNotFound;
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+    switch (completed.term) {
+        .exited => |code| if (code != 0) return error.FileNotFound,
+        .signal, .stopped, .unknown => return error.FileNotFound,
+    }
+    return allocator.dupe(u8, name);
 }
 
 fn detectHomebrewLlvm20Prefix(allocator: Allocator, io: Io) !?[]const u8 {
@@ -531,7 +522,13 @@ fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, 
     const section_arg = try std.fmt.allocPrint(allocator, "{s}={s}", .{ srcmap_section_name, temp_section_path });
     defer allocator.free(section_arg);
 
-    const objcopy = try findLlvmObjcopy(allocator, io);
+    const objcopy = findLlvmObjcopy(allocator, io) catch |err| switch (err) {
+        error.FileNotFound => {
+            // llvm-objcopy not available (e.g. Ubuntu CI); skip source map embedding
+            return;
+        },
+        else => return err,
+    };
     defer allocator.free(objcopy);
 
     const argv = [_][]const u8{
