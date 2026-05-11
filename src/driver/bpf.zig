@@ -125,15 +125,20 @@ pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !b
     };
     defer allocator.free(env_val_raw);
 
-    const env_val = std.mem.trim(u8, env_val_raw, " \t\r\n");
-    const solana_zig: []const u8 = if (env_val.len == 0 or std.mem.eql(u8, env_val, "0"))
-        return false
-    else if (std.mem.eql(u8, env_val, "1"))
-        "solana-zig"
-    else
-        env_val; // custom path
+    const solana_zig: []const u8 = parseSolanaZigEnv(env_val_raw) orelse return false;
 
     return try buildBpfDirectWith(allocator, io, solana_zig, options);
+}
+
+fn parseSolanaZigEnv(raw: []const u8) ?[]const u8 {
+    const env_val = std.mem.trim(u8, raw, " \t\r\n");
+    if (env_val.len == 0 or std.mem.eql(u8, env_val, "0")) {
+        return null;
+    }
+    if (std.mem.eql(u8, env_val, "1")) {
+        return "solana-zig";
+    }
+    return env_val;
 }
 
 fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, options: BpfBuildOptions) !bool {
@@ -715,6 +720,14 @@ fn testExitCode(term: std.process.Child.Term) u8 {
         .exited => |code| code,
         .signal, .stopped, .unknown => 1,
     };
+}
+
+test "BPF source-map env parser accepts trimmed values" {
+    try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv("1") orelse "<disabled>");
+    try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv(" 1 \n") orelse "<disabled>");
+    try std.testing.expectEqual(@as(?[]const u8, null), parseSolanaZigEnv("0"));
+    try std.testing.expectEqual(@as(?[]const u8, null), parseSolanaZigEnv("   "));
+    try std.testing.expectEqualStrings("/tmp/custom-solana-zig", parseSolanaZigEnv(" /tmp/custom-solana-zig \t") orelse "<disabled>");
 }
 
 test "BPF source map builder captures hackathon_greet source locations" {
