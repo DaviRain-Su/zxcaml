@@ -10,7 +10,6 @@ env:
   ZIG_VERSION: "0.16.0"
   OCAML_VERSION: "5.2.1"
   OPAM_SWITCH: zxcaml-p1
-  SBPF_LINKER_VERSION: "0.1.8"
 
 jobs:
   build-test:
@@ -28,7 +27,7 @@ jobs:
       # SOLANA_BPF=1, but GitHub macOS runners currently lack a compatible
       # OpenSSL Ed25519 signing path for the no-op invocation helper.
       SOLANA_BPF: ${{ vars.SOLANA_BPF }}
-      # Default SOLANA_ZIG semantics: empty/unset now enables direct Solana Zig.
+      # SOLANA_ZIG defaults to direct `solana-zig` mode when unset/empty/"1" (or path).
       SOLANA_ZIG: ""
 
     steps:
@@ -49,19 +48,6 @@ jobs:
           path: ~/zig
           key: ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}
 
-      - name: Cache sbpf-linker cargo install
-        if: ${{ runner.os == 'macOS' || env.SOLANA_ZIG == '' || env.SOLANA_ZIG == '0' }}
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/sbpf-linker
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-sbpf-linker-${{ env.SBPF_LINKER_VERSION }}-${{ hashFiles('init.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-sbpf-linker-${{ env.SBPF_LINKER_VERSION }}-
-
       - name: Initialize toolchain
         run: ./init.sh
 
@@ -70,16 +56,6 @@ jobs:
 
       - name: Test
         run: zig build test
-
-      - name: Prepare legacy linker for Mollusk fallback
-        env:
-          SOLANA_ZIG: "0"
-        run: ./init.sh
-
-      - name: Mollusk SVM tests
-        env:
-          SOLANA_ZIG: "0"
-        run: cd tests && cargo test
 
       - name: P3 no_alloc smoke
         run: zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml

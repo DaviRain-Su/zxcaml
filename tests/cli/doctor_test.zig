@@ -81,37 +81,23 @@ test "cli: doctor reports toolchain health" {
     defer allocator.free(result.stderr);
 
     const observed_status_lines = statusLineCount(result.stdout);
-    const legacy_expected = [_][]const u8{
-        "zig",
-        "opam-switch (zxcaml-p1)",
-        "ocamlc",
-        "cargo",
-        "sbpf-linker",
-        "llvm-objcopy",
-        "surfpool",
-    };
-    const direct_expected = [_][]const u8{
+    const expected_order = [_][]const u8{
         "zig",
         "opam-switch (zxcaml-p1)",
         "ocamlc",
         "solana-zig",
         "cargo",
-        "sbpf-linker",
         "llvm-objcopy",
         "surfpool",
     };
 
-    const expected_order: []const []const u8 = switch (observed_status_lines) {
-        legacy_expected.len => legacy_expected[0..],
-        direct_expected.len => direct_expected[0..],
-        else => {
-            std.debug.print(
-                "omlz doctor returned unexpected status-line count (expected {d} or {d}, got {d})\nstdout:\n{s}\nstderr:\n{s}\n",
-                .{ legacy_expected.len, direct_expected.len, observed_status_lines, result.stdout, result.stderr },
-            );
-            return error.UnexpectedStatusLineCount;
-        }
-    };
+    if (observed_status_lines != expected_order.len) {
+        std.debug.print(
+            "omlz doctor returned unexpected status-line count (expected {d}, got {d})\nstdout:\n{s}\nstderr:\n{s}\n",
+            .{ expected_order.len, observed_status_lines, result.stdout, result.stderr },
+        );
+        return error.UnexpectedStatusLineCount;
+    }
 
     if (result.exit_code != 0 or observed_status_lines != expected_order.len) {
         std.debug.print(

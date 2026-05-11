@@ -21,9 +21,7 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 |---|---:|---|---|
 | Zig | `0.16.0` | 构建 `omlz`、Zig runtime helper，以及生成出来的 Zig 代码 | 如果当前激活的 `zig` 不是精确的 `0.16.0`，就在 `~/zig` 下安装 Zig `0.16.0` |
 | opam + OCaml | OCaml `5.2.x` | 用上游 `compiler-libs` 构建 OCaml `zxc-frontend` 胶水 | 如有需要，在 macOS 上通过 Homebrew 安装 `opam`，创建带 OCaml `5.2.1` 的 `zxcaml-p1` switch，并安装 `ocamlfind` |
-| cargo + `sbpf-linker` | `sbpf-linker 0.1.8` | 仅在使用 legacy fallback 时用于链接 Zig 的 LLVM bitcode | 按需要求 `cargo`；当需要时用 `cargo install --locked --force` 安装 `sbpf-linker --version 0.1.8` |
 | solana-cli | stable | 运行 BPF acceptance harness 和本地 validator 检查 | 只有在运行 `init.sh` 前设置了 `SOLANA_BPF=1` 时才安装 |
-| macOS `llvm@20` | Homebrew `llvm@20` | 在 macOS 上为 `sbpf-linker 0.1.8` 提供 `libLLVM` | 在 macOS 上通过 Homebrew 安装 `llvm@20`，并在脚本运行期间导出 `DYLD_FALLBACK_LIBRARY_PATH` |
 
 ### P3 依赖状态
 
@@ -58,9 +56,7 @@ SOLANA_BPF=1 ./init.sh
 
 1. `zig 0.16.0`；
 2. `opam`、`zxcaml-p1` switch、OCaml `5.2.1`、`ocamlfind` 和 `compiler-libs`；
-3. legacy `sbpf-linker 0.1.8`（在 `SOLANA_ZIG` 为空或 `0` 时需要；Linux 直接模式可选）;
-4. Homebrew `llvm@20` 和 macOS LLVM 动态库路径；
-5. 当 `SOLANA_BPF=1` 时的 `solana`、`solana-keygen` 和 `solana-test-validator`。
+3. 当 `SOLANA_BPF=1` 时的 `solana`、`solana-keygen` 和 `solana-test-validator`。
 
 如果你要运行 SPL-Token acceptance harness，还要确保同一个 shell 中
 `spl-token --version` 能成功。
@@ -87,26 +83,16 @@ file sh.so
 
 ## 故障排查
 
-### `sbpf-linker: unable to find LLVM shared lib`
+### Solana CLI 安装
 
-在 macOS 上，`sbpf-linker 0.1.8` 会动态加载 LLVM。`init.sh` 会安装
-Homebrew `llvm@20`，并在它运行期间导出 fallback 路径。如果你在另一个
-shell 中直接调用 `sbpf-linker`，请导出同样的值：
-
-```sh
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-```
-
-### 缺少 `libLLVM`
-
-安装或修复 Homebrew `llvm@20`：
+如果需要本地 validator 工作流（`SOLANA_BPF=1`），请确保运行 `init.sh`
+后以下命令可用：
 
 ```sh
-brew install llvm@20
-brew --prefix llvm@20
+solana --version
+solana-keygen --version
+solana-test-validator --version
 ```
-
-该 prefix 必须包含带有 `libLLVM*.dylib` 的 `lib/` 目录。
 
 ### opam switch 创建失败
 
@@ -133,7 +119,7 @@ opam install -y ocamlfind
 
 ## 验证清单
 
-`sbpf-linker --version` 仅在 legacy 链接模式下必需（`SOLANA_ZIG` 未设置或为 `0`）。Linux 上若启用直接 `SOLANA_ZIG`，该命令可选。
+`solana` 和相关 CLI 工具仅在启用 `SOLANA_BPF=1` 时才需要。
 
 
 setup 后，以下命令应成功：
@@ -141,7 +127,6 @@ setup 后，以下命令应成功：
 ```sh
 zig version
 ocaml -vnum
-sbpf-linker --version
 zig build
 zig build test
 zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml

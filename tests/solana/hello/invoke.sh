@@ -74,13 +74,6 @@ require_cmd() {
   fi
 }
 
-needs_legacy_sbpf_linker() {
-  if [[ -z "${SOLANA_ZIG-}" ]] || [[ "${SOLANA_ZIG-}" == "0" ]]; then
-    return 0
-  fi
-  return 1
-}
-
 rpc_json() {
   local method="$1"
   local params="${2:-[]}"
@@ -352,9 +345,6 @@ cd "$ROOT"
 for cmd in zig solana solana-keygen solana-test-validator curl python3 openssl; do
   require_cmd "$cmd"
 done
-if needs_legacy_sbpf_linker; then
-  require_cmd "sbpf-linker"
-fi
 if [[ "${ZXCAML_SOLANA_SPL_TOKEN:-}" == "1" ]]; then
   require_cmd spl-token
 fi

@@ -53,18 +53,19 @@ evidence for each major bullet.
 
 ### Changed — SOLANA_ZIG + source-map tool fallback behavior
 
-- `SOLANA_ZIG` remains opt-in for the one-step direct path: `SOLANA_ZIG=1` uses `solana-zig` from `PATH`, `SOLANA_ZIG=<path>` uses a custom path, and `SOLANA_ZIG=0` / empty / missing falls back to the legacy `zig build-lib + sbpf-linker` flow (`c4a924f`, `98a0f7d`, `fc29987`, `38eb335`, `e65c69e`).
+- `SOLANA_ZIG=1` / custom path / empty / missing selects direct `solana-zig build-lib`; only `SOLANA_ZIG=0` selects the legacy `zig build-lib + sbpf-linker` flow (`c4a924f`, `98a0f7d`, `fc29987`, `38eb335`, `e65c69e`).
 - Source-map embedding is now a best-effort step when `llvm-objcopy` is not available, so BPF build still succeeds while emitting the `.map` sidecar; section assertions in tests were made tolerant accordingly (`fc29987`, `46b5512`, `f3a7d96`, `8cf4983`).
-- `tests/cli` and Mollusk flows were updated to skip embedded-section assertions when tooling is unavailable, and CI now disables `SOLANA_ZIG` during Rust integration tests to avoid host-dependent `solana-zig` stdlib regressions (`e65c69e`, `46b5512`, `8cf4983`).
+- `tests/cli` and Mollusk flows were updated to skip embedded-section assertions when tooling is unavailable, and CI now runs Mollusk in explicit legacy mode (`SOLANA_ZIG=0`) to keep fallback-coverage parity while avoiding host-dependent `solana-zig` stdlib regressions (`e65c69e`, `46b5512`, `8cf4983`).
 
 ### Changed — BPF toolchain migration (dual-mode: direct + legacy fallback)
 
-- Split the user-facing semantics so `sbpf-linker` is required only in legacy fallback mode (`SOLANA_ZIG=0` / unset/empty), while `SOLANA_ZIG=1` or `SOLANA_ZIG=<path>` takes the direct `solana-zig build-lib` path; docs and diagnostics were aligned accordingly (`2c4e114`, `97c6b1f`, `bb22227`).
+- Split the user-facing semantics so `sbpf-linker` is required only in legacy fallback mode (`SOLANA_ZIG=0`), while `SOLANA_ZIG=1`, custom path, empty, or missing selects direct `solana-zig build-lib`; docs and diagnostics were aligned accordingly (`2c4e114`, `97c6b1f`, `bb22227`).
 - Updated CI to cache/install `sbpf-linker` only for legacy macOS or `SOLANA_ZIG` legacy runs, and added explicit `SOLANA_ZIG=0` re-init before Mollusk legacy tests on Linux to preserve fallback coverage (`7ecfcdf`, `669cffc`, `2c4e114`).
 - Added decision-guidance docs for choosing `SOLANA_ZIG` vs legacy in both EN/ZH BPF target docs and tightened roadmap wording to treat `SOLANA_ZIG` migration as parity-gated (`c8ad59b`, `973b9ec`).
-- Tightened direct-mode execution so `SOLANA_ZIG=1`/path now takes and enforces the one-step `solana-zig` path; legacy fallback is only used when `SOLANA_ZIG` is disabled, and direct-mode build errors are no longer masked by a fallback switch.
+- Tightened direct-mode execution so `SOLANA_ZIG=1`/path now takes and enforces the one-step `solana-zig` path; legacy fallback is only used when `SOLANA_ZIG=0`, and direct-mode build errors are no longer masked by a fallback switch.
 - Doctor output now includes an explicit `solana-zig` probe when direct mode is enabled (`SOLANA_ZIG=1`/path), while continuing to keep legacy probes optional in that mode.
 - Promoted `SOLANA_ZIG` to default direct one-step behavior (empty/unset now resolves to `solana-zig`) and aligned init/CI defaults for direct path, while keeping `SOLANA_ZIG=0` as the explicit legacy fallback switch.
+- Synchronized migration docs (`README`, `INSTALLING`, roadmap, and `docs/06-bpf-target`) to remove "legacy-by-default" language and describe explicit `SOLANA_ZIG=0` legacy mode as optional compatibility fallback.
 ### Sealed — Phase 22 maintenance hold
 
 Phase 22 enters a maintenance hold after Phases 19+20+21 were sealed through

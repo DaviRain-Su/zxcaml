@@ -7,9 +7,9 @@
 //! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
 //! - Dispatch `omlz idl <file.ml>` through frontend → ANF → JSON IDL emission.
 //! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
-//! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through either direct
-//!   `solana-zig build-lib` (when `SOLANA_ZIG` is enabled) or legacy Zig
-//!   bitcode emission plus `sbpf-linker`.
+//! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through the direct
+//!   `solana-zig build-lib` path (default when `SOLANA_ZIG` is unset/empty/`1`; custom
+//!   values are treated as command/path overrides except `0`).
 //! - Dispatch `omlz bench` through a fixed local BPF fixture set and print compile metrics.
 //! - Dispatch `omlz doctor` through local toolchain probes and print health status.
 //! - Reject all unimplemented commands with a non-zero exit status.
@@ -671,39 +671,32 @@ const DoctorStatus = enum {
 fn runDoctor(init: std.process.Init) !void {
     var required_misses: usize = 0;
 
-    const solana_zig = try resolveSolanaZigCommand(init.arena.allocator(), init.minimal.environ);
-    defer if (solana_zig) |path| init.arena.allocator().free(path);
-    const use_solana_zig = solana_zig != null;
+    const solana_zig = blk: {
+        const command = resolveSolanaZigCommand(init.arena.allocator(), init.minimal.environ) catch |err| switch (err) {
+            error.InvalidSolanaZigCommand => {
+                try writeDoctorProbeLine(init, .warn, "solana-zig", "SOLANA_ZIG=0 is not supported; use unset/empty/1 or a command/path value");
+                break :blk try init.arena.allocator().dupe(u8, "solana-zig");
+            },
+            else => return err,
+        };
+        break :blk command;
+    };
+    defer init.arena.allocator().free(solana_zig);
 
     try runRequiredDoctorCommand(init, "zig", &.{ "zig", "version" }, &required_misses);
     try runOpamSwitchDoctorProbe(init, &required_misses);
     try runOcamlcDoctorProbe(init, &required_misses);
 
-    if (solana_zig) |binary| {
-        var solana_zig_argv = [_][]const u8{ binary, "--version" };
-        const result = runDoctorCommand(init, &solana_zig_argv);
-        if (result.ok) {
-            try writeDoctorProbeLine(init, .ok, "solana-zig", result.detail);
-        } else {
-            try writeDoctorProbeLine(init, .warn, "solana-zig", result.detail);
-        }
-
-        try runOptionalDoctorCommand(init, "cargo", &.{ "cargo", "--version" });
+    const result = runDoctorCommand(init, &.{ solana_zig, "--version" });
+    if (result.ok) {
+        try writeDoctorProbeLine(init, .ok, "solana-zig", result.detail);
     } else {
-        try runRequiredDoctorCommand(init, "cargo", &.{ "cargo", "--version" }, &required_misses);
+        try writeDoctorProbeLine(init, .warn, "solana-zig", result.detail);
     }
-    try runSbpfLinkerDoctorProbe(init, &required_misses, use_solana_zig);
 
-    if (use_solana_zig) {
-        try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" });
-    } else {
-        try runRequiredDoctorCommand(
-            init,
-            "llvm-objcopy",
-            &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" },
-            &required_misses,
-        );
-    }
+    try runOptionalDoctorCommand(init, "cargo", &.{ "cargo", "--version" });
+    try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" });
+
     try runSurfpoolDoctorProbe(init);
 
     if (required_misses != 0) {
@@ -789,27 +782,6 @@ fn runOpamSwitchDoctorProbe(init: std.process.Init, required_misses: *usize) !vo
     try writeDoctorProbeLine(init, .miss, "opam-switch (zxcaml-p1)", result.detail);
 }
 
-fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize, optional: bool) !void {
-    const result = runDoctorCommand(init, &.{ "sbpf-linker", "--version" });
-    if (result.ok) {
-        try writeDoctorProbeLine(init, .ok, "sbpf-linker", result.detail);
-        return;
-    }
-
-    if (commandExistsOnPath(init, "sbpf-linker")) {
-        try writeDoctorProbeLine(init, .ok, "sbpf-linker", "present on PATH");
-        return;
-    }
-
-    if (optional) {
-        try writeDoctorProbeLine(init, .warn, "sbpf-linker", result.detail);
-        return;
-    }
-
-    required_misses.* += 1;
-    try writeDoctorProbeLine(init, .miss, "sbpf-linker", result.detail);
-}
-
 fn runSurfpoolDoctorProbe(init: std.process.Init) !void {
     const result = runDoctorCommand(init, &.{ "surfpool", "--version" });
     if (result.ok or commandExistsOnPath(init, "surfpool")) {
@@ -856,29 +828,22 @@ fn firstNonEmptyLine(stdout: []const u8, stderr: []const u8) []const u8 {
     return firstLine(stderr);
 }
 
-fn resolveSolanaZigCommand(allocator: std.mem.Allocator, environ: std.process.Environ) !?[]const u8 {
-    const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch null;
-    defer if (env_val_raw) |value| allocator.free(value);
+fn resolveSolanaZigCommand(allocator: std.mem.Allocator, environ: std.process.Environ) ![]const u8 {
+    const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch return try allocator.dupe(u8, "solana-zig");
+    defer allocator.free(env_val_raw);
 
-    const env_val = std.mem.trim(u8, env_val_raw orelse "", " \t\r\n");
-    if (std.mem.eql(u8, env_val, "0")) {
-        return null;
-    }
-
+    const env_val = std.mem.trim(u8, env_val_raw, " \t\r\n");
     if (env_val.len == 0) {
         return try allocator.dupe(u8, "solana-zig");
     }
     if (std.mem.eql(u8, env_val, "1")) {
         return try allocator.dupe(u8, "solana-zig");
     }
+    if (std.mem.eql(u8, env_val, "0")) {
+        return error.InvalidSolanaZigCommand;
+    }
 
     return try allocator.dupe(u8, env_val);
-}
-
-fn shouldUseSolanaZig(environ: std.process.Environ, allocator: std.mem.Allocator) bool {
-    const command = resolveSolanaZigCommand(allocator, environ) catch null;
-    defer if (command) |value| allocator.free(value);
-    return command != null;
 }
 
 fn firstLine(text: []const u8) []const u8 {
@@ -1519,10 +1484,15 @@ fn buildBpf(
         .source_map_hook = source_map_hook,
         .quiet = build_args.quiet,
     }) catch |err| {
-        if (err != error.SbpfLinkerMissing) {
-            try writeStderr(init.io, "error: BPF build failed: ");
-            try writeStderr(init.io, @errorName(err));
-            try writeStderr(init.io, "\n");
+        switch (err) {
+            error.InvalidSolanaZigCommand => {
+                try writeStderr(init.io, "error: SOLANA_ZIG=0 is not supported; use unset/empty/1 for default or a direct command/path\n");
+            },
+            else => {
+                try writeStderr(init.io, "error: BPF build failed: ");
+                try writeStderr(init.io, @errorName(err));
+                try writeStderr(init.io, "\n");
+            },
         }
         std.process.exit(1);
     };

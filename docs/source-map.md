@@ -78,17 +78,11 @@ later features to reduce `.so` growth, but it must retain the same schema shape.
 
 ## `SOLANA_ZIG` and toolchain mode interaction
 
-`SOLANA_ZIG` is an opt-in switch for the one-step compilation path:
+`SOLANA_ZIG` controls how `solana-zig` is invoked:
 
-- `SOLANA_ZIG=1`: use `solana-zig build-lib` directly.
-- `SOLANA_ZIG=<path>`: use the custom `solana-zig` binary at the supplied
-  path.
-- `SOLANA_ZIG=0` or empty / missing: use legacy two-step path
-  (`zig build-lib` + `sbpf-linker`).
-
-MacOS currently keeps this opt-in path disabled in CI because `solana-zig`'s
-bundled stdlib lacks the `getrandom`/`IOV_MAX` surface needed on that runner.
-Linux runs the direct path by default in CI.
+- `unset` / empty / `1`: default direct mode, using `solana-zig build-lib`.
+- `0` is not a supported mode; use a command/path string instead.
+- Any other non-empty value is used as a direct command/path override.
 
 ## unmap
 

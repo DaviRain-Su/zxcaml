@@ -90,8 +90,8 @@ the fmt corpus expansion.
 - **Codegen/runtime new directions:** only schedule concrete work with a named
   runtime, BPF, or codegen acceptance target; speculative multi-target or
   allocator changes still require an ADR-sized proposal.
-- **BPF toolchain migration:** current status (2026-05-11) is dual-mode: Linux CI and local default path uses `SOLANA_ZIG` direct mode, while macOS and compatibility-sensitive paths keep `sbpf-linker` legacy fallback. `sbpf-linker` is no longer a hard global dependency.
-- **Default-mode gate:** promote `SOLANA_ZIG` as the default only after both Linux and macOS reach acceptance parity under the same dual-mode matrix; until then, migration remains compatibility-first.
+- **BPF toolchain migration:** default status (2026-05-11) is direct `solana-zig` mode (`SOLANA_ZIG` unset/empty/`1`); this is the canonical build path.
+- **Tooling policy:** `sbpf-linker` is no longer required in normal workflows; maintain compatibility notes only as historical context.
 - **M-WIKI-5 wiki refresh:** refresh the Factory wiki after the next meaningful
   compiler/runtime/docs baseline rather than after every small docs-only commit.
 - **Maintenance hold:** pause new feature scope and keep the repository on

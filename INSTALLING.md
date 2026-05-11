@@ -21,9 +21,7 @@ The last command should produce `sh.so`, a Solana BPF shared object.
 |---|---:|---|---|
 | Zig | `0.16.0` | Builds `omlz`, the Zig runtime helpers, and generated Zig code | Installs Zig `0.16.0` under `~/zig` if the active `zig` is not exactly `0.16.0` |
 | opam + OCaml | OCaml `5.2.x` | Builds the OCaml `zxc-frontend` glue with upstream `compiler-libs` | Installs `opam` via Homebrew on macOS if needed, creates switch `zxcaml-p1` with OCaml `5.2.1`, and installs `ocamlfind` |
-| cargo + `sbpf-linker` | `0.1.8` | Legacy fallback linker for environments explicitly using `SOLANA_ZIG=0` mode | Requires `cargo`; installs `sbpf-linker --version 0.1.8` with `cargo install --locked --force` when needed |
 | solana-cli | stable | Runs the BPF acceptance harness and local validator checks | Installed only when `SOLANA_BPF=1` is set before running `init.sh` |
-| macOS `llvm@20` | Homebrew `llvm@20` | Provides `libLLVM` for `sbpf-linker 0.1.8` on macOS | Installs `llvm@20` via Homebrew on macOS and exports `DYLD_FALLBACK_LIBRARY_PATH` while the script runs |
 
 ### P3 dependency state
 
@@ -60,9 +58,7 @@ This is the same script CI uses. It verifies or installs:
 
 1. `zig 0.16.0`;
 2. `opam`, switch `zxcaml-p1`, OCaml `5.2.1`, `ocamlfind`, and `compiler-libs`;
-3. Legacy `sbpf-linker 0.1.8` (required when `SOLANA_ZIG` is unset/`0`; optional on Linux with direct `SOLANA_ZIG`);
-4. Homebrew `llvm@20` and the macOS LLVM dynamic-library path;
-5. `solana`, `solana-keygen`, and `solana-test-validator` when `SOLANA_BPF=1`.
+3. `solana`, `solana-keygen`, and `solana-test-validator` when `SOLANA_BPF=1`.
 
 If you intend to run the SPL-Token acceptance harness, also ensure
 `spl-token --version` succeeds in the same shell.
@@ -89,26 +85,16 @@ local Solana validator tools.
 
 ## Troubleshooting
 
-### `sbpf-linker: unable to find LLVM shared lib`
+### Solana CLI installation
 
-On macOS, `sbpf-linker 0.1.8` loads LLVM dynamically. `init.sh` installs
-Homebrew `llvm@20` and exports the fallback path while it runs. If you invoke
-`sbpf-linker` directly in a different shell, export the same value:
-
-```sh
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-```
-
-### Missing `libLLVM`
-
-Install or repair Homebrew `llvm@20`:
+If you need local validator workflows (`SOLANA_BPF=1`), ensure these commands
+are available after running `init.sh`:
 
 ```sh
-brew install llvm@20
-brew --prefix llvm@20
+solana --version
+solana-keygen --version
+solana-test-validator --version
 ```
-
-The prefix must contain a `lib/` directory with `libLLVM*.dylib`.
 
 ### opam switch creation fails
 
@@ -134,7 +120,7 @@ Install Rust from `https://rustup.rs/`, open a new shell, and rerun `./init.sh`.
 
 ## Verification checklist
 
-`sbpf-linker --version` is required only when forcing legacy mode (`SOLANA_ZIG=0`). In direct mode, this check can be omitted.
+`solana` and related CLI tools are required only when running with `SOLANA_BPF=1`.
 
 
 After setup, these commands should succeed:
@@ -142,7 +128,6 @@ After setup, these commands should succeed:
 ```sh
 zig version
 ocaml -vnum
-sbpf-linker --version
 zig build
 zig build test
 zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml

@@ -2,11 +2,7 @@
 //!
 //! RESPONSIBILITIES:
 //! - Materialise the BPF runtime shim next to generated `out/program.zig`.
-//! - In direct mode, invoke `solana-zig build-lib`.
-//! - In legacy fallback mode, run Zig bitcode emission with ADR-012 flags,
-//!   then invoke `sbpf-linker` with ADR-013 defaults.
-//! - In legacy mode, let `sbpf-linker --export entrypoint` preserve loader
-//!   entry semantics.
+//! - Invoke `solana-zig build-lib` in the canonical direct path.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -19,10 +15,6 @@ const core_inline = @import("../core/inline.zig");
 const core_ir = @import("../core/ir.zig");
 const ttree = @import("../frontend_bridge/ttree.zig");
 const srcmap = @import("srcmap.zig");
-
-/// ADR-013: mainnet-compatible SBPF v2 is the default; v3 will be opt-in later.
-const default_sbpf_cpu = "v2";
-const pinned_sbpf_linker_version = "0.1.8";
 
 /// Options for the Solana BPF build path.
 pub const BpfBuildOptions = struct {
@@ -94,61 +86,51 @@ const runtime_files = [_]RuntimeFile{
 
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
 ///
-/// By default, this uses the one-step direct `solana-zig` pipeline. Legacy
-/// `zig build-lib` + `sbpf-linker` is used only when explicitly disabled via
-/// `SOLANA_ZIG=0`.
+/// Uses the one-step direct `solana-zig build-lib` pipeline.
 pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try materializeRuntime(allocator, io);
 
-    // Try solana-zig direct compilation (preferred, no sbpf-linker needed)
-    if (try buildBpfDirect(allocator, io, options)) {
-        if (options.source_map_hook) |hook| {
-            const input = options.source_map orelse return error.MissingSourceMapInput;
-            const source_map = try buildSourceMapSchema(allocator, input);
-            defer allocator.free(source_map.schema.entries);
-            try hook.emit(hook.context, source_map);
-            try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
-        }
-        return;
-    }
+    try buildBpfDirect(allocator, io, options);
 
-    // Legacy two-step pipeline: zig build-lib → sbpf-linker
-    try buildBpfLegacy(allocator, io, options);
+    if (options.source_map_hook) |hook| {
+        const input = options.source_map orelse return error.MissingSourceMapInput;
+        const source_map = try buildSourceMapSchema(allocator, input);
+        defer allocator.free(source_map.schema.entries);
+        try hook.emit(hook.context, source_map);
+        try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
+    }
 }
 
-/// One-step BPF build using solana-zig (built-in Solana LLVM fork).
-/// Returns true on success in direct mode; false only when direct mode is
-/// disabled with `SOLANA_ZIG=0`.
-pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
-    const solana_zig = try activeDirectSolanaZig(allocator, options.environ) orelse return false;
+/// One-step BPF build using `solana-zig`.
+pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
+    const solana_zig = try activeDirectSolanaZig(allocator, options.environ);
     defer allocator.free(solana_zig);
 
     try buildBpfDirectWith(allocator, io, solana_zig, options);
-    return true;
 }
 
-fn parseSolanaZigEnv(raw: []const u8) ?[]const u8 {
+fn parseSolanaZigEnv(raw: []const u8) ![]const u8 {
     const env_val = std.mem.trim(u8, raw, " \t\r\n");
-    if (std.mem.eql(u8, env_val, "0")) {
-        return null;
-    }
     if (env_val.len == 0) {
         return "solana-zig";
     }
     if (std.mem.eql(u8, env_val, "1")) {
         return "solana-zig";
     }
+    if (std.mem.eql(u8, env_val, "0")) {
+        return error.InvalidSolanaZigCommand;
+    }
     return env_val;
 }
 
-fn activeDirectSolanaZig(allocator: Allocator, environ: std.process.Environ) !?[]const u8 {
+fn activeDirectSolanaZig(allocator: Allocator, environ: std.process.Environ) ![]const u8 {
     const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return null,
+        error.EnvironmentVariableMissing => return try allocator.dupe(u8, "solana-zig"),
         else => return err,
     };
     defer allocator.free(env_val_raw);
 
-    const resolved = parseSolanaZigEnv(env_val_raw) orelse return null;
+    const resolved = try parseSolanaZigEnv(env_val_raw);
     return try allocator.dupe(u8, resolved);
 }
 
@@ -214,61 +196,6 @@ fn materializeLinkerScript(allocator: Allocator, io: Io) !void {
         ,
         .flags = .{ .truncate = true },
     });
-}
-
-/// Legacy two-step BPF build: zig build-lib (bitcode) → sbpf-linker.
-pub fn buildBpfLegacy(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
-    const bitcode_arg = try std.fmt.allocPrint(allocator, "-femit-llvm-bc={s}", .{options.bitcode_path});
-    defer allocator.free(bitcode_arg);
-
-    const zig_argv = [_][]const u8{
-        "zig",
-        "build-lib",
-        "-target",
-        "bpfel-freestanding",
-        "-O",
-        "ReleaseSmall",
-        "-fno-stack-check",
-        "-fno-PIC",
-        "-fno-PIE",
-        "-fstrip",
-        bitcode_arg,
-        "-fno-emit-bin",
-        options.bpf_entry_path,
-    };
-
-    try runAndForward(allocator, io, &zig_argv, null, error.BpfZigBuildFailed, !options.quiet);
-
-    var env_map = try makeLinkerEnv(allocator, io, options.environ);
-    defer env_map.deinit();
-
-    const linker_argv = [_][]const u8{
-        "sbpf-linker",
-        "--cpu",
-        default_sbpf_cpu,
-        "--llvm-args=-bpf-stack-size=4096",
-        "--export",
-        "entrypoint",
-        "-o",
-        options.output_path,
-        options.bitcode_path,
-    };
-
-    runAndForward(allocator, io, &linker_argv, &env_map, error.SbpfLinkFailed, !options.quiet) catch |err| switch (err) {
-        error.FileNotFound => {
-            try writeMissingSbpfLinkerDiagnostic(io);
-            return error.SbpfLinkerMissing;
-        },
-        else => |e| return e,
-    };
-
-    if (options.source_map_hook) |hook| {
-        const input = options.source_map orelse return error.MissingSourceMapInput;
-        const source_map = try buildSourceMapSchema(allocator, input);
-        defer allocator.free(source_map.schema.entries);
-        try hook.emit(hook.context, source_map);
-        try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
-    }
 }
 
 /// Builds the deterministic in-memory source-map schema from Core IR locations.
@@ -436,30 +363,6 @@ fn runAndForward(
     return failure;
 }
 
-fn makeLinkerEnv(allocator: Allocator, io: Io, environ: std.process.Environ) !std.process.Environ.Map {
-    var env_map = try std.process.Environ.createMap(environ, allocator);
-    errdefer env_map.deinit();
-
-    if (builtin.os.tag == .macos and env_map.get("DYLD_FALLBACK_LIBRARY_PATH") == null) {
-        if (try detectHomebrewLlvm20Lib(allocator, io)) |llvm_lib| {
-            defer allocator.free(llvm_lib);
-            try env_map.put("DYLD_FALLBACK_LIBRARY_PATH", llvm_lib);
-        }
-    }
-
-    return env_map;
-}
-
-fn detectHomebrewLlvm20Lib(allocator: Allocator, io: Io) !?[]const u8 {
-    if (builtin.os.tag != .macos) return null;
-
-    const prefix = try detectHomebrewLlvm20Prefix(allocator, io) orelse return null;
-    defer allocator.free(prefix);
-
-    const llvm_lib = try std.fs.path.join(allocator, &.{ prefix, "lib" });
-    return @as([]const u8, llvm_lib);
-}
-
 fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
     if (builtin.os.tag == .macos) {
         if (try detectHomebrewLlvm20Prefix(allocator, io)) |prefix| {
@@ -580,11 +483,7 @@ fn gzipBytes(allocator: Allocator, bytes: []const u8) ![]u8 {
     return output.toOwnedSlice();
 }
 
-fn writeMissingSbpfLinkerDiagnostic(io: Io) !void {
-    try writeStderr(io, "error: sbpf-linker not found on PATH; ZxCaml requires sbpf-linker ");
-    try writeStderr(io, pinned_sbpf_linker_version);
-    try writeStderr(io, " per ADR-012. Run ./init.sh to install the pinned BPF toolchain.\n");
-}
+
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
     var buffer: [1024]u8 = undefined;
@@ -603,10 +502,9 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
 }
 
 fn writeToolStderr(io: Io, bytes: []const u8) !void {
-    // sbpf-linker's LLVM proxy scans Homebrew's llvm@20 directory on macOS and
-    // tries to `dlopen` every `libLLVM*.a` static archive. Static archives can
-    // never be loaded with dlopen, so suppress only those probe lines while
-    // preserving genuine dynamic-library and linker diagnostics.
+    // External tooling may emit noisy `dlopen` warnings about static LLVM archives
+    // on macOS. Static archives cannot be loaded with dlopen, so suppress only
+    // those probe lines while preserving genuine dynamic-library diagnostics.
     var start: usize = 0;
     while (start < bytes.len) {
         const line_end = std.mem.indexOfScalarPos(u8, bytes, start, '\n') orelse bytes.len;
@@ -652,7 +550,7 @@ test "static archive LLVM dlopen warnings are filtered narrowly" {
         "unable to open LLVM shared lib /opt/homebrew/opt/llvm@20/lib/libLLVM.dylib: dlopen failed",
     ));
     try std.testing.expect(!isStaticArchiveDlopenWarning(
-        "error: sbpf-linker failed to parse out/program.bc",
+        "error: direct build failed to parse out/program.bc",
     ));
 }
 
@@ -701,26 +599,7 @@ test "BPF build smoke does not spam LLVM dlopen warnings" {
     try std.testing.expect(dlopen_count <= 2);
 }
 
-test "BPF linker argv pins ADR-013 default SBPF v2 CPU and entrypoint export" {
-    const linker_argv = [_][]const u8{
-        "sbpf-linker",
-        "--cpu",
-        default_sbpf_cpu,
-        "--llvm-args=-bpf-stack-size=4096",
-        "--export",
-        "entrypoint",
-        "-o",
-        "/tmp/m0_zero.so",
-        "out/program.bc",
-    };
 
-    try std.testing.expectEqualStrings("sbpf-linker", linker_argv[0]);
-    try std.testing.expectEqualStrings("--cpu", linker_argv[1]);
-    try std.testing.expectEqualStrings("v2", linker_argv[2]);
-    try std.testing.expectEqualStrings("--llvm-args=-bpf-stack-size=4096", linker_argv[3]);
-    try std.testing.expectEqualStrings("--export", linker_argv[4]);
-    try std.testing.expectEqualStrings("entrypoint", linker_argv[5]);
-}
 
 fn testExitCode(term: std.process.Child.Term) u8 {
     return switch (term) {
@@ -729,13 +608,23 @@ fn testExitCode(term: std.process.Child.Term) u8 {
     };
 }
 
-test "BPF source-map env parser accepts trimmed values" {
-    try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv("1") orelse "<disabled>");
-    try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv(" 1 \n") orelse "<disabled>");
-    try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv("   ") orelse "<disabled>");
-    try std.testing.expectEqual(@as(?[]const u8, null), parseSolanaZigEnv("0"));
-    try std.testing.expectEqualStrings("/tmp/custom-solana-zig", parseSolanaZigEnv(" /tmp/custom-solana-zig \t") orelse "<disabled>");
+test "BPF source env parser accepts trimmed values" {
+    try std.testing.expectEqualStrings("solana-zig", try parseSolanaZigEnv("1"));
+    try std.testing.expectEqualStrings("solana-zig", try parseSolanaZigEnv(" 1 \n"));
+    try std.testing.expectEqualStrings("solana-zig", try parseSolanaZigEnv("   "));
+    try std.testing.expectError(error.InvalidSolanaZigCommand, parseSolanaZigEnv("0"));
+    try std.testing.expectEqualStrings("/tmp/custom-solana-zig", try parseSolanaZigEnv(" /tmp/custom-solana-zig \t"));
 }
+
+test "BPF env parser maps empty/missing env to direct path" {
+    const allocator = std.testing.allocator;
+
+    const direct_env = try activeDirectSolanaZig(allocator, std.process.Environ.empty);
+    defer allocator.free(direct_env);
+
+    try std.testing.expectEqualStrings("solana-zig", direct_env);
+}
+
 
 test "BPF source map builder captures hackathon_greet source locations" {
     const allocator = std.testing.allocator;

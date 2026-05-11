@@ -30,11 +30,8 @@ The frontend is borrowed from upstream OCaml; everything from
 [ Backend ]                          (P1: Zig codegen)
    │   .zig source
    ▼
-[ Zig toolchain ]                    (zig build-lib -target bpfel-freestanding -femit-llvm-bc)
-   │   .bc (LLVM bitcode)
-   ▼
-[ sbpf-linker ]                      (--cpu v2 --export entrypoint; v3 opt-in)
-   │
+[ Zig toolchain ]                    (solana-zig build-lib -target sbf-solana; ADR-013 default v2)
+   │   .so (Solana-loadable ELF)
    ▼
 Solana BPF .so
 ```
@@ -136,9 +133,9 @@ Backend:
 
 P1 implementations:
 
-- `ZigBackend` — emits `.zig` source, then drives `zig build-lib
-  -femit-llvm-bc` and `sbpf-linker` to produce the Solana BPF `.so`,
-  or hosted Zig for native developer builds.
+- `ZigBackend` — emits `.zig` source, then drives direct
+  `solana-zig build-lib` to produce Solana BPF `.so`, or hosted Zig for
+  native developer builds.
 - `Interpreter` — executes Core IR directly (does **not** go through
   Lowered IR). Used for `omlz run` and as a semantic oracle in
   tests.
@@ -167,14 +164,13 @@ flowchart TD
     LIR["Lowered IR"]
     BE["ZigBackend (P1)"]
     ZSRC[".zig"]
-    ZTOOL["zig build-lib -femit-llvm-bc"]
-    BC[".bc (LLVM bitcode)"]
-    LINK["sbpf-linker --cpu v2 (v3 opt-in)"]
+    DIRECT["solana-zig build-lib -target sbf-solana"]
     BPF["Solana BPF .so"]
 
     SRC --> OCAMLC --> CMT --> XFE --> SEXP --> BRIDGE --> TT --> ANF --> CIR
     CIR --> INTERP
-    CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BC --> LINK --> BPF
+    CIR --> LSTRAT --> LIR --> BE --> ZSRC
+    BE --> DIRECT --> BPF
 ```
 
 ## 5. What lives where
@@ -187,7 +183,7 @@ flowchart TD
 | `ttree` → Core IR (ANF + `Layout` fields) | `core/anf.zig` | Our first owned IR transformation |
 | Core IR → Lowered IR | `LoweringStrategy` | P1 single impl |
 | Lowered IR → bytes | `Backend` | P1: Zig source |
-| `.zig` → `.bc` → `.so` | Driver, calls `zig build-lib` and `sbpf-linker` | Not the compiler's job |
+| `.zig` → `.so` | Driver drives direct `solana-zig build-lib` path only | Not the compiler's job |
 | Runtime helpers (arena, panic, BPF entry shim) | `runtime/zig` | Linked into user programs |
 | Diagnostics rendering | `omlz` (Zig), formatted from JSON emitted by `zxc-frontend` | Single user-facing diagnostic style |
 

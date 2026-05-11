@@ -13,19 +13,12 @@
 从源码编译一个定制的 Zig 0.16.0，链接了 Solana LLVM fork (anza-xyz/llvm-project)。
 这个编译器内置 BPF/SBF 目标支持，可以直接编译出 `.so` 文件，**不需要 sbpf-linker**。
 
-### 当前 ZxCaml BPF 编译流程（两步）
+### 历史 ZxCaml BPF 编译流程（已弃用）
 
-```
-OCaml → ZxCaml → Zig codegen → program.zig
-  → Step 1: `zig build-lib -target bpfel-freestanding -femit-llvm-bc` → program.bc (LLVM bitcode)
-  → Step 2: `sbpf-linker --cpu v2 --export entrypoint program.bc -o program.so`
-```
-
-- Step 1: 用标准 Zig 0.16.0 生成 LLVM bitcode
-- Step 2: 用 sbpf-linker（需要系统 LLVM 共享库）将 bitcode 链接成 BPF ELF
-
-**问题**：Step 2 的 sbpf-linker 使用 `aya-rustc-llvm-proxy`，需要 `libLLVM.so`。
-Ubuntu CI runner 不安装 LLVM，导致 sbpf-linker 崩溃。
+历史上该流程是两步：先 `zig build-lib -femit-llvm-bc` 得到 bitcode，再由
+`sbpf-linker` 链接成 `.so`。该路径依赖系统 LLVM 库分发，并在特定平台上
+出现兼容性与维护成本问题。当前工程已切到 direct `solana-zig`，该历史路径
+仅保留文档史料，不再作为默认构建策略。
 
 ### solana-zig-bootstrap 的方案（一步）
 
@@ -113,34 +106,29 @@ OCaml → ZxCaml → Zig codegen → program.zig
 - ZxCaml 生成的 Zig 代码可能需要适配（ABI、链接脚本等）
 - sbf-solana 目标的运行时（arena、syscalls）需要验证兼容性
 
-### 方案 B：仅用于 CI（最小改动）
+### 历史方案 B：兼容说明（可选，仅供记录）
 
-保持当前 sbpf-linker 流程不变，仅在 CI 上用 solana-zig 作为 fallback：
+原先保留的兼容路径已被标记为不推荐。当前默认与 CI 标准流程使用方案 A 的
+`solana-zig build-lib` 直接链路，不再在新工作流中维护历史两步回退路径。
 
-1. `init.sh`: 如果 `sbpf-linker` 失败（缺少 LLVM），下载 `solana-zig`
-2. `src/driver/bpf.zig`: 检测 `solana-zig` 命令，优先使用 sbpf-linker，fallback 到 solana-zig
+### 方案 C：保留旧行为（仅备选）
 
-**优点**：最小改动，不破坏现有用户
-**缺点**：维护两套编译路径
+历史上用于离线/回退场景的保留策略。建议仅在确需兼容旧环境时临时使用；新
+工程推进以方案 A 为准。
 
-### 方案 C：保持现状（最小风险）
-
-保持 sbpf-linker 流程，CI 上 BPF 测试仅在 macOS 上运行。
-
-**优点**：零改动
-**缺点**：Ubuntu CI BPF 测试始终跳过
+**优点**：最少变更成本
+**缺点**：会继续承载旧链路的环境依赖
 
 ## 对比
 
 | 方案 | CI 改动 | 运行时兼容性 | 维护成本 | 推荐 |
 |---|---|---|---|---|
 | A: 替换流程 | 中等 | 需验证 | 低 | ⭐ 推荐 |
-| B: CI fallback | 小 | 无风险 | 中等 | 可选 |
-| C: 保持现状 | 无 | 无风险 | 低 | 最保守 |
+| C: 保留旧行为（历史兼容） | 无 | 无风险 | 低 | 仅历史参考 |
 
 ## 下一步
 
-如果选择方案 A，实施路径：
+如果选择方案 A（当前基线），实施路径：
 
 1. 下载 solana-zig 到本地，验证 ZxCaml 生成的 Zig 代码可以直接编译为 SBF .so
 2. 修改 `buildBpf()` 函数，支持 solana-zig 直接编译模式

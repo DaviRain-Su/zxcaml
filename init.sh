@@ -13,7 +13,6 @@ cd "$ROOT"
 ZIG_VERSION="${ZIG_VERSION:-0.16.0}"
 OCAML_VERSION="${OCAML_VERSION:-5.2.1}"
 OPAM_SWITCH="${OPAM_SWITCH:-zxcaml-p1}"
-SBPF_LINKER_VERSION="${SBPF_LINKER_VERSION:-0.1.8}"
 SOLANA_CLI_VERSION="${SOLANA_CLI_VERSION:-stable}"
 
 OS="$(uname -s)"
@@ -37,15 +36,6 @@ persist_env() {
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     printf '%s=%s\n' "$name" "$value" >>"$GITHUB_ENV"
   fi
-}
-
-need_sbpf_linker() {
-  # Legacy linker dependencies are required only when legacy mode is explicit.
-  if [[ "${SOLANA_ZIG-}" == "0" ]]; then
-    return 0
-  fi
-
-  return 1
 }
 
 have_versioned_zig() {
@@ -168,36 +158,10 @@ setup_opam() {
   echo "    compiler-libs visible to ocamlfind OK"
 }
 
-setup_sbpf_linker() {
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "ERROR: cargo not found. Install Rust via https://rustup.rs/" >&2
-    exit 1
-  fi
-
-  append_path "$HOME/.cargo/bin"
-
-  local current=""
-  if command -v sbpf-linker >/dev/null 2>&1; then
-    current="$(sbpf-linker --version 2>/dev/null | awk '{print $NF}')"
-  fi
-
-  if [[ "$current" == "$SBPF_LINKER_VERSION" ]]; then
-    echo "    sbpf-linker $current OK"
-  else
-    echo "    Installing sbpf-linker $SBPF_LINKER_VERSION from crates.io..."
-    cargo install sbpf-linker --version "$SBPF_LINKER_VERSION" --locked --force
-  fi
-}
-
 setup_macos_llvm() {
   if [[ "$OS" != "Darwin" ]]; then
     return
   fi
-  if ! need_sbpf_linker; then
-    echo "    skipping (legacy path disabled)"
-    return
-  fi
-
   if ! command -v brew >/dev/null 2>&1; then
     echo "ERROR: Homebrew is required on macOS for llvm@20" >&2
     exit 1
@@ -287,7 +251,7 @@ setup_solana_zig() {
     ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
     append_path "$HOME/.local/bin"
   else
-    echo "    WARNING: solana-zig download failed (BPF builds will use sbpf-linker fallback)" >&2
+    echo "    WARNING: solana-zig download failed; check network or repository availability" >&2
   fi
 }
 
@@ -326,18 +290,13 @@ echo "==> Checking Zig..."
 install_zig
 echo "==> Checking opam + OCaml..."
 setup_opam
-echo "==> Checking sbpf-linker..."
-if need_sbpf_linker; then
-  setup_sbpf_linker
-else
-  echo "    skipping (SOLANA_ZIG requested direct solana-zig path)"
-fi
-echo "==> Checking macOS LLVM 20..."
+echo "==> Checking LLVM tooling..."
 setup_macos_llvm
-echo "==> Checking Linux LLVM..."
 setup_linux_llvm
+
 echo "==> Checking solana-zig..."
 setup_solana_zig
+
 echo "==> Checking solana-cli..."
 setup_solana_if_requested
 
@@ -346,13 +305,6 @@ echo "init.sh: environment ready."
 echo "  workdir:        $ROOT"
 echo "  zig:            $(zig version)"
 echo "  opam switch:    $OPAM_SWITCH ($(ocaml -vnum))"
-if command -v sbpf-linker >/dev/null 2>&1; then
-  echo "  sbpf-linker:    $(sbpf-linker --version 2>/dev/null || echo MISSING)"
-elif need_sbpf_linker; then
-  echo "  sbpf-linker:    MISSING"
-else
-  echo "  sbpf-linker:    unavailable (solana-zig direct path requested)"
-fi
 if command -v solana >/dev/null 2>&1; then
   echo "  solana-cli:     $(solana --version 2>/dev/null | head -1)"
 else

@@ -24,12 +24,6 @@ solana program deploy ./solana_hello.so
  │  omlz 前端 + ArenaStrategy + ZigBackend
  ▼
 out/program.zig + out/runtime.zig + out/build.zig
- │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
- ▼
-out/program.bc   (LLVM bitcode)
- │  sbpf-linker --cpu v2 --export entrypoint    （legacy 路径，v3 为可选；ADR-013）
- │
- │  若 SOLANA_ZIG != 0/空：
  │  └─  solana-zig build-lib -target sbf-solana（直连）
  ▼
 program.so   (Solana 可加载的 SBPF ELF)
@@ -38,15 +32,12 @@ program.so   (Solana 可加载的 SBPF ELF)
 工具链 **不是** "原生 `zig build-obj`" 这一步就完。
 能产出 Solana loader 接受的 ELF 的真实链路是：
 
-1. `zig build-lib … -femit-llvm-bc` → 出 LLVM bitcode（这一步真正的产物
-   是 `.bc`；`zig` 自己接着产的 `.o` **不是** Solana 兼容 ELF）。
-2. **`sbpf-linker --cpu v2 --export entrypoint`** → 出 `program.so`。
-   这是 Solana 专用的 linker，它懂 SBPF（默认 v2，v3 可选）的 ELF
-   section 布局和入口符号 export 语义；标准 `lld` 不懂。
+1. `solana-zig build-lib -target sbf-solana -fPIC -fstrip -dynamic` → 直接产出
+   可加载的 `program.so`。
 
-所以 `sbpf-linker` 是 `omlz` legacy 路径（`SOLANA_ZIG` 为 `0`/空）下的 build-time 依赖。
-`SOLANA_ZIG=1` 或 `SOLANA_ZIG=<path>` 时则改走 `solana-zig` 一步到位路径。
-pinning 策略见 ADR-012；SBPF 版本固定见 ADR-013。
+`omlz` 直接用 `solana-zig` 的 direct path。
+
+SBPF 版本行为可见 ADR-013。
 
 > **来源说明。** 这套工具链的形态是通过阅读
 > `DaviRain-Su/zignocchio`（一个 Zig→Solana SBF SDK，
@@ -64,8 +55,7 @@ bpfel-freestanding
 - `freestanding` —— 没有宿主操作系统接口。
 
 P1 **不** 使用 Solana 自己的 LLVM fork。
-`zig` 0.16 自带的 LLVM 产出的 BPF bitcode `sbpf-linker` 接受；
-linker 才是把"通用 BPF bitcode"转成"Solana 形 ELF"的桥。
+`solana-zig` 的 `build-lib` 直接产出 Solana 可加载的 ELF。
 
 ## 4. Entrypoint 契约
 
@@ -118,80 +108,9 @@ runtime shim 才是 Solana 实际加载的东西。
 
 ## 6. Build flag
 
-### macOS 前置条件（sbpf-linker LLVM 20 dlopen）
-
-`sbpf-linker 0.1.8`（ADR-012 pin 的版本）通过 `aya-rustc-llvm-proxy`
-在运行时 `dlopen` `libLLVM*`。在 stock macOS + Homebrew 环境里，
-该库不在动态链接器搜索路径上，所以 linker 会 panic：
-
-```
-sbpf-linker: unable to find LLVM shared lib
-```
-
-修复方式（Spike β 已验证）：
-
-```sh
-brew install llvm@20
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"
-```
-
-我们要 **`llvm@20`**，因为 `sbpf-linker 0.1.8` 是按 LLVM 20 ABI 编出来的；
-`llvm@21` 在运行时也"能解析符号"，但 ABI 不保证。
-Linux 上大多数发行版自带 `libLLVM-20.so`；若没有，
-把 `LD_LIBRARY_PATH=/path/to/llvm-20/lib` 指过去。
-
-完整理由及"`sbpf-linker` 哪天去掉这个依赖时的升级路径"
-见 ADR-012（Revised 2026-04-27）。
-
 ### `SOLANA_ZIG` 直连路径
 
-当 `SOLANA_ZIG` 设为 `1`（或某个路径）时，`omlz build --target=bpf` 会走 `solana-zig build-lib`
-（一步链路）产 `.so`，不再调用 `sbpf-linker`。
-
-### 何时用 `SOLANA_ZIG` / legacy 模式
-
-建议按场景选择：
-
-- **Linux 开发与 CI 优先走直连**：
-  - `SOLANA_ZIG=1`（或 `SOLANA_ZIG=/path/to/solana-zig`）
-  - 一步产物链路更短，且不需要 `sbpf-linker`。
-- **macOS 当前仍建议 legacy**（`SOLANA_ZIG` 为空/`0`）：
-  - `solana-zig` 在当前版本对 macOS stdlib（如 `getrandom` / `IOV_MAX` 相关路径）仍有兼容性缺口，
-    为降低波动风险建议保持旧链路。
-- **依赖排障或兼容性验证**：
-  - 需要 `sbpf-linker`/`cargo` 的场景、或要覆盖现有 legacy fallback 回归时，显式设
-    `SOLANA_ZIG=0`。
-
-CI 上，Linux 用例在运行 `cargo test` 前会额外执行一次
-`SOLANA_ZIG=0 ./init.sh`，用于准备 legacy 兜底所需依赖；`Mollusk SVM tests` 则保持 legacy
-模式（`SOLANA_ZIG=""`）执行，以便持续覆盖两条链路。
-
-### BPF 用 —— legacy 两步管线（先出 bitcode，再链接）
-
-```sh
-# Step 1：Zig → LLVM bitcode
-zig build-lib \
-  -target bpfel-freestanding \
-  -O ReleaseSmall \
-  -fno-stack-check \
-  -fno-PIC \
-  -fno-PIE \
-  --strip \
-  -femit-llvm-bc=out/program.bc \
-  -fno-emit-bin \
-  out/program.zig
-
-# Step 2：SBPF 链接
-sbpf-linker \
-  --cpu v2 \
-  --export entrypoint \
-  -o program.so \
-  out/program.bc
-```
-
-`--cpu v2` 把 SBPF 版本钉死（默认；与 Solana mainnet 一致）。
-`--cpu v3` 通过 CLI flag `--sbpf-version=v3` 作为可选路径，
-保留给明确需要 v3 特性的用户。理由见 ADR-013（Revised 2026-04-27）。
+`SOLANA_ZIG` 未设置/空（默认）或设为 `1`（或某个路径）时，`omlz build --target=bpf` 使用 `solana-zig build-lib` 的一步式直接链路，直接产 `.so`。`SOLANA_ZIG=0` 会被视为非法自定义值，不再作为模式开关。
 
 Native 仅供开发便利（**不是** P1 交付物）：
 
@@ -213,10 +132,8 @@ zig build-exe -O Debug out/program.zig
 3. 一次 no-op 调用返回 `0`。
 4. **G13 可复现性结果（2026-04-28）：PASS。** 运行
    `zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/a.so && zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/b.so && diff /tmp/a.so /tmp/b.so; echo "diff_exit=$?"`
-   得到 `diff_exit=0`。两个 `.so` 字节完全相同。macOS 上 `sbpf-linker` 会打印良性的 LLVM archive probe warning，但两次链接都成功退出。
-5. （新加）通过 `sbpf-linker` 链接后的 section 布局检查 ——
-   没有 `.rodata` 符号解析到 < 0x100 的地址（Zig 0.16 的低地址怪癖；
-   见 §4 的注）。
+   得到 `diff_exit=0`。两个 `.so` 字节完全相同。
+5. section 布局检查应稳定，不出现低地址 (<0x100) 的可读数据段符号；Zig 0.16 的低地址怪癖见 §4 的注。
 
 1–3、5 是 canonical hello 验收检查。启用 Solana harness 时，closure 相关 BPF 验收由 `tests/solana/closures/` 单独覆盖。
 
@@ -228,11 +145,8 @@ zig build-exe -O Debug out/program.zig
 | 症状 | 可能原因 / 观察来源 | 处理 |
 |---|---|---|
 | `zig` 拒绝 target triple | Zig 版本漂移 | CI 固定 `zig 0.16.x`；任何升级都要更新 ADR-002 并重跑 BPF acceptance |
-| 找不到 `sbpf-linker` | legacy fallback 模式（`SOLANA_ZIG=0`/空）下缺少依赖 | 按 ADR-012 执行 `cargo install sbpf-linker --version 0.1.8`；CI 和 `init.sh` 负责在 legacy 场景安装/检查 |
-| `sbpf-linker: unable to find LLVM shared lib` | macOS dynamic loader 路径上没有 LLVM 20 dylib | `brew install llvm@20`；确保 driver/CI 设置 `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` |
-| 出现大量 `unable to open LLVM shared lib ... .a: dlopen failed`，但 link exit 0 | `aya-rustc-llvm-proxy` 在找到可用 dylib 前会探测 Homebrew LLVM archive | 视为嘈杂但良性的 archive-probe 输出；除非 `sbpf-linker` 非零退出，否则不要失败或过滤 |
+| `solana-zig` 输出出现异常节段布局 | 直接链路结果的节段布局或符号顺序存在问题 | 保持 section 排序与零地址保护规则，和已知可用 `solana_hello.so` 做对比 |
 | macOS 上 `llvm-objdump` 不在 `PATH` | Homebrew 把 LLVM 工具放在 `llvm@20/bin` 下 | 手动检查时使用 `/opt/homebrew/opt/llvm@20/bin/llvm-objdump`，或把该目录加到 `PATH` |
-| `sbpf-linker` 拒绝 bitcode | LLVM IR 形状它不理解 | 降低 `ZigBackend` codegen 复杂度；只有在有 ADR addendum 和 acceptance 证据时才放宽到 `--cpu v3` |
 | Loader 因低地址 `Access violation` 拒绝 | Zig 0.16 module-scope const-array placement quirk（§4） | Codegen 规则：对 module-scope const array 取地址前先复制到栈上 |
 | BPF build 拒绝 Zig `@trap` / abort builtin | freestanding BPF 不能使用 hosted panic path | `runtime/zig/panic.zig` 保持 BPF-safe no-return path；Solana-friendly logging 留到 P3 |
 | 一等 closure BPF build 失败或运行时 fault | Closure lowering 回退到不支持的 code-pointer relocation 或无效 capture 地址 | 保持 P2 closure hardening：已知 callee 尽量 lower 成直接 helper 调用，一等 closure 使用 arena-backed capture storage 和类型化 dispatch 元数据；`SOLANA_BPF=1` 时 `tests/solana/closures/invoke.sh` 必须保持绿色 |

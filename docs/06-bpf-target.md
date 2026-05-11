@@ -25,12 +25,6 @@ solana program deploy ./solana_hello.so
  │  omlz frontend + ArenaStrategy + ZigBackend
  ▼
 out/program.zig + out/runtime.zig + out/build.zig
- │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
- ▼
-out/program.bc   (LLVM bitcode)
- │  sbpf-linker --cpu v2 --export entrypoint    (legacy path, v3 is opt-in; ADR-013)
- │
- │  if SOLANA_ZIG != 0/empty:
  │  └─  solana-zig build-lib -target sbf-solana  (direct path)
  ▼
 program.so   (Solana-loadable SBPF ELF)
@@ -39,19 +33,10 @@ program.so   (Solana-loadable SBPF ELF)
 The toolchain is **not** "stock `zig build-obj`". The actual chain
 that produces a Solana-loadable artefact is:
 
-1. `zig build-lib … -femit-llvm-bc` → emit LLVM bitcode (the `.bc`
-   file is the deliverable from this step; the `.o` `zig` would
-   produce on its own is **not** a Solana-compatible ELF).
-2. **`sbpf-linker --cpu v2 --export entrypoint`** → produce
-   `program.so`. This is a Solana-specific linker that knows about
-   SBPF (v2 by default; v3 opt-in) ELF section layout and
-   entry-symbol export, which stock `lld` does not.
+1. `solana-zig build-lib -target sbf-solana -fPIC -fstrip -dynamic`
+   emits Solana-loadable `program.so` directly.
 
-`sbpf-linker` is therefore a build-time dependency for the legacy
-`SOLANA_ZIG=0` / unset path. When `SOLANA_ZIG=1` or `SOLANA_ZIG=<path>`, the
-`solana-zig` direct path is used instead.
-See ADR-012 for the pinning policy and ADR-013 for the SBPF version
-pinning.
+See ADR-013 for the SBPF version behavior used by the direct path.
 
 > **Lineage.** This toolchain shape was discovered by reading
 > `DaviRain-Su/zignocchio` (a Zig→Solana SBF SDK that has the
@@ -68,10 +53,8 @@ bpfel-freestanding
 - `bpfel` — little-endian eBPF, which is Solana's flavour.
 - `freestanding` — no host OS surface.
 
-We do **not** use the Solana-specific LLVM fork in P1. The bundled
-LLVM that ships with `zig` 0.16 emits BPF bitcode that
-`sbpf-linker` accepts; the linker is what bridges generic-BPF
-bitcode to a Solana-shaped ELF.
+We do **not** use the Solana-specific LLVM fork in P1. The direct
+`solana-zig` path emits the final Solana-loadable ELF directly.
 
 ## 4. Entrypoint contract
 
@@ -129,85 +112,20 @@ contract.
 
 ## 6. Build flags
 
-### macOS prerequisites (sbpf-linker LLVM 20 dlopen)
-
-`sbpf-linker 0.1.8` (the version pinned by ADR-012) `dlopen`s
-`libLLVM*` at runtime via `aya-rustc-llvm-proxy`. On a stock
-macOS + Homebrew environment that library is not on the dynamic
-loader's search path, so the linker panics with:
-
-```
-sbpf-linker: unable to find LLVM shared lib
-```
-
-The fix (Spike β verified):
-
-```sh
-brew install llvm@20
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"
-```
-
-We require **`llvm@20`** specifically because `sbpf-linker 0.1.8`
-was built against the LLVM 20 ABI; `llvm@21` happens to resolve
-symbols at runtime but is not ABI-guaranteed. On Linux, most
-distros ship `libLLVM-20.so` already; if not, set
-`LD_LIBRARY_PATH=/path/to/llvm-20/lib` to the equivalent.
-
-See ADR-012 (Revised 2026-04-27) for the full rationale and the
-upgrade path if `sbpf-linker` ever drops this dependency.
-
 ### `SOLANA_ZIG` direct path
 
-When `SOLANA_ZIG` is set to `1` (or a path), `omlz build --target=bpf` uses the
-one-step `solana-zig build-lib` path and does not invoke `sbpf-linker`.
-This writes the final `.so` directly.
+`SOLANA_ZIG` is used as the direct `solana-zig build-lib` command path when
+unset/empty (default), set to `1`, or set to a custom path. No alternate compatibility
+path is supported. `SOLANA_ZIG=0` is treated as an invalid custom value.
 
-### When to use `SOLANA_ZIG` vs. legacy fallback
+The direct path does not invoke any external linker like `sbpf-linker`; it
+writes the final Solana `.so` directly.
 
-A practical decision pattern is:
-
-- **Prefer direct mode on Linux / default CI path:**
-  - `SOLANA_ZIG=1` (or `SOLANA_ZIG=/path/to/solana-zig`)
-  - Single-step link flow with fewer moving parts; does not need `sbpf-linker`.
-- **Keep legacy on macOS unless you are intentionally testing direct mode:**
-  - `SOLANA_ZIG` empty or `0`
-  - The current `solana-zig` path has known stdlib gaps on macOS (for example
-    `getrandom`/`IOV_MAX` paths), so legacy fallback reduces risk for now.
-- **Use legacy explicitly for compatibility/perf regression work:**
-  - When you need `sbpf-linker`/`cargo`, or want to cover legacy fallback
-    regression explicitly, set `SOLANA_ZIG=0`.
-
-In CI, Linux runs include an extra `SOLANA_ZIG=0 ./init.sh` before
-`cargo test` to prepare legacy fallback dependencies; `Mollusk SVM tests` still run
-in legacy mode (`SOLANA_ZIG=""`) to keep both paths exercised.
-
-### For BPF — two-step legacy path (bitcode then link)
+For native convenience only (not a P1 deliverable), use `zig build-exe`.
 
 ```sh
-# Step 1: Zig → LLVM bitcode
-zig build-lib \
-  -target bpfel-freestanding \
-  -O ReleaseSmall \
-  -fno-stack-check \
-  -fno-PIC \
-  -fno-PIE \
-  --strip \
-  -femit-llvm-bc=out/program.bc \
-  -fno-emit-bin \
-  out/program.zig
-
-# Step 2: SBPF link
-sbpf-linker \
-  --cpu v2 \
-  --export entrypoint \
-  -o program.so \
-  out/program.bc
+zig build-exe -O Debug out/program.zig
 ```
-
-`--cpu v2` pins the SBPF version (default; matches Solana
-mainnet). `--cpu v3` is reserved as an opt-in via the
-`--sbpf-version=v3` CLI flag for users who explicitly need v3
-features. See ADR-013 (Revised 2026-04-27) for the rationale.
 
 For native (developer convenience only, **not** a P1 deliverable):
 
@@ -231,13 +149,11 @@ A BPF `.so` produced by the current pipeline must satisfy:
 4. **G13 reproducibility result (2026-04-28): PASS.** Running
    `zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/a.so && zig-out/bin/omlz build --target=bpf examples/solana_hello.ml -o /tmp/b.so && diff /tmp/a.so /tmp/b.so; echo "diff_exit=$?"`
    produced `diff_exit=0`. The two `.so` files were byte-identical.
-   `sbpf-linker` printed benign LLVM archive-probe warnings on macOS,
-   but both link steps exited successfully.
-5. (New) Section layout passes the `sbpf-linker` post-link check —
-   no `.rodata` symbol resolves to address < 0x100 (the Zig 0.16
-   low-address quirk; see §4 note).
+5. Section layout pass includes stable symbol placement of runtime sections.
+   The `.so` output should not place data symbols below low-addresses known to
+   trigger verifier access violations.
 
-Items 1–3 and 5 are the canonical hello acceptance checks. Closure-focused
+Items 1–4 are the canonical hello acceptance checks. Closure-focused
 BPF acceptance is covered separately by `tests/solana/closures/` when the
 Solana harness is enabled.
 
@@ -250,11 +166,8 @@ release-engineering guidance for later workers.
 | Symptom | Likely cause / observed source | Response |
 |---|---|---|
 | `zig` rejects the target triple | Zig version drift | Pin `zig 0.16.x` in CI; document any upgrade in ADR-002 and rerun BPF acceptance |
-| `sbpf-linker` not found | Legacy fallback path (`SOLANA_ZIG=0`/unset) is missing | `cargo install sbpf-linker --version 0.1.8` per ADR-012; CI and `init.sh` install/check it for legacy-mode runs |
-| `sbpf-linker: unable to find LLVM shared lib` | macOS missing LLVM 20 dylib on the dynamic loader path | `brew install llvm@20`; ensure `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` is set by the driver/CI |
-| Many `unable to open LLVM shared lib ... .a: dlopen failed` lines, but link exits 0 | `aya-rustc-llvm-proxy` probes Homebrew LLVM archives before finding the usable dylib | Treat as noisy but benign archive-probe output; do not fail or filter unless `sbpf-linker` exits non-zero |
+| Solana verifier rejects low-address layout | Direct `solana-zig` path output has section-layout or symbol-order quirks | Keep existing low-address workaround for module-scope consts; compare against known-good output |
 | `llvm-objdump` is not on `PATH` on macOS | Homebrew keeps LLVM tools under `llvm@20/bin` | Use `/opt/homebrew/opt/llvm@20/bin/llvm-objdump` or add that directory to `PATH` for manual inspection |
-| `sbpf-linker` rejects bitcode | LLVM IR shape it does not understand | Lower codegen complexity in `ZigBackend`; widen to `--cpu v3` only with an ADR addendum and acceptance evidence |
 | Loader rejects with low-address `Access violation` | Zig 0.16 module-scope const-array placement quirk (§4) | Codegen rule: copy module-scope const arrays to stack before taking their address |
 | BPF build rejects Zig `@trap` / abort builtin | Freestanding BPF cannot use the hosted panic path | Keep `runtime/zig/panic.zig` on the BPF-safe no-return path; add Solana-friendly logging only in P3 |
 | First-class closure BPF build fails or runtime faults | Closure lowering regressed into an unsupported code-pointer relocation or invalid capture address | Keep P2 closure hardening: known callees lower to direct helper calls where possible, first-class closures use arena-backed capture storage and typed dispatch metadata, and `tests/solana/closures/invoke.sh` must remain green when `SOLANA_BPF=1` |

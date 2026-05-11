@@ -30,11 +30,8 @@
 [ 后端 ]                             （P1：Zig 代码生成）
    │   .zig 源码
    ▼
-[ Zig 工具链 ]                       （zig build-lib -target bpfel-freestanding -femit-llvm-bc）
-   │   .bc (LLVM bitcode)
-   ▼
-[ sbpf-linker ]                      （--cpu v2 --export entrypoint；v3 可选）
-   │
+[ Zig 工具链 ]                       （solana-zig build-lib -target sbf-solana；ADR-013 默认 v2）
+   │   .so（Solana 可加载 ELF）
    ▼
 Solana BPF .so
 ```
@@ -124,8 +121,8 @@ Backend:
 
 P1 实现：
 
-- `ZigBackend` —— 产出 `.zig` 源码，再驱动 `zig build-lib -femit-llvm-bc`
-  与 `sbpf-linker` 产出 Solana BPF `.so`；也可为 native developer builds 产出 hosted Zig。
+- `ZigBackend` —— 产出 `.zig` 源码，驱动直接的
+  `solana-zig build-lib` 生成 Solana BPF `.so`；也可为 native developer builds 产出 hosted Zig。
 - `Interpreter` —— 直接执行 Core IR（**不**走 Lowered IR）。
   用于 `omlz run`、REPL、以及在测试中作为语义参考。
 
@@ -152,14 +149,13 @@ flowchart TD
     LIR["Lowered IR"]
     BE["ZigBackend (P1)"]
     ZSRC[".zig"]
-    ZTOOL["zig build-lib -femit-llvm-bc"]
-    BC[".bc (LLVM bitcode)"]
-    LINK["sbpf-linker --cpu v2（v3 可选）"]
+    DIRECT["solana-zig build-lib -target sbf-solana"]
     BPF["Solana BPF .so"]
 
     SRC --> OCAMLC --> CMT --> XFE --> SEXP --> BRIDGE --> TT --> ANF --> CIR
     CIR --> INTERP
-    CIR --> LSTRAT --> LIR --> BE --> ZSRC --> ZTOOL --> BC --> LINK --> BPF
+    CIR --> LSTRAT --> LIR --> BE --> ZSRC
+    BE --> DIRECT --> BPF
 ```
 
 ## 5. 各阶段归属
@@ -172,7 +168,7 @@ flowchart TD
 | `ttree` → Core IR（ANF + `Layout` 字段） | `core/anf.zig` | 我们拥有的第一道 IR 转换 |
 | Core IR → Lowered IR | `LoweringStrategy` | P1 单实现 |
 | Lowered IR → 字节 | `Backend` | P1：Zig 源码 |
-| `.zig` → `.bc` → `.so` | Driver 调 `zig build-lib` 和 `sbpf-linker` | 编译器自身不做这件事 |
+| `.zig` → `.so` | Driver 仅调用直接 `solana-zig build-lib` 路径 | 编译器自身不做这件事 |
 | Runtime helper（arena、panic、BPF entry shim） | `runtime/zig` | 链接进用户程序 |
 | 诊断渲染 | `omlz`（Zig），按 `zxc-frontend` 输出的 JSON 格式渲染 | 用户面前只有一种诊断风格 |
 
