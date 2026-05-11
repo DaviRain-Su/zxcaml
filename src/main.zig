@@ -669,17 +669,30 @@ const DoctorStatus = enum {
 fn runDoctor(init: std.process.Init) !void {
     var required_misses: usize = 0;
 
+    const use_solana_zig = blk: {
+        const env_val = std.process.Environ.getAlloc(init.minimal.environ, init.arena.allocator(), "SOLANA_ZIG") catch null;
+        defer if (env_val) |value| init.arena.allocator().free(value);
+        if (env_val == null) break :blk false;
+        const value = env_val.?;
+        if (value.len == 0) break :blk false;
+        break :blk !std.mem.eql(u8, value, "0");
+    };
+
     try runRequiredDoctorCommand(init, "zig", &.{ "zig", "version" }, &required_misses);
     try runOpamSwitchDoctorProbe(init, &required_misses);
     try runOcamlcDoctorProbe(init, &required_misses);
     try runRequiredDoctorCommand(init, "cargo", &.{ "cargo", "--version" }, &required_misses);
     try runSbpfLinkerDoctorProbe(init, &required_misses);
-    try runRequiredDoctorCommand(
-        init,
-        "llvm-objcopy",
-        &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" },
-        &required_misses,
-    );
+    if (use_solana_zig) {
+        try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" });
+    } else {
+        try runRequiredDoctorCommand(
+            init,
+            "llvm-objcopy",
+            &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" },
+            &required_misses,
+        );
+    }
     try runSurfpoolDoctorProbe(init);
 
     if (required_misses != 0) {
@@ -690,6 +703,19 @@ fn runDoctor(init: std.process.Init) !void {
         );
         try writeStderr(init.io, summary);
         std.process.exit(1);
+    }
+}
+
+fn runOptionalDoctorCommand(
+    init: std.process.Init,
+    name: []const u8,
+    argv: []const []const u8,
+) !void {
+    const result = runDoctorCommand(init, argv);
+    if (result.ok) {
+        try writeDoctorProbeLine(init, .ok, name, result.detail);
+    } else {
+        try writeDoctorProbeLine(init, .warn, name, result.detail);
     }
 }
 

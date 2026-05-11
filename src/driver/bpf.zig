@@ -125,7 +125,7 @@ pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !b
     };
     defer allocator.free(env_val);
 
-    const solana_zig: []const u8 = if (std.mem.eql(u8, env_val, "0"))
+    const solana_zig: []const u8 = if (env_val.len == 0 or std.mem.eql(u8, env_val, "0"))
         return false
     else if (std.mem.eql(u8, env_val, "1"))
         "solana-zig"
@@ -473,8 +473,12 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
         return allocator.dupe(u8, name);
     }
 
-    // On macOS (non-Homebrew) and other platforms, assume llvm-objcopy is available
-    return allocator.dupe(u8, "llvm-objcopy");
+    // Non-Linux fallback: if llvm-objcopy is on PATH, use it; otherwise
+    // return FileNotFound so callers can gracefully skip source-map embedding.
+    if (isExecutable(io, "llvm-objcopy")) {
+        return allocator.dupe(u8, "llvm-objcopy");
+    }
+    return error.FileNotFound;
 }
 
 fn detectHomebrewLlvm20Prefix(allocator: Allocator, io: Io) !?[]const u8 {
