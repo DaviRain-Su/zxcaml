@@ -130,15 +130,21 @@ fn llvm20_lib_dir() -> Option<PathBuf> {
 
 
 fn apply_platform_env(command: &mut Command) {
-    if cfg!(target_os = "macos") {
-        if let Some(lib) = llvm20_lib_dir() {
-            let mut value = OsString::from(lib);
-            if let Some(existing) = std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH") {
-                value.push(":");
-                value.push(existing);
-            }
-            command.env("DYLD_FALLBACK_LIBRARY_PATH", value);
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+
+    if !std::env::var("SOLANA_ZIG").is_ok_and(|value| value == "0") {
+        return;
+    }
+
+    if let Some(lib) = llvm20_lib_dir() {
+        let mut value = OsString::from(lib);
+        if let Some(existing) = std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH") {
+            value.push(":");
+            value.push(existing);
         }
+        command.env("DYLD_FALLBACK_LIBRARY_PATH", value);
     }
 }
 
