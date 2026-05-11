@@ -30,12 +30,15 @@ The script:
 - On macOS with **Homebrew Rust**, `sbpf-linker` cannot find `libLLVM` at runtime:
   `aya-rustc-llvm-proxy` searches `LD_LIBRARY_PATH` / `DYLD_FALLBACK_LIBRARY_PATH`
   / `PATH→lib`, none of which contain a `libLLVM*.dylib` by default.
-  Workaround: `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib`.
-  This is required because Homebrew Rust dynamically links to `llvm@21`'s
-  `libLLVM.dylib`, but `sbpf-linker 0.1.8` was built against LLVM 20 ABI.
+  Workaround: `reproduce.sh` adds a candidate `DYLD_FALLBACK_LIBRARY_PATH` from a
+  locally-installed LLVM formula.
+  This is required because Homebrew Rust dynamically links to its own LLVM dylib,
+  while `sbpf-linker 0.1.8` was built against LLVM 20 ABI.
 - The zignocchio `build.zig` hard-codes `LD_LIBRARY_PATH=.zig-cache/llvm_fix`
   pointing at a Linux `.so` path. On macOS this points at a non-existent file,
   which makes `aya-rustc-llvm-proxy` fail. `reproduce.sh` works around this by
   invoking `sbpf-linker` directly with the right `DYLD_FALLBACK_LIBRARY_PATH`.
 - zignocchio uses `--cpu v2`, not `--cpu v3`. See the verdict for what this
   means for our 06-bpf-target.md and ADR-013 assumptions.
+- This spike path exercises the legacy `sbpf-linker` route; core compiler guidance now
+  prefers direct `solana-zig build-lib` as the primary BPF path.

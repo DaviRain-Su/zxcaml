@@ -79,12 +79,11 @@ no-op invocation transaction whose log output and exit status we captured.
    environment **none of these paths contain a `libLLVM.dylib`** by default,
    so the linker panics with `unable to find LLVM shared lib`.
    - **Workaround used in `reproduce.sh`**: export
-     `DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"` before
-     invoking `sbpf-linker`.
-   - We chose `llvm@20` because `sbpf-linker 0.1.8` was built against the
-     LLVM 20 ABI; using `llvm@21` (the version Homebrew Rust links against)
-     also "works" in the sense of resolving symbols at runtime, but is not
-     ABI-guaranteed.
+     `DYLD_FALLBACK_LIBRARY_PATH` pointing at a locally installed LLVM
+     `lib/` directory before invoking `sbpf-linker` (legacy path).
+   - `sbpf-linker 0.1.8` is LLVM-20 ABI based; using the matching LLVM
+     binary generally reduces ABI risk, while `llvm@21` may also work in some
+     symbol-resolution cases.
 
 2. **`zignocchio`'s `build.zig` actively breaks the macOS build.**
    It hard-codes `LD_LIBRARY_PATH=.zig-cache/llvm_fix` containing a Linux-only
@@ -137,28 +136,28 @@ In one paragraph: `cargo install sbpf-linker --version 0.1.8 --locked` works,
 the resulting linker successfully consumes Zig-generated LLVM bitcode, and
 the `.so` it produces is loaded and executed by a current `solana-test-validator`
 without verifier complaints. The `hello` program logs and returns 0 at
-107 compute units. The two caveats are (a) the macOS environment needs a
-`DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` shim to satisfy
+107 compute units. The two caveats are (a) the macOS environment may need a
+`DYLD_FALLBACK_LIBRARY_PATH` shim for legacy `sbpf-linker` runs to satisfy
 `aya-rustc-llvm-proxy`'s dlopen, and (b) zignocchio itself targets `--cpu v2`,
 not the `--cpu v3` our docs reference.
 
 ## Implications for ZxCaml docs (recommendations only — not enacted)
 
 1. **`docs/06-bpf-target.md` §6 ("build flags")**: should document the
-   macOS LLVM-dylib environment issue and the
-   `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` shim. Linux
-   users with rustup-installed Rust likely don't hit this, but our
-   developer baseline (Homebrew Rust on macOS) does.
+   legacy `sbpf-linker` path's macOS LLVM-dylib environment issue and when a
+   `DYLD_FALLBACK_LIBRARY_PATH` shim may be needed. Linux users with
+   rustup-installed Rust likely don't hit this, but our Homebrew-based
+   macOS legacy baseline can.
 2. **`docs/06-bpf-target.md` and ADR-013**: clarify the `--cpu v2` vs
    `--cpu v3` decision. Today's reference (zignocchio) uses v2; if ZxCaml
    really wants v3, we need an explicit reason and a feature-flag plan,
    not just "use v3 because it's newer". A defensible default is **v2 by
    default, v3 opt-in**, matching the upstream ecosystem.
 3. **ADR-012**: keep the pin at `sbpf-linker = 0.1.8` — it works as
-   advertised. Optionally add a note that the underlying LLVM ABI is
-   LLVM 20, so on macOS the matching Homebrew formula is `llvm@20`.
-4. **CONTRIBUTING / preflight script**: add an explicit dependency check
-   for `brew --prefix llvm@20` on macOS, surfaced before any build attempt.
+   advertised. Record that it is LLVM-20 ABI based, so matching LLVM versions
+   in the legacy path is safer.
+4. **CONTRIBUTING / preflight script**: ensure legacy macOS scripts check for a
+   discoverable LLVM `lib/` directory before running legacy checks.
 5. **No change needed** to ADR-014 (no-vendor-zignocchio): we successfully
    used it as inspiration without copying its source, and `.gitignore`
    keeps the local clone out of our tree.

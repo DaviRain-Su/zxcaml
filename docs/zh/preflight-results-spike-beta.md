@@ -77,10 +77,11 @@ hello.so entrypoint.bc`。随后启动 `solana-test-validator --reset --quiet`�
    macOS + Homebrew 环境里，**这些路径默认都没有 `libLLVM.dylib`**，
    导致链接器以 `unable to find LLVM shared lib` panic。
    - **`reproduce.sh` 中采用的兼容方案**：在调用 `sbpf-linker` 之前
-     `export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm@20)/lib"`。
-   - 选择 `llvm@20` 是因为 `sbpf-linker 0.1.8` 是基于 LLVM 20 ABI 编译的；
-     使用 Homebrew Rust 链接的 `llvm@21` 在符号解析层面也"能用"，但不
-     保证 ABI 兼容。
+     为 `DYLD_FALLBACK_LIBRARY_PATH` 指定本地可用 LLVM 的 `lib/` 目录（legacy
+     路径）。
+   - `sbpf-linker 0.1.8` 是基于 LLVM 20 ABI 构建；与 LLVM ABI 匹配的工具链更
+     易于避免兼容风险，而 Homebrew Rust 关联的 `llvm@21` 在符号解析层面虽可
+     能“能用”，但并非 ABI 保证。
 
 2. **zignocchio 的 `build.zig` 在 macOS 上会主动破坏构建**。
    它硬编码了 `LD_LIBRARY_PATH=.zig-cache/llvm_fix`，里面是一个指向
@@ -127,27 +128,26 @@ hello.so entrypoint.bc`。随后启动 `solana-test-validator --reset --quiet`�
 该链接器能正确消费 Zig 生成的 LLVM bitcode；产出的 `.so` 被当前的
 `solana-test-validator` 正确加载和执行，verifier 没有任何抱怨。
 `hello` 程序消耗 107 compute units，打印日志并返回 0。两处注意点是：
-（a）macOS 环境需要 `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib`
-来满足 `aya-rustc-llvm-proxy` 的 dlopen；（b）zignocchio 自身使用
-`--cpu v2`，而非我们文档引用的 `--cpu v3`。
+（a）macOS legacy `sbpf-linker` 路径下可能需要 `DYLD_FALLBACK_LIBRARY_PATH`
+指向合适 LLVM `lib/`，来满足 `aya-rustc-llvm-proxy` 的 dlopen；（b）
+zignocchio 自身使用 `--cpu v2`，而非我们文档引用的 `--cpu v3`。
 
 ## 对 ZxCaml 文档的建议（仅建议，未直接落地）
 
-1. **`docs/06-bpf-target.md` §6（"build flags"）**：应记录 macOS 的
-   LLVM-dylib 环境问题与
-   `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` 这一兼容
-   方案。Linux + rustup 的开发者大概率不会遇到，但我们的开发基线
-   （macOS + Homebrew Rust）会遇到。
+1. **`docs/06-bpf-target.md` §6（"build flags"）**：应记录 legacy 的
+   `sbpf-linker` 路径下，macOS 的 LLVM-dylib 环境问题与
+   兼容方案（`DYLD_FALLBACK_LIBRARY_PATH`）。Linux + rustup 的开发者大概率
+   不会遇到，但我们的开发基线（macOS + Homebrew Rust）会遇到。
 2. **`docs/06-bpf-target.md` 与 ADR-013**：明确 `--cpu v2` vs `--cpu v3`
    的取舍。今天的参考实现（zignocchio）使用 v2；如果 ZxCaml 真的要
    走 v3，需要明确理由与 feature flag 计划，而不是单纯"用 v3 是因为
    它更新"。一个可以辩护的默认是 **默认 v2，v3 opt-in**，与上游生态
    保持一致。
 3. **ADR-012**：保留 `sbpf-linker = 0.1.8` 的版本固定 — 它如所宣告
-   工作。可选地附注：底层 LLVM ABI 是 LLVM 20，所以 macOS 上对应
-   的 Homebrew formula 是 `llvm@20`。
-4. **CONTRIBUTING / 预飞脚本**：在 macOS 上构建之前，明确检查
-   `brew --prefix llvm@20` 是否存在，并显式提示。
+   工作。并记录其 LLVM ABI 为 LLVM 20，这使得 legacy 兼容时倾向选择
+   匹配该 ABI 的 LLVM。
+4. **CONTRIBUTING / 预飞脚本**：在 macOS 上构建 legacy `sbpf-linker`
+   方案前，明确检查可发现的 LLVM `lib/` 目录并提示。
 5. **ADR-014（不 vendor zignocchio）无需更改**：我们成功地把它当作
    参考使用而没有拷贝其源码，且 `.gitignore` 把本地 clone 排除在
    仓库之外。

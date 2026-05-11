@@ -57,15 +57,15 @@ evidence for each major bullet.
 - Source-map embedding is now a best-effort step when `llvm-objcopy` is not available, so BPF build still succeeds while emitting the `.map` sidecar; section assertions in tests were made tolerant accordingly (`fc29987`, `46b5512`, `f3a7d96`, `8cf4983`).
 - `tests/cli` and Mollusk-related flows were updated to skip embedded-section assertions when tooling is unavailable; CI now runs BPF checks with the direct `SOLANA_ZIG` default path.
 
-### Changed — BPF toolchain migration (dual-mode: direct + legacy fallback)
+### Changed — BPF toolchain migration (direct-first with legacy notes)
 
-- Split the user-facing semantics so `sbpf-linker` is required only in legacy fallback mode (`SOLANA_ZIG=0`), while `SOLANA_ZIG=1`, custom path, empty, or missing selects direct `solana-zig build-lib`; docs and diagnostics were aligned accordingly (`2c4e114`, `97c6b1f`, `bb22227`).
-- Updated CI to cache/install `sbpf-linker` only for legacy macOS or `SOLANA_ZIG` legacy runs, and added explicit `SOLANA_ZIG=0` re-init before Mollusk legacy tests on Linux to preserve fallback coverage (`7ecfcdf`, `669cffc`, `2c4e114`).
-- Added decision-guidance docs for choosing `SOLANA_ZIG` vs legacy in both EN/ZH BPF target docs and tightened roadmap wording to treat `SOLANA_ZIG` migration as parity-gated (`c8ad59b`, `973b9ec`).
-- Tightened direct-mode execution so `SOLANA_ZIG=1`/path now takes and enforces the one-step `solana-zig` path; legacy fallback is only used when `SOLANA_ZIG=0`, and direct-mode build errors are no longer masked by a fallback switch.
-- Doctor output now includes an explicit `solana-zig` probe when direct mode is enabled (`SOLANA_ZIG=1`/path), while continuing to keep legacy probes optional in that mode.
-- Promoted `SOLANA_ZIG` to default direct one-step behavior (empty/unset now resolves to `solana-zig`) and aligned init/CI defaults for direct path, while keeping `SOLANA_ZIG=0` as the explicit legacy fallback switch.
-- Synchronized migration docs (`README`, `INSTALLING`, roadmap, and `docs/06-bpf-target`) to remove "legacy-by-default" language and describe explicit `SOLANA_ZIG=0` legacy mode as optional compatibility fallback.
+- `SOLANA_ZIG=0` is now treated as an invalid custom command value; direct
+  `solana-zig build-lib` remains the default path for empty/unset/`1`/custom
+  command values.
+- CI and docs were aligned around this direct-first model while retaining
+  compatibility notes for legacy `sbpf-linker` use in historical/spike contexts.
+- Legacy LLVM shim guidance was hardened to be version-agnostic and optional,
+  with `llvm@20` no longer hardcoded in active tooling paths.
 ### Sealed — Phase 22 maintenance hold
 
 Phase 22 enters a maintenance hold after Phases 19+20+21 were sealed through

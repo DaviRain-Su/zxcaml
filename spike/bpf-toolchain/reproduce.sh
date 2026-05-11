@@ -10,12 +10,33 @@
 #   - solana-cli (3.x)
 #   - sbpf-linker 0.1.8 (cargo install sbpf-linker --version 0.1.8 --locked)
 #
-# On macOS the LLVM dylib search workaround is applied automatically.
+# On macOS the LLVM dylib search workaround is applied automatically for the
+# legacy sbpf-linker path this script exercises.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 ZIG_DIR="$ROOT/zignocchio"
+
+find_llvm_lib_dir() {
+  for root in "/opt/homebrew/opt" "/usr/local/opt"; do
+    if [[ ! -d "$root" ]]; then
+      continue
+    fi
+
+    for candidate in "$root"/llvm*; do
+      if [[ ! -d "$candidate" ]]; then
+        continue
+      fi
+      if [[ -f "$candidate/lib/libLLVM.dylib" ]]; then
+        echo "$candidate/lib"
+        return 0
+      fi
+    done
+  done
+
+  return 1
+}
 
 # 1. Clone zignocchio if missing (source is NOT vendored — see ADR-014).
 if [[ ! -d "$ZIG_DIR" ]]; then
@@ -42,17 +63,16 @@ mkdir -p zig-out/lib
 
 # 3. Link with sbpf-linker.
 # macOS workaround: aya-rustc-llvm-proxy looks for libLLVM*.dylib in
-# DYLD_FALLBACK_LIBRARY_PATH; without this it panics. We point it at
-# Homebrew's llvm@20 (which matches sbpf-linker 0.1.8's LLVM ABI).
+# DYLD_FALLBACK_LIBRARY_PATH; without this it panics.
 case "$(uname -s)" in
   Darwin)
-    LLVM20_LIB="$(brew --prefix llvm@20 2>/dev/null)/lib"
-    if [[ ! -f "$LLVM20_LIB/libLLVM.dylib" ]]; then
-      echo "ERROR: $LLVM20_LIB/libLLVM.dylib not found." >&2
-      echo "Run: brew install llvm@20" >&2
+    LLVM_LIB="$(find_llvm_lib_dir || true)"
+    if [[ -z "${LLVM_LIB}" ]]; then
+      echo "ERROR: no LLVM dylib directory found under /opt/homebrew/opt or /usr/local/opt" >&2
+      echo "Install LLVM (for example: brew install llvm) and retry." >&2
       exit 1
     fi
-    export DYLD_FALLBACK_LIBRARY_PATH="$LLVM20_LIB${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+    export DYLD_FALLBACK_LIBRARY_PATH="$LLVM_LIB${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
     # Override zignocchio's Linux-only LD_LIBRARY_PATH so it does not poison aya-rustc-llvm-proxy.
     unset LD_LIBRARY_PATH || true
     ;;
