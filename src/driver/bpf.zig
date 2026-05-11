@@ -115,11 +115,23 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
 }
 
 /// One-step BPF build using solana-zig (built-in Solana LLVM fork).
-/// Returns true on success, false if solana-zig is not found.
+/// Returns true on success, false if solana-zig is not available.
+/// Activated only when SOLANA_ZIG env var is set to a truthy value.
 pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
-    // Try SOLANA_ZIG env var first, then try "solana-zig" on PATH.
-    // The detection is implicit: buildBpfDirectWith returns false on FileNotFound.
-    const solana_zig: []const u8 = "solana-zig";
+    // Only activate when explicitly opted in via SOLANA_ZIG=1 or SOLANA_ZIG=path
+    const env_val = std.process.Environ.getAlloc(options.environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return false,
+        else => return false,
+    };
+    defer allocator.free(env_val);
+
+    const solana_zig: []const u8 = if (std.mem.eql(u8, env_val, "0"))
+        return false
+    else if (std.mem.eql(u8, env_val, "1"))
+        "solana-zig"
+    else
+        env_val; // custom path
+
     return try buildBpfDirectWith(allocator, io, solana_zig, options);
 }
 
