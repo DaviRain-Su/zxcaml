@@ -167,7 +167,7 @@ release-engineering guidance for later workers.
 |---|---|---|
 | `zig` rejects the target triple | Zig version drift | Pin `zig 0.16.x` in CI; document any upgrade in ADR-002 and rerun BPF acceptance |
 | Solana verifier rejects low-address layout | Direct `solana-zig` path output has section-layout or symbol-order quirks | Keep existing low-address workaround for module-scope consts; compare against known-good output |
-| `llvm-objdump` is not on `PATH` on macOS | Homebrew keeps LLVM tools under `llvm@20/bin` | Use `/opt/homebrew/opt/llvm@20/bin/llvm-objdump` or add that directory to `PATH` for manual inspection |
+| `llvm-objdump` is not on `PATH` on macOS | Homebrew may place LLVM tools outside `PATH` | Use `/opt/homebrew/bin/llvm-objdump` (or add it to `PATH`) for manual inspection |
 | Loader rejects with low-address `Access violation` | Zig 0.16 module-scope const-array placement quirk (§4) | Codegen rule: copy module-scope const arrays to stack before taking their address |
 | BPF build rejects Zig `@trap` / abort builtin | Freestanding BPF cannot use the hosted panic path | Keep `runtime/zig/panic.zig` on the BPF-safe no-return path; add Solana-friendly logging only in P3 |
 | First-class closure BPF build fails or runtime faults | Closure lowering regressed into an unsupported code-pointer relocation or invalid capture address | Keep P2 closure hardening: known callees lower to direct helper calls where possible, first-class closures use arena-backed capture storage and typed dispatch metadata, and `tests/solana/closures/invoke.sh` must remain green when `SOLANA_BPF=1` |

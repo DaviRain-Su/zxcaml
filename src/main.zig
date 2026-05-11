@@ -695,7 +695,7 @@ fn runDoctor(init: std.process.Init) !void {
     }
 
     try runOptionalDoctorCommand(init, "cargo", &.{ "cargo", "--version" });
-    try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" });
+    try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "llvm-objcopy", "--version" });
 
     try runSurfpoolDoctorProbe(init);
 

@@ -364,22 +364,18 @@ fn runAndForward(
 }
 
 fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
-    if (builtin.os.tag == .macos) {
-        if (try detectHomebrewLlvm20Prefix(allocator, io)) |prefix| {
-            defer allocator.free(prefix);
-            const candidate = try std.fs.path.join(allocator, &.{ prefix, "bin", "llvm-objcopy" });
-            errdefer allocator.free(candidate);
-            if (commandAvailable(allocator, io, candidate)) return candidate;
-            allocator.free(candidate);
-        }
-        if (commandAvailable(allocator, io, "llvm-objcopy")) {
-            return allocator.dupe(u8, "llvm-objcopy");
-        }
-        return error.FileNotFound;
+    if (try detectHomebrewLlvmPrefix(allocator, io)) |prefix| {
+        defer allocator.free(prefix);
+        const candidate = try std.fs.path.join(allocator, &.{ prefix, "bin", "llvm-objcopy" });
+        errdefer allocator.free(candidate);
+        if (commandAvailable(allocator, io, candidate)) return candidate;
+        allocator.free(candidate);
     }
 
     const candidates = [_][]const u8{
         "llvm-objcopy",
+        "/opt/homebrew/bin/llvm-objcopy",
+        "/usr/local/bin/llvm-objcopy",
         "/usr/bin/llvm-objcopy",
     };
     for (candidates) |path| {
@@ -389,6 +385,32 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
     }
 
     return error.FileNotFound;
+}
+
+fn detectHomebrewLlvmPrefix(allocator: Allocator, io: Io) !?[]const u8 {
+    if (builtin.os.tag != .macos) return null;
+
+    const formulas = [_][]const u8{
+        "llvm",
+        "llvm@20",
+    };
+    for (formulas) |formula| {
+        const argv = [_][]const u8{ "brew", "--prefix", formula };
+        const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch continue;
+        defer allocator.free(completed.stdout);
+        defer allocator.free(completed.stderr);
+
+        switch (completed.term) {
+            .exited => |code| if (code != 0) continue,
+            .signal, .stopped, .unknown => continue,
+        }
+
+        const prefix = std.mem.trim(u8, completed.stdout, " \t\r\n");
+        if (prefix.len == 0) continue;
+        return try allocator.dupe(u8, prefix);
+    }
+
+    return null;
 }
 
 fn commandAvailable(allocator: Allocator, io: Io, path: []const u8) bool {
@@ -407,23 +429,6 @@ fn commandAvailable(allocator: Allocator, io: Io, path: []const u8) bool {
     };
 }
 
-fn detectHomebrewLlvm20Prefix(allocator: Allocator, io: Io) !?[]const u8 {
-    if (builtin.os.tag != .macos) return null;
-
-    const argv = [_][]const u8{ "brew", "--prefix", "llvm@20" };
-    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return null;
-    defer allocator.free(completed.stdout);
-    defer allocator.free(completed.stderr);
-
-    switch (completed.term) {
-        .exited => |code| if (code != 0) return null,
-        .signal, .stopped, .unknown => return null,
-    }
-
-    const prefix = std.mem.trim(u8, completed.stdout, " \t\r\n");
-    if (prefix.len == 0) return null;
-    return try allocator.dupe(u8, prefix);
-}
 
 fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, schema: srcmap.Schema) !void {
     // F-SRCMAP-4 follows investigation §4 / Appendix B: add a post-link
@@ -544,10 +549,10 @@ fn countDlopenMentionsIgnoreCase(bytes: []const u8) usize {
 
 test "static archive LLVM dlopen warnings are filtered narrowly" {
     try std.testing.expect(isStaticArchiveDlopenWarning(
-        "unable to open LLVM shared lib /opt/homebrew/opt/llvm@20/lib/libLLVMAnalysis.a: dlopen failed",
+        "unable to open LLVM shared lib /path/to/llvm/lib/libLLVMAnalysis.a: dlopen failed",
     ));
     try std.testing.expect(!isStaticArchiveDlopenWarning(
-        "unable to open LLVM shared lib /opt/homebrew/opt/llvm@20/lib/libLLVM.dylib: dlopen failed",
+        "unable to open LLVM shared lib /path/to/llvm/lib/libLLVM.dylib: dlopen failed",
     ));
     try std.testing.expect(!isStaticArchiveDlopenWarning(
         "error: direct build failed to parse out/program.bc",

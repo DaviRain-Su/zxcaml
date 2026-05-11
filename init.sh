@@ -158,35 +158,8 @@ setup_opam() {
   echo "    compiler-libs visible to ocamlfind OK"
 }
 
-setup_macos_llvm() {
-  if [[ "$OS" != "Darwin" ]]; then
-    return
-  fi
-  if ! command -v brew >/dev/null 2>&1; then
-    echo "ERROR: Homebrew is required on macOS for llvm@20" >&2
-    exit 1
-  fi
-
-  if ! brew list llvm@20 >/dev/null 2>&1; then
-    echo "    Installing llvm@20 via Homebrew..."
-    brew install llvm@20
-  fi
-
-  local llvm_prefix
-  llvm_prefix="$(brew --prefix llvm@20)"
-  local existing="${DYLD_FALLBACK_LIBRARY_PATH:-}"
-  case ":$existing:" in
-    *":$llvm_prefix/lib:"*) persist_env DYLD_FALLBACK_LIBRARY_PATH "$existing" ;;
-    *) persist_env DYLD_FALLBACK_LIBRARY_PATH "$llvm_prefix/lib${existing:+:$existing}" ;;
-  esac
-  echo "    DYLD_FALLBACK_LIBRARY_PATH includes $llvm_prefix/lib"
-}
-
-setup_linux_llvm() {
-  if [[ "$OS" != "Linux" ]]; then
-    return
-  fi
-  echo "    skipping (solana-zig direct BPF build eliminates LLVM dependency)"
+note_optional_llvm_tools() {
+  echo "    optional: llvm-objcopy is used only for source-map embedding. It is non-fatal if missing."
 }
 
 setup_solana_zig() {
@@ -291,8 +264,7 @@ install_zig
 echo "==> Checking opam + OCaml..."
 setup_opam
 echo "==> Checking LLVM tooling..."
-setup_macos_llvm
-setup_linux_llvm
+note_optional_llvm_tools
 
 echo "==> Checking solana-zig..."
 setup_solana_zig

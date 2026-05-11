@@ -146,7 +146,7 @@ zig build-exe -O Debug out/program.zig
 |---|---|---|
 | `zig` 拒绝 target triple | Zig 版本漂移 | CI 固定 `zig 0.16.x`；任何升级都要更新 ADR-002 并重跑 BPF acceptance |
 | `solana-zig` 输出出现异常节段布局 | 直接链路结果的节段布局或符号顺序存在问题 | 保持 section 排序与零地址保护规则，和已知可用 `solana_hello.so` 做对比 |
-| macOS 上 `llvm-objdump` 不在 `PATH` | Homebrew 把 LLVM 工具放在 `llvm@20/bin` 下 | 手动检查时使用 `/opt/homebrew/opt/llvm@20/bin/llvm-objdump`，或把该目录加到 `PATH` |
+| macOS 上 `llvm-objdump` 不在 `PATH` | Homebrew 可能将 LLVM 工具放在 PATH 之外 | 手动检查时使用 `/opt/homebrew/bin/llvm-objdump`（或将其加入 `PATH`） |
 | Loader 因低地址 `Access violation` 拒绝 | Zig 0.16 module-scope const-array placement quirk（§4） | Codegen 规则：对 module-scope const array 取地址前先复制到栈上 |
 | BPF build 拒绝 Zig `@trap` / abort builtin | freestanding BPF 不能使用 hosted panic path | `runtime/zig/panic.zig` 保持 BPF-safe no-return path；Solana-friendly logging 留到 P3 |
 | 一等 closure BPF build 失败或运行时 fault | Closure lowering 回退到不支持的 code-pointer relocation 或无效 capture 地址 | 保持 P2 closure hardening：已知 callee 尽量 lower 成直接 helper 调用，一等 closure 使用 arena-backed capture storage 和类型化 dispatch 元数据；`SOLANA_BPF=1` 时 `tests/solana/closures/invoke.sh` 必须保持绿色 |
