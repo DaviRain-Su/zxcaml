@@ -28,7 +28,10 @@ out/program.zig + out/runtime.zig + out/build.zig
  │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
  ▼
 out/program.bc   (LLVM bitcode)
- │  sbpf-linker --cpu v2 --export entrypoint    (v3 is opt-in; ADR-013)
+ │  sbpf-linker --cpu v2 --export entrypoint    (legacy path, v3 is opt-in; ADR-013)
+ │
+ │  if SOLANA_ZIG != 0/empty:
+ │  └─  solana-zig build-lib -target sbf-solana  (direct path)
  ▼
 program.so   (Solana-loadable SBPF ELF)
 ```
@@ -44,8 +47,10 @@ that produces a Solana-loadable artefact is:
    SBPF (v2 by default; v3 opt-in) ELF section layout and
    entry-symbol export, which stock `lld` does not.
 
-`sbpf-linker` is therefore a build-time dependency of `omlz`. See
-ADR-012 for the pinning policy and ADR-013 for the SBPF version
+`sbpf-linker` is therefore a build-time dependency for the legacy
+`SOLANA_ZIG=0` / unset path. When `SOLANA_ZIG=1` or `SOLANA_ZIG=<path>`, the
+`solana-zig` direct path is used instead.
+See ADR-012 for the pinning policy and ADR-013 for the SBPF version
 pinning.
 
 > **Lineage.** This toolchain shape was discovered by reading
@@ -151,7 +156,13 @@ distros ship `libLLVM-20.so` already; if not, set
 See ADR-012 (Revised 2026-04-27) for the full rationale and the
 upgrade path if `sbpf-linker` ever drops this dependency.
 
-### For BPF — two-step pipeline (bitcode then link)
+### `SOLANA_ZIG` direct path
+
+When `SOLANA_ZIG` is set to `1` (or a path), `omlz build --target=bpf` uses the
+one-step `solana-zig build-lib` path and does not invoke `sbpf-linker`.
+This writes the final `.so` directly.
+
+### For BPF — two-step legacy path (bitcode then link)
 
 ```sh
 # Step 1: Zig → LLVM bitcode
@@ -220,7 +231,7 @@ release-engineering guidance for later workers.
 | Symptom | Likely cause / observed source | Response |
 |---|---|---|
 | `zig` rejects the target triple | Zig version drift | Pin `zig 0.16.x` in CI; document any upgrade in ADR-002 and rerun BPF acceptance |
-| `sbpf-linker` not found | New build-time dependency not installed | `cargo install sbpf-linker --version 0.1.8` per ADR-012; CI and `init.sh` install/check it |
+| `sbpf-linker` not found | Legacy fallback path (`SOLANA_ZIG=0`/unset) is missing | `cargo install sbpf-linker --version 0.1.8` per ADR-012; CI and `init.sh` install/check it for legacy-mode runs |
 | `sbpf-linker: unable to find LLVM shared lib` | macOS missing LLVM 20 dylib on the dynamic loader path | `brew install llvm@20`; ensure `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` is set by the driver/CI |
 | Many `unable to open LLVM shared lib ... .a: dlopen failed` lines, but link exits 0 | `aya-rustc-llvm-proxy` probes Homebrew LLVM archives before finding the usable dylib | Treat as noisy but benign archive-probe output; do not fail or filter unless `sbpf-linker` exits non-zero |
 | `llvm-objdump` is not on `PATH` on macOS | Homebrew keeps LLVM tools under `llvm@20/bin` | Use `/opt/homebrew/opt/llvm@20/bin/llvm-objdump` or add that directory to `PATH` for manual inspection |

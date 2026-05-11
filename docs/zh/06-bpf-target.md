@@ -27,7 +27,10 @@ out/program.zig + out/runtime.zig + out/build.zig
  │  zig build-lib -target bpfel-freestanding -femit-llvm-bc=…
  ▼
 out/program.bc   (LLVM bitcode)
- │  sbpf-linker --cpu v2 --export entrypoint    （v3 为可选；ADR-013）
+ │  sbpf-linker --cpu v2 --export entrypoint    （legacy 路径，v3 为可选；ADR-013）
+ │
+ │  若 SOLANA_ZIG != 0/空：
+ │  └─  solana-zig build-lib -target sbf-solana（直连）
  ▼
 program.so   (Solana 可加载的 SBPF ELF)
 ```
@@ -41,7 +44,8 @@ program.so   (Solana 可加载的 SBPF ELF)
    这是 Solana 专用的 linker，它懂 SBPF（默认 v2，v3 可选）的 ELF
    section 布局和入口符号 export 语义；标准 `lld` 不懂。
 
-所以 `sbpf-linker` 是 `omlz` 的 build-time 依赖。
+所以 `sbpf-linker` 是 `omlz` legacy 路径（`SOLANA_ZIG` 为 `0`/空）下的 build-time 依赖。
+`SOLANA_ZIG=1` 或 `SOLANA_ZIG=<path>` 时则改走 `solana-zig` 一步到位路径。
 pinning 策略见 ADR-012；SBPF 版本固定见 ADR-013。
 
 > **来源说明。** 这套工具链的形态是通过阅读
@@ -139,7 +143,12 @@ Linux 上大多数发行版自带 `libLLVM-20.so`；若没有，
 完整理由及"`sbpf-linker` 哪天去掉这个依赖时的升级路径"
 见 ADR-012（Revised 2026-04-27）。
 
-### BPF 用 —— 两步管线（先出 bitcode，再链接）
+### `SOLANA_ZIG` 直连路径
+
+当 `SOLANA_ZIG` 设为 `1`（或某个路径）时，`omlz build --target=bpf` 会走 `solana-zig build-lib`
+（一步链路）产 `.so`，不再调用 `sbpf-linker`。
+
+### BPF 用 —— legacy 两步管线（先出 bitcode，再链接）
 
 ```sh
 # Step 1：Zig → LLVM bitcode
@@ -201,7 +210,7 @@ zig build-exe -O Debug out/program.zig
 | 症状 | 可能原因 / 观察来源 | 处理 |
 |---|---|---|
 | `zig` 拒绝 target triple | Zig 版本漂移 | CI 固定 `zig 0.16.x`；任何升级都要更新 ADR-002 并重跑 BPF acceptance |
-| 找不到 `sbpf-linker` | 新的 build-time dependency 未安装 | 按 ADR-012 执行 `cargo install sbpf-linker --version 0.1.8`；CI 和 `init.sh` 负责安装/检查 |
+| 找不到 `sbpf-linker` | legacy fallback 模式（`SOLANA_ZIG=0`/空）下缺少依赖 | 按 ADR-012 执行 `cargo install sbpf-linker --version 0.1.8`；CI 和 `init.sh` 负责在 legacy 场景安装/检查 |
 | `sbpf-linker: unable to find LLVM shared lib` | macOS dynamic loader 路径上没有 LLVM 20 dylib | `brew install llvm@20`；确保 driver/CI 设置 `DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix llvm@20)/lib` |
 | 出现大量 `unable to open LLVM shared lib ... .a: dlopen failed`，但 link exit 0 | `aya-rustc-llvm-proxy` 在找到可用 dylib 前会探测 Homebrew LLVM archive | 视为嘈杂但良性的 archive-probe 输出；除非 `sbpf-linker` 非零退出，否则不要失败或过滤 |
 | macOS 上 `llvm-objdump` 不在 `PATH` | Homebrew 把 LLVM 工具放在 `llvm@20/bin` 下 | 手动检查时使用 `/opt/homebrew/opt/llvm@20/bin/llvm-objdump`，或把该目录加到 `PATH` |

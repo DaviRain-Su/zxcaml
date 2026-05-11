@@ -90,6 +90,9 @@ the fmt corpus expansion.
 - **Codegen/runtime new directions:** only schedule concrete work with a named
   runtime, BPF, or codegen acceptance target; speculative multi-target or
   allocator changes still require an ADR-sized proposal.
+- **BPF toolchain migration:** continue treating `sbpf-linker` as the legacy
+  fallback dependency and graduate `SOLANA_ZIG` direct mode as the preferred path
+  only after CI and acceptance evidence reaches parity on both Linux and macOS.
 - **M-WIKI-5 wiki refresh:** refresh the Factory wiki after the next meaningful
   compiler/runtime/docs baseline rather than after every small docs-only commit.
 - **Maintenance hold:** pause new feature scope and keep the repository on

@@ -26,7 +26,10 @@
 [ zig build-lib -target bpfel-freestanding -femit-llvm-bc ]
    │  .bc (LLVM bitcode)
    ▼
-[ sbpf-linker --cpu v2 --export entrypoint ]    ◀── v3 可选（ADR-013）
+[ SOLANA_ZIG=1 或 `SOLANA_ZIG=<path>`：`solana-zig build-lib`（直连） ]
+                  或
+   ▼
+[ sbpf-linker --cpu v2 --export entrypoint ]    ◀── v3 可选（ADR-013），legacy fallback
    │
    ▼
 Solana BPF .so
@@ -124,7 +127,7 @@ Anchor-compatible IDL。
 - **OCaml 子集：** let 绑定、嵌套 let、let rec、curried 函数、函数应用、算术/比较运算、if/then/else、用户自定义 ADT、嵌套构造器模式、带 guard 的 match arm、字面量常量模式、or-pattern、alias pattern、tuple、record、字段访问、函数式 record update、列表（`[]` / `::`）、sequence 表达式（`;`）、function cases（`function |`）、string 操作（`^`、length、get、sub）、char 操作（code、chr），以及覆盖这些形式的模式匹配
 - **Stdlib：** bundled `List`（`length`、`map`、`filter`、`fold_left`、`rev`、`append`、`hd`、`tl`、`nth`、`exists`、`for_all`、`find`、`sort`、`combine`、`split`）、`Option`（`is_none`、`is_some`、`value`、`get`、`fold`）、`Result`（`is_ok`、`is_error`、`ok`、`error`、`map`、`bind`）、`Fun`（`id`、`const`、`flip`）、`Map`（`empty`、`singleton`、`add`、`find`、`remove`、`mem`、`size`、`to_list`）、`Set`（`empty`、`singleton`、`add`、`mem`、`remove`、`size`、`to_list`、`union`、`inter`）、`String`（`length`、`get`、`sub`）、`Char`（`code`、`chr`）、`Crypto`（`sha256`、`keccak256`）和 `Pubkey`（`zero`、`token_program`、`of_hex`）模块
 - **内存模型：** arena-only，并通过 region inference 自动把不逃逸的局部值放到栈上；BPF entry arena 为 32 KiB
-- **后端：** tree-walk interpreter、Zig native codegen，以及通过 `sbpf-linker --cpu v2` 的 BPF codegen
+- **后端：** tree-walk interpreter、Zig native codegen，以及 legacy fallback `sbpf-linker --cpu v2` 或 Linux 上可选的 `solana-zig build-lib` 的 BPF codegen
 - **Solana accounts：** 内置 `account` record 值把 BPF input buffer 解析出的 key、lamports、data、owner，以及 signer/writable/executable flags 暴露为零拷贝视图；runtime parser 还会跟踪 rent epoch
 - **Solana syscalls：** logging、`sol_log_64`、pubkey logging、SHA-256/Keccak、Clock/Rent sysvars 和 remaining compute units 都通过 `external` declarations 直接绑定到 Zig runtime symbols
 - **External declarations：** `external name : type = "zig_symbol"` 语法允许以类型安全方式直接 FFI 到 Zig runtime 函数
@@ -164,7 +167,7 @@ Anchor-compatible IDL。
 | 03 | [Core IR](./03-core-ir.md) | ANF IR 数据模型，核心契约 |
 | 04 | [内存模型](./04-memory-model.md) | 当前的 arena-only 模型，以及未来 region 描述符 |
 | 05 | [后端](./05-backends.md) | Zig codegen、tree-walk interpreter、backend trait |
-| 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.so` 的工具链链路（zig + sbpf-linker） |
+| 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.so` 的工具链链路（legacy `sbpf-linker` / `SOLANA_ZIG` 直连） |
 | 07 | [仓库布局](./07-repo-layout.md) | 目录契约，谁拥有什么 |
 | 08 | [路线图](./08-roadmap.md) | P1-P9 已封版；未来工作预览 |
 | 09 | [决策（ADR）](./09-decisions.md) | 锁定的决策，附带理由 |

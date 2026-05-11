@@ -52,6 +52,7 @@ jobs:
           key: ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}
 
       - name: Cache sbpf-linker cargo install
+        if: ${{ runner.os == 'macOS' || env.SOLANA_ZIG == '' || env.SOLANA_ZIG == '0' }}
         uses: actions/cache@v4
         with:
           path: |

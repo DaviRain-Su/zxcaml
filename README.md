@@ -26,7 +26,10 @@
 [ zig build-lib -target bpfel-freestanding -femit-llvm-bc ]
    │  .bc (LLVM bitcode)
    ▼
-[ sbpf-linker --cpu v2 --export entrypoint ]    ◀── v3 opt-in (ADR-013)
+[ SOLANA_ZIG=1 or SOLANA_ZIG=<path>：solana-zig build-lib ] (direct path)
+            or
+   ▼
+[ sbpf-linker --cpu v2 --export entrypoint ]    ◀── v3 opt-in (ADR-013), legacy fallback
    │
    ▼
 Solana BPF .so
@@ -153,7 +156,7 @@ or emit Anchor-compatible IDL.
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), string operations (`^`, length, get, sub), char operations (code, chr), and pattern matching over all of those forms
 - **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Char` (`code`, `chr`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; BPF entry arena is 32 KiB
-- **Backends:** tree-walk interpreter, Zig native codegen, BPF codegen via `sbpf-linker --cpu v2`
+- **Backends:** tree-walk interpreter, Zig native codegen, legacy BPF codegen via `sbpf-linker --cpu v2` or Linux `SOLANA_ZIG` direct `solana-zig build-lib` path
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
 - **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
 - **Solana sysvar readers:** `Sysvar.clock_from_account`, `rent_from_account`, `instructions_header_from_account`, `instruction_at`, `stake_history_latest_from_account`, and `epoch_schedule_from_account` decode Clock, Rent, Instructions, StakeHistory, and EpochSchedule account data; see [`docs/15-sysvars.md`](./docs/15-sysvars.md)
@@ -200,7 +203,7 @@ Read in order:
 | 03 | [Core IR](./docs/03-core-ir.md) | ANF IR data model, the central contract |
 | 04 | [Memory model](./docs/04-memory-model.md) | Arena-only current model, region descriptor for the future |
 | 05 | [Backends](./docs/05-backends.md) | Zig codegen, tree-walk interpreter, backend trait |
-| 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.so` (zig + sbpf-linker) |
+| 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.so` (legacy `sbpf-linker`, optional `SOLANA_ZIG` direct) |
 | 07 | [Repo layout](./docs/07-repo-layout.md) | Directory contract, who owns what |
 | 08 | [Roadmap](./docs/08-roadmap.md) | P1-P9 sealed; Phase 19+20+21 drift baselines; future work preview |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
