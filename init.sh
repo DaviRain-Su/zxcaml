@@ -218,9 +218,12 @@ setup_solana_zig() {
 
   if [[ -x "$solana_zig_dir/zig" ]]; then
     echo "    solana-zig $("$solana_zig_dir/zig" version 2>/dev/null) OK ($solana_zig_dir/zig)"
-    # Create a 'solana-zig' symlink — do NOT add to PATH directly
+    # Create a 'solana-zig' symlink in both the system zig directory
+    # and ~/.local/bin. Do NOT add solana-zig dir to PATH directly
     # because that would override the system zig used for native builds.
-    mkdir -p "$HOME/.local/bin"
+    local zig_home="$HOME/zig"
+    mkdir -p "$zig_home" "$HOME/.local/bin"
+    ln -sf "$solana_zig_dir/zig" "$zig_home/solana-zig" 2>/dev/null || true
     ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
     append_path "$HOME/.local/bin"
     return
@@ -252,7 +255,9 @@ setup_solana_zig() {
 
   if [[ -x "$solana_zig_dir/zig" ]]; then
     echo "    solana-zig $("$solana_zig_dir/zig" version 2>/dev/null) installed"
-    mkdir -p "$HOME/.local/bin"
+    local zig_home="$HOME/zig"
+    mkdir -p "$zig_home" "$HOME/.local/bin"
+    ln -sf "$solana_zig_dir/zig" "$zig_home/solana-zig" 2>/dev/null || true
     ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
     append_path "$HOME/.local/bin"
   else
