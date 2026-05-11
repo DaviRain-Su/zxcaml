@@ -2,9 +2,11 @@
 //!
 //! RESPONSIBILITIES:
 //! - Materialise the BPF runtime shim next to generated `out/program.zig`.
-//! - Drive Zig's BPF bitcode emission step with the ADR-012 flags.
-//! - Invoke `sbpf-linker` with the ADR-013 default SBPF CPU and diagnostics.
-//! - Let `sbpf-linker --export entrypoint` preserve the loader entry symbol.
+//! - In direct mode, invoke `solana-zig build-lib`.
+//! - In legacy fallback mode, run Zig bitcode emission with ADR-012 flags,
+//!   then invoke `sbpf-linker` with ADR-013 defaults.
+//! - In legacy mode, let `sbpf-linker --export entrypoint` preserve loader
+//!   entry semantics.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -92,9 +94,9 @@ const runtime_files = [_]RuntimeFile{
 
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
 ///
-/// Strategy: try solana-zig direct compilation first (one step, no sbpf-linker
-/// needed). If solana-zig is not available, fall back to the legacy two-step
-/// pipeline (zig build-lib → sbpf-linker).
+/// If `SOLANA_ZIG` is set (to `1` or a custom binary path), this uses the
+/// one-step direct solana-zig pipeline. Otherwise it uses the legacy
+/// two-step `zig build-lib` → `sbpf-linker` pipeline.
 pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try materializeRuntime(allocator, io);
 
@@ -115,19 +117,13 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
 }
 
 /// One-step BPF build using solana-zig (built-in Solana LLVM fork).
-/// Returns true on success, false if solana-zig is not available.
-/// Activated only when SOLANA_ZIG env var is set to a truthy value.
+/// Returns true on success, false if `SOLANA_ZIG` is unset/empty/`0`.
 pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
-    // Only activate when explicitly opted in via SOLANA_ZIG=1 or SOLANA_ZIG=path
-    const env_val_raw = std.process.Environ.getAlloc(options.environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return false,
-        else => return false,
-    };
-    defer allocator.free(env_val_raw);
+    const solana_zig = try activeDirectSolanaZig(allocator, options.environ) orelse return false;
+    defer allocator.free(solana_zig);
 
-    const solana_zig: []const u8 = parseSolanaZigEnv(env_val_raw) orelse return false;
-
-    return try buildBpfDirectWith(allocator, io, solana_zig, options);
+    try buildBpfDirectWith(allocator, io, solana_zig, options);
+    return true;
 }
 
 fn parseSolanaZigEnv(raw: []const u8) ?[]const u8 {
@@ -141,7 +137,18 @@ fn parseSolanaZigEnv(raw: []const u8) ?[]const u8 {
     return env_val;
 }
 
-fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, options: BpfBuildOptions) !bool {
+fn activeDirectSolanaZig(allocator: Allocator, environ: std.process.Environ) !?[]const u8 {
+    const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return null,
+        else => return err,
+    };
+    defer allocator.free(env_val_raw);
+
+    const resolved = parseSolanaZigEnv(env_val_raw) orelse return null;
+    return try allocator.dupe(u8, resolved);
+}
+
+fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, options: BpfBuildOptions) !void {
     // Materialize the BPF linker script
     try materializeLinkerScript(allocator, io);
 
@@ -166,11 +173,7 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
         options.bpf_entry_path,
     };
 
-    runAndForward(allocator, io, &zig_argv, null, error.BpfDirectBuildFailed, !options.quiet) catch |err| switch (err) {
-        error.FileNotFound => return false, // solana-zig not found on PATH
-        else => return err,
-    };
-    return true;
+    try runAndForward(allocator, io, &zig_argv, null, error.BpfDirectBuildFailed, !options.quiet);
 }
 
 /// Materialize the BPF linker script used by solana-zig direct compilation.

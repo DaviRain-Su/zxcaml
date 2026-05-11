@@ -7,7 +7,9 @@
 //! - Dispatch `omlz run <file.ml>` through frontend → ANF → interpreter.
 //! - Dispatch `omlz idl <file.ml>` through frontend → ANF → JSON IDL emission.
 //! - Dispatch `omlz build --target=native <file.ml> -o <out>` through Zig source emission and build-exe.
-//! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through Zig bitcode emission and sbpf-linker.
+//! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through either direct
+//!   `solana-zig build-lib` (when `SOLANA_ZIG` is enabled) or legacy Zig
+//!   bitcode emission plus `sbpf-linker`.
 //! - Dispatch `omlz bench` through a fixed local BPF fixture set and print compile metrics.
 //! - Dispatch `omlz doctor` through local toolchain probes and print health status.
 //! - Reject all unimplemented commands with a non-zero exit status.
