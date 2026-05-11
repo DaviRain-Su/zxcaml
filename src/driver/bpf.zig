@@ -99,7 +99,11 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try materializeRuntime(allocator, io);
 
     // Try solana-zig direct compilation (preferred, no sbpf-linker needed)
-    if (try buildBpfDirect(allocator, io, options)) {
+    const direct_result = try buildBpfDirect(allocator, io, options);
+    try writeStderr(io, "note: buildBpfDirect returned ");
+    try writeStderr(io, if (direct_result) "true" else "false");
+    try writeStderr(io, "\n");
+    if (direct_result) {
         if (options.source_map_hook) |hook| {
             const input = options.source_map orelse return error.MissingSourceMapInput;
             const source_map = try buildSourceMapSchema(allocator, input);
