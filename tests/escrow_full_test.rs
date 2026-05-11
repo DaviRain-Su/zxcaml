@@ -94,50 +94,42 @@ fn acquire_build_lock(root: &Path) -> BuildLock {
 }
 
 fn llvm20_lib_dir() -> Option<PathBuf> {
-    for candidate in [
-        PathBuf::from("/opt/homebrew/opt/llvm@20/lib"),
-        PathBuf::from("/usr/local/opt/llvm@20/lib"),
-    ] {
-        if candidate.join("libLLVM.dylib").exists() {
-            return Some(candidate);
+    let llvm_roots = ["/opt/homebrew/opt", "/usr/local/opt"];
+    for root in llvm_roots {
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !name.starts_with("llvm") {
+                    continue;
+                }
+
+                let candidate = entry.path().join("lib");
+                if candidate.join("libLLVM.dylib").exists() {
+                    return Some(candidate);
+                }
+            }
         }
     }
 
-    let output = Command::new("brew")
-        .args(["--prefix", "llvm@20"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let prefix = String::from_utf8(output.stdout).ok()?;
-    let lib = PathBuf::from(prefix.trim()).join("lib");
-    lib.join("libLLVM.dylib").exists().then_some(lib)
+    None
 }
 
-fn llvm_objdump_path() -> PathBuf {
-    for candidate in [
-        PathBuf::from("/opt/homebrew/opt/llvm@20/bin/llvm-objdump"),
-        PathBuf::from("/usr/local/opt/llvm@20/bin/llvm-objdump"),
-    ] {
-        if candidate.exists() {
-            return candidate;
-        }
-    }
 
-    let output = Command::new("brew")
-        .args(["--prefix", "llvm@20"])
-        .output()
-        .ok();
-    if let Some(output) = output {
-        if output.status.success() {
-            if let Ok(prefix) = String::from_utf8(output.stdout) {
-                let objdump = PathBuf::from(prefix.trim())
-                    .join("bin")
-                    .join("llvm-objdump");
-                if objdump.exists() {
-                    return objdump;
+fn llvm_objdump_path() -> PathBuf {
+    let llvm_roots = ["/opt/homebrew/opt", "/usr/local/opt"];
+    for root in llvm_roots {
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !name.starts_with("llvm") {
+                    continue;
+                }
+
+                let candidate = entry.path().join("bin").join("llvm-objdump");
+                if candidate.exists() {
+                    return candidate;
                 }
             }
         }
