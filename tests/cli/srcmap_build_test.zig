@@ -69,10 +69,11 @@ fn fileExists(io: Io, path: []const u8) bool {
 }
 
 fn commandExecutable(io: Io, path: []const u8) bool {
-    std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch {
+    if (std.fs.path.isAbsolute(path)) {
+        std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch return false;
+    } else {
         std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch return false;
-        return true;
-    };
+    }
     return true;
 }
 
