@@ -63,6 +63,7 @@ evidence for each major bullet.
 - Updated CI to cache/install `sbpf-linker` only for legacy macOS or `SOLANA_ZIG` legacy runs, and added explicit `SOLANA_ZIG=0` re-init before Mollusk legacy tests on Linux to preserve fallback coverage (`7ecfcdf`, `669cffc`, `2c4e114`).
 - Added decision-guidance docs for choosing `SOLANA_ZIG` vs legacy in both EN/ZH BPF target docs and tightened roadmap wording to treat `SOLANA_ZIG` migration as parity-gated (`c8ad59b`, `973b9ec`).
 - Tightened direct-mode execution so `SOLANA_ZIG=1`/path now takes and enforces the one-step `solana-zig` path; legacy fallback is only used when `SOLANA_ZIG` is disabled, and direct-mode build errors are no longer masked by a fallback switch.
+- Doctor output now includes an explicit `solana-zig` probe when direct mode is enabled (`SOLANA_ZIG=1`/path), while continuing to keep legacy probes optional in that mode.
 
 ### Sealed — Phase 22 maintenance hold
 

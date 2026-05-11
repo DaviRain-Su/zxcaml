@@ -671,17 +671,29 @@ const DoctorStatus = enum {
 fn runDoctor(init: std.process.Init) !void {
     var required_misses: usize = 0;
 
-    const use_solana_zig = shouldUseSolanaZig(init.minimal.environ, init.arena.allocator());
+    const solana_zig = try resolveSolanaZigCommand(init.arena.allocator(), init.minimal.environ);
+    defer if (solana_zig) |path| init.arena.allocator().free(path);
+    const use_solana_zig = solana_zig != null;
 
     try runRequiredDoctorCommand(init, "zig", &.{ "zig", "version" }, &required_misses);
     try runOpamSwitchDoctorProbe(init, &required_misses);
     try runOcamlcDoctorProbe(init, &required_misses);
-    if (use_solana_zig) {
+
+    if (solana_zig) |binary| {
+        var solana_zig_argv = [_][]const u8{ binary, "--version" };
+        const result = runDoctorCommand(init, &solana_zig_argv);
+        if (result.ok) {
+            try writeDoctorProbeLine(init, .ok, "solana-zig", result.detail);
+        } else {
+            try writeDoctorProbeLine(init, .warn, "solana-zig", result.detail);
+        }
+
         try runOptionalDoctorCommand(init, "cargo", &.{ "cargo", "--version" });
     } else {
         try runRequiredDoctorCommand(init, "cargo", &.{ "cargo", "--version" }, &required_misses);
     }
     try runSbpfLinkerDoctorProbe(init, &required_misses, use_solana_zig);
+
     if (use_solana_zig) {
         try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" });
     } else {
@@ -844,12 +856,26 @@ fn firstNonEmptyLine(stdout: []const u8, stderr: []const u8) []const u8 {
     return firstLine(stderr);
 }
 
-fn shouldUseSolanaZig(environ: std.process.Environ, allocator: std.mem.Allocator) bool {
+fn resolveSolanaZigCommand(allocator: std.mem.Allocator, environ: std.process.Environ) !?[]const u8 {
     const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch null;
     defer if (env_val_raw) |value| allocator.free(value);
 
     const env_val = std.mem.trim(u8, env_val_raw orelse "", " \t\r\n");
-    return env_val.len != 0 and !std.mem.eql(u8, env_val, "0");
+    if (env_val.len == 0 or std.mem.eql(u8, env_val, "0")) {
+        return null;
+    }
+
+    if (std.mem.eql(u8, env_val, "1")) {
+        return try allocator.dupe(u8, "solana-zig");
+    }
+
+    return try allocator.dupe(u8, env_val);
+}
+
+fn shouldUseSolanaZig(environ: std.process.Environ, allocator: std.mem.Allocator) bool {
+    const command = resolveSolanaZigCommand(allocator, environ) catch null;
+    defer if (command) |value| allocator.free(value);
+    return command != null;
 }
 
 fn firstLine(text: []const u8) []const u8 {

@@ -80,7 +80,8 @@ test "cli: doctor reports toolchain health" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    const expected_order = [_][]const u8{
+    const observed_status_lines = statusLineCount(result.stdout);
+    const legacy_expected = [_][]const u8{
         "zig",
         "opam-switch (zxcaml-p1)",
         "ocamlc",
@@ -89,8 +90,30 @@ test "cli: doctor reports toolchain health" {
         "llvm-objcopy",
         "surfpool",
     };
+    const direct_expected = [_][]const u8{
+        "zig",
+        "opam-switch (zxcaml-p1)",
+        "ocamlc",
+        "solana-zig",
+        "cargo",
+        "sbpf-linker",
+        "llvm-objcopy",
+        "surfpool",
+    };
 
-    if (result.exit_code != 0 or statusLineCount(result.stdout) != expected_order.len) {
+    const expected_order: []const []const u8 = switch (observed_status_lines) {
+        legacy_expected.len => legacy_expected[0..],
+        direct_expected.len => direct_expected[0..],
+        else => {
+            std.debug.print(
+                "omlz doctor returned unexpected status-line count (expected {d} or {d}, got {d})\nstdout:\n{s}\nstderr:\n{s}\n",
+                .{ legacy_expected.len, direct_expected.len, observed_status_lines, result.stdout, result.stderr },
+            );
+            return error.UnexpectedStatusLineCount;
+        }
+    };
+
+    if (result.exit_code != 0 or observed_status_lines != expected_order.len) {
         std.debug.print(
             "omlz doctor failed expectations\nexit={d}\nstdout:\n{s}\nstderr:\n{s}\n",
             .{ result.exit_code, result.stdout, result.stderr },
@@ -98,7 +121,7 @@ test "cli: doctor reports toolchain health" {
     }
 
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
-    try std.testing.expectEqual(expected_order.len, statusLineCount(result.stdout));
+    try std.testing.expectEqual(expected_order.len, observed_status_lines);
     for (expected_order, 0..) |needle, index| {
         const line = statusLineAt(result.stdout, index) orelse return error.MissingStatusLine;
         try std.testing.expect(containsIgnoreCase(line, needle));
