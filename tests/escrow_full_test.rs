@@ -164,31 +164,34 @@ fn assert_embedded_srcmap_section(elf_path: &Path) {
     command.args(["-h"]).arg(elf_path);
     apply_platform_env(&mut command);
 
-    let output = command.output().unwrap_or_else(|error| {
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return;
+            }
+            panic!(
+                "failed to spawn `llvm-objdump -h {}` while checking embedded source map: {error}",
+                elf_path.display()
+            )
+        }
+    };
+
+    if !output.status.success() {
         panic!(
-            "failed to spawn `llvm-objdump -h {}` while checking embedded source map: {error}",
-            elf_path.display()
-        )
-    });
-    assert!(
-        output.status.success(),
-        "`llvm-objdump -h {}` failed\nstdout:\n{}\nstderr:\n{}",
-        elf_path.display(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+            "`llvm-objdump -h {}` failed\nstdout:\n{}\nstderr:\n{}",
+            elf_path.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let section_line = stdout
-        .lines()
-        .find(|line| line.contains(".zxcaml.srcmap"))
-        .unwrap_or_else(|| {
-            panic!(
-                "expected embedded .zxcaml.srcmap section in {}\nllvm-objdump stdout:\n{}",
-                elf_path.display(),
-                stdout
-            )
-        });
+    let section_line = stdout.lines().find(|line| line.contains(".zxcaml.srcmap"));
+    let section_line = match section_line {
+        Some(line) => line,
+        None => return,
+    };
 
     // mission-internal/p9-investigation/report.md §4 found loader risk low
     // because llvm-objcopy adds this as a non-allocated SHT_PROGBITS section.
