@@ -64,7 +64,7 @@ evidence for each major bullet.
 - Added decision-guidance docs for choosing `SOLANA_ZIG` vs legacy in both EN/ZH BPF target docs and tightened roadmap wording to treat `SOLANA_ZIG` migration as parity-gated (`c8ad59b`, `973b9ec`).
 - Tightened direct-mode execution so `SOLANA_ZIG=1`/path now takes and enforces the one-step `solana-zig` path; legacy fallback is only used when `SOLANA_ZIG` is disabled, and direct-mode build errors are no longer masked by a fallback switch.
 - Doctor output now includes an explicit `solana-zig` probe when direct mode is enabled (`SOLANA_ZIG=1`/path), while continuing to keep legacy probes optional in that mode.
-
+- Promoted `SOLANA_ZIG` to default direct one-step behavior (empty/unset now resolves to `solana-zig`) and aligned init/CI defaults for direct path, while keeping `SOLANA_ZIG=0` as the explicit legacy fallback switch.
 ### Sealed — Phase 22 maintenance hold
 
 Phase 22 enters a maintenance hold after Phases 19+20+21 were sealed through

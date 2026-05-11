@@ -861,10 +861,13 @@ fn resolveSolanaZigCommand(allocator: std.mem.Allocator, environ: std.process.En
     defer if (env_val_raw) |value| allocator.free(value);
 
     const env_val = std.mem.trim(u8, env_val_raw orelse "", " \t\r\n");
-    if (env_val.len == 0 or std.mem.eql(u8, env_val, "0")) {
+    if (std.mem.eql(u8, env_val, "0")) {
         return null;
     }
 
+    if (env_val.len == 0) {
+        return try allocator.dupe(u8, "solana-zig");
+    }
     if (std.mem.eql(u8, env_val, "1")) {
         return try allocator.dupe(u8, "solana-zig");
     }

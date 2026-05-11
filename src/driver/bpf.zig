@@ -94,9 +94,9 @@ const runtime_files = [_]RuntimeFile{
 
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
 ///
-/// If `SOLANA_ZIG` is set (to `1` or a custom binary path), this uses the
-/// one-step direct solana-zig pipeline. Otherwise it uses the legacy
-/// two-step `zig build-lib` → `sbpf-linker` pipeline.
+/// By default, this uses the one-step direct `solana-zig` pipeline. Legacy
+/// `zig build-lib` + `sbpf-linker` is used only when explicitly disabled via
+/// `SOLANA_ZIG=0`.
 pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try materializeRuntime(allocator, io);
 
@@ -117,7 +117,8 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
 }
 
 /// One-step BPF build using solana-zig (built-in Solana LLVM fork).
-/// Returns true on success, false if `SOLANA_ZIG` is unset/empty/`0`.
+/// Returns true on success in direct mode; false only when direct mode is
+/// disabled with `SOLANA_ZIG=0`.
 pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
     const solana_zig = try activeDirectSolanaZig(allocator, options.environ) orelse return false;
     defer allocator.free(solana_zig);
@@ -128,8 +129,11 @@ pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !b
 
 fn parseSolanaZigEnv(raw: []const u8) ?[]const u8 {
     const env_val = std.mem.trim(u8, raw, " \t\r\n");
-    if (env_val.len == 0 or std.mem.eql(u8, env_val, "0")) {
+    if (std.mem.eql(u8, env_val, "0")) {
         return null;
+    }
+    if (env_val.len == 0) {
+        return "solana-zig";
     }
     if (std.mem.eql(u8, env_val, "1")) {
         return "solana-zig";
@@ -728,8 +732,8 @@ fn testExitCode(term: std.process.Child.Term) u8 {
 test "BPF source-map env parser accepts trimmed values" {
     try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv("1") orelse "<disabled>");
     try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv(" 1 \n") orelse "<disabled>");
+    try std.testing.expectEqualStrings("solana-zig", parseSolanaZigEnv("   ") orelse "<disabled>");
     try std.testing.expectEqual(@as(?[]const u8, null), parseSolanaZigEnv("0"));
-    try std.testing.expectEqual(@as(?[]const u8, null), parseSolanaZigEnv("   "));
     try std.testing.expectEqualStrings("/tmp/custom-solana-zig", parseSolanaZigEnv(" /tmp/custom-solana-zig \t") orelse "<disabled>");
 }
 

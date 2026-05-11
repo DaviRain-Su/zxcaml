@@ -40,14 +40,8 @@ persist_env() {
 }
 
 need_sbpf_linker() {
-  # On Linux, direct solana-zig mode can be used when SOLANA_ZIG is set to
-  # any value other than empty/0. Keep macOS strict because solana-zig direct
-  # path currently has stdlib compatibility gaps there.
-  if [[ "$OS" != "Linux" ]]; then
-    return 0
-  fi
-
-  if [[ -z "${SOLANA_ZIG-}" ]] || [[ "${SOLANA_ZIG-}" == "0" ]]; then
+  # Legacy linker dependencies are required only when legacy mode is explicit.
+  if [[ "${SOLANA_ZIG-}" == "0" ]]; then
     return 0
   fi
 
@@ -197,6 +191,10 @@ setup_sbpf_linker() {
 
 setup_macos_llvm() {
   if [[ "$OS" != "Darwin" ]]; then
+    return
+  fi
+  if ! need_sbpf_linker; then
+    echo "    skipping (legacy path disabled)"
     return
   fi
 
