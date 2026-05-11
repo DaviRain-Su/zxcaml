@@ -458,17 +458,23 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
         }
     }
 
-    const name = "llvm-objcopy";
-    // Check if llvm-objcopy is actually accessible on PATH
-    const argv = [_][]const u8{ name, "--version" };
-    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return error.FileNotFound;
-    defer allocator.free(completed.stdout);
-    defer allocator.free(completed.stderr);
-    switch (completed.term) {
-        .exited => |code| if (code != 0) return error.FileNotFound,
-        .signal, .stopped, .unknown => return error.FileNotFound,
+    // On Linux, check if llvm-objcopy is on PATH; if not, return FileNotFound
+    // so embedSourceMapSection can gracefully skip the embedding step.
+    if (builtin.os.tag == .linux) {
+        const name = "llvm-objcopy";
+        const argv = [_][]const u8{ name, "--version" };
+        const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return error.FileNotFound;
+        defer allocator.free(completed.stdout);
+        defer allocator.free(completed.stderr);
+        switch (completed.term) {
+            .exited => |code| if (code != 0) return error.FileNotFound,
+            .signal, .stopped, .unknown => return error.FileNotFound,
+        }
+        return allocator.dupe(u8, name);
     }
-    return allocator.dupe(u8, name);
+
+    // On macOS (non-Homebrew) and other platforms, assume llvm-objcopy is available
+    return allocator.dupe(u8, "llvm-objcopy");
 }
 
 fn detectHomebrewLlvm20Prefix(allocator: Allocator, io: Io) !?[]const u8 {
@@ -522,12 +528,9 @@ fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, 
     const section_arg = try std.fmt.allocPrint(allocator, "{s}={s}", .{ srcmap_section_name, temp_section_path });
     defer allocator.free(section_arg);
 
-    const objcopy = findLlvmObjcopy(allocator, io) catch |err| switch (err) {
-        error.FileNotFound => {
-            // llvm-objcopy not available (e.g. Ubuntu CI); skip source map embedding
-            return;
-        },
-        else => return err,
+    const objcopy = findLlvmObjcopy(allocator, io) catch {
+        // llvm-objcopy not available (e.g. Ubuntu CI); skip source map embedding
+        return;
     };
     defer allocator.free(objcopy);
 
