@@ -91,7 +91,7 @@ fn create_scratch_dir() -> ScratchDir {
     ScratchDir { path }
 }
 
-fn llvm20_lib_dir() -> Option<PathBuf> {
+fn llvm_lib_dir() -> Option<PathBuf> {
     let llvm_roots = ["/opt/homebrew/opt", "/usr/local/opt"];
     for root in llvm_roots {
         if let Ok(entries) = fs::read_dir(root) {
@@ -123,7 +123,7 @@ fn apply_platform_env(command: &mut Command) {
         return;
     }
 
-    if let Some(lib) = llvm20_lib_dir() {
+    if let Some(lib) = llvm_lib_dir() {
         let mut value = OsString::from(lib);
         if let Some(existing) = std::env::var_os("DYLD_FALLBACK_LIBRARY_PATH") {
             value.push(":");
