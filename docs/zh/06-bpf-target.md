@@ -148,6 +148,24 @@ Linux 上大多数发行版自带 `libLLVM-20.so`；若没有，
 当 `SOLANA_ZIG` 设为 `1`（或某个路径）时，`omlz build --target=bpf` 会走 `solana-zig build-lib`
 （一步链路）产 `.so`，不再调用 `sbpf-linker`。
 
+### 何时用 `SOLANA_ZIG` / legacy 模式
+
+建议按场景选择：
+
+- **Linux 开发与 CI 优先走直连**：
+  - `SOLANA_ZIG=1`（或 `SOLANA_ZIG=/path/to/solana-zig`）
+  - 一步产物链路更短，且不需要 `sbpf-linker`。
+- **macOS 当前仍建议 legacy**（`SOLANA_ZIG` 为空/`0`）：
+  - `solana-zig` 在当前版本对 macOS stdlib（如 `getrandom` / `IOV_MAX` 相关路径）仍有兼容性缺口，
+    为降低波动风险建议保持旧链路。
+- **依赖排障或兼容性验证**：
+  - 需要 `sbpf-linker`/`cargo` 的场景、或要覆盖现有 legacy fallback 回归时，显式设
+    `SOLANA_ZIG=0`。
+
+CI 上，Linux 用例在运行 `cargo test` 前会额外执行一次
+`SOLANA_ZIG=0 ./init.sh`，用于准备 legacy 兜底所需依赖；`Mollusk SVM tests` 则保持 legacy
+模式（`SOLANA_ZIG=""`）执行，以便持续覆盖两条链路。
+
 ### BPF 用 —— legacy 两步管线（先出 bitcode，再链接）
 
 ```sh

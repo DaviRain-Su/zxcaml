@@ -43,8 +43,10 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 
 ### BPF 工具链迁移（可选）
 
-- 将 `sbpf-linker` 作为 legacy 兜底保留，但优先推进 `SOLANA_ZIG` 一步直连路径。
-- 在 Linux 及 macOS 上都达到同等级 CI/验收验证后，逐步把直连路径提升为默认行为，并下调 legacy 依赖要求。
+- 当前处于 **legacy + direct 双轨** 状态（2026-05-11）：Linux 与默认 CI 路径优先尝试 `SOLANA_ZIG` 一步直连；macOS 与兼容性回归场景仍保留 `sbpf-linker` 兜底。
+- `sbpf-linker` 不再是全局硬依赖，现仅在 legacy fallback 下（`SOLANA_ZIG` 未设置或 `0`）作为构建前置依赖。
+- 只有当 Linux 与 macOS 都在同一条 CI/验收矩阵下通过 `SOLANA_ZIG` 直连后，才推进“默认直连”里程碑并下调 legacy 要求。
+- 当前阶段只做迁移对齐（文档/测试/CI），不做默认策略的重大声明改动。
 
 ### PX — 多目标扩展（可选，有门槛）
 
