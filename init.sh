@@ -39,6 +39,21 @@ persist_env() {
   fi
 }
 
+need_sbpf_linker() {
+  # On Linux, direct solana-zig mode can be used when SOLANA_ZIG is set to
+  # any value other than empty/0. Keep macOS strict because solana-zig direct
+  # path currently has stdlib compatibility gaps there.
+  if [[ "$OS" != "Linux" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${SOLANA_ZIG-}" ]] || [[ "${SOLANA_ZIG-}" == "0" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
 have_versioned_zig() {
   command -v zig >/dev/null 2>&1 && [[ "$(zig version)" == "$ZIG_VERSION" ]]
 }
@@ -314,7 +329,11 @@ install_zig
 echo "==> Checking opam + OCaml..."
 setup_opam
 echo "==> Checking sbpf-linker..."
-setup_sbpf_linker
+if need_sbpf_linker; then
+  setup_sbpf_linker
+else
+  echo "    skipping (SOLANA_ZIG requested direct solana-zig path)"
+fi
 echo "==> Checking macOS LLVM 20..."
 setup_macos_llvm
 echo "==> Checking Linux LLVM..."
@@ -329,7 +348,13 @@ echo "init.sh: environment ready."
 echo "  workdir:        $ROOT"
 echo "  zig:            $(zig version)"
 echo "  opam switch:    $OPAM_SWITCH ($(ocaml -vnum))"
-echo "  sbpf-linker:    $(sbpf-linker --version 2>/dev/null || echo MISSING)"
+if command -v sbpf-linker >/dev/null 2>&1; then
+  echo "  sbpf-linker:    $(sbpf-linker --version 2>/dev/null || echo MISSING)"
+elif need_sbpf_linker; then
+  echo "  sbpf-linker:    MISSING"
+else
+  echo "  sbpf-linker:    unavailable (solana-zig direct path requested)"
+fi
 if command -v solana >/dev/null 2>&1; then
   echo "  solana-cli:     $(solana --version 2>/dev/null | head -1)"
 else

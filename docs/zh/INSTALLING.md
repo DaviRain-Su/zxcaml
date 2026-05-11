@@ -21,7 +21,7 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 |---|---:|---|---|
 | Zig | `0.16.0` | 构建 `omlz`、Zig runtime helper，以及生成出来的 Zig 代码 | 如果当前激活的 `zig` 不是精确的 `0.16.0`，就在 `~/zig` 下安装 Zig `0.16.0` |
 | opam + OCaml | OCaml `5.2.x` | 用上游 `compiler-libs` 构建 OCaml `zxc-frontend` 胶水 | 如有需要，在 macOS 上通过 Homebrew 安装 `opam`，创建带 OCaml `5.2.1` 的 `zxcaml-p1` switch，并安装 `ocamlfind` |
-| cargo + `sbpf-linker` | `sbpf-linker 0.1.8` | 把 Zig 产出的 LLVM bitcode 链接成 Solana 可加载的 `.so` 文件 | 要求已有 `cargo`；用 `cargo install --locked --force` 安装 `sbpf-linker --version 0.1.8` |
+| cargo + `sbpf-linker` | `sbpf-linker 0.1.8` | 仅在使用 legacy fallback 时用于链接 Zig 的 LLVM bitcode | 按需要求 `cargo`；当需要时用 `cargo install --locked --force` 安装 `sbpf-linker --version 0.1.8` |
 | solana-cli | stable | 运行 BPF acceptance harness 和本地 validator 检查 | 只有在运行 `init.sh` 前设置了 `SOLANA_BPF=1` 时才安装 |
 | macOS `llvm@20` | Homebrew `llvm@20` | 在 macOS 上为 `sbpf-linker 0.1.8` 提供 `libLLVM` | 在 macOS 上通过 Homebrew 安装 `llvm@20`，并在脚本运行期间导出 `DYLD_FALLBACK_LIBRARY_PATH` |
 
@@ -58,7 +58,7 @@ SOLANA_BPF=1 ./init.sh
 
 1. `zig 0.16.0`；
 2. `opam`、`zxcaml-p1` switch、OCaml `5.2.1`、`ocamlfind` 和 `compiler-libs`；
-3. `sbpf-linker 0.1.8`；
+3. legacy `sbpf-linker 0.1.8`（在 `SOLANA_ZIG` 为空或 `0` 时需要；Linux 直接模式可选）;
 4. Homebrew `llvm@20` 和 macOS LLVM 动态库路径；
 5. 当 `SOLANA_BPF=1` 时的 `solana`、`solana-keygen` 和 `solana-test-validator`。
 
@@ -132,6 +132,9 @@ opam install -y ocamlfind
 `./init.sh`。
 
 ## 验证清单
+
+`sbpf-linker --version` 仅在 legacy 链接模式下必需（`SOLANA_ZIG` 未设置或为 `0`）。Linux 上若启用直接 `SOLANA_ZIG`，该命令可选。
+
 
 setup 后，以下命令应成功：
 

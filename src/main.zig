@@ -669,20 +669,17 @@ const DoctorStatus = enum {
 fn runDoctor(init: std.process.Init) !void {
     var required_misses: usize = 0;
 
-    const use_solana_zig = blk: {
-        const env_val = std.process.Environ.getAlloc(init.minimal.environ, init.arena.allocator(), "SOLANA_ZIG") catch null;
-        defer if (env_val) |value| init.arena.allocator().free(value);
-        if (env_val == null) break :blk false;
-        const value = env_val.?;
-        if (value.len == 0) break :blk false;
-        break :blk !std.mem.eql(u8, value, "0");
-    };
+    const use_solana_zig = shouldUseSolanaZig(init.minimal.environ, init.arena.allocator());
 
     try runRequiredDoctorCommand(init, "zig", &.{ "zig", "version" }, &required_misses);
     try runOpamSwitchDoctorProbe(init, &required_misses);
     try runOcamlcDoctorProbe(init, &required_misses);
-    try runRequiredDoctorCommand(init, "cargo", &.{ "cargo", "--version" }, &required_misses);
-    try runSbpfLinkerDoctorProbe(init, &required_misses);
+    if (use_solana_zig) {
+        try runOptionalDoctorCommand(init, "cargo", &.{ "cargo", "--version" });
+    } else {
+        try runRequiredDoctorCommand(init, "cargo", &.{ "cargo", "--version" }, &required_misses);
+    }
+    try runSbpfLinkerDoctorProbe(init, &required_misses, use_solana_zig);
     if (use_solana_zig) {
         try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy", "--version" });
     } else {
@@ -778,7 +775,7 @@ fn runOpamSwitchDoctorProbe(init: std.process.Init, required_misses: *usize) !vo
     try writeDoctorProbeLine(init, .miss, "opam-switch (zxcaml-p1)", result.detail);
 }
 
-fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
+fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize, optional: bool) !void {
     const result = runDoctorCommand(init, &.{ "sbpf-linker", "--version" });
     if (result.ok) {
         try writeDoctorProbeLine(init, .ok, "sbpf-linker", result.detail);
@@ -787,6 +784,11 @@ fn runSbpfLinkerDoctorProbe(init: std.process.Init, required_misses: *usize) !vo
 
     if (commandExistsOnPath(init, "sbpf-linker")) {
         try writeDoctorProbeLine(init, .ok, "sbpf-linker", "present on PATH");
+        return;
+    }
+
+    if (optional) {
+        try writeDoctorProbeLine(init, .warn, "sbpf-linker", result.detail);
         return;
     }
 
@@ -838,6 +840,14 @@ fn firstNonEmptyLine(stdout: []const u8, stderr: []const u8) []const u8 {
     const stdout_line = firstLine(stdout);
     if (stdout_line.len != 0) return stdout_line;
     return firstLine(stderr);
+}
+
+fn shouldUseSolanaZig(environ: std.process.Environ, allocator: std.mem.Allocator) bool {
+    const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch null;
+    defer if (env_val_raw) |value| allocator.free(value);
+
+    const env_val = std.mem.trim(u8, env_val_raw orelse "", " \t\r\n");
+    return env_val.len != 0 and !std.mem.eql(u8, env_val, "0");
 }
 
 fn firstLine(text: []const u8) []const u8 {

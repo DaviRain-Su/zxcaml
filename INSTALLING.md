@@ -21,7 +21,7 @@ The last command should produce `sh.so`, a Solana BPF shared object.
 |---|---:|---|---|
 | Zig | `0.16.0` | Builds `omlz`, the Zig runtime helpers, and generated Zig code | Installs Zig `0.16.0` under `~/zig` if the active `zig` is not exactly `0.16.0` |
 | opam + OCaml | OCaml `5.2.x` | Builds the OCaml `zxc-frontend` glue with upstream `compiler-libs` | Installs `opam` via Homebrew on macOS if needed, creates switch `zxcaml-p1` with OCaml `5.2.1`, and installs `ocamlfind` |
-| cargo + `sbpf-linker` | `sbpf-linker 0.1.8` | Links Zig-emitted LLVM bitcode into Solana-loadable `.so` files | Requires `cargo`; installs `sbpf-linker --version 0.1.8` with `cargo install --locked --force` |
+| cargo + `sbpf-linker` | `sbpf-linker 0.1.8` | Legacy fallback linker for environments not using direct `solana-zig` mode | Requires `cargo`; installs `sbpf-linker --version 0.1.8` with `cargo install --locked --force` when needed |
 | solana-cli | stable | Runs the BPF acceptance harness and local validator checks | Installed only when `SOLANA_BPF=1` is set before running `init.sh` |
 | macOS `llvm@20` | Homebrew `llvm@20` | Provides `libLLVM` for `sbpf-linker 0.1.8` on macOS | Installs `llvm@20` via Homebrew on macOS and exports `DYLD_FALLBACK_LIBRARY_PATH` while the script runs |
 
@@ -60,7 +60,7 @@ This is the same script CI uses. It verifies or installs:
 
 1. `zig 0.16.0`;
 2. `opam`, switch `zxcaml-p1`, OCaml `5.2.1`, `ocamlfind`, and `compiler-libs`;
-3. `sbpf-linker 0.1.8`;
+3. Legacy `sbpf-linker 0.1.8` (required when `SOLANA_ZIG` is unset/`0`; optional on Linux with direct `SOLANA_ZIG`);
 4. Homebrew `llvm@20` and the macOS LLVM dynamic-library path;
 5. `solana`, `solana-keygen`, and `solana-test-validator` when `SOLANA_BPF=1`.
 
@@ -133,6 +133,9 @@ Then rerun:
 Install Rust from `https://rustup.rs/`, open a new shell, and rerun `./init.sh`.
 
 ## Verification checklist
+
+`sbpf-linker --version` is required only in legacy link mode (`SOLANA_ZIG` unset or `0`). On Linux with direct `SOLANA_ZIG`, this check can be omitted.
+
 
 After setup, these commands should succeed:
 
