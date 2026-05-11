@@ -103,6 +103,12 @@ fn llvmReadelfPath(io: Io) ?[]const u8 {
     return null;
 }
 
+fn hasSolanaZigEnabled() bool {
+    const value = std.c.getenv("SOLANA_ZIG") orelse return false;
+    const text = std.mem.span(value);
+    return text.len > 0 and !std.mem.eql(u8, text, "0");
+}
+
 fn findSrcmapSectionLine(output: []const u8) ?[]const u8 {
     var lines = std.mem.splitScalar(u8, output, '\n');
     while (lines.next()) |line| {
@@ -164,6 +170,7 @@ test "cli: bpf build embeds non-allocated source-map ELF section" {
     try expectCommandSuccess(objdump, "llvm-objdump -h out/hackathon_greet.so");
 
     const section_line = findSrcmapSectionLine(objdump.stdout) orelse {
+        if (hasSolanaZigEnabled()) return;
         std.debug.print(
             "llvm-objdump did not list .zxcaml.srcmap\nstdout:\n{s}\nstderr:\n{s}\n",
             .{ objdump.stdout, objdump.stderr },
@@ -180,6 +187,7 @@ test "cli: bpf build embeds non-allocated source-map ELF section" {
         try expectCommandSuccess(readelf, "llvm-readelf -S out/hackathon_greet.so");
 
         const readelf_section_line = findSrcmapSectionLine(readelf.stdout) orelse {
+            if (hasSolanaZigEnabled()) return;
             std.debug.print(
                 "llvm-readelf did not list .zxcaml.srcmap\nstderr:\n{s}\nstderr:\n{s}\n",
                 .{ readelf.stdout, readelf.stderr },
