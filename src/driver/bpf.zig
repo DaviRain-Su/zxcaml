@@ -465,8 +465,6 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
     const candidates = [_][]const u8{
         "llvm-objcopy",
         "/usr/bin/llvm-objcopy",
-        "objcopy",
-        "/usr/bin/objcopy",
     };
     for (candidates) |path| {
         if (commandAvailable(allocator, io, path)) {

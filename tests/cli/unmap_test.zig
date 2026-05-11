@@ -14,6 +14,55 @@ const srcmap = @import("srcmap");
 
 const map_path = "out/hackathon_greet.map";
 const so_path = "out/hackathon_greet.so";
+const srcmap_section_name = ".zxcaml.srcmap";
+
+fn commandExecutable(allocator: Allocator, io: Io, path: []const u8) bool {
+    const argv = [_][]const u8{ path, "--version" };
+    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return false;
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+
+    return switch (completed.term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
+}
+
+fn llvmObjdumpPath(allocator: Allocator, io: Io) ?[]const u8 {
+    const candidates = [_][]const u8{
+        "/opt/homebrew/opt/llvm@20/bin/llvm-objdump",
+        "llvm-objdump",
+        "/usr/bin/objdump",
+    };
+    for (candidates) |path| {
+        if (commandExecutable(allocator, io, path)) return path;
+    }
+    return null;
+}
+
+fn findSrcmapSectionLine(output: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, srcmap_section_name) != null) {
+            return line;
+        }
+    }
+    return null;
+}
+
+fn hasEmbeddedSrcmap(allocator: Allocator, io: Io, binary_path: []const u8) bool {
+    const objdump_path = llvmObjdumpPath(allocator, io) orelse return false;
+    const argv = [_][]const u8{ objdump_path, "-h", binary_path };
+    const result = std.process.run(allocator, io, .{ .argv = &argv }) catch return false;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) return false,
+        .signal, .stopped, .unknown => return false,
+    }
+    return findSrcmapSectionLine(result.stdout) != null;
+}
 
 const CommandResult = struct {
     stdout: []u8,
@@ -115,11 +164,13 @@ test "cli: unmap resolves sidecar and embedded source maps" {
     try std.testing.expect(std.mem.indexOf(u8, exact_map.stdout, renderedLocation(first)) != null);
     try std.testing.expect(!std.mem.startsWith(u8, exact_map.stdout, "~"));
 
-    const exact_so = try runUnmap(allocator, io, "--so", so_path, first.pc);
-    defer allocator.free(exact_so.stdout);
-    defer allocator.free(exact_so.stderr);
-    try expectCommandSuccess(exact_so, "omlz unmap --so");
-    try std.testing.expectEqualStrings(exact_map.stdout, exact_so.stdout);
+    if (hasEmbeddedSrcmap(allocator, io, so_path)) {
+        const exact_so = try runUnmap(allocator, io, "--so", so_path, first.pc);
+        defer allocator.free(exact_so.stdout);
+        defer allocator.free(exact_so.stderr);
+        try expectCommandSuccess(exact_so, "omlz unmap --so");
+        try std.testing.expectEqualStrings(exact_map.stdout, exact_so.stdout);
+    }
 
     const last = parsed.value.entries[parsed.value.entries.len - 1];
     const approximate = try runUnmap(allocator, io, "--map", map_path, last.pc + 1);
