@@ -218,12 +218,19 @@ setup_solana_zig() {
 
   if [[ -x "$solana_zig_dir/zig" ]]; then
     echo "    solana-zig $("$solana_zig_dir/zig" version 2>/dev/null) OK ($solana_zig_dir/zig)"
-    # Create a 'solana-zig' symlink in both the system zig directory
-    # and ~/.local/bin. Do NOT add solana-zig dir to PATH directly
+    # Create a 'solana-zig' symlink in the same directory as the system zig,
+    # which is already on PATH. Do NOT add solana-zig dir to PATH directly
     # because that would override the system zig used for native builds.
+    # Also create in ~/.local/bin as fallback.
+    local zig_dir=""
     local zig_home="$HOME/zig"
-    mkdir -p "$zig_home" "$HOME/.local/bin"
-    ln -sf "$solana_zig_dir/zig" "$zig_home/solana-zig" 2>/dev/null || true
+    for d in "$zig_home"/zig-*; do
+      if [[ -x "$d/zig" ]]; then zig_dir="$d"; break; fi
+    done
+    mkdir -p "$HOME/.local/bin"
+    if [[ -n "$zig_dir" ]]; then
+      ln -sf "$solana_zig_dir/zig" "$zig_dir/solana-zig" 2>/dev/null || true
+    fi
     ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
     append_path "$HOME/.local/bin"
     return
@@ -255,9 +262,15 @@ setup_solana_zig() {
 
   if [[ -x "$solana_zig_dir/zig" ]]; then
     echo "    solana-zig $("$solana_zig_dir/zig" version 2>/dev/null) installed"
+    local zig_dir=""
     local zig_home="$HOME/zig"
-    mkdir -p "$zig_home" "$HOME/.local/bin"
-    ln -sf "$solana_zig_dir/zig" "$zig_home/solana-zig" 2>/dev/null || true
+    for d in "$zig_home"/zig-*; do
+      if [[ -x "$d/zig" ]]; then zig_dir="$d"; break; fi
+    done
+    mkdir -p "$HOME/.local/bin"
+    if [[ -n "$zig_dir" ]]; then
+      ln -sf "$solana_zig_dir/zig" "$zig_dir/solana-zig" 2>/dev/null || true
+    fi
     ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
     append_path "$HOME/.local/bin"
   else
