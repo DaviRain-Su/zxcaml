@@ -104,6 +104,12 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try writeStderr(io, if (direct_result) "true" else "false");
     try writeStderr(io, "\n");
     if (direct_result) {
+        try writeStderr(io, "DBG: direct result true, source_map_hook=");
+        if (options.source_map_hook) |_| {
+            try writeStderr(io, "some\n");
+        } else {
+            try writeStderr(io, "null\n");
+        }
         if (options.source_map_hook) |hook| {
             const input = options.source_map orelse return error.MissingSourceMapInput;
             const source_map = try buildSourceMapSchema(allocator, input);
@@ -111,6 +117,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
             try hook.emit(hook.context, source_map);
             try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
         }
+        try writeStderr(io, "DBG: buildBpf returning success\n");
         return;
     }
 
