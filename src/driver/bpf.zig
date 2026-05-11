@@ -167,8 +167,13 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
         options.bpf_entry_path,
     };
 
-    runAndForward(allocator, io, &zig_argv, null, error.BpfZigBuildFailed, !options.quiet) catch |err| switch (err) {
-        error.FileNotFound => return false, // solana-zig not found
+    runAndForward(allocator, io, &zig_argv, null, error.BpfDirectBuildFailed, !options.quiet) catch |err| switch (err) {
+        error.FileNotFound => {
+            try writeStderr(io, "note: solana-zig '");
+            try writeStderr(io, solana_zig);
+            try writeStderr(io, "' not found (FileNotFound)\n");
+            return false;
+        },
         else => return err,
     };
     return true;
