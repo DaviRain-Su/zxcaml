@@ -68,45 +68,57 @@ fn fileExists(io: Io, path: []const u8) bool {
     return true;
 }
 
-fn commandExecutable(io: Io, path: []const u8) bool {
+fn commandExecutable(allocator: Allocator, io: Io, path: []const u8) bool {
     if (std.fs.path.isAbsolute(path)) {
         std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch return false;
-    } else {
-        std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch return false;
+        return true;
     }
-    return true;
+
+    const argv = [_][]const u8{ path, "--version" };
+    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return false;
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+
+    return switch (completed.term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
 }
 
-fn llvmObjdumpPath(io: Io) ?[]const u8 {
+fn llvmObjcopyPath(allocator: Allocator, io: Io) ?[]const u8 {
+    const candidates = [_][]const u8{
+        "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy",
+        "llvm-objcopy",
+        "/usr/bin/llvm-objcopy",
+    };
+    for (candidates) |path| {
+        if (commandExecutable(allocator, io, path)) return path;
+    }
+    return null;
+}
+
+fn llvmObjdumpPath(allocator: Allocator, io: Io) ?[]const u8 {
     const candidates = [_][]const u8{
         "/opt/homebrew/opt/llvm@20/bin/llvm-objdump",
         "llvm-objdump",
         "/usr/bin/objdump",
-        "objdump",
     };
     for (candidates) |path| {
-        if (commandExecutable(io, path)) return path;
+        if (commandExecutable(allocator, io, path)) return path;
     }
     return null;
 }
 
-fn llvmReadelfPath(io: Io) ?[]const u8 {
+fn llvmReadelfPath(io: Io, allocator: Allocator) ?[]const u8 {
     const candidates = [_][]const u8{
         "/opt/homebrew/opt/llvm@20/bin/llvm-readelf",
         "llvm-readelf",
         "/usr/bin/readelf",
-        "readelf",
     };
     for (candidates) |path| {
-        if (commandExecutable(io, path)) return path;
+        if (commandExecutable(allocator, io, path)) return path;
     }
     return null;
-}
-
-fn hasSolanaZigEnabled() bool {
-    const value = std.c.getenv("SOLANA_ZIG") orelse return false;
-    const text = std.mem.span(value);
-    return text.len > 0 and !std.mem.eql(u8, text, "0");
 }
 
 fn findSrcmapSectionLine(output: []const u8) ?[]const u8 {
@@ -159,7 +171,7 @@ test "cli: bpf build embeds non-allocated source-map ELF section" {
     try std.testing.expect(fileExists(io, so_path));
     try std.testing.expect(fileExists(io, map_path));
 
-    const objdump_path = llvmObjdumpPath(io) orelse {
+    const objdump_path = llvmObjdumpPath(allocator, io) orelse {
         // Keep this test runnable on environments without LLVM objdump tooling.
         return;
     };
@@ -169,8 +181,9 @@ test "cli: bpf build embeds non-allocated source-map ELF section" {
     defer allocator.free(objdump.stderr);
     try expectCommandSuccess(objdump, "llvm-objdump -h out/hackathon_greet.so");
 
+    if (llvmObjcopyPath(allocator, io) == null) return;
+
     const section_line = findSrcmapSectionLine(objdump.stdout) orelse {
-        if (hasSolanaZigEnabled()) return;
         std.debug.print(
             "llvm-objdump did not list .zxcaml.srcmap\nstdout:\n{s}\nstderr:\n{s}\n",
             .{ objdump.stdout, objdump.stderr },
@@ -179,7 +192,7 @@ test "cli: bpf build embeds non-allocated source-map ELF section" {
     };
     try std.testing.expect(std.mem.indexOf(u8, section_line, "ALLOC") == null);
 
-    if (llvmReadelfPath(io)) |readelf_path| {
+    if (llvmReadelfPath(io, allocator)) |readelf_path| {
         const readelf_argv = [_][]const u8{ readelf_path, "-S", so_path };
         const readelf = try runCommand(allocator, io, &readelf_argv);
         defer allocator.free(readelf.stdout);
@@ -187,7 +200,6 @@ test "cli: bpf build embeds non-allocated source-map ELF section" {
         try expectCommandSuccess(readelf, "llvm-readelf -S out/hackathon_greet.so");
 
         const readelf_section_line = findSrcmapSectionLine(readelf.stdout) orelse {
-            if (hasSolanaZigEnabled()) return;
             std.debug.print(
                 "llvm-readelf did not list .zxcaml.srcmap\nstderr:\n{s}\nstderr:\n{s}\n",
                 .{ readelf.stdout, readelf.stderr },
