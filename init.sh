@@ -205,6 +205,34 @@ setup_macos_llvm() {
   echo "    DYLD_FALLBACK_LIBRARY_PATH includes $llvm_prefix/lib"
 }
 
+setup_linux_llvm() {
+  if [[ "$OS" != "Linux" ]]; then
+    return
+  fi
+
+  # sbpf-linker needs LLVM shared libraries.
+  # Install llvm-dev via apt if not already present.
+  if ! dpkg -s libllvm-20-dev >/dev/null 2>&1; then
+    echo "    Installing llvm-20-dev via apt..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq llvm-20-dev libclang-20-dev 2>/dev/null || {
+      # Fall back to generic llvm-dev if versioned package unavailable
+      sudo apt-get install -y -qq llvm-dev libclang-dev 2>/dev/null || true
+    }
+  fi
+
+  # Ensure LLVM shared lib path is in LD_LIBRARY_PATH
+  local llvm_lib
+  llvm_lib="$(llvm-config --libdir 2>/dev/null || true)"
+  if [[ -n "$llvm_lib" ]]; then
+    local existing="${LD_LIBRARY_PATH:-}"
+    case ":$existing:" in
+      *":$llvm_lib:"*) ;;
+      *) persist_env LD_LIBRARY_PATH "$llvm_lib${existing:+:$existing}" ;;
+    esac
+    echo "    LD_LIBRARY_PATH includes $llvm_lib"
+  fi
+}
+
 setup_solana_if_requested() {
   if [[ "${SOLANA_BPF:-}" != "1" ]]; then
     if ! command -v solana >/dev/null 2>&1; then
@@ -244,6 +272,8 @@ echo "==> Checking sbpf-linker..."
 setup_sbpf_linker
 echo "==> Checking macOS LLVM 20..."
 setup_macos_llvm
+echo "==> Checking Linux LLVM..."
+setup_linux_llvm
 echo "==> Checking solana-cli..."
 setup_solana_if_requested
 
