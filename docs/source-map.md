@@ -55,6 +55,14 @@ verified that `llvm-objcopy --add-section` creates a `SHT_PROGBITS` section with
 no allocation flag by default, so the Solana loader ignores it while developer
 tools can still discover it with `llvm-objdump -h`.
 
+Embedding metadata is a best-effort step after sidecar generation:
+
+- It requires an available `llvm-objcopy` compatible with the produced ELF.
+- If no suitable `llvm-objcopy` is found, the BPF build still succeeds and
+developers can still use the `.map` sidecar.
+- CI and `omlz` tests that validate `.so` sections are tolerant when `objcopy`
+or `objdump` tooling is not installed.
+
 ## Section Flags
 
 The embedded section is metadata only:
@@ -67,6 +75,20 @@ The embedded section is metadata only:
 
 The sidecar remains the full-fidelity map. The ELF payload may be pruned in
 later features to reduce `.so` growth, but it must retain the same schema shape.
+
+## `SOLANA_ZIG` and toolchain mode interaction
+
+`SOLANA_ZIG` is an opt-in switch for the one-step compilation path:
+
+- `SOLANA_ZIG=1` or unset path: use `solana-zig build-lib` directly.
+- `SOLANA_ZIG=<path>`: use the custom `solana-zig` binary at the supplied
+  path.
+- `SOLANA_ZIG=0` or empty / missing: use legacy two-step path
+  (`zig build-lib` + `sbpf-linker`).
+
+MacOS currently keeps this opt-in path disabled in CI because `solana-zig`'s
+bundled stdlib lacks the `getrandom`/`IOV_MAX` surface needed on that runner.
+Linux runs the direct path by default in CI.
 
 ## unmap
 

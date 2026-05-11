@@ -51,6 +51,12 @@ evidence for each major bullet.
 
 ## [Unreleased]
 
+### Changed — SOLANA_ZIG + source-map tool fallback behavior
+
+- `SOLANA_ZIG` remains opt-in for the one-step direct path: `SOLANA_ZIG=1` uses `solana-zig` from `PATH`, `SOLANA_ZIG=<path>` uses a custom path, and `SOLANA_ZIG=0` / empty / missing falls back to the legacy `zig build-lib + sbpf-linker` flow (`c4a924f`, `98a0f7d`, `fc29987`, `38eb335`, `e65c69e`).
+- Source-map embedding is now a best-effort step when `llvm-objcopy` is not available, so BPF build still succeeds while emitting the `.map` sidecar; section assertions in tests were made tolerant accordingly (`fc29987`, `46b5512`, `f3a7d96`, `8cf4983`).
+- `tests/cli` and Mollusk flows were updated to skip embedded-section assertions when tooling is unavailable, and CI now disables `SOLANA_ZIG` during Rust integration tests to avoid host-dependent `solana-zig` stdlib regressions (`e65c69e`, `46b5512`, `8cf4983`).
+
 ### Sealed — Phase 22 maintenance hold
 
 Phase 22 enters a maintenance hold after Phases 19+20+21 were sealed through
