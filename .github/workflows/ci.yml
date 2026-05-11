@@ -28,8 +28,8 @@ jobs:
       # SOLANA_BPF=1, but GitHub macOS runners currently lack a compatible
       # OpenSSL Ed25519 signing path for the no-op invocation helper.
       SOLANA_BPF: ${{ vars.SOLANA_BPF }}
-      # Use Solana Zig one-step BPF path by default across all hosted OSes.
-      SOLANA_ZIG: "1"
+      # Default SOLANA_ZIG semantics: empty/unset now enables direct Solana Zig.
+      SOLANA_ZIG: ""
 
     steps:
       - name: Checkout
@@ -50,7 +50,7 @@ jobs:
           key: ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}
 
       - name: Cache sbpf-linker cargo install
-        if: ${{ env.SOLANA_ZIG == '0' }}
+        if: ${{ runner.os == 'macOS' || env.SOLANA_ZIG == '' || env.SOLANA_ZIG == '0' }}
         uses: actions/cache@v4
         with:
           path: |
@@ -72,7 +72,6 @@ jobs:
         run: zig build test
 
       - name: Prepare legacy linker for Mollusk fallback
-        if: ${{ matrix.os == 'ubuntu-latest' }}
         env:
           SOLANA_ZIG: "0"
         run: ./init.sh
