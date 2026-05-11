@@ -162,6 +162,25 @@ When `SOLANA_ZIG` is set to `1` (or a path), `omlz build --target=bpf` uses the
 one-step `solana-zig build-lib` path and does not invoke `sbpf-linker`.
 This writes the final `.so` directly.
 
+### When to use `SOLANA_ZIG` vs. legacy fallback
+
+A practical decision pattern is:
+
+- **Prefer direct mode on Linux / default CI path:**
+  - `SOLANA_ZIG=1` (or `SOLANA_ZIG=/path/to/solana-zig`)
+  - Single-step link flow with fewer moving parts; does not need `sbpf-linker`.
+- **Keep legacy on macOS unless you are intentionally testing direct mode:**
+  - `SOLANA_ZIG` empty or `0`
+  - The current `solana-zig` path has known stdlib gaps on macOS (for example
+    `getrandom`/`IOV_MAX` paths), so legacy fallback reduces risk for now.
+- **Use legacy explicitly for compatibility/perf regression work:**
+  - When you need `sbpf-linker`/`cargo`, or want to cover legacy fallback
+    regression explicitly, set `SOLANA_ZIG=0`.
+
+In CI, Linux runs include an extra `SOLANA_ZIG=0 ./init.sh` before
+`cargo test` to prepare legacy fallback dependencies; `Mollusk SVM tests` still run
+in legacy mode (`SOLANA_ZIG=""`) to keep both paths exercised.
+
 ### For BPF — two-step legacy path (bitcode then link)
 
 ```sh
