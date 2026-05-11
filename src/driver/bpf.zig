@@ -390,24 +390,26 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
 fn detectHomebrewLlvmPrefix(allocator: Allocator, io: Io) !?[]const u8 {
     if (builtin.os.tag != .macos) return null;
 
-    const formulas = [_][]const u8{
-        "llvm",
-        "llvm@20",
-    };
-    for (formulas) |formula| {
-        const argv = [_][]const u8{ "brew", "--prefix", formula };
-        const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch continue;
-        defer allocator.free(completed.stdout);
-        defer allocator.free(completed.stderr);
+    const roots = [_][]const u8{ "/opt/homebrew/opt", "/usr/local/opt" };
+    for (roots) |root| {
+        const root_dir = std.Io.Dir.cwd().openDir(io, root, .{ .iterate = true }) catch continue;
+        defer root_dir.close(io);
 
-        switch (completed.term) {
-            .exited => |code| if (code != 0) continue,
-            .signal, .stopped, .unknown => continue,
+        var iter = root_dir.iterate();
+        while (true) {
+            const entry = iter.next(io) catch continue;
+            if (entry == null) break;
+            const next = entry.?;
+            if (next.kind != .directory) continue;
+            if (!std.mem.startsWith(u8, next.name, "llvm")) continue;
+
+            const prefix = try std.fs.path.join(allocator, &.{ root, next.name });
+            const candidate = try std.fs.path.join(allocator, &.{ prefix, "bin", "llvm-objcopy" });
+            const has_objcopy = commandAvailable(allocator, io, candidate);
+            allocator.free(candidate);
+            if (has_objcopy) return prefix;
+            allocator.free(prefix);
         }
-
-        const prefix = std.mem.trim(u8, completed.stdout, " \t\r\n");
-        if (prefix.len == 0) continue;
-        return try allocator.dupe(u8, prefix);
     }
 
     return null;

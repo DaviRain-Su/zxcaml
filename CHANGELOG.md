@@ -53,9 +53,9 @@ evidence for each major bullet.
 
 ### Changed — SOLANA_ZIG + source-map tool fallback behavior
 
-- `SOLANA_ZIG=1` / custom path / empty / missing selects direct `solana-zig build-lib`; only `SOLANA_ZIG=0` selects the legacy `zig build-lib + sbpf-linker` flow (`c4a924f`, `98a0f7d`, `fc29987`, `38eb335`, `e65c69e`).
+- `SOLANA_ZIG=1` / custom path / empty / missing still selects direct `solana-zig build-lib`; `SOLANA_ZIG=0` is now treated as an invalid custom command value (with an explicit diagnostic) and is no longer a compatibility fallback switch.
 - Source-map embedding is now a best-effort step when `llvm-objcopy` is not available, so BPF build still succeeds while emitting the `.map` sidecar; section assertions in tests were made tolerant accordingly (`fc29987`, `46b5512`, `f3a7d96`, `8cf4983`).
-- `tests/cli` and Mollusk flows were updated to skip embedded-section assertions when tooling is unavailable, and CI now runs Mollusk in explicit legacy mode (`SOLANA_ZIG=0`) to keep fallback-coverage parity while avoiding host-dependent `solana-zig` stdlib regressions (`e65c69e`, `46b5512`, `8cf4983`).
+- `tests/cli` and Mollusk-related flows were updated to skip embedded-section assertions when tooling is unavailable; CI now runs BPF checks with the direct `SOLANA_ZIG` default path.
 
 ### Changed — BPF toolchain migration (dual-mode: direct + legacy fallback)
 
