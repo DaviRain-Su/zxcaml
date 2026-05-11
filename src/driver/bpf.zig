@@ -91,9 +91,108 @@ const runtime_files = [_]RuntimeFile{
 };
 
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
+///
+/// Strategy: try solana-zig direct compilation first (one step, no sbpf-linker
+/// needed). If solana-zig is not available, fall back to the legacy two-step
+/// pipeline (zig build-lib → sbpf-linker).
 pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     try materializeRuntime(allocator, io);
 
+    // Try solana-zig direct compilation (preferred, no sbpf-linker needed)
+    if (try buildBpfDirect(allocator, io, options)) {
+        if (options.source_map_hook) |hook| {
+            const input = options.source_map orelse return error.MissingSourceMapInput;
+            const source_map = try buildSourceMapSchema(allocator, input);
+            defer allocator.free(source_map.schema.entries);
+            try hook.emit(hook.context, source_map);
+            try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
+        }
+        return;
+    }
+
+    // Legacy two-step pipeline: zig build-lib → sbpf-linker
+    try buildBpfLegacy(allocator, io, options);
+}
+
+/// One-step BPF build using solana-zig (built-in Solana LLVM fork).
+/// Returns true on success, false if solana-zig is not found.
+pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
+    // Try SOLANA_ZIG env var first, then try "solana-zig" on PATH.
+    // The detection is implicit: buildBpfDirectWith returns false on FileNotFound.
+    const solana_zig: []const u8 = "solana-zig";
+    return try buildBpfDirectWith(allocator, io, solana_zig, options);
+}
+
+fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, options: BpfBuildOptions) !bool {
+    // Materialize the BPF linker script
+    try materializeLinkerScript(allocator, io);
+
+    const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{options.output_path});
+    defer allocator.free(emit_arg);
+
+    const zig_argv = [_][]const u8{
+        solana_zig,
+        "build-lib",
+        "-target",
+        "sbf-solana",
+        "-O",
+        "ReleaseSmall",
+        "-fPIC",
+        "-fstrip",
+        "-dynamic",
+        "-T",
+        "out/runtime/bpf.ld",
+        "-z",
+        "notext",
+        emit_arg,
+        options.bpf_entry_path,
+    };
+
+    runAndForward(allocator, io, &zig_argv, null, error.BpfZigBuildFailed, !options.quiet) catch |err| switch (err) {
+        error.FileNotFound => return false, // solana-zig not found
+        else => return err,
+    };
+    return true;
+}
+
+/// Materialize the BPF linker script used by solana-zig direct compilation.
+fn materializeLinkerScript(allocator: Allocator, io: Io) !void {
+    _ = allocator;
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, "out/runtime");
+    try cwd.writeFile(io, .{
+        .sub_path = "out/runtime/bpf.ld",
+        .data =
+        \\PHDRS
+        \\{
+        \\text PT_LOAD  ;
+        \\rodata PT_LOAD ;
+        \\data PT_LOAD ;
+        \\dynamic PT_DYNAMIC ;
+        \\}
+        \\SECTIONS
+        \\{
+        \\    . = SIZEOF_HEADERS;
+        \\    .text : { *(.text*) } :text
+        \\    .rodata : { *(.rodata*) } :rodata
+        \\    .data.rel.ro : { *(.data.rel.ro*) } :rodata
+        \\    .dynamic : { *(.dynamic) } :dynamic
+        \\    .dynsym : { *(.dynsym) } :data
+        \\    .dynstr : { *(.dynstr) } :data
+        \\    .rel.dyn : { *(.rel.dyn) } :data
+        \\    /DISCARD/ : {
+        \\    *(.eh_frame*)
+        \\    *(.gnu.hash*)
+        \\    *(.hash*)
+        \\    }
+        \\}
+        ,
+        .flags = .{ .truncate = true },
+    });
+}
+
+/// Legacy two-step BPF build: zig build-lib (bitcode) → sbpf-linker.
+pub fn buildBpfLegacy(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
     const bitcode_arg = try std.fmt.allocPrint(allocator, "-femit-llvm-bc={s}", .{options.bitcode_path});
     defer allocator.free(bitcode_arg);
 

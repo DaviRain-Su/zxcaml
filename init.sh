@@ -209,13 +209,59 @@ setup_linux_llvm() {
   if [[ "$OS" != "Linux" ]]; then
     return
   fi
+  echo "    skipping (solana-zig direct BPF build eliminates LLVM dependency)"
+}
 
-  # NOTE: BPF tests that invoke sbpf-linker are expected to fail on
-  # Ubuntu CI because the runner image does not include LLVM shared
-  # libraries.  The aya-rustc-llvm-proxy inside sbpf-linker panics when
-  # it cannot find libLLVM.so.  This is a known environment limitation.
-  # BPF tests pass on macOS (where setup_macos_llvm installs llvm@20).
-  echo "    skipping (BPF tests will use macOS runner)"
+setup_solana_zig() {
+  local solana_zig_version="${SOLANA_ZIG_VERSION:-v1.53.0}"
+  local solana_zig_dir="$ROOT/solana-zig"
+
+  if [[ -x "$solana_zig_dir/zig" ]]; then
+    echo "    solana-zig $("$solana_zig_dir/zig" version 2>/dev/null) OK ($solana_zig_dir/zig)"
+    # Add to PATH so omlz can discover it
+    append_path "$solana_zig_dir"
+    # Also create a 'solana-zig' symlink for discovery
+    if [[ ! -x "$HOME/.local/bin/solana-zig" ]]; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
+        append_path "$HOME/.local/bin"
+    fi
+    return
+  fi
+
+  echo "    Downloading solana-zig $solana_zig_version..."
+  local arch
+  arch="$(uname -m)"
+  if [[ "$arch" == "arm64" ]]; then
+    arch="aarch64"
+  fi
+  local os
+  local abi
+  case "$OS" in
+    Linux)  os="linux";  abi="musl"  ;;
+    Darwin) os="macos"; abi="none"  ;;
+    *)      echo "    skipping (unsupported OS: $OS)"; return ;;
+  esac
+
+  local tarball="zig-$arch-$os-$abi.tar.bz2"
+  local url="https://github.com/joncinque/solana-zig-bootstrap/releases/download/solana-$solana_zig_version/$tarball"
+
+  mkdir -p "$solana_zig_dir"
+  (cd "$solana_zig_dir" && \
+    curl --proto '=https' --tlsv1.2 -SfOL "$url" && \
+    tar -xjf "$tarball" && \
+    mv "zig-$arch-$os-$abi-baseline"/* . 2>/dev/null || true && \
+    rm -rf "$tarball" "zig-$arch-$os-$abi-baseline" 2>/dev/null)
+
+  if [[ -x "$solana_zig_dir/zig" ]]; then
+    echo "    solana-zig $("$solana_zig_dir/zig" version 2>/dev/null) installed"
+    append_path "$solana_zig_dir"
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$solana_zig_dir/zig" "$HOME/.local/bin/solana-zig" 2>/dev/null || true
+    append_path "$HOME/.local/bin"
+  else
+    echo "    WARNING: solana-zig download failed (BPF builds will use sbpf-linker fallback)" >&2
+  fi
 }
 
 setup_solana_if_requested() {
@@ -259,6 +305,8 @@ echo "==> Checking macOS LLVM 20..."
 setup_macos_llvm
 echo "==> Checking Linux LLVM..."
 setup_linux_llvm
+echo "==> Checking solana-zig..."
+setup_solana_zig
 echo "==> Checking solana-cli..."
 setup_solana_if_requested
 
