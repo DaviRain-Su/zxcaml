@@ -80,7 +80,7 @@ later features to reduce `.so` growth, but it must retain the same schema shape.
 
 `SOLANA_ZIG` is an opt-in switch for the one-step compilation path:
 
-- `SOLANA_ZIG=1` or unset path: use `solana-zig build-lib` directly.
+- `SOLANA_ZIG=1`: use `solana-zig build-lib` directly.
 - `SOLANA_ZIG=<path>`: use the custom `solana-zig` binary at the supplied
   path.
 - `SOLANA_ZIG=0` or empty / missing: use legacy two-step path

@@ -119,12 +119,13 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
 /// Activated only when SOLANA_ZIG env var is set to a truthy value.
 pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !bool {
     // Only activate when explicitly opted in via SOLANA_ZIG=1 or SOLANA_ZIG=path
-    const env_val = std.process.Environ.getAlloc(options.environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
+    const env_val_raw = std.process.Environ.getAlloc(options.environ, allocator, "SOLANA_ZIG") catch |err| switch (err) {
         error.EnvironmentVariableMissing => return false,
         else => return false,
     };
-    defer allocator.free(env_val);
+    defer allocator.free(env_val_raw);
 
+    const env_val = std.mem.trim(u8, env_val_raw, " \t\r\n");
     const solana_zig: []const u8 = if (env_val.len == 0 or std.mem.eql(u8, env_val, "0"))
         return false
     else if (std.mem.eql(u8, env_val, "1"))
