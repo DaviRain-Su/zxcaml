@@ -87,8 +87,8 @@ fn commandExecutable(allocator: Allocator, io: Io, path: []const u8) bool {
 
 fn llvmObjcopyPath(allocator: Allocator, io: Io) ?[]const u8 {
     const candidates = [_][]const u8{
-        "/opt/homebrew/opt/llvm@20/bin/llvm-objcopy",
         "llvm-objcopy",
+        "/opt/homebrew/bin/llvm-objcopy",
         "/usr/bin/llvm-objcopy",
     };
     for (candidates) |path| {
@@ -99,8 +99,8 @@ fn llvmObjcopyPath(allocator: Allocator, io: Io) ?[]const u8 {
 
 fn llvmObjdumpPath(allocator: Allocator, io: Io) ?[]const u8 {
     const candidates = [_][]const u8{
-        "/opt/homebrew/opt/llvm@20/bin/llvm-objdump",
         "llvm-objdump",
+        "/opt/homebrew/bin/llvm-objdump",
         "/usr/bin/objdump",
     };
     for (candidates) |path| {
@@ -111,8 +111,8 @@ fn llvmObjdumpPath(allocator: Allocator, io: Io) ?[]const u8 {
 
 fn llvmReadelfPath(io: Io, allocator: Allocator) ?[]const u8 {
     const candidates = [_][]const u8{
-        "/opt/homebrew/opt/llvm@20/bin/llvm-readelf",
         "llvm-readelf",
+        "/opt/homebrew/bin/llvm-readelf",
         "/usr/bin/readelf",
     };
     for (candidates) |path| {
