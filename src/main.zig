@@ -23,6 +23,7 @@ const driver_bpf = @import("driver/bpf.zig");
 const driver_doctor = @import("driver/doctor.zig");
 const driver_idl = @import("driver/idl.zig");
 const driver_srcmap = @import("driver/srcmap.zig");
+const target_capability = @import("target/capability.zig");
 const target_registry = @import("target/registry.zig");
 const diag = @import("util/diag.zig");
 const diag_explain = @import("util/diag_explain.zig");
@@ -279,8 +280,8 @@ pub fn main(init: std.process.Init) !void {
         switch (result) {
             .success => |parsed| {
                 switch (resolved_target.build_dispatch) {
-                    .bpf => try buildBpf(init, parsed.module, build_args),
-                    .native => try buildNative(init, parsed.module, build_args),
+                    .bpf => try buildBpf(init, resolved_target, parsed.module, build_args),
+                    .native => try buildNative(init, resolved_target, parsed.module, build_args),
                 }
             },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
@@ -1174,8 +1175,26 @@ fn deriveProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]u8
     return allocator.dupe(u8, stem);
 }
 
+fn ensureTargetCapabilitiesOrExit(
+    init: std.process.Init,
+    target: *const target_registry.TargetContract,
+    module: core_ir.Module,
+) !void {
+    const result = try target_capability.scanTargetModuleCapabilities(init.gpa, target, module);
+    switch (result) {
+        .ok => {},
+        .unsupported => |diagnostic| {
+            const rendered = try target_capability.renderUnsupportedCapabilityDiagnostic(init.gpa, diagnostic);
+            defer init.gpa.free(rendered);
+            try writeStderr(init.io, rendered);
+            std.process.exit(1);
+        },
+    }
+}
+
 fn buildNative(
     init: std.process.Init,
+    target: *const target_registry.TargetContract,
     module: @import("frontend_bridge/ttree.zig").Module,
     build_args: BuildArgs,
 ) !void {
@@ -1212,6 +1231,7 @@ fn buildNative(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    try ensureTargetCapabilitiesOrExit(init, target, optimized_core_module);
     const inferred_core_module = try inferRegionsOrExit(init, &core_arena, optimized_core_module, build_args.diagnostics);
 
     var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
@@ -1255,6 +1275,7 @@ fn buildNative(
 
 fn buildBpf(
     init: std.process.Init,
+    target: *const target_registry.TargetContract,
     module: @import("frontend_bridge/ttree.zig").Module,
     build_args: BuildArgs,
 ) !void {
@@ -1291,6 +1312,7 @@ fn buildBpf(
         try writeStderr(init.io, "\n");
         std.process.exit(1);
     };
+    try ensureTargetCapabilitiesOrExit(init, target, optimized_core_module);
     const inferred_core_module = try inferRegionsOrExit(init, &core_arena, optimized_core_module, build_args.diagnostics);
 
     var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
@@ -1570,7 +1592,8 @@ fn runBenchFixture(init: std.process.Init, argv0: []const u8, fixture: BenchFixt
 
     switch (frontend_result) {
         .success => |parsed| {
-            try buildBpf(init, parsed.module, .{
+            const bpf_target = target_registry.lookupByCliName("bpf") orelse return error.UnsupportedBuildTarget;
+            try buildBpf(init, bpf_target, parsed.module, .{
                 .target = "bpf",
                 .keep_zig = false,
                 .input_file = bench_input_name,
@@ -1826,6 +1849,7 @@ test {
     _ = pipeline;
     _ = @import("frontend_bridge/sexp_lexer.zig");
     _ = @import("frontend_bridge/sexp_parser.zig");
+    _ = @import("target/capability.zig");
     _ = @import("target/registry.zig");
     _ = @import("frontend_bridge/ttree.zig");
 }
