@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-15  
-**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, and MTF-2 NEAR no-storage adapter architecture
+**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, and MTF-3 portable contract core API architecture
 
 ## Context
 
@@ -457,6 +457,136 @@ current accomplishment. No implementation mission may claim MTF-2 runtime
 acceptance until NEAR Sandbox (and the companion local tooling needed to drive
 it) is installed and used to prove the method-export contract end to end.
 
+### 19. MTF-3 portable capabilities are abstract operations with target-owned mappings
+
+MTF-3 adds a portable contract core API architecture. The key rule is that
+portable capabilities are defined as **abstract operations** first, and each
+target family must then either:
+
+1. map that capability into an explicit target-owned adapter contract; or
+2. reject it with a target-aware unsupported-capability diagnostic.
+
+The portable capability surface for this milestone is intentionally small:
+
+- caller identity;
+- storage read;
+- storage write;
+- log;
+- return;
+- trap/revert.
+
+Those names describe **what the portable program is asking for**, not a promise
+that every target can provide the same runtime meaning.
+
+### 20. MTF-3 capability matrix and rejection policy
+
+The future capability contract is:
+
+| Portable capability | Native acceptance harness | Solana SBF | Generic WASM (MTF-1) | NEAR no-storage MVP (MTF-2) | EVM Yul MVP (MTF-4) |
+|---|---|---|---|---|---|
+| `Portable.Caller.current` | Optional harness-injected synthetic caller for tests only | Adapter-defined signer/account-meta view; must not be presented as identical to `msg.sender` | **Unsupported**: freestanding pure WASM has no caller host | **Unsupported in MTF-2**: no caller host imports in the no-storage MVP | **Deferred**: later EVM adapter may map to `msg.sender`, but MTF-4 does not claim it |
+| `Portable.Storage.read` | Optional harness-owned in-memory fixture only when a native adapter declares it | Adapter-owned account-data read, never implicit global storage | **Unsupported**: MTF-1 is import-free and hostless | **Unsupported in MTF-2**: storage host functions are explicitly out of scope | **Deferred**: EVM storage is out of MTF-4 scope pending later ADRs |
+| `Portable.Storage.write` | Optional harness-owned in-memory fixture only when a native adapter declares it | Adapter-owned account mutation/write path | **Unsupported**: MTF-1 is import-free and hostless | **Unsupported in MTF-2**: storage host functions are explicitly out of scope | **Deferred**: EVM storage is out of MTF-4 scope pending later ADRs |
+| `Portable.Log.emit` | Harness log sink or stdout capture | Solana log/syscall surface | **Unsupported**: import-free WASM MVP has no host log channel | `env.log_utf8` | **Deferred**: EVM logs/events are outside MTF-4 MVP |
+| `Portable.Return.finish` | Harness-captured return value | Adapter-defined success surface only; may require return-data bytes or other explicit adapter contract rather than a pretend universal VM return slot | Direct exported-function result within the scalar MTF-1 ABI | `env.value_return` | ABI-encoded return data once the EVM adapter exists |
+| `Portable.Trap.abort` | Harness failure / process error | Panic or explicit non-success adapter path | WASM trap | `env.panic_utf8` | `revert` once the EVM adapter exists |
+
+Rules that follow from this matrix:
+
+- a portable capability exists only when the requested target's registry entry
+  declares a mapping for it;
+- a target may reject a capability even if another target supports it;
+- adapter-owned semantics stay visible in documentation and diagnostics;
+- a rejected capability is a compile-time or preflight error, never a silent
+  fallback.
+
+### 21. Unsupported-capability diagnostics, invariants, and namespace rules
+
+Unsupported-capability diagnostics are first-class architecture requirements.
+Every future target must emit actionable diagnostics that name:
+
+- the requested target;
+- the capability or API surface used;
+- whether the failure is architectural, milestone-scoped, or toolchain-gated;
+- the nearest supported alternative, if one exists.
+
+Representative required diagnostics:
+
+- `Portable.Storage.read` under `--target=wasm`: reject with guidance that
+  MTF-1 generic WASM is import-free pure logic only and has no storage host.
+- `Portable.Caller.current` under `--target=near`: reject in the MTF-2
+  no-storage MVP because the minimal NEAR host surface does not expose caller
+  identity yet.
+- `Portable.Log.emit` under `--target=wasm`: reject because import-free WASM
+  has no host log channel; direct pure return values remain the supported smoke
+  path.
+
+Cross-chain invariants must trace into milestone gates rather than live as
+unowned aspirations:
+
+| Invariant | MTF-3 architecture rule | Milestone gates it constrains |
+|---|---|---|
+| Determinism | Portable capability APIs may not depend on hidden host behavior; target mappings must preserve explicit observable semantics | MTF-1 import-free pure exports, MTF-2 method input/output contract, MTF-4 ABI dispatch/revert checks |
+| Memory / resource bounds | Capability mappings must declare memory ownership, allocation limits, and metering-visible resource behavior | MTF-1 scalar-only export ABI, MTF-2 register/linear-memory boundary, later EVM gas-aware lowering |
+| ABI / account boundaries | Portable core cannot erase target entrypoint and state-boundary differences | MTF-1 scalar exports, MTF-2 `env.input` / `value_return`, Solana account adapters, MTF-4 selector dispatch |
+| Serialization / layout | Cross-target data exchange must be explicitly profiled, never inferred from a portable name | MTF-2 raw-bytes stance, later JSON/Borsh or Solidity ABI profiles, numeric ADR blocker for EVM |
+| Diagnostics | Unsupported target/capability pairs must fail with target-aware messages | MTF-3 capability diagnostics, all later target build/test gates |
+| Real toolchain conformance | Capability claims are valid only if the target's canonical tools and runners are present | MTF-1 Node WebAssembly, MTF-2 NEAR Sandbox/near-workspaces, MTF-4 `solc` + `anvil` + `cast` |
+
+Public API naming is likewise constrained. Future user-facing surfaces must
+follow these namespace rules:
+
+- `Portable.*` is reserved for operations whose contract can be written without
+  chain-specific nouns.
+- chain-specific semantics must stay under explicit namespaces such as
+  `Solana.*`, `Near.*`, `Evm.*`, or `NativeTest.*`.
+- no chain-specific API may be re-exported through a generic alias that hides
+  semantic differences.
+- documentation must show when a portable capability maps to a target-specific
+  surface instead of pretending the surface is identical everywhere.
+
+Examples:
+
+- acceptable: `Portable.Log.emit`, `Solana.Account.primary_signer`,
+  `Near.Runtime.predecessor`, `Evm.Context.msg_sender`;
+- rejected: `Portable.sender` when it really means `msg.sender`,
+  `Portable.account` when it really means a Solana account meta bundle, or
+  `Portable.storage` when the target has no stable storage contract.
+
+### 22. Target-aware toolchain preflight diagnostics are mandatory
+
+Every future target build and acceptance runner must execute preflight checks
+derived from the target registry/runtime manifest before lowering or launch.
+Those checks must verify both build tools and canonical acceptance runners.
+
+At minimum, the registry entry for each target must carry:
+
+- required binaries or runtimes;
+- which step needs each tool (build, adapter assembly, acceptance run, diff);
+- the diagnostic to show when the tool is absent;
+- whether the failure blocks build, acceptance, or target graduation.
+
+The MTF-3 minimum policy is:
+
+- **MTF-1 generic WASM:** require `zig` for artifact production and Node's
+  built-in WebAssembly runtime for the canonical import-free acceptance runner.
+- **MTF-2 NEAR:** require the future NEAR adapter toolchain plus
+  `near-sandbox`/`near-workspaces` before any mission claims runtime
+  acceptance; absence must produce an actionable prerequisite diagnostic.
+- **MTF-4 EVM:** require `solc`, `anvil`, and `cast` for strict-assembly
+  validation and local deploy/call smoke tests.
+
+Preflight failures must be specific. For example:
+
+- missing Node for `--target=wasm` acceptance should explain that the canonical
+  MTF-1 runner is unavailable, even if artifact generation might still be
+  possible;
+- missing `near-sandbox` for `--target=near` should explain that MTF-2 runtime
+  validation is blocked by missing NEAR Sandbox rather than by source-program
+  semantics;
+- missing `solc` or `anvil` for `--target=evm` should explain which part of
+  the validation flow cannot run.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
@@ -472,10 +602,13 @@ The following claims are explicitly disallowed:
 ## Consequences
 
 - Later milestones may extend this document, but they must preserve the MTF-0,
-  MTF-1, and MTF-2 statements above unless superseded by a later ADR.
+  MTF-1, MTF-2, and MTF-3 statements above unless superseded by a later ADR.
 - Multichain work is now blocked on explicit target contracts rather than
   roadmap optimism.
 - The current native/Solana baseline remains authoritative and unchanged.
+- Portable capability APIs are now required to expose unsupported-target
+  failures explicitly instead of pretending every adapter has equivalent host
+  semantics.
 - EVM planning remains blocked on the numeric-model ADR.
 - Future WASM-family work must prove each adapter independently; generic WASM
   success will not imply NEAR, CosmWasm, Substrate, Stylus, or Internet
@@ -484,7 +617,7 @@ The following claims are explicitly disallowed:
 ## Relationship to `docs/19-functional-multichain-roadmap.md`
 
 `docs/19-functional-multichain-roadmap.md` remains the exploratory product and
-milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 contract that
+milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 + MTF-3 contract that
 constrains how later milestones may be implemented.
 
 In short:
