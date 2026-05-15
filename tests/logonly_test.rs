@@ -55,6 +55,44 @@ fn test_logonly_emits_string_numeric_and_compute_logs() {
     let logs = log_collector.borrow();
     let messages = logs.get_recorded_content();
     assert!(
+        !messages
+            .iter()
+            .any(|message| message.contains("Program log: ZxCaml entrypoint")),
+        "logonly should not emit default entrypoint noise; captured logs: {messages:?}"
+    );
+    let hello_indexes = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            message
+                .contains("Program log: logonly: hello")
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let numeric_indexes = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            message
+                .contains("Program log: 0xb, 0x16, 0x21, 0x2c, 0x37")
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        hello_indexes.len(),
+        1,
+        "logonly should emit its string log exactly once; captured logs: {messages:?}"
+    );
+    assert_eq!(
+        numeric_indexes.len(),
+        1,
+        "logonly should emit its sol_log_64 values exactly once; captured logs: {messages:?}"
+    );
+    assert!(
+        hello_indexes[0] < numeric_indexes[0],
+        "logonly should emit its string log before its sol_log_64 values; captured logs: {messages:?}"
+    );
+    assert!(
         messages
             .iter()
             .any(|message| message.contains("Program log: logonly: hello")),

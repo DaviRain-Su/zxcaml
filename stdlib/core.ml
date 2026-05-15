@@ -495,6 +495,8 @@ module Syscall = struct
 
   external sol_log_64 : int -> int -> int -> int -> int -> unit = "sol_log_64_"
 
+  external sol_log_pubkey : pubkey -> unit = "sol_log_pubkey"
+
   external sol_sha256 : 'a -> 'a = "sol_sha256"
 
   external sol_get_clock_sysvar : unit -> clock = "sol_get_clock_sysvar"

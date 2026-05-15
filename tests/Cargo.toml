@@ -32,6 +32,14 @@ name = "logonly_test"
 path = "logonly_test.rs"
 
 [[test]]
+name = "log64_boundaries_test"
+path = "log64_boundaries_test.rs"
+
+[[test]]
+name = "log_account_key_test"
+path = "log_account_key_test.rs"
+
+[[test]]
 name = "transfer_sol_test"
 path = "transfer_sol_test.rs"
 
