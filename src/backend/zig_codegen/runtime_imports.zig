@@ -273,6 +273,7 @@ pub fn isSyscallExternalSymbol(symbol: []const u8) bool {
         std.mem.eql(u8, symbol, "sol_secp256k1_recover_into_account_data") or
         std.mem.eql(u8, symbol, "sol_get_clock_sysvar") or
         std.mem.eql(u8, symbol, "sol_get_rent_sysvar") or
+        std.mem.eql(u8, symbol, "sol_get_rent_lamports_per_byte_year") or
         std.mem.eql(u8, symbol, "sol_log_compute_units_") or
         std.mem.eql(u8, symbol, "sol_remaining_compute_units");
 }
@@ -407,6 +408,11 @@ pub fn emitSyscallAppExpr(
     if (std.mem.eql(u8, name, "Syscall.sol_get_clock_sysvar")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         try emitSyscallClockExpr(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Syscall.sol_get_rent_lamports_per_byte_year")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "@as(i64, @intCast(syscalls.sol_get_rent_lamports_per_byte_year()))");
         return true;
     }
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units")) {

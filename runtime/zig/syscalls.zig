@@ -232,6 +232,11 @@ pub inline fn sol_get_rent_sysvar() Rent {
     return .{};
 }
 
+/// Reads just `Rent.lamports_per_byte_year` through the direct syscall surface.
+pub inline fn sol_get_rent_lamports_per_byte_year() u64 {
+    return sol_get_rent_sysvar().lamports_per_byte_year;
+}
+
 /// Logs the currently consumed compute units through Solana's runtime.
 pub inline fn sol_log_compute_units_() void {
     if (comptime is_bpf) {
@@ -389,5 +394,6 @@ test "unsupported hosted syscall fallbacks stay explicit" {
     try std.testing.expectEqual(@as(u64, 0), rent.lamports_per_byte_year);
     try std.testing.expectEqual(@as(f64, 0), rent.exemption_threshold);
     try std.testing.expectEqual(@as(u8, 0), rent.burn_percent);
+    try std.testing.expectEqual(@as(u64, 0), sol_get_rent_lamports_per_byte_year());
     try std.testing.expectEqual(@as(u64, 0), sol_remaining_compute_units());
 }

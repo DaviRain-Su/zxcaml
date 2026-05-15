@@ -1199,6 +1199,8 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = bytes_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_get_clock_sysvar") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = clock_ty };
+    if (std.mem.eql(u8, name, "Syscall.sol_get_rent_lamports_per_byte_year") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
     if ((std.mem.eql(u8, name, "set_return_data") or std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) and arg_count == 1)

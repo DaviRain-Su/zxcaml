@@ -110,7 +110,10 @@ pub fn apply_platform_env(command: &mut Command) {
 pub fn compile_program_from_path(source_path: &Path, output_path: &Path) -> PathBuf {
     let root = repo_root();
     let _lock = acquire_build_lock(&root);
+    compile_program_from_path_locked(&root, source_path, output_path)
+}
 
+fn compile_program_from_path_locked(root: &Path, source_path: &Path, output_path: &Path) -> PathBuf {
     let mut command = Command::new(root.join("zig-out").join("bin").join("omlz"));
     command.current_dir(&root).args([
         "build",
@@ -155,6 +158,91 @@ pub fn compile_program(example: &str) -> PathBuf {
     compile_program_from_path(&source_path, &output_path)
 }
 
+pub fn compile_program_and_host_runner(
+    example: &str,
+    host_runner_relative_path: &str,
+    host_bin_name: &str,
+) -> (PathBuf, PathBuf) {
+    let root = repo_root();
+    let _lock = acquire_build_lock(&root);
+
+    let source_path = root.join("examples").join(format!("{example}.ml"));
+    let elf_path = root.join("build").join(format!("{example}.so"));
+    let elf_path = compile_program_from_path_locked(&root, &source_path, &elf_path);
+
+    let host_runner_path = root.join(host_runner_relative_path);
+    let host_bin_path = root.join("build").join(host_bin_name);
+    compile_host_runner_locked(&root, &host_runner_path, &host_bin_path);
+
+    (elf_path, host_bin_path)
+}
+
+pub fn compile_host_runner(host_runner_relative_path: &str, host_bin_name: &str) -> PathBuf {
+    let root = repo_root();
+    let _lock = acquire_build_lock(&root);
+    let host_runner_path = root.join(host_runner_relative_path);
+    let host_bin_path = root.join("build").join(host_bin_name);
+    compile_host_runner_locked(&root, &host_runner_path, &host_bin_path);
+    host_bin_path
+}
+
+fn compile_host_runner_locked(root: &Path, runner_path: &Path, output_path: &Path) {
+    let root_module_arg = format!("-Mroot={}", runner_path.display());
+    let vendored_sdk_arg = format!("-Mvendored_sdk={}", root.join("runtime/zig/sdk/root.zig").display());
+    let solana_sdk_m2_arg = format!(
+        "-Msolana_sdk_m2={}",
+        root.join("vendor/solana-program-sdk-zig/src/zxcaml_m2_root.zig")
+            .display()
+    );
+    let runtime_syscalls_arg = format!("-Mruntime_syscalls={}", root.join("runtime/zig/syscalls.zig").display());
+    let runtime_sysvar_arg = format!("-Mruntime_sysvar={}", root.join("runtime/zig/sysvar.zig").display());
+    let emit_bin_arg = format!("-femit-bin={}", output_path.display());
+
+    let mut command = Command::new("zig");
+    command.current_dir(root);
+    command.args([
+        "build-exe",
+        "-O",
+        "ReleaseSmall",
+        "--dep",
+        "vendored_sdk",
+        "--dep",
+        "solana_sdk_m2",
+        "--dep",
+        "runtime_syscalls",
+        "--dep",
+        "runtime_sysvar",
+        root_module_arg.as_str(),
+        vendored_sdk_arg.as_str(),
+        solana_sdk_m2_arg.as_str(),
+        runtime_syscalls_arg.as_str(),
+        runtime_sysvar_arg.as_str(),
+        emit_bin_arg.as_str(),
+    ]);
+    apply_platform_env(&mut command);
+
+    let result = command.output().unwrap_or_else(|error| {
+        panic!(
+            "failed to spawn `zig build-exe` for host runner {} -> {}: {error}",
+            runner_path.display(),
+            output_path.display()
+        )
+    });
+    assert!(
+        result.status.success(),
+        "`zig build-exe` for host runner {} -> {} failed\nstdout:\n{}\nstderr:\n{}",
+        runner_path.display(),
+        output_path.display(),
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        output_path.exists(),
+        "expected host runner artifact at {}",
+        output_path.display()
+    );
+}
+
 pub struct CompiledProgram {
     pub elf_path: PathBuf,
     pub generated_source: String,
@@ -174,5 +262,33 @@ pub fn compile_program_with_source(example: &str) -> CompiledProgram {
     CompiledProgram {
         elf_path: output_path,
         generated_source,
+    }
+}
+
+pub struct BinaryOutput {
+    pub status: std::process::ExitStatus,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+pub fn run_binary(path: &Path) -> BinaryOutput {
+    let root = repo_root();
+    let result = Command::new(path)
+        .current_dir(&root)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run {}: {error}", path.display()));
+
+    assert!(
+        result.status.success(),
+        "expected {} to succeed\nstdout:\n{}\nstderr:\n{}",
+        path.display(),
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    BinaryOutput {
+        status: result.status,
+        stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
     }
 }

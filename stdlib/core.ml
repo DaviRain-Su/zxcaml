@@ -501,6 +501,9 @@ module Syscall = struct
 
   external sol_get_clock_sysvar : unit -> clock = "sol_get_clock_sysvar"
 
+  external sol_get_rent_lamports_per_byte_year : unit -> int
+    = "sol_get_rent_lamports_per_byte_year"
+
   external sol_remaining_compute_units : unit -> int
     = "sol_remaining_compute_units"
 end
