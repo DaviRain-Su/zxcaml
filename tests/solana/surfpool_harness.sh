@@ -34,6 +34,8 @@ zxcaml_rpc_json() {
   local method="$1"
   local params="${2:-[]}"
   curl -sf \
+    --connect-timeout "${ZXCAML_SURFPOOL_RPC_CONNECT_TIMEOUT:-1}" \
+    --max-time "${ZXCAML_SURFPOOL_RPC_MAX_TIME:-2}" \
     -H 'Content-Type: application/json' \
     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$method\",\"params\":$params}" \
     "$RPC_URL"
@@ -58,6 +60,13 @@ zxcaml_surfpool_pid_owned() {
 zxcaml_report_port_listener() {
   local port="$1"
   lsof -nP -iTCP:"$port" -sTCP:LISTEN >&2 || true
+}
+
+zxcaml_explain_port_conflict() {
+  local port="$1"
+  echo "ERROR: required Surfpool port 127.0.0.1:$port is already in use by a listener that is not owned by ${SURFPOOL_PID_FILE}." >&2
+  echo "ERROR: stop that listener and rerun the harness; refusing to kill, reuse, or attach to unknown processes." >&2
+  zxcaml_report_port_listener "$port"
 }
 
 zxcaml_remove_stale_state() {
@@ -89,8 +98,7 @@ zxcaml_check_port_conflicts() {
   local port
   for port in "$RPC_PORT" "$WS_PORT"; do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "ERROR: required Surfpool port 127.0.0.1:$port is already in use. Refusing to kill unknown processes." >&2
-      zxcaml_report_port_listener "$port"
+      zxcaml_explain_port_conflict "$port"
       conflict=1
     fi
   done
@@ -100,12 +108,12 @@ zxcaml_check_port_conflicts() {
 zxcaml_start_surfpool() {
   zxcaml_remove_stale_state || return 1
 
+  zxcaml_check_port_conflicts || return 1
+
   if zxcaml_surfpool_ready; then
     echo "ERROR: $RPC_URL already answers getHealth, but no harness pidfile exists. Refusing to attach to an unknown Surfpool process." >&2
     return 1
   fi
-
-  zxcaml_check_port_conflicts || return 1
 
   : >"$SURFPOOL_LOG_FILE"
   echo "==> starting Surfpool at $RPC_URL (ws://127.0.0.1:$WS_PORT)"
