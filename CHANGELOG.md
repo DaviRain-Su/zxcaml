@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — R13c Solana account guard diagnostics
+
+- Added UI coverage for common `Account.*` helper misuse cases: non-account
+  inputs to `Account.is_signer` / `Account.data_len` and non-bytes keys passed
+  to `Account.has_key`.
+- Expanded the English and Chinese Solana guide with the recommended account
+  guard pattern, IDL metadata behavior, and `error_` custom-code convention.
+
 ### Changed — R13b Solana account guard IDL polish
 
 - `omlz idl` now recognizes `account` parameters represented as either record

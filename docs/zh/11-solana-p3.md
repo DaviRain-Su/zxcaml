@@ -58,6 +58,28 @@ runtime 把 `key`、`data` 和 `owner` 保存为指向序列化输入 buffer 的
 而不是复制这些字节。这样能让 BPF 上的 account 访问保持可预测，并符合仅
 arena 的内存模型。
 
+### Account guard helper 模式
+
+entrypoint 在 mutation 前验证 account meta 时，优先使用 `Account` stdlib helper：
+
+```ocaml
+let error_missing_signer = 1
+let error_missing_writable = 2
+let error_wrong_owner = 3
+
+let entrypoint authority guarded_account instruction_data =
+  let _ = instruction_data in
+  if not (Account.is_signer authority) then error_missing_signer
+  else if not (Account.is_writable guarded_account) then error_missing_writable
+  else if not (Account.is_owned_by guarded_account (Account.key authority)) then error_wrong_owner
+  else 0
+```
+
+这样 account 顺序保持显式（先 `authority`，再 `guarded_account`），程序返回稳定
+custom code 而不是 panic，并且 `omlz idl` 会从同一组 guard 表达式推导 `signer` /
+`writable` metadata。`Account.is_signer 1`、`Account.data_len bytes` 或
+`Account.has_key account 1` 这类误用会在 lowering 前由 OCaml frontend 拒绝。
+
 ### 示例
 
 `examples/log_accounts.ml` 是 account/syscall smoke 程序。当前 backend 会把

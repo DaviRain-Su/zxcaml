@@ -1,0 +1,5 @@
+error[OCAML-FRONTEND]: This expression has type "bytes" but an expression was expected of type "Core.account"
+ --> tests/ui/account_data_len_bytes.ml:1:29
+  |
+1 | let value = Account.data_len (Bytes.of_string "abc")
+  |                             ^^^^^^^^^^^^^^^^^^^^^^^

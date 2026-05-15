@@ -62,6 +62,30 @@ The runtime stores `key`, `data`, and `owner` as views into the serialized input
 buffer rather than copying those bytes. That keeps account access predictable on
 BPF and matches the arena-only memory model.
 
+### Account guard helper pattern
+
+Prefer the `Account` stdlib helpers when an entrypoint validates account metas
+before mutation:
+
+```ocaml
+let error_missing_signer = 1
+let error_missing_writable = 2
+let error_wrong_owner = 3
+
+let entrypoint authority guarded_account instruction_data =
+  let _ = instruction_data in
+  if not (Account.is_signer authority) then error_missing_signer
+  else if not (Account.is_writable guarded_account) then error_missing_writable
+  else if not (Account.is_owned_by guarded_account (Account.key authority)) then error_wrong_owner
+  else 0
+```
+
+This keeps the account order explicit (`authority`, then `guarded_account`),
+returns stable custom codes instead of panicking, and lets `omlz idl` derive
+`signer` / `writable` metadata from the same guard expressions. Misuse such as
+`Account.is_signer 1`, `Account.data_len bytes`, or `Account.has_key account 1`
+is rejected by the OCaml frontend before lowering.
+
 ### Example
 
 `examples/log_accounts.ml` is the account/syscall smoke program. The current

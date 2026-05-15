@@ -1,0 +1,5 @@
+error[OCAML-FRONTEND]: This expression has type "int" but an expression was expected of type "bytes"
+ --> tests/ui/account_has_key_int.ml:12:43
+  |
+12 | let value = Account.has_key sample_account 1
+  |                                           ^
