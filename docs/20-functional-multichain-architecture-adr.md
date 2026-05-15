@@ -820,6 +820,80 @@ The architecture policy for these reserved adapters is strict:
   need an independent target contract, adapter ABI, capability mapping, and
   acceptance gate. Success for one does not imply readiness for another.
 
+### 30. The seven MTF milestones form one connected sequence, and current support stays separate from future targets
+
+This ADR defines exactly **seven** multichain milestones:
+**MTF-0**, **MTF-1**, **MTF-2**, **MTF-3**, **MTF-4**, **MTF-5**, and
+**MTF-6**.
+
+They are connected by explicit deliverables and gates:
+
+| Milestone | Depends on | Delivers to the next milestone |
+|---|---|---|
+| **MTF-0** target contract ADR | current native/Solana baseline plus existing ADRs | vocabulary, registry/manifest shape, graduation gates, anti-overclaim language, and the numeric blocker used by every later target |
+| **MTF-1** generic WASM | MTF-0 target vocabulary, backend/adapter seam, and graduation gates | a hostless `wasm32-freestanding` pure-logic smoke target that later adapter families may build on without inheriting support |
+| **MTF-2** NEAR no-storage adapter | MTF-1 generic WASM artifact assumptions plus MTF-0 adapter contract rules | a method-export host-adapter contract with explicit input/return/log/panic boundaries and a named sandbox-readiness prerequisite |
+| **MTF-3** portable capability API | MTF-0 vocabulary plus MTF-1/MTF-2 target contracts | the portable capability matrix, namespace policy, and unsupported-capability diagnostics used by every future adapter/backend |
+| **MTF-4** EVM/Yul MVP | MTF-0 numeric blocker and MTF-3 capability/diagnostic rules | a sibling Yul backend contract, strict-assembly validation path, and ABI/revert scope that stays separate from Zig-output targets |
+| **MTF-5** verified extraction profile | MTF-0 anti-overclaim rules and MTF-3 portable-core boundaries | a constrained `zxcaml-verified-subset`, runnable evidence expectations, and trust-boundary language for proof-backed portable logic |
+| **MTF-6** additional adapter reservation | MTF-1 generic WASM separation, MTF-3 capability rules, and the earlier graduation policy | a reservation matrix for later adapters that forbids inherited support and requires named owners plus real toolchain gates |
+
+Support status remains explicitly split between the **current verified
+baseline** and **future planned targets**:
+
+| Target family | Status in this ADR | Notes |
+|---|---|---|
+| **`native`** | implemented baseline | Current supported build target today. |
+| **Solana `bpf`** | implemented baseline | Current supported build target today through `solana-zig`. |
+| **Generic WASM** | future / experimental architecture only | Planned by MTF-1; no current target implementation or support claim. |
+| **NEAR** | future / experimental architecture only | Planned by MTF-2; adapter contract only, no current runtime validation. |
+| **EVM/Yul** | future / experimental architecture only | Planned by MTF-4; sibling backend contract only, blocked on numeric ADR. |
+| **Verified extraction profile** | future / accepted-hosting concept only | Planned by MTF-5; constrains claims about proof-backed portable logic only. |
+| **CosmWasm / Substrate / Stylus / Internet Computer / similar** | reserved only | MTF-6 reserves them as candidates; none inherit support from generic WASM. |
+
+### 31. Verified tool readiness, upper syntax boundaries, and acceptance surface are explicit
+
+The verified local toolchain/readiness snapshot for this architecture-only ADR
+slice is:
+
+| Tool / runtime | Verified state | Impact on this ADR |
+|---|---|---|
+| `zig 0.16.0` | available | Current compiler/build baseline and planned generic WASM builder. |
+| Node `v25.9.0` WebAssembly runtime | available | Canonical MTF-1 import-free `.wasm` runner. |
+| `solana-zig 0.16.0` | available | Confirms the current Solana `bpf` baseline toolchain. |
+| `solana-cli 3.1.12` | available | Confirms the current Solana acceptance environment exists. |
+| `solc 0.8.34` | available | Future MTF-4 strict-assembly validator. |
+| `anvil 1.5.1-stable` | available | Future MTF-4 local EVM execution runner. |
+| `cast 1.5.1-stable` | available | Future MTF-4 deploy/call and ABI-observation tool. |
+| `forge 1.5.1-stable` | available | Optional future EVM workflow wrapper; not the canonical MVP gate. |
+| `wasmtime` | unavailable locally | Not required because MTF-1 uses Node WebAssembly. |
+| `wasmer` | unavailable locally | Not required because MTF-1 uses Node WebAssembly. |
+| `near` / `near-sandbox` / `near-workspaces` | unavailable locally | MTF-2 remains architecture-only until NEAR Sandbox tooling is installed. |
+| `revm` CLI | unavailable locally | Non-blocking because MTF-4 uses `solc` + `anvil` + `cast`. |
+
+Upper syntaxes and future source layers are also bounded explicitly:
+
+- **ReasonML / ReScript-like syntax layers** may only participate by lowering
+  deterministically into ordinary `.ml` accepted by upstream OCaml and then by
+  the ZxCaml subset gate; this ADR does **not** commit to a new frontend
+  language or alternate runtime semantics.
+- **PPX or custom DSL expansions** are acceptable only when the expansion
+  result is plain OCaml that remains subset-safe, deterministic, and readable
+  through the existing `compiler-libs` frontend.
+- **Verified-source extraction** from F*, Coq, WhyML, or similar systems is a
+  future input path only when the extracted OCaml fits the
+  `zxcaml-verified-subset`; extraction does not bypass the OCaml subset,
+  lowering, adapter, or runtime boundaries above.
+
+Final acceptance for this ADR slice is intentionally review-only:
+
+- document review of this ADR against the roadmap and existing ADRs;
+- shell-based tool/version checks and repository validators;
+- git diff/status review confirming the artifact stays architecture-only.
+
+No browser, Electron, TUI, app server, database, or interactive external
+service is required for final acceptance of this slice.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
