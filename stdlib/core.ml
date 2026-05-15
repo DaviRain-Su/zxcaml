@@ -692,6 +692,28 @@ module Format = struct
   let hex_of_int width n = hex_loop width n ""
 end
 
+module Account = struct
+  let key (account : account) = account.key
+
+  let owner (account : account) = account.owner
+
+  let data (account : account) = account.data
+
+  let lamports (account : account) = account.lamports
+
+  let data_len (account : account) = Bytes.length account.data
+
+  let is_signer (account : account) = account.is_signer
+
+  let is_writable (account : account) = account.is_writable
+
+  let is_executable (account : account) = account.executable
+
+  let has_key (account : account) key = Bytes.equal account.key key
+
+  let is_owned_by (account : account) owner = Bytes.equal account.owner owner
+end
+
 module Pubkey = struct
   let zero : pubkey = Bytes.make 32 '\000'
 

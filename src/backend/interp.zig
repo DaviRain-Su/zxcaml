@@ -503,6 +503,7 @@ fn evalStdlibApp(
         return boolCtor(!v);
     }
 
+    if (try evalAccountApp(allocator, name, args, env)) |value| return value;
     if (try evalFixedAmountApp(allocator, name, args, env)) |value| return value;
 
     if (std.mem.eql(u8, name, "Format.int_to_string")) {
@@ -661,6 +662,46 @@ fn evalAssert(allocator: std.mem.Allocator, assert_expr: ir.AssertExpr, env: *st
     const cond = try evalExpr(allocator, assert_expr.condition.*, env);
     if (!try boolValue(cond)) return error.AssertFailure;
     return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+}
+
+fn evalAccountApp(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    args: []const *const ir.Expr,
+    env: *std.StringHashMap(Value),
+) EvalError!?Value {
+    if (std.mem.eql(u8, name, "Account.key") or std.mem.eql(u8, name, "Account.owner") or std.mem.eql(u8, name, "Account.data")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const record = try accountRecord(try evalExpr(allocator, args[0].*, env));
+        const field_name = if (std.mem.eql(u8, name, "Account.key")) "key" else if (std.mem.eql(u8, name, "Account.owner")) "owner" else "data";
+        return findRecordValue(record, field_name) orelse error.UnsupportedExpr;
+    }
+    if (std.mem.eql(u8, name, "Account.lamports")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const record = try accountRecord(try evalExpr(allocator, args[0].*, env));
+        return findRecordValue(record, "lamports") orelse error.UnsupportedExpr;
+    }
+    if (std.mem.eql(u8, name, "Account.data_len")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const record = try accountRecord(try evalExpr(allocator, args[0].*, env));
+        const data = try stringValue(findRecordValue(record, "data") orelse return error.UnsupportedExpr);
+        return .{ .Int = @intCast(data.len) };
+    }
+    if (std.mem.eql(u8, name, "Account.is_signer") or std.mem.eql(u8, name, "Account.is_writable") or std.mem.eql(u8, name, "Account.is_executable")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const record = try accountRecord(try evalExpr(allocator, args[0].*, env));
+        const field_name = if (std.mem.eql(u8, name, "Account.is_signer")) "is_signer" else if (std.mem.eql(u8, name, "Account.is_writable")) "is_writable" else "executable";
+        return findRecordValue(record, field_name) orelse error.UnsupportedExpr;
+    }
+    if (std.mem.eql(u8, name, "Account.has_key") or std.mem.eql(u8, name, "Account.is_owned_by")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const record = try accountRecord(try evalExpr(allocator, args[0].*, env));
+        const field_name = if (std.mem.eql(u8, name, "Account.has_key")) "key" else "owner";
+        const actual = try stringValue(findRecordValue(record, field_name) orelse return error.UnsupportedExpr);
+        const expected = try stringValue(try evalExpr(allocator, args[1].*, env));
+        return boolCtor(std.mem.eql(u8, actual, expected));
+    }
+    return null;
 }
 
 fn evalFixedAmountApp(
@@ -1063,6 +1104,13 @@ fn evalAccountFieldSet(allocator: std.mem.Allocator, field_set: ir.AccountFieldS
     _ = try evalExpr(allocator, field_set.account_expr.*, env);
     _ = try evalExpr(allocator, field_set.value.*, env);
     return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+}
+
+fn accountRecord(value: Value) EvalError!RecordValue {
+    return switch (value) {
+        .Record => |record| record,
+        else => error.UnsupportedExpr,
+    };
 }
 
 fn findRecordValue(record: RecordValue, field_name: []const u8) ?Value {

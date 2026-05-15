@@ -136,6 +136,10 @@ name = "assert_panic_test"
 path = "assert_panic_test.rs"
 
 [[test]]
+name = "account_guard_test"
+path = "account_guard_test.rs"
+
+[[test]]
 name = "dao_voting_test"
 path = "dao_voting_test.rs"
 

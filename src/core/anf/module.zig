@@ -1137,6 +1137,7 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
     const int_option = try optionTy(arena, .Int);
     const int_result = try resultTy(arena, .Int, .Int);
     const bytes_ty: ir.Ty = .String;
+    const account_ty: ir.Ty = .{ .Record = .{ .name = "account", .params = &.{} } };
     const clock_ty: ir.Ty = .{ .Record = .{ .name = "clock", .params = &.{} } };
     const account_meta_ty: ir.Ty = .{ .Record = .{ .name = "account_meta", .params = &.{} } };
     const instruction_ty: ir.Ty = .{ .Record = .{ .name = "instruction", .params = &.{} } };
@@ -1172,6 +1173,15 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = int_option };
     if (std.mem.eql(u8, name, "Result.error") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{int_result}), .return_ty = int_option };
+
+    if ((std.mem.eql(u8, name, "Account.key") or std.mem.eql(u8, name, "Account.owner") or std.mem.eql(u8, name, "Account.data")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{account_ty}), .return_ty = bytes_ty };
+    if ((std.mem.eql(u8, name, "Account.lamports") or std.mem.eql(u8, name, "Account.data_len")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{account_ty}), .return_ty = .Int };
+    if ((std.mem.eql(u8, name, "Account.is_signer") or std.mem.eql(u8, name, "Account.is_writable") or std.mem.eql(u8, name, "Account.is_executable")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{account_ty}), .return_ty = .Bool };
+    if ((std.mem.eql(u8, name, "Account.has_key") or std.mem.eql(u8, name, "Account.is_owned_by")) and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ account_ty, bytes_ty }), .return_ty = .Bool };
 
     if (std.mem.eql(u8, name, "Syscall.sol_log") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.String}), .return_ty = .Unit };

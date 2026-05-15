@@ -122,7 +122,7 @@ whitelisted stdlib surface 之外的 labelled arguments  optional arguments  loc
 ## 6. 程序可见的标准库
 
 内置 stdlib（`stdlib/core.ml`）定义 `Option`、`Result`、`List`、`Map`、`Set`、`String`、
-`Char`、`Fixed`、`Amount`、`Crypto`、`Pubkey` 和面向 Solana 的 helper 模块。核心函数式表面包含常用函数：
+`Char`、`Account`、`Fixed`、`Amount`、`Crypto`、`Pubkey` 和面向 Solana 的 helper 模块。核心函数式表面包含常用函数：
 
 - `List.length`、`List.map`、`List.filter`、`List.fold_left`、`List.rev`、
   `List.append`、`List.hd`、`List.tl`；
@@ -133,6 +133,7 @@ whitelisted stdlib surface 之外的 labelled arguments  optional arguments  loc
 - `Map` / `Set` 构造和查找 helper；
 - `String.length`、`String.get`、`String.sub`；
 - `Char.code`、`Char.chr`；
+- `Account` 字段/谓词 helper，用于 signer、writable、executable、owner、key、lamports 和 data length 检查；
 - `Fixed` 六位小数定点数 arithmetic 和 `Amount` basis-point helper；
 - `Crypto.sha256`、`Crypto.keccak256`，以及 `Pubkey` 常量 / helper。
 

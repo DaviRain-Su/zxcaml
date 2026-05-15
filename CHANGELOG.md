@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — R13 Solana account guard helpers
+
+- Added an `Account` stdlib module with BPF-aware field/read helpers:
+  `key`, `owner`, `data`, `lamports`, `data_len`, `is_signer`,
+  `is_writable`, `is_executable`, `has_key`, and `is_owned_by`.
+- Added compiler, interpreter, Zig-codegen, and LSP completion support for the
+  new `Account.*` helper surface.
+- Added `examples/account_guard.ml`, a Solana guard-flow example that returns
+  stable custom status codes for missing signer, missing writable, and wrong
+  owner preconditions.
+- Added `examples/tests/account_helpers_test.ml` plus a four-case Mollusk SVM
+  `account_guard_test`, raising the examples corpus to 86 programs and the Rust
+  integration baseline to 36 files / 47 test cases.
+- Hardened entrypoint account binding so account parameters used through
+  `Account.*` helper calls are materialized just like direct field reads, while
+  runtime-derived swallowed process args remain suppressible.
+
 ### Added — R12 mutable-state hardening
 
 - Added `examples/mutable_state_stress.ml`, an interpreter/native/BPF smoke

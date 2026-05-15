@@ -123,6 +123,18 @@ pub const items = [_]Item{
     .{ .label = "Bytes.equal", .kind = .function, .detail = "bytes -> bytes -> bool" },
     .{ .label = "Bytes.compare", .kind = .function, .detail = "bytes -> bytes -> int" },
 
+    // Account
+    .{ .label = "Account.key", .kind = .function, .detail = "account -> pubkey" },
+    .{ .label = "Account.owner", .kind = .function, .detail = "account -> pubkey" },
+    .{ .label = "Account.data", .kind = .function, .detail = "account -> bytes" },
+    .{ .label = "Account.lamports", .kind = .function, .detail = "account -> int" },
+    .{ .label = "Account.data_len", .kind = .function, .detail = "account -> int" },
+    .{ .label = "Account.is_signer", .kind = .function, .detail = "account -> bool" },
+    .{ .label = "Account.is_writable", .kind = .function, .detail = "account -> bool" },
+    .{ .label = "Account.is_executable", .kind = .function, .detail = "account -> bool" },
+    .{ .label = "Account.has_key", .kind = .function, .detail = "account -> pubkey -> bool" },
+    .{ .label = "Account.is_owned_by", .kind = .function, .detail = "account -> pubkey -> bool" },
+
     // Fixed / Amount
     .{ .label = "Fixed.scale", .kind = .constant, .detail = "int" },
     .{ .label = "Fixed.zero", .kind = .constant, .detail = "Fixed.t" },
@@ -170,15 +182,18 @@ test "stdlib whitelist contains expected anchors" {
     var saw_list_length = false;
     var saw_option_is_some = false;
     var saw_pubkey_zero = false;
+    var saw_account_is_signer = false;
     var saw_fixed_apply = false;
     for (items) |item| {
         if (std.mem.eql(u8, item.label, "List.length")) saw_list_length = true;
         if (std.mem.eql(u8, item.label, "Option.is_some")) saw_option_is_some = true;
         if (std.mem.eql(u8, item.label, "Pubkey.zero")) saw_pubkey_zero = true;
+        if (std.mem.eql(u8, item.label, "Account.is_signer")) saw_account_is_signer = true;
         if (std.mem.eql(u8, item.label, "Fixed.apply")) saw_fixed_apply = true;
     }
     try std.testing.expect(saw_list_length);
     try std.testing.expect(saw_option_is_some);
     try std.testing.expect(saw_pubkey_zero);
+    try std.testing.expect(saw_account_is_signer);
     try std.testing.expect(saw_fixed_apply);
 }

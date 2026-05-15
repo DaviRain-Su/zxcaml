@@ -159,12 +159,89 @@ pub fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
     };
 }
 
+pub fn exprUsesNameInAccountHelper(expr: lir.LExpr, name: []const u8) bool {
+    return switch (expr) {
+        .App => |app| blk: {
+            if (app.callee.* == .Var and std.mem.startsWith(u8, app.callee.Var.name, "Account.")) {
+                for (app.args) |arg| if (exprUsesName(arg.*, name)) break :blk true;
+            }
+            if (exprUsesNameInAccountHelper(app.callee.*, name)) break :blk true;
+            for (app.args) |arg| if (exprUsesNameInAccountHelper(arg.*, name)) break :blk true;
+            break :blk false;
+        },
+        .Let => |let_expr| exprUsesNameInAccountHelper(let_expr.value.*, name) or
+            (!std.mem.eql(u8, let_expr.name, name) and exprUsesNameInAccountHelper(let_expr.body.*, name)),
+        .Assert => |assert_expr| exprUsesNameInAccountHelper(assert_expr.condition.*, name),
+        .If => |if_expr| exprUsesNameInAccountHelper(if_expr.cond.*, name) or
+            exprUsesNameInAccountHelper(if_expr.then_branch.*, name) or
+            exprUsesNameInAccountHelper(if_expr.else_branch.*, name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| if (exprUsesNameInAccountHelper(arg.*, name)) break :blk true;
+            break :blk false;
+        },
+        .Ctor => |ctor_expr| blk: {
+            for (ctor_expr.args) |arg| if (exprUsesNameInAccountHelper(arg.*, name)) break :blk true;
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| if (exprUsesNameInAccountHelper(item.*, name)) break :blk true;
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| exprUsesNameInAccountHelper(tuple_proj.tuple_expr.*, name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| if (exprUsesNameInAccountHelper(field.value.*, name)) break :blk true;
+            break :blk false;
+        },
+        .RecordField => |record_field| exprUsesNameInAccountHelper(record_field.record_expr.*, name),
+        .RecordUpdate => |record_update| blk: {
+            if (exprUsesNameInAccountHelper(record_update.base_expr.*, name)) break :blk true;
+            for (record_update.fields) |field| if (exprUsesNameInAccountHelper(field.value.*, name)) break :blk true;
+            break :blk false;
+        },
+        .AccountFieldSet => |field_set| exprUsesNameInAccountHelper(field_set.account_expr.*, name) or
+            exprUsesNameInAccountHelper(field_set.value.*, name),
+        .Match => |match_expr| blk: {
+            if (exprUsesNameInAccountHelper(match_expr.scrutinee.*, name)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsName(arm.pattern, name)) {
+                    if (arm.guard) |guard_expr| if (exprUsesNameInAccountHelper(guard_expr.*, name)) break :blk true;
+                    if (exprUsesNameInAccountHelper(arm.body.*, name)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .Closure => false,
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| if (exprUsesNameInAccountHelper(elem.*, name)) break :blk true;
+            break :blk false;
+        },
+        .ArrayGet => |array_get| exprUsesNameInAccountHelper(array_get.arr.*, name) or
+            exprUsesNameInAccountHelper(array_get.idx.*, name),
+        .ArrayLength => |array_length| exprUsesNameInAccountHelper(array_length.arr.*, name),
+        .ArraySet => |array_set| exprUsesNameInAccountHelper(array_set.arr.*, name) or
+            exprUsesNameInAccountHelper(array_set.idx.*, name) or
+            exprUsesNameInAccountHelper(array_set.value.*, name),
+        .ArrayMake => |array_make| exprUsesNameInAccountHelper(array_make.init.*, name),
+        .RefMake => |ref_make| exprUsesNameInAccountHelper(ref_make.init.*, name),
+        .RefGet => |ref_get| exprUsesNameInAccountHelper(ref_get.target.*, name),
+        .RefSet => |ref_set| exprUsesNameInAccountHelper(ref_set.target.*, name) or
+            exprUsesNameInAccountHelper(ref_set.value.*, name),
+        .Constant, .Var => false,
+    };
+}
+
 pub fn exprUsesNameOutsideRuntimeProcessArgs(expr: lir.LExpr, name: []const u8) bool {
     return switch (expr) {
         .App => |app| blk: {
             if (exprUsesNameOutsideRuntimeProcessArgs(app.callee.*, name)) break :blk true;
             switch (app.callee.*) {
                 .Var => |callee| {
+                    if (std.mem.startsWith(u8, callee.name, "Account.")) {
+                        for (app.args) |arg| {
+                            if (exprUsesNameOutsideRuntimeProcessArgs(arg.*, name)) break :blk true;
+                        }
+                        break :blk false;
+                    }
                     if (std.mem.eql(u8, callee.name, "transfer_sol")) {
                         if (app.args.len > 3 and exprUsesNameOutsideRuntimeProcessArgs(app.args[3].*, name)) break :blk true;
                         break :blk false;
@@ -713,11 +790,11 @@ pub fn hasAccountRecordType(type_decls: []const lir.LRecordType) bool {
 }
 
 pub fn isAccountTy(ty: lir.LTy) bool {
-    const record = switch (ty) {
-        .Record => |value| value,
-        else => return false,
+    return switch (ty) {
+        .Record => |record| isAccountRecordTy(record),
+        .Adt => |adt| std.mem.eql(u8, adt.name, "account") and adt.params.len == 0,
+        else => false,
     };
-    return isAccountRecordTy(record);
 }
 
 pub fn isAccountRecordTy(record: lir.LRecordTy) bool {

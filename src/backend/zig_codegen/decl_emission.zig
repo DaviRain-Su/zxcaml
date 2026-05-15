@@ -9,6 +9,7 @@ const LetBindingStorage = common.LetBindingStorage;
 const freeEmittedFunctionName = common.freeEmittedFunctionName;
 const exprUsesName = common.exprUsesName;
 const exprUsesNameOutsideRuntimeProcessArgs = common.exprUsesNameOutsideRuntimeProcessArgs;
+const exprUsesNameInAccountHelper = common.exprUsesNameInAccountHelper;
 const zigTypeName = common.zigTypeName;
 const zigTypeExprName = common.zigTypeExprName;
 const payloadTypeName = common.payloadTypeName;
@@ -461,7 +462,7 @@ pub fn emitEntrypointRuntimeBindings(
         if (!paramNeedsEntrypointAccounts(param)) continue;
         const param_used_anywhere = exprUsesName(body, param.name);
         const param_used_outside_swallowed_args = exprUsesNameOutsideRuntimeProcessArgs(body, param.name);
-        if (param_used_anywhere and !param_used_outside_swallowed_args) continue;
+        if (param_used_anywhere and !param_used_outside_swallowed_args and !exprUsesNameInAccountHelper(body, param.name)) continue;
         bindings.accounts_used = true;
         if (isAccountTy(param.ty)) {
             try append(out, allocator, "    const ");

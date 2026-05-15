@@ -88,6 +88,10 @@ pub fn emitStdlibAppExpr(
         try emitStdlibBytesCompare(out, allocator, app, indent_level, ctx);
         return true;
     }
+    if (isAccountName(name)) {
+        try emitAccountApp(out, allocator, name, app, indent_level, ctx);
+        return true;
+    }
     if (isFixedAmountName(name)) {
         try emitFixedAmountApp(out, allocator, name, app, indent_level, ctx);
         return true;
@@ -101,6 +105,76 @@ pub fn emitStdlibAppExpr(
         return true;
     }
     return false;
+}
+
+fn isAccountName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "Account.key") or
+        std.mem.eql(u8, name, "Account.owner") or
+        std.mem.eql(u8, name, "Account.data") or
+        std.mem.eql(u8, name, "Account.lamports") or
+        std.mem.eql(u8, name, "Account.data_len") or
+        std.mem.eql(u8, name, "Account.is_signer") or
+        std.mem.eql(u8, name, "Account.is_writable") or
+        std.mem.eql(u8, name, "Account.is_executable") or
+        std.mem.eql(u8, name, "Account.has_key") or
+        std.mem.eql(u8, name, "Account.is_owned_by");
+}
+
+pub fn emitAccountApp(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (std.mem.eql(u8, name, "Account.key") or std.mem.eql(u8, name, "Account.owner")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, if (std.mem.eql(u8, name, "Account.key")) ").key[0..]" else ").owner[0..]");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Account.data")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ").data");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Account.lamports")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "@as(i64, @intCast((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ").lamportsValue()))");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Account.data_len")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "@as(i64, @intCast((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ").data.len))");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Account.is_signer") or std.mem.eql(u8, name, "Account.is_writable") or std.mem.eql(u8, name, "Account.is_executable")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "prelude.Bool.fromNative((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ").");
+        try append(out, allocator, if (std.mem.eql(u8, name, "Account.is_executable")) "executable" else if (std.mem.eql(u8, name, "Account.is_signer")) "is_signer" else "is_writable");
+        try append(out, allocator, ")");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Account.has_key") or std.mem.eql(u8, name, "Account.is_owned_by")) {
+        if (app.args.len != 2) return error.UnsupportedExpr;
+        try append(out, allocator, "prelude.Bool.fromNative(std.mem.eql(u8, (");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, if (std.mem.eql(u8, name, "Account.has_key")) ").key[0..], " else ").owner[0..], ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, "))");
+        return;
+    }
+    return error.UnsupportedExpr;
 }
 
 fn isFixedAmountName(name: []const u8) bool {

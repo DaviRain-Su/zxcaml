@@ -135,8 +135,8 @@ labelled arguments outside the whitelisted stdlib surface  optional arguments  l
 ## 6. Standard library visible to programs
 
 The bundled stdlib (`stdlib/core.ml`) defines `Option`, `Result`, `List`,
-`Map`, `Set`, `String`, `Char`, `Fixed`, `Amount`, `Crypto`, `Pubkey`, and
-Solana-facing helper modules. The core functional surface includes common
+`Map`, `Set`, `String`, `Char`, `Account`, `Fixed`, `Amount`, `Crypto`,
+`Pubkey`, and Solana-facing helper modules. The core functional surface includes common
 functions such as:
 
 - `List.length`, `List.map`, `List.filter`, `List.fold_left`, `List.rev`,
@@ -148,6 +148,8 @@ functions such as:
 - `Map`/`Set` construction and lookup helpers;
 - `String.length`, `String.get`, `String.sub`;
 - `Char.code`, `Char.chr`;
+- `Account` field/predicate helpers for signer, writable, executable, owner,
+  key, lamports, and data length checks;
 - `Fixed` six-decimal arithmetic and `Amount` basis-point helpers;
 - `Crypto.sha256`, `Crypto.keccak256`, and `Pubkey` constants/helpers.
 

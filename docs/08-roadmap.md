@@ -4,9 +4,9 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 85
-`.ml` programs, the Mollusk SVM suite contains 35 Rust integration-test files
-(43 Rust test cases), and P1-P9
+frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 86
+`.ml` programs, the Mollusk SVM suite contains 36 Rust integration-test files
+(47 Rust test cases), and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 Real-world Examples Batch 2 is tracked in [`CHANGELOG.md`](../CHANGELOG.md#real-world-examples-batch-2---2026-05-05).
 Real-world Examples Batch 3 adds the SPL Token primitive examples
@@ -98,7 +98,7 @@ the fmt corpus expansion.
 - **Maintenance hold:** pause new feature scope and keep the repository on
   validator, drift, and process-hygiene work if no high-confidence runtime or
   codegen direction is ready.
-- **Language-subset gap proposals:** ADR-015 is partially landed and now has R12 stress coverage across controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs; follow-ups remain deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. ADR-016 (multi-file modules via frontend `open Foo`) remains proposed in [`09-decisions.md`](./09-decisions.md).
+- **Language-subset gap proposals:** ADR-015 is partially landed and now has R12 stress coverage across controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs; follow-ups remain deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. R13 adds a small `Account` helper surface for Solana guard checks. ADR-016 (multi-file modules via frontend `open Foo`) remains proposed in [`09-decisions.md`](./09-decisions.md).
 
 ## Future / optional
 

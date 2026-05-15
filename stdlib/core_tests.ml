@@ -148,6 +148,13 @@ let () =
   assert (account.lamports = 42);
   assert (account.is_signer);
   assert (not account.executable);
+  assert (Account.lamports account = 42);
+  assert (Account.data_len account = 7);
+  assert (Account.is_signer account);
+  assert (not (Account.is_writable account));
+  assert (not (Account.is_executable account));
+  assert (Account.has_key account account.key);
+  assert (Account.is_owned_by account account.owner);
   let meta =
     { pubkey = account.key; is_writable = account.is_writable; is_signer = account.is_signer }
   in
