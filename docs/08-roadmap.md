@@ -11,7 +11,10 @@ are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 Real-world Examples Batch 2 is tracked in [`CHANGELOG.md`](../CHANGELOG.md#real-world-examples-batch-2---2026-05-05).
 Real-world Examples Batch 3 adds the SPL Token primitive examples
 `spl_burn`, `spl_close_account`, and `spl_revoke`.
-The public Zig runtime surface is documented in [`docs/runtime-api.md`](./runtime-api.md).
+R13 is closed as the account-guard product polish slice: `Account.*` helpers,
+`account_guard`, IDL signer/writable/error metadata, and UI misuse diagnostics
+are all represented in tests and docs. The public Zig runtime surface is
+documented in [`docs/runtime-api.md`](./runtime-api.md).
 
 ## Completed phases (P1–P9)
 
@@ -86,6 +89,14 @@ the fmt corpus expansion.
   `post-fmt-deepnested-baseline` then sealed the final generic `) word`
   spacing follow-up.
 
+### R-series product polish ledger
+
+| Slice | Status | Completed | Notes |
+|---|---|---:|---|
+| R11 — Fixed-point math surface | ✅ sealed | 2026-05-15 | Added deterministic `Fixed` / `Amount` helpers, `fixed_amm_quote`, tests, and bilingual docs. |
+| R12 — Mutable state hardening | ✅ sealed | 2026-05-15 | Hardened `int array`, `for` / `while`, and `int` / `bool` refs across interpreter/native/BPF with stress coverage. |
+| R13 — Solana account guard polish | ✅ sealed | 2026-05-15 | Added `Account` guard/read helpers, `account_guard`, Mollusk coverage, IDL metadata/error output, UI misuse diagnostics, and bilingual docs. |
+
 ### Phase 22+ candidates
 
 - **Codegen/runtime new directions:** only schedule concrete work with a named
@@ -98,7 +109,7 @@ the fmt corpus expansion.
 - **Maintenance hold:** pause new feature scope and keep the repository on
   validator, drift, and process-hygiene work if no high-confidence runtime or
   codegen direction is ready.
-- **Language-subset gap proposals:** ADR-015 is partially landed and now has R12 stress coverage across controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs; follow-ups remain deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. R13 adds a small `Account` helper surface for Solana guard checks. ADR-016 (multi-file modules via frontend `open Foo`) remains proposed in [`09-decisions.md`](./09-decisions.md).
+- **Language-subset gap proposals:** ADR-015 is partially landed and now has R12 stress coverage across controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs; follow-ups remain deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. R13 is sealed as a Solana account-guard polish slice. ADR-016 (multi-file modules via frontend `open Foo`) remains proposed in [`09-decisions.md`](./09-decisions.md).
 
 ## Future / optional
 

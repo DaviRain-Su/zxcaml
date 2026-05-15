@@ -3,7 +3,7 @@
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
 这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.5`，examples 语料包含 86 个 `.ml` 程序，Mollusk SVM 套件包含 36 个 Rust 集成测试文件（47 个 Rust test case），并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
-Real-world Examples Batch 3 补齐了 `spl_burn`、`spl_close_account` 和 `spl_revoke` 这三个 SPL Token primitive 示例。
+Real-world Examples Batch 3 补齐了 `spl_burn`、`spl_close_account` 和 `spl_revoke` 这三个 SPL Token primitive 示例。R13 已作为 account-guard 产品打磨 slice 收束：`Account.*` helper、`account_guard`、IDL signer/writable/error metadata，以及 UI 误用诊断都已有测试和文档覆盖。
 Zig runtime 公契面见 [`docs/zh/runtime-api.md`](./runtime-api.md)。
 
 ## 已完成阶段（P1–P9）
@@ -37,6 +37,14 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 - 一键复现入口是从仓库根目录运行 `make demo`；同一个 hackathon 索引也指向 `make demo-clean` 以及 `scripts/demo/` 下的组件脚本。
 - 当前 demo 叙事的公开落地页是 [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/)。它呈现 P1-P9 的编译器状态和 P8 之后的 hackathon 资产，但不会把 demo 包装成新的编译器阶段。
 
+## R-series 产品打磨 ledger
+
+| Slice | 状态 | 完成时间 | 说明 |
+|---|---|---:|---|
+| R11 — Fixed-point math surface | ✅ sealed | 2026-05-15 | 加入 deterministic `Fixed` / `Amount` helper、`fixed_amm_quote`、测试和双语文档。 |
+| R12 — Mutable state hardening | ✅ sealed | 2026-05-15 | 通过 stress coverage 加固解释器/native/BPF 上的 `int array`、`for` / `while`、`int` / `bool` ref。 |
+| R13 — Solana account guard polish | ✅ sealed | 2026-05-15 | 加入 `Account` guard/read helper、`account_guard`、Mollusk 覆盖、IDL metadata/error 输出、UI 误用诊断和双语文档。 |
+
 ## 未来 / 可选
 
 下面的内容保留给已封存 P1-P9 编译器范围之外、也不属于 P8 之后 hackathon/demo 工作的可选方向。
@@ -49,7 +57,7 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 
 ### 语言子集差距提案
 
-- ADR-015 已部分落地，并且现在有 R12 stress coverage 覆盖受控 `int` array、`for` / `while` loop，以及 `int` / `bool` ref；动态/泛型 array、更宽 ref 类型和跨函数/闭包 aliasing 仍是后续项。ADR-017 的 deterministic-number 方向现在已有初版六位小数 `Fixed` / `Amount` stdlib surface；更完整 fixed-point/decimal 设计仍是未来工作。R13 增加了小型 `Account` helper surface，用于 Solana guard checks。ADR-016（多文件模块，前端 `open Foo`）仍保留为提案。
+- ADR-015 已部分落地，并且现在有 R12 stress coverage 覆盖受控 `int` array、`for` / `while` loop，以及 `int` / `bool` ref；动态/泛型 array、更宽 ref 类型和跨函数/闭包 aliasing 仍是后续项。ADR-017 的 deterministic-number 方向现在已有初版六位小数 `Fixed` / `Amount` stdlib surface；更完整 fixed-point/decimal 设计仍是未来工作。R13 已作为 Solana account-guard polish slice 封存。ADR-016（多文件模块，前端 `open Foo`）仍保留为提案。
 
 ### PX — 多目标扩展（可选，有门槛）
 

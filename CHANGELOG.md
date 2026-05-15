@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — R13 closeout docs/status sync
+
+- Marked R13 as a sealed Solana account-guard polish slice in the English and
+  Chinese roadmaps, covering the helper API, BPF example, Mollusk test, IDL
+  metadata/error output, UI diagnostics, and bilingual docs.
+- Refreshed the README / Chinese README IDL and diagnostics bullets so the
+  current account-guard metadata and misuse-test behavior is visible from the
+  top-level status pages.
+
 ### Added — R13c Solana account guard diagnostics
 
 - Added UI coverage for common `Account.*` helper misuse cases: non-account

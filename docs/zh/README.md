@@ -131,7 +131,7 @@ Anchor-compatible IDL。
 - **CPI 和 PDA helpers:** 内置 `instruction` / `account_meta` records、`invoke`、`invoke_signed`、PDA helpers 和 return-data syscalls,形状贴近 Solana C ABI
 - **SPL-Token:** helper 支持和 acceptance 示例覆盖 legacy Tokenkeg primitives:transfer、init_account、burn、close_account、revoke;当前 SPL primitive 示例包括 `spl_burn`、`spl_close_account` 和 `spl_revoke`
 - **no_alloc:** `omlz check --no-alloc` 运行保守的 Core IR allocation proof,失败时报告导致分配的 node
-- **IDL:** `omlz idl <file>` 发出 Anchor 0.30+ compatible JSON,包含 SHA-256 discriminators、instruction accounts/args、account types、events、errors 和 constants
+- **IDL:** `omlz idl <file>` 发出 Anchor 0.30+ compatible JSON,包含 SHA-256 discriminators、instruction accounts/args、account types、events、errors 和 constants；`Account.is_signer` / `Account.is_writable` guard helper 会进入 signer/writable metadata，`error_` 常量会进入 IDL error table
 - **BPF 闭包:** 加固的一等闭包--捕获 ADT 值的闭包、多环境捕获和嵌套闭包都会 lower 成不依赖 BPF 不支持的 code-pointer relocations 的形态,并由 Solana closure acceptance tests 覆盖
 - **Solana 验收:** canonical hello harness、closure harness、account/syscall harness、simple CPI harness 和 SPL-Token transfer harness 都可在 `solana-test-validator` 上部署 + 调用
 - **Region inference:** 自动 escape analysis 会把不逃逸的局部值标成 stack allocation,降低 arena 压力并改善 BPF compute 效率
@@ -142,7 +142,7 @@ Anchor-compatible IDL。
 - **确定性:** 当前受支持 examples corpus 上,interpreter ≡ Zig native
 - **CI:** GitHub Actions 工作流以 `macos-latest` + `ubuntu-latest` matrix 运行 `./init.sh`、`zig build`、`zig build test`、`cargo test`(Mollusk SVM)、P3 `no_alloc` 与 IDL smoke checks、Mollusk tests,以及 examples `omlz check` corpus loop
 - **Mollusk SVM tests:** `tests/` 下有 36 个 Rust integration-test 文件（47 个 Rust test case），使用 Mollusk SVM v0.12.1(hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet、mutable_state_stress、account_guard、real-world zignocchio ports,以及 SPL Token primitive coverage)。`tests/bpf_test_support.rs` 统一了测试链路中 artifacts 的构建与加载逻辑；历史上的 ELF 后处理已移除（详见 `mission-internal/elf-patch-investigation.md`）。
-- **诊断信息:** 默认是 rustc-style 诊断,并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注
+- **诊断信息:** 默认是 rustc-style 诊断,并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注；UI coverage 包含常见 `Account.*` helper 误用场景
 - **LSP:** `zig build` 会安装 `omlz-lsp`,它通过 stdio JSON-RPC 提供 LSP push diagnostics
 - **Source maps:** BPF 构建会发出确定性的 source map,嵌入 `.zxcaml.srcmap`,并可用 `omlz unmap` 把 BPF PC 映回 OCaml 位置
 - **示例:** `examples/` 下 86 个程序,覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion(TCO)、hackathon greeting、zignocchio-port programs、dao_voting、ata_transfer、order_book、spl_burn、spl_close_account、spl_revoke、fixed_amm_quote、mutable_state_stress 和 account_guard
