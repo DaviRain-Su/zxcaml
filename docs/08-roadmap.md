@@ -100,9 +100,14 @@ the fmt corpus expansion.
 
 ### Phase 22+ candidates
 
+- **Functional multichain roadmap:** [`docs/19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md)
+  records the exploratory thesis that ZxCaml can unify smart-contract business
+  logic through a contract-safe OCaml subset while keeping chain runtimes behind
+  explicit adapters. It is not scheduled yet; implementation still requires a
+  target-contract ADR and acceptance gates.
 - **Codegen/runtime new directions:** only schedule concrete work with a named
-  runtime, BPF, or codegen acceptance target; speculative multi-target or
-  allocator changes still require an ADR-sized proposal.
+  runtime, BPF, WASM-chain, EVM/Yul, or codegen acceptance target; speculative
+  multi-target or allocator changes still require an ADR-sized proposal.
 - **BPF toolchain migration:** default status (2026-05-11) is direct `solana-zig` mode (`SOLANA_ZIG` unset/empty/`1`); this is the canonical build path.
 - **Tooling policy:** `sbpf-linker` is no longer required in normal workflows; maintain compatibility notes only as historical context.
 - **M-WIKI-5 wiki refresh:** refresh the Factory wiki after the next meaningful
@@ -116,6 +121,39 @@ the fmt corpus expansion.
 
 The prose below is retained for optional ideas that are outside the sealed P1-P9
 compiler scope and outside the post-P8 hackathon/demo work.
+
+### FM — Functional multichain contract core (optional, exploratory)
+
+**Status:** Not scheduled. Captured in
+[`19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md).
+
+This direction reframes future target work around a portable contract core:
+write deterministic business logic once in the ZxCaml OCaml subset, then bind it
+to Solana, WASM chains, EVM, or other runtimes through explicit adapters. The
+portable layer is pure/state-machine logic; the adapter layer owns entrypoints,
+storage, caller identity, serialization, logging, calls, errors, metadata, and
+acceptance tests.
+
+Candidate implementation sequence:
+
+1. **MTF-0 target ADR** — pin the portable subset, target terminology, and `int`
+   / word-size policy.
+2. **MTF-1 generic WASM** — prove `Core IR → Zig source → wasm32` with a pure
+   acceptance fixture.
+3. **MTF-2 NEAR adapter** — add exported methods and minimal NEAR host imports
+   before storage/promises.
+4. **MTF-3 portable contract API** — define chain-neutral capabilities and
+   diagnostics for unsupported targets.
+5. **MTF-4 EVM/Yul MVP** — add a sibling backend that emits Yul/bytecode rather
+   than routing EVM through generated Zig source.
+6. **MTF-5 verified extraction profile** — accept constrained OCaml extracted
+   from F*, Coq, or WhyML for formally verified business logic.
+7. **MTF-6 additional adapters** — CosmWasm, Substrate contracts, Stylus, or IC
+   only after a named use case and host model exist.
+
+This direction can host formally verified contract logic, but it does not make
+all ZxCaml output automatically formally verified. Proof claims belong to the
+upstream proof/extraction source plus the specific verified subset boundary.
 
 ### PX — Multi-target expansion (optional, gated)
 

@@ -215,6 +215,7 @@ Read in order:
 | P9 | [Source maps](./docs/source-map.md) | `.map` sidecar schema, `.zxcaml.srcmap`, and `omlz unmap` |
 | P9+ | [Wire compatibility](./docs/wire-compat.md) | Current wire `1.5`, prior additive bumps, and deprecated compatibility windows |
 | 18 | [Fixed-point math](./docs/18-fixed-point.md) | `Fixed` / `Amount` six-decimal arithmetic and bps helpers for deterministic DeFi examples |
+| 19 | [Functional multichain roadmap](./docs/19-functional-multichain-roadmap.md) | Exploratory plan for portable contract logic, WASM-chain adapters, EVM/Yul, upper syntaxes, and verified extraction |
 | —  | [Hackathon assets](./docs/hackathon/README.md) | Surfpool demo, Anchor comparison, Slidev decks, recording checklist, and submission copy |
 | —  | [Live site](https://zxcaml.pages.dev/) | Current public project landing page |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |
