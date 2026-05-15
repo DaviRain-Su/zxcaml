@@ -503,6 +503,8 @@ fn evalStdlibApp(
         return boolCtor(!v);
     }
 
+    if (try evalFixedAmountApp(allocator, name, args, env)) |value| return value;
+
     if (std.mem.eql(u8, name, "Format.int_to_string")) {
         if (args.len != 1) return error.ArityMismatch;
         const n = try intValue(try evalExpr(allocator, args[0].*, env));
@@ -659,6 +661,80 @@ fn evalAssert(allocator: std.mem.Allocator, assert_expr: ir.AssertExpr, env: *st
     const cond = try evalExpr(allocator, assert_expr.condition.*, env);
     if (!try boolValue(cond)) return error.AssertFailure;
     return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+}
+
+fn evalFixedAmountApp(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    args: []const *const ir.Expr,
+    env: *std.StringHashMap(Value),
+) EvalError!?Value {
+    const scale: i64 = 1000000;
+    const half_scale: i64 = scale / 2;
+
+    if (std.mem.eql(u8, name, "Fixed.of_scaled") or std.mem.eql(u8, name, "Fixed.to_scaled")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = try intValue(try evalExpr(allocator, args[0].*, env)) };
+    }
+    if (std.mem.eql(u8, name, "Fixed.of_int")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = wrappingMul(try intValue(try evalExpr(allocator, args[0].*, env)), scale) };
+    }
+    if (std.mem.eql(u8, name, "Fixed.to_int_trunc")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = try truncatingDiv(try intValue(try evalExpr(allocator, args[0].*, env)), scale) };
+    }
+    if (std.mem.eql(u8, name, "Fixed.to_int_floor")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const value = try intValue(try evalExpr(allocator, args[0].*, env));
+        const quotient = try truncatingDiv(value, scale);
+        const remainder = try truncatingMod(value, scale);
+        return .{ .Int = if (value < 0 and remainder != 0) quotient - 1 else quotient };
+    }
+    if (std.mem.eql(u8, name, "Fixed.to_int_ceil")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const value = try intValue(try evalExpr(allocator, args[0].*, env));
+        const quotient = try truncatingDiv(value, scale);
+        const remainder = try truncatingMod(value, scale);
+        return .{ .Int = if (value > 0 and remainder != 0) quotient + 1 else quotient };
+    }
+    if (std.mem.eql(u8, name, "Fixed.to_int_round")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const value = try intValue(try evalExpr(allocator, args[0].*, env));
+        const adjusted = if (value >= 0) wrappingAdd(value, half_scale) else wrappingSub(value, half_scale);
+        return .{ .Int = try truncatingDiv(adjusted, scale) };
+    }
+    if (std.mem.eql(u8, name, "Fixed.neg")) {
+        if (args.len != 1) return error.ArityMismatch;
+        return .{ .Int = wrappingSub(0, try intValue(try evalExpr(allocator, args[0].*, env))) };
+    }
+    if (std.mem.eql(u8, name, "Fixed.bps")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const value = try intValue(try evalExpr(allocator, args[0].*, env));
+        return .{ .Int = try truncatingDiv(wrappingMul(value, scale), 10000) };
+    }
+
+    if (args.len == 2) {
+        const left = try intValue(try evalExpr(allocator, args[0].*, env));
+        const right = try intValue(try evalExpr(allocator, args[1].*, env));
+        if (std.mem.eql(u8, name, "Fixed.add")) return .{ .Int = wrappingAdd(left, right) };
+        if (std.mem.eql(u8, name, "Fixed.sub")) return .{ .Int = wrappingSub(left, right) };
+        if (std.mem.eql(u8, name, "Fixed.mul")) return .{ .Int = try truncatingDiv(wrappingMul(left, right), scale) };
+        if (std.mem.eql(u8, name, "Fixed.div")) return .{ .Int = try truncatingDiv(wrappingMul(left, scale), right) };
+        if (std.mem.eql(u8, name, "Fixed.mul_int")) return .{ .Int = wrappingMul(left, right) };
+        if (std.mem.eql(u8, name, "Fixed.div_int")) return .{ .Int = try truncatingDiv(left, right) };
+        if (std.mem.eql(u8, name, "Fixed.ratio")) return .{ .Int = try truncatingDiv(wrappingMul(left, scale), right) };
+        if (std.mem.eql(u8, name, "Fixed.apply") or std.mem.eql(u8, name, "Amount.apply_rate")) return .{ .Int = try truncatingDiv(wrappingMul(left, right), scale) };
+        if (std.mem.eql(u8, name, "Fixed.compare")) return .{ .Int = if (left < right) -1 else if (left > right) 1 else 0 };
+        if (std.mem.eql(u8, name, "Fixed.equal")) return boolCtor(left == right);
+        if (std.mem.eql(u8, name, "Fixed.min")) return .{ .Int = if (left <= right) left else right };
+        if (std.mem.eql(u8, name, "Fixed.max")) return .{ .Int = if (left >= right) left else right };
+        if (std.mem.eql(u8, name, "Amount.fee_bps")) return .{ .Int = try truncatingDiv(wrappingMul(left, right), 10000) };
+        if (std.mem.eql(u8, name, "Amount.discount_bps")) return .{ .Int = wrappingSub(left, try truncatingDiv(wrappingMul(left, right), 10000)) };
+        if (std.mem.eql(u8, name, "Amount.premium_bps")) return .{ .Int = wrappingAdd(left, try truncatingDiv(wrappingMul(left, right), 10000)) };
+    }
+
+    return null;
 }
 
 fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap(Value)) EvalError!Value {

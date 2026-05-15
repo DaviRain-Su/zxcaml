@@ -4,7 +4,7 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 83
+frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 84
 `.ml` programs, the Mollusk SVM suite contains 34 Rust integration-test files
 (42 Rust test cases), and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -98,7 +98,7 @@ the fmt corpus expansion.
 - **Maintenance hold:** pause new feature scope and keep the repository on
   validator, drift, and process-hygiene work if no high-confidence runtime or
   codegen direction is ready.
-- **Language-subset gap proposals:** ADR-015 is partially landed (controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs) with follow-ups still deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-016 (multi-file modules via frontend `open Foo`) and ADR-017 (float replacement via a bundled `Fixed` Q64.64 stdlib module) remain proposed in [`09-decisions.md`](./09-decisions.md).
+- **Language-subset gap proposals:** ADR-015 is partially landed (controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs) with follow-ups still deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. ADR-016 (multi-file modules via frontend `open Foo`) remains proposed in [`09-decisions.md`](./09-decisions.md).
 
 ## Future / optional
 

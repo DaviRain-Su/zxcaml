@@ -122,7 +122,7 @@ whitelisted stdlib surface 之外的 labelled arguments  optional arguments  loc
 ## 6. 程序可见的标准库
 
 内置 stdlib（`stdlib/core.ml`）定义 `Option`、`Result`、`List`、`Map`、`Set`、`String`、
-`Char`、`Crypto`、`Pubkey` 和面向 Solana 的 helper 模块。核心函数式表面包含常用函数：
+`Char`、`Fixed`、`Amount`、`Crypto`、`Pubkey` 和面向 Solana 的 helper 模块。核心函数式表面包含常用函数：
 
 - `List.length`、`List.map`、`List.filter`、`List.fold_left`、`List.rev`、
   `List.append`、`List.hd`、`List.tl`；
@@ -133,6 +133,7 @@ whitelisted stdlib surface 之外的 labelled arguments  optional arguments  loc
 - `Map` / `Set` 构造和查找 helper；
 - `String.length`、`String.get`、`String.sub`；
 - `Char.code`、`Char.chr`；
+- `Fixed` 六位小数定点数 arithmetic 和 `Amount` basis-point helper；
 - `Crypto.sha256`、`Crypto.keccak256`，以及 `Pubkey` 常量 / helper。
 
 这些函数都是普通 OCaml 子集代码，由上游 OCaml 类型检查，并由同一条管线编译。

@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — R11 fixed-point math surface
+
+- Added pure-OCaml `Fixed` and `Amount` stdlib modules for deterministic
+  six-decimal fixed-point math, basis-point fees, discounts/premiums, and
+  applying fixed rates to integer token amounts. The representation remains an
+  erased `int` alias, so no wire bump or runtime representation change is
+  required.
+- Added `examples/fixed_amm_quote.ml`, a BPF-friendly constant-product quote
+  smoke example that combines `Amount.fee_bps`, `Amount.discount_bps`,
+  `Fixed.ratio`, and `Amount.apply_rate`.
+- Added `examples/tests/fixed_test.ml` plus upstream `stdlib/core_tests.ml`
+  assertions, and exposed the new helpers through LSP stdlib completions.
+- Documented the new surface in `docs/18-fixed-point.md` and refreshed the
+  examples corpus count to 84.
+
 ### Added — R11.5 lift the match-scrutinee / `let`-destructure form restriction
 
 - The frontend now accepts arbitrary expressions as a `match` scrutinee,

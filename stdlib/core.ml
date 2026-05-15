@@ -583,6 +583,81 @@ module Bytes = struct
     loop 0
 end
 
+module Fixed = struct
+  (* Decimal fixed-point values with six fractional digits. The representation
+     is intentionally just an int in the accepted OCaml subset: one unit equals
+     one million scaled units. This keeps the first DeFi-oriented math surface
+     portable across the interpreter, native Zig, and Solana BPF without adding
+     a new runtime representation. *)
+  type t = int
+
+  let scale = 1000000
+
+  let zero = 0
+
+  let one = scale
+
+  let of_scaled raw = raw
+
+  let to_scaled value = value
+
+  let of_int value = value * scale
+
+  let to_int_trunc value = value / scale
+
+  let to_int_floor value =
+    let quotient = value / scale in
+    let remainder = value mod scale in
+    if value < 0 && remainder <> 0 then quotient - 1 else quotient
+
+  let to_int_ceil value =
+    let quotient = value / scale in
+    let remainder = value mod scale in
+    if value > 0 && remainder <> 0 then quotient + 1 else quotient
+
+  let to_int_round value =
+    if value >= 0 then (value + (scale / 2)) / scale
+    else (value - (scale / 2)) / scale
+
+  let add left right = left + right
+
+  let sub left right = left - right
+
+  let neg value = 0 - value
+
+  let mul left right = (left * right) / scale
+
+  let div left right = (left * scale) / right
+
+  let mul_int value factor = value * factor
+
+  let div_int value divisor = value / divisor
+
+  let ratio numerator denominator = (numerator * scale) / denominator
+
+  let bps basis_points = (basis_points * scale) / 10000
+
+  let apply amount rate = (amount * rate) / scale
+
+  let compare left right = if left < right then -1 else if left > right then 1 else 0
+
+  let equal left right = left = right
+
+  let min left right = if left <= right then left else right
+
+  let max left right = if left >= right then left else right
+end
+
+module Amount = struct
+  let fee_bps amount basis_points = (amount * basis_points) / 10000
+
+  let discount_bps amount basis_points = amount - fee_bps amount basis_points
+
+  let premium_bps amount basis_points = amount + fee_bps amount basis_points
+
+  let apply_rate amount rate = Fixed.apply amount rate
+end
+
 module Format = struct
   (* Digit lookup string; using String.sub keeps each digit as a 1-character
      string and avoids relying on Char-to-string conversions that the

@@ -1205,6 +1205,16 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Int}), .return_ty = .String };
     if (std.mem.eql(u8, name, "Format.hex_of_int") and arg_count == 2)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int }), .return_ty = .String };
+
+    if ((std.mem.eql(u8, name, "Fixed.of_scaled") or std.mem.eql(u8, name, "Fixed.to_scaled") or std.mem.eql(u8, name, "Fixed.of_int") or std.mem.eql(u8, name, "Fixed.to_int_trunc") or std.mem.eql(u8, name, "Fixed.to_int_floor") or std.mem.eql(u8, name, "Fixed.to_int_ceil") or std.mem.eql(u8, name, "Fixed.to_int_round") or std.mem.eql(u8, name, "Fixed.neg") or std.mem.eql(u8, name, "Fixed.bps")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Int}), .return_ty = .Int };
+    if ((std.mem.eql(u8, name, "Fixed.add") or std.mem.eql(u8, name, "Fixed.sub") or std.mem.eql(u8, name, "Fixed.mul") or std.mem.eql(u8, name, "Fixed.div") or std.mem.eql(u8, name, "Fixed.mul_int") or std.mem.eql(u8, name, "Fixed.div_int") or std.mem.eql(u8, name, "Fixed.ratio") or std.mem.eql(u8, name, "Fixed.apply") or std.mem.eql(u8, name, "Amount.fee_bps") or std.mem.eql(u8, name, "Amount.discount_bps") or std.mem.eql(u8, name, "Amount.premium_bps") or std.mem.eql(u8, name, "Amount.apply_rate")) and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int }), .return_ty = .Int };
+    if ((std.mem.eql(u8, name, "Fixed.compare") or std.mem.eql(u8, name, "Fixed.min") or std.mem.eql(u8, name, "Fixed.max")) and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int }), .return_ty = .Int };
+    if (std.mem.eql(u8, name, "Fixed.equal") and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int }), .return_ty = .Bool };
+
     if (std.mem.eql(u8, name, "invoke") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{instruction_ty}), .return_ty = .Int };
     if (std.mem.eql(u8, name, "invoke_signed") and arg_count == 2)
@@ -2098,6 +2108,20 @@ pub fn lowerVarExpr(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, var_ref
             lowered.layout = layoutForTy(ty);
         }
         return .{ .Var = lowered };
+    }
+    if (std.mem.eql(u8, var_ref.name, "Fixed.scale") or std.mem.eql(u8, var_ref.name, "Fixed.one")) {
+        return .{ .Constant = .{
+            .value = .{ .Int = 1000000 },
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } };
+    }
+    if (std.mem.eql(u8, var_ref.name, "Fixed.zero")) {
+        return .{ .Constant = .{
+            .value = .{ .Int = 0 },
+            .ty = .Int,
+            .layout = layout.intConstant(),
+        } };
     }
     if (std.mem.eql(u8, var_ref.name, "max_int")) {
         return .{ .Constant = .{

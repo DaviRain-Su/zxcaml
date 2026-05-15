@@ -123,6 +123,29 @@ pub const items = [_]Item{
     .{ .label = "Bytes.equal", .kind = .function, .detail = "bytes -> bytes -> bool" },
     .{ .label = "Bytes.compare", .kind = .function, .detail = "bytes -> bytes -> int" },
 
+    // Fixed / Amount
+    .{ .label = "Fixed.scale", .kind = .constant, .detail = "int" },
+    .{ .label = "Fixed.zero", .kind = .constant, .detail = "Fixed.t" },
+    .{ .label = "Fixed.one", .kind = .constant, .detail = "Fixed.t" },
+    .{ .label = "Fixed.of_scaled", .kind = .function, .detail = "int -> Fixed.t" },
+    .{ .label = "Fixed.to_scaled", .kind = .function, .detail = "Fixed.t -> int" },
+    .{ .label = "Fixed.of_int", .kind = .function, .detail = "int -> Fixed.t" },
+    .{ .label = "Fixed.to_int_trunc", .kind = .function, .detail = "Fixed.t -> int" },
+    .{ .label = "Fixed.to_int_floor", .kind = .function, .detail = "Fixed.t -> int" },
+    .{ .label = "Fixed.to_int_ceil", .kind = .function, .detail = "Fixed.t -> int" },
+    .{ .label = "Fixed.to_int_round", .kind = .function, .detail = "Fixed.t -> int" },
+    .{ .label = "Fixed.add", .kind = .function, .detail = "Fixed.t -> Fixed.t -> Fixed.t" },
+    .{ .label = "Fixed.sub", .kind = .function, .detail = "Fixed.t -> Fixed.t -> Fixed.t" },
+    .{ .label = "Fixed.mul", .kind = .function, .detail = "Fixed.t -> Fixed.t -> Fixed.t" },
+    .{ .label = "Fixed.div", .kind = .function, .detail = "Fixed.t -> Fixed.t -> Fixed.t" },
+    .{ .label = "Fixed.ratio", .kind = .function, .detail = "int -> int -> Fixed.t" },
+    .{ .label = "Fixed.bps", .kind = .function, .detail = "int -> Fixed.t" },
+    .{ .label = "Fixed.apply", .kind = .function, .detail = "int -> Fixed.t -> int" },
+    .{ .label = "Amount.fee_bps", .kind = .function, .detail = "int -> int -> int" },
+    .{ .label = "Amount.discount_bps", .kind = .function, .detail = "int -> int -> int" },
+    .{ .label = "Amount.premium_bps", .kind = .function, .detail = "int -> int -> int" },
+    .{ .label = "Amount.apply_rate", .kind = .function, .detail = "int -> Fixed.t -> int" },
+
     // Format
     .{ .label = "Format.int_to_string", .kind = .function, .detail = "int -> string" },
     .{ .label = "Format.hex_of_int", .kind = .function, .detail = "int -> int -> string" },
@@ -147,12 +170,15 @@ test "stdlib whitelist contains expected anchors" {
     var saw_list_length = false;
     var saw_option_is_some = false;
     var saw_pubkey_zero = false;
+    var saw_fixed_apply = false;
     for (items) |item| {
         if (std.mem.eql(u8, item.label, "List.length")) saw_list_length = true;
         if (std.mem.eql(u8, item.label, "Option.is_some")) saw_option_is_some = true;
         if (std.mem.eql(u8, item.label, "Pubkey.zero")) saw_pubkey_zero = true;
+        if (std.mem.eql(u8, item.label, "Fixed.apply")) saw_fixed_apply = true;
     }
     try std.testing.expect(saw_list_length);
     try std.testing.expect(saw_option_is_some);
     try std.testing.expect(saw_pubkey_zero);
+    try std.testing.expect(saw_fixed_apply);
 }

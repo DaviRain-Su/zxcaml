@@ -88,6 +88,10 @@ pub fn emitStdlibAppExpr(
         try emitStdlibBytesCompare(out, allocator, app, indent_level, ctx);
         return true;
     }
+    if (isFixedAmountName(name)) {
+        try emitFixedAmountApp(out, allocator, name, app, indent_level, ctx);
+        return true;
+    }
     if (std.mem.eql(u8, name, "Format.int_to_string")) {
         try emitStdlibFormatIntToString(out, allocator, app, indent_level, ctx);
         return true;
@@ -97,6 +101,194 @@ pub fn emitStdlibAppExpr(
         return true;
     }
     return false;
+}
+
+fn isFixedAmountName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "Fixed.of_scaled") or
+        std.mem.eql(u8, name, "Fixed.to_scaled") or
+        std.mem.eql(u8, name, "Fixed.of_int") or
+        std.mem.eql(u8, name, "Fixed.to_int_trunc") or
+        std.mem.eql(u8, name, "Fixed.to_int_floor") or
+        std.mem.eql(u8, name, "Fixed.to_int_ceil") or
+        std.mem.eql(u8, name, "Fixed.to_int_round") or
+        std.mem.eql(u8, name, "Fixed.add") or
+        std.mem.eql(u8, name, "Fixed.sub") or
+        std.mem.eql(u8, name, "Fixed.neg") or
+        std.mem.eql(u8, name, "Fixed.mul") or
+        std.mem.eql(u8, name, "Fixed.div") or
+        std.mem.eql(u8, name, "Fixed.mul_int") or
+        std.mem.eql(u8, name, "Fixed.div_int") or
+        std.mem.eql(u8, name, "Fixed.ratio") or
+        std.mem.eql(u8, name, "Fixed.bps") or
+        std.mem.eql(u8, name, "Fixed.apply") or
+        std.mem.eql(u8, name, "Fixed.compare") or
+        std.mem.eql(u8, name, "Fixed.equal") or
+        std.mem.eql(u8, name, "Fixed.min") or
+        std.mem.eql(u8, name, "Fixed.max") or
+        std.mem.eql(u8, name, "Amount.fee_bps") or
+        std.mem.eql(u8, name, "Amount.discount_bps") or
+        std.mem.eql(u8, name, "Amount.premium_bps") or
+        std.mem.eql(u8, name, "Amount.apply_rate");
+}
+
+pub fn emitFixedAmountApp(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const scale = "1000000";
+    if (std.mem.eql(u8, name, "Fixed.of_scaled") or std.mem.eql(u8, name, "Fixed.to_scaled")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.of_int")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, " *% 1000000)");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.to_int_trunc")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "prelude.intDiv(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ", 1000000)");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.neg")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "(0 -% ");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.to_int_floor") or std.mem.eql(u8, name, "Fixed.to_int_ceil") or std.mem.eql(u8, name, "Fixed.to_int_round")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_fixed_v_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        if (std.mem.eql(u8, name, "Fixed.to_int_round")) {
+            try appendPrint(out, allocator, "const omlz_fixed_adj_{d} = if (omlz_fixed_v_{d} >= 0) omlz_fixed_v_{d} + 500000 else omlz_fixed_v_{d} - 500000;\n", .{ block_id, block_id, block_id, block_id });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "break :blk{d} prelude.intDiv(omlz_fixed_adj_{d}, 1000000);\n", .{ block_id, block_id });
+        } else {
+            try appendPrint(out, allocator, "const omlz_fixed_q_{d} = prelude.intDiv(omlz_fixed_v_{d}, 1000000);\n", .{ block_id, block_id });
+            try emitIndent(out, allocator, indent_level + 1);
+            try appendPrint(out, allocator, "const omlz_fixed_r_{d} = prelude.intMod(omlz_fixed_v_{d}, 1000000);\n", .{ block_id, block_id });
+            try emitIndent(out, allocator, indent_level + 1);
+            if (std.mem.eql(u8, name, "Fixed.to_int_floor")) {
+                try appendPrint(out, allocator, "break :blk{d} if (omlz_fixed_v_{d} < 0 and omlz_fixed_r_{d} != 0) omlz_fixed_q_{d} - 1 else omlz_fixed_q_{d};\n", .{ block_id, block_id, block_id, block_id, block_id });
+            } else {
+                try appendPrint(out, allocator, "break :blk{d} if (omlz_fixed_v_{d} > 0 and omlz_fixed_r_{d} != 0) omlz_fixed_q_{d} + 1 else omlz_fixed_q_{d};\n", .{ block_id, block_id, block_id, block_id, block_id });
+            }
+        }
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return;
+    }
+
+    if (std.mem.eql(u8, name, "Fixed.bps")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "prelude.intDiv((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, " *% 1000000), 10000)");
+        return;
+    }
+
+    if (app.args.len != 2) return error.UnsupportedExpr;
+    if (std.mem.eql(u8, name, "Fixed.add") or std.mem.eql(u8, name, "Fixed.sub") or std.mem.eql(u8, name, "Fixed.mul_int")) {
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        if (std.mem.eql(u8, name, "Fixed.add")) {
+            try append(out, allocator, " +% ");
+        } else if (std.mem.eql(u8, name, "Fixed.sub")) {
+            try append(out, allocator, " -% ");
+        } else {
+            try append(out, allocator, " *% ");
+        }
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.div_int")) {
+        try append(out, allocator, "prelude.intDiv(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, ", ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.mul") or std.mem.eql(u8, name, "Fixed.apply") or std.mem.eql(u8, name, "Amount.apply_rate")) {
+        try append(out, allocator, "prelude.intDiv((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, " *% ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try appendPrint(out, allocator, "), {s})", .{scale});
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.div") or std.mem.eql(u8, name, "Fixed.ratio")) {
+        try append(out, allocator, "prelude.intDiv((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, " *% 1000000), ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, ")");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Amount.fee_bps")) {
+        try append(out, allocator, "prelude.intDiv((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, " *% ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, "), 10000)");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Amount.discount_bps") or std.mem.eql(u8, name, "Amount.premium_bps")) {
+        try append(out, allocator, "(");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, if (std.mem.eql(u8, name, "Amount.discount_bps")) " -% " else " +% ");
+        try append(out, allocator, "prelude.intDiv((");
+        try emitExpr(out, allocator, app.args[0].*, indent_level, ctx);
+        try append(out, allocator, " *% ");
+        try emitExpr(out, allocator, app.args[1].*, indent_level, ctx);
+        try append(out, allocator, "), 10000))");
+        return;
+    }
+    if (std.mem.eql(u8, name, "Fixed.compare") or std.mem.eql(u8, name, "Fixed.min") or std.mem.eql(u8, name, "Fixed.max") or std.mem.eql(u8, name, "Fixed.equal")) {
+        const block_id = ctx.next_block_id;
+        ctx.next_block_id += 1;
+        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_fixed_a_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        try appendPrint(out, allocator, "const omlz_fixed_b_{d} = ", .{block_id});
+        try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+        try append(out, allocator, ";\n");
+        try emitIndent(out, allocator, indent_level + 1);
+        if (std.mem.eql(u8, name, "Fixed.compare")) {
+            try appendPrint(out, allocator, "break :blk{d} if (omlz_fixed_a_{d} < omlz_fixed_b_{d}) -1 else if (omlz_fixed_a_{d} > omlz_fixed_b_{d}) 1 else 0;\n", .{ block_id, block_id, block_id, block_id, block_id });
+        } else if (std.mem.eql(u8, name, "Fixed.equal")) {
+            try appendPrint(out, allocator, "break :blk{d} prelude.Bool.fromNative(omlz_fixed_a_{d} == omlz_fixed_b_{d});\n", .{ block_id, block_id, block_id });
+        } else if (std.mem.eql(u8, name, "Fixed.min")) {
+            try appendPrint(out, allocator, "break :blk{d} if (omlz_fixed_a_{d} <= omlz_fixed_b_{d}) omlz_fixed_a_{d} else omlz_fixed_b_{d};\n", .{ block_id, block_id, block_id, block_id, block_id });
+        } else {
+            try appendPrint(out, allocator, "break :blk{d} if (omlz_fixed_a_{d} >= omlz_fixed_b_{d}) omlz_fixed_a_{d} else omlz_fixed_b_{d};\n", .{ block_id, block_id, block_id, block_id, block_id });
+        }
+        try emitIndent(out, allocator, indent_level);
+        try append(out, allocator, "}");
+        return;
+    }
+    return error.UnsupportedExpr;
 }
 
 pub fn emitStdlibBytesEqual(
