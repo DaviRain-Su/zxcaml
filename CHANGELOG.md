@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — R13b Solana account guard IDL polish
+
+- `omlz idl` now recognizes `account` parameters represented as either record
+  or ADT types, so `Account.*` guard examples emit account metas instead of
+  treating account inputs as instruction args.
+- IDL account metadata now understands `Account.is_signer`,
+  `Account.is_writable`, and `Account.is_executable` helper calls when deriving
+  signer/writable flags.
+- `examples/account_guard.ml` now uses `error_`-prefixed custom-code constants
+  so its stable `Custom(1..3)` failures appear in the IDL `errors` array.
+
 ### Added — R13 Solana account guard helpers
 
 - Added an `Account` stdlib module with BPF-aware field/read helpers:

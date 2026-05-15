@@ -221,6 +221,14 @@ The original P3 schema was intentionally small and ZxCaml-specific. The
 current sealed P5/P8 toolchain emits Anchor-compatible IDL JSON while keeping
 the source of truth in the `.ml` program.
 
+R13 account helper calls also feed the IDL account metadata pass. For example,
+`Account.is_signer authority` marks `authority` as `signer: true`, and
+`Account.is_writable guarded_account` marks `guarded_account` as
+`writable: true`; those account parameters are emitted under instruction
+`accounts` instead of ordinary `args`. Prefer naming stable custom-code
+constants with an `error_` prefix (for example `error_missing_signer = 1`) so
+`omlz idl` can expose them in the top-level `errors` array.
+
 ## 7. CI coverage
 
 CI continues to run the cross-platform matrix on macOS and Ubuntu:

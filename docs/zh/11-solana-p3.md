@@ -209,6 +209,13 @@ zig-out/bin/omlz idl tests/idl/entrypoint.ml | python3 -m json.tool
 最初的 P3 schema 有意保持小而且 ZxCaml 专用。当前已封存的 P5/P8 toolchain 会发出
 Anchor-compatible IDL JSON，同时仍以 `.ml` 程序作为事实源。
 
+R13 的 account helper call 也会进入 IDL account metadata pass。例如
+`Account.is_signer authority` 会把 `authority` 标记为 `signer: true`，
+`Account.is_writable guarded_account` 会把 `guarded_account` 标记为
+`writable: true`；这些 account 参数会出现在 instruction 的 `accounts` 中，而不是普通
+`args`。推荐把稳定 custom code 常量命名为 `error_` 前缀（例如
+`error_missing_signer = 1`），这样 `omlz idl` 可以把它们暴露在顶层 `errors` 数组中。
+
 ## 7. CI 覆盖
 
 CI 继续在 macOS 和 Ubuntu 上运行跨平台 matrix：

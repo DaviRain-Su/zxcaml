@@ -402,11 +402,11 @@ fn isBuiltinRecordType(name: []const u8) bool {
 }
 
 fn isAccountTy(ty: ir.Ty) bool {
-    const record = switch (ty) {
-        .Record => |value| value,
-        else => return false,
+    return switch (ty) {
+        .Record => |record| std.mem.eql(u8, record.name, "account") and record.params.len == 0,
+        .Adt => |adt| std.mem.eql(u8, adt.name, "account") and adt.params.len == 0,
+        else => false,
     };
-    return std.mem.eql(u8, record.name, "account") and record.params.len == 0;
 }
 
 fn isUnitTy(ty: ir.Ty) bool {
@@ -432,7 +432,8 @@ fn accountFlagReferenced(expr: ir.Expr, param_name: []const u8, flag_name: []con
             break :blk accountFlagReferenced(group.body.*, param_name, flag_name);
         },
         .Assert => |assert_expr| accountFlagReferenced(assert_expr.condition.*, param_name, flag_name),
-        .App => |app| exprSliceFlagReferenced(app.args, param_name, flag_name) or accountFlagReferenced(app.callee.*, param_name, flag_name),
+        .App => |app| accountHelperFlagReferenced(app, param_name, flag_name) or
+            exprSliceFlagReferenced(app.args, param_name, flag_name) or accountFlagReferenced(app.callee.*, param_name, flag_name),
         .If => |if_expr| accountFlagReferenced(if_expr.cond.*, param_name, flag_name) or
             accountFlagReferenced(if_expr.then_branch.*, param_name, flag_name) or
             accountFlagReferenced(if_expr.else_branch.*, param_name, flag_name),
@@ -467,6 +468,23 @@ fn accountFlagReferenced(expr: ir.Expr, param_name: []const u8, flag_name: []con
             accountFlagReferenced(ref_set.value.*, param_name, flag_name),
         .Constant, .Var => false,
     };
+}
+
+fn accountHelperFlagReferenced(app: ir.App, param_name: []const u8, flag_name: []const u8) bool {
+    if (app.args.len == 0) return false;
+    const callee = switch (app.callee.*) {
+        .Var => |var_ref| var_ref.name,
+        else => return false,
+    };
+    const expected_helper = if (std.mem.eql(u8, flag_name, "is_signer"))
+        "Account.is_signer"
+    else if (std.mem.eql(u8, flag_name, "is_writable"))
+        "Account.is_writable"
+    else if (std.mem.eql(u8, flag_name, "executable"))
+        "Account.is_executable"
+    else
+        return false;
+    return std.mem.eql(u8, callee, expected_helper) and exprIsVarNamed(app.args[0].*, param_name);
 }
 
 fn exprSliceFlagReferenced(exprs: []const *const ir.Expr, param_name: []const u8, flag_name: []const u8) bool {

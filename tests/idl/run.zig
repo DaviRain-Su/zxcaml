@@ -111,6 +111,29 @@ test "idl: hackathon greet emits init and greet instructions" {
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"instruction_greet\"") == null);
 }
 
+test "idl: account guard helpers emit account metas instead of args" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const result = try runIdl(allocator, io, "examples/account_guard.ml");
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.exit_code != 0) {
+        std.debug.print("omlz idl failed with stderr:\n{s}\n", .{result.stderr});
+    }
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{});
+    defer parsed.deinit();
+
+    try expectContains(result.stdout, "\"metadata\":{\"name\":\"account_guard\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}");
+    try expectContains(result.stdout, "\"instructions\":[{\"name\":\"entrypoint\",\"discriminator\":[237,127,171,8,17,8,23,233],\"accounts\":[{\"name\":\"authority\",\"writable\":false,\"signer\":true},{\"name\":\"guarded_account\",\"writable\":true,\"signer\":false}],\"args\":[{\"name\":\"instruction_data\",\"type\":\"bytes\"}]}]");
+    try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_missing_signer\",\"code\":1},{\"name\":\"error_missing_writable\",\"code\":2},{\"name\":\"error_wrong_owner\",\"code\":3}]");
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"authority\",\"type\":{\"defined\":{\"name\":\"account\"}}") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"guarded_account\",\"type\":{\"defined\":{\"name\":\"account\"}}") == null);
+}
+
 test "idl: no entrypoint emits empty instructions array" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
