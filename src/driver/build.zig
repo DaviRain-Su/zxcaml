@@ -8,17 +8,13 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const target_manifest = @import("../target/manifest.zig");
 
 /// Options for the developer-convenience native build path.
 pub const NativeBuildOptions = struct {
     generated_zig_path: []const u8 = "out/program.zig",
     native_entry_path: []const u8 = "out/native_entry.zig",
     output_path: []const u8,
-};
-
-const RuntimeFile = struct {
-    src_path: []const u8,
-    out_path: []const u8,
 };
 
 const vendored_sdk_runtime_root = "out/runtime/sdk/root.zig";
@@ -28,35 +24,6 @@ const vendored_spl_token_root = "vendor/solana-program-sdk-zig/packages/spl-toke
 const vendored_spl_ata_root = "vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig";
 const vendored_solana_system_root = "vendor/solana-program-sdk-zig/packages/solana-system/src/root.zig";
 const vendored_spl_memo_root = "vendor/solana-program-sdk-zig/packages/spl-memo/src/root.zig";
-
-const runtime_files = [_]RuntimeFile{
-    .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
-    .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
-    .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
-    .{ .src_path = "runtime/zig/sdk/root.zig", .out_path = "out/runtime/sdk/root.zig" },
-    .{ .src_path = "runtime/zig/sdk/import_smoke.zig", .out_path = "out/runtime/sdk/import_smoke.zig" },
-    .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
-    .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
-    .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
-    .{ .src_path = "runtime/zig/programs/vault_v2.zig", .out_path = "out/runtime/programs/vault_v2.zig" },
-    .{ .src_path = "runtime/zig/programs/hackathon_greet.zig", .out_path = "out/runtime/programs/hackathon_greet.zig" },
-    .{ .src_path = "runtime/zig/programs/token_vault.zig", .out_path = "out/runtime/programs/token_vault.zig" },
-    .{ .src_path = "runtime/zig/programs/escrow_full.zig", .out_path = "out/runtime/programs/escrow_full.zig" },
-    .{ .src_path = "runtime/zig/programs/dao_voting.zig", .out_path = "out/runtime/programs/dao_voting.zig" },
-    .{ .src_path = "runtime/zig/programs/ata_transfer.zig", .out_path = "out/runtime/programs/ata_transfer.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_burn.zig", .out_path = "out/runtime/programs/spl_burn.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_close_account.zig", .out_path = "out/runtime/programs/spl_close_account.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_revoke.zig", .out_path = "out/runtime/programs/spl_revoke.zig" },
-    .{ .src_path = "runtime/zig/programs/order_book.zig", .out_path = "out/runtime/programs/order_book.zig" },
-    .{ .src_path = "runtime/zig/programs/ata.zig", .out_path = "out/runtime/programs/ata.zig" },
-    .{ .src_path = "runtime/zig/bs58.zig", .out_path = "out/runtime/bs58.zig" },
-    .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
-    .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
-    .{ .src_path = "runtime/zig/spl_token.zig", .out_path = "out/runtime/spl_token.zig" },
-    .{ .src_path = "runtime/zig/syscalls.zig", .out_path = "out/runtime/syscalls.zig" },
-    .{ .src_path = "runtime/zig/sysvar.zig", .out_path = "out/runtime/sysvar.zig" },
-    .{ .src_path = "runtime/zig/native_entry.zig", .out_path = "out/native_entry.zig" },
-};
 
 fn appendVendoredSdkModuleArgs(
     allocator: Allocator,
@@ -106,7 +73,7 @@ fn appendVendoredSdkModuleArgs(
 
 /// Builds a hosted native executable from generated Zig source.
 pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !void {
-    try materializeRuntime(allocator, io);
+    try target_manifest.materializeRuntimeForDispatch(allocator, io, .native);
 
     const emit_bin_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{options.output_path});
     defer allocator.free(emit_bin_arg);
@@ -141,24 +108,6 @@ pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !v
             return error.NativeBuildFailed;
         },
         .signal, .stopped, .unknown => return error.NativeBuildFailed,
-    }
-}
-
-fn materializeRuntime(allocator: Allocator, io: Io) !void {
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, "out/runtime");
-    try cwd.createDirPath(io, "out/runtime/sdk");
-    try cwd.createDirPath(io, "out/runtime/programs");
-
-    inline for (runtime_files) |file| {
-        const contents = try cwd.readFileAlloc(io, file.src_path, allocator, .limited(128 * 1024));
-        defer allocator.free(contents);
-
-        try cwd.writeFile(io, .{
-            .sub_path = file.out_path,
-            .data = contents,
-            .flags = .{ .truncate = true },
-        });
     }
 }
 

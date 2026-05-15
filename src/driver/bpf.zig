@@ -14,6 +14,7 @@ const core_dce = @import("../core/dce.zig");
 const core_inline = @import("../core/inline.zig");
 const core_ir = @import("../core/ir.zig");
 const ttree = @import("../frontend_bridge/ttree.zig");
+const target_manifest = @import("../target/manifest.zig");
 const srcmap = @import("srcmap.zig");
 
 /// Options for the Solana BPF build path.
@@ -50,11 +51,6 @@ pub const SourceMapHook = struct {
     emit: *const fn (context: *anyopaque, build: SourceMapBuild) anyerror!void,
 };
 
-const RuntimeFile = struct {
-    src_path: []const u8,
-    out_path: []const u8,
-};
-
 const srcmap_section_name = ".zxcaml.srcmap";
 const vendored_sdk_runtime_root = "out/runtime/sdk/root.zig";
 const vendored_solana_program_sdk_root = "vendor/solana-program-sdk-zig/src/root.zig";
@@ -64,40 +60,11 @@ const vendored_spl_ata_root = "vendor/solana-program-sdk-zig/packages/spl-ata/sr
 const vendored_solana_system_root = "vendor/solana-program-sdk-zig/packages/solana-system/src/root.zig";
 const vendored_spl_memo_root = "vendor/solana-program-sdk-zig/packages/spl-memo/src/root.zig";
 
-const runtime_files = [_]RuntimeFile{
-    .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
-    .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
-    .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
-    .{ .src_path = "runtime/zig/sdk/root.zig", .out_path = "out/runtime/sdk/root.zig" },
-    .{ .src_path = "runtime/zig/sdk/import_smoke.zig", .out_path = "out/runtime/sdk/import_smoke.zig" },
-    .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
-    .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
-    .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
-    .{ .src_path = "runtime/zig/programs/vault_v2.zig", .out_path = "out/runtime/programs/vault_v2.zig" },
-    .{ .src_path = "runtime/zig/programs/hackathon_greet.zig", .out_path = "out/runtime/programs/hackathon_greet.zig" },
-    .{ .src_path = "runtime/zig/programs/token_vault.zig", .out_path = "out/runtime/programs/token_vault.zig" },
-    .{ .src_path = "runtime/zig/programs/escrow_full.zig", .out_path = "out/runtime/programs/escrow_full.zig" },
-    .{ .src_path = "runtime/zig/programs/dao_voting.zig", .out_path = "out/runtime/programs/dao_voting.zig" },
-    .{ .src_path = "runtime/zig/programs/ata_transfer.zig", .out_path = "out/runtime/programs/ata_transfer.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_burn.zig", .out_path = "out/runtime/programs/spl_burn.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_close_account.zig", .out_path = "out/runtime/programs/spl_close_account.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_revoke.zig", .out_path = "out/runtime/programs/spl_revoke.zig" },
-    .{ .src_path = "runtime/zig/programs/order_book.zig", .out_path = "out/runtime/programs/order_book.zig" },
-    .{ .src_path = "runtime/zig/programs/ata.zig", .out_path = "out/runtime/programs/ata.zig" },
-    .{ .src_path = "runtime/zig/bs58.zig", .out_path = "out/runtime/bs58.zig" },
-    .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
-    .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
-    .{ .src_path = "runtime/zig/spl_token.zig", .out_path = "out/runtime/spl_token.zig" },
-    .{ .src_path = "runtime/zig/syscalls.zig", .out_path = "out/runtime/syscalls.zig" },
-    .{ .src_path = "runtime/zig/sysvar.zig", .out_path = "out/runtime/sysvar.zig" },
-    .{ .src_path = "runtime/zig/bpf_entry.zig", .out_path = "out/bpf_entry.zig" },
-};
-
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
 ///
 /// Uses the one-step direct `solana-zig build-lib` pipeline.
 pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
-    try materializeRuntime(allocator, io);
+    try target_manifest.materializeRuntimeForDispatch(allocator, io, .bpf);
 
     try buildBpfDirect(allocator, io, options);
 
@@ -410,24 +377,6 @@ const SourceMapCollector = struct {
     }
 };
 
-fn materializeRuntime(allocator: Allocator, io: Io) !void {
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, "out/runtime");
-    try cwd.createDirPath(io, "out/runtime/sdk");
-    try cwd.createDirPath(io, "out/runtime/programs");
-
-    inline for (runtime_files) |file| {
-        const contents = try cwd.readFileAlloc(io, file.src_path, allocator, .limited(128 * 1024));
-        defer allocator.free(contents);
-
-        try cwd.writeFile(io, .{
-            .sub_path = file.out_path,
-            .data = contents,
-            .flags = .{ .truncate = true },
-        });
-    }
-}
-
 fn runAndForward(
     allocator: Allocator,
     io: Io,
@@ -525,7 +474,6 @@ fn commandAvailable(allocator: Allocator, io: Io, path: []const u8) bool {
     };
 }
 
-
 /// Stable warning emitted at most once per `buildBpf` invocation when
 /// `llvm-objcopy` cannot be located on PATH. Exposed for tests that assert
 /// the exact byte sequence appears on stderr.
@@ -613,8 +561,6 @@ fn gzipBytes(allocator: Allocator, bytes: []const u8) ![]u8 {
 
     return output.toOwnedSlice();
 }
-
-
 
 fn writeStdout(io: Io, bytes: []const u8) !void {
     var buffer: [1024]u8 = undefined;
@@ -762,8 +708,6 @@ test "BPF build smoke does not spam LLVM dlopen warnings" {
     try std.testing.expect(dlopen_count <= 2);
 }
 
-
-
 fn testExitCode(term: std.process.Child.Term) u8 {
     return switch (term) {
         .exited => |code| code,
@@ -787,7 +731,6 @@ test "BPF env parser maps empty/missing env to direct path" {
 
     try std.testing.expectEqualStrings("solana-zig", direct_env);
 }
-
 
 test "BPF source map builder captures hackathon_greet source locations" {
     const allocator = std.testing.allocator;

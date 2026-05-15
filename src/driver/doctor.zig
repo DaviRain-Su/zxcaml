@@ -18,6 +18,8 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const driver_bpf = @import("bpf.zig");
 const driver_pipeline = @import("pipeline.zig");
+const target_preflight = @import("../target/preflight.zig");
+const target_registry = @import("../target/registry.zig");
 
 pub const Status = enum {
     ok,
@@ -52,10 +54,7 @@ pub fn run(
     try probeZig(arena, io, stdout, &has_fail);
     try probeFrontend(arena, io, stdout, argv0);
     try probeOcamlc(arena, io, stdout, &has_fail);
-    try probeSolanaZig(arena, io, environ, stdout, &has_fail);
-    try probeLlvmObjcopy(arena, io, environ, stdout);
-    try probeOptionalCommand(arena, io, stdout, "solana", &.{ "solana", "--version" });
-    try probeOptionalCommand(arena, io, stdout, "cargo", &.{ "cargo", "--version" });
+    try probeBpfTargetTools(arena, io, environ, stdout, &has_fail);
 
     return !has_fail;
 }
@@ -144,98 +143,31 @@ fn probeOcamlc(arena: Allocator, io: Io, stdout: anytype, has_fail: *bool) !void
     });
 }
 
-fn probeSolanaZig(
+fn probeBpfTargetTools(
     arena: Allocator,
     io: Io,
     environ: std.process.Environ,
     stdout: anytype,
     has_fail: *bool,
 ) !void {
-    const raw_env = std.process.Environ.getAlloc(environ, arena, "SOLANA_ZIG") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => null,
-        else => return err,
-    };
-
-    // Replicate the bpf.zig contract: empty/missing/"1" → "solana-zig",
-    // "0" → FAIL (no longer supported per CHANGELOG), other → use as command.
-    const resolved = if (raw_env) |raw|
-        driver_bpf.parseSolanaZigEnv(raw) catch {
-            has_fail.* = true;
-            try writeProbe(stdout, .{
-                .label = "solana-zig",
-                .status = .fail,
-                .detail = "SOLANA_ZIG=0 is no longer supported (see CHANGELOG); unset, set to 1, or use a command/path",
-            });
-            return;
-        }
-    else
-        "solana-zig";
-
-    // `solana-zig` is a Zig-style wrapper, so use the `version` subcommand
-    // (mirrors how `bpf.zig` invokes it for `build-lib`).
-    const output = runCommand(arena, io, &.{ resolved, "version" });
-    if (output.ok) {
-        const version = firstLine(output.stdout);
-        const detail = try std.fmt.allocPrint(arena, "{s} ({s})", .{ version, resolved });
-        try writeProbe(stdout, .{ .label = "solana-zig", .status = .ok, .detail = detail });
-        return;
-    }
-
-    has_fail.* = true;
-    const detail_src = if (output.stderr.len != 0) output.stderr else output.stdout;
-    const detail = try std.fmt.allocPrint(arena, "{s}: {s}", .{ resolved, firstLine(detail_src) });
-    try writeProbe(stdout, .{
-        .label = "solana-zig",
-        .status = .fail,
-        .detail = detail,
-    });
+    const bpf = target_registry.lookupByCliName("bpf") orelse return error.UnsupportedBuildTarget;
+    const probes = try target_preflight.collectTargetToolProbes(arena, io, bpf, environ);
+    try writeTargetToolProbes(stdout, probes, has_fail);
 }
 
-fn probeLlvmObjcopy(
-    arena: Allocator,
-    io: Io,
-    environ: std.process.Environ,
-    stdout: anytype,
-) !void {
-    const found_on_path = try locateOnPath(arena, io, environ, "llvm-objcopy");
-    if (found_on_path) |path| {
+fn writeTargetToolProbes(stdout: anytype, probes: []const target_preflight.ToolProbe, has_fail: *bool) !void {
+    for (probes) |probe| {
+        if (probe.status == .fail) has_fail.* = true;
         try writeProbe(stdout, .{
-            .label = "llvm-objcopy",
-            .status = .ok,
-            .detail = path,
+            .label = probe.label,
+            .status = switch (probe.status) {
+                .ok => .ok,
+                .warn => .warn,
+                .fail => .fail,
+            },
+            .detail = probe.detail,
         });
-        return;
     }
-
-    try writeProbe(stdout, .{
-        .label = "llvm-objcopy",
-        .status = .warn,
-        .detail = "not found; BPF source-map embedding will degrade to sidecar-only",
-    });
-}
-
-fn probeOptionalCommand(
-    arena: Allocator,
-    io: Io,
-    stdout: anytype,
-    label: []const u8,
-    argv: []const []const u8,
-) !void {
-    const output = runCommand(arena, io, argv);
-    if (output.ok) {
-        try writeProbe(stdout, .{
-            .label = label,
-            .status = .ok,
-            .detail = firstLine(output.stdout),
-        });
-        return;
-    }
-
-    try writeProbe(stdout, .{
-        .label = label,
-        .status = .warn,
-        .detail = "not found",
-    });
 }
 
 fn runCommand(arena: Allocator, io: Io, argv: []const []const u8) CommandOutput {
@@ -317,25 +249,44 @@ fn fileExists(io: Io, path: []const u8) !bool {
     return true;
 }
 
-fn locateOnPath(
-    arena: Allocator,
-    io: Io,
-    environ: std.process.Environ,
-    command: []const u8,
-) !?[]const u8 {
-    const path_env = std.process.Environ.getAlloc(environ, arena, "PATH") catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return null,
-        else => return err,
+fn argvEql(lhs: []const []const u8, rhs: []const []const u8) bool {
+    if (lhs.len != rhs.len) return false;
+    for (lhs, rhs) |a, b| {
+        if (!std.mem.eql(u8, a, b)) return false;
+    }
+    return true;
+}
+
+const FakeTargetRunner = struct {
+    const Response = struct {
+        argv: []const []const u8,
+        output: target_preflight.CommandOutput,
     };
 
-    var entries = std.mem.splitScalar(u8, path_env, std.fs.path.delimiter);
-    while (entries.next()) |entry| {
-        if (entry.len == 0) continue;
-        const candidate = try std.fs.path.join(arena, &.{ entry, command });
-        if (try fileExists(io, candidate)) return candidate;
+    responses: []const Response,
+
+    fn runFakeCommand(context: *anyopaque, allocator: Allocator, io: Io, argv: []const []const u8) target_preflight.CommandOutput {
+        _ = allocator;
+        _ = io;
+        const self: *FakeTargetRunner = @ptrCast(@alignCast(context));
+        for (self.responses) |response| {
+            if (argvEql(response.argv, argv)) return response.output;
+        }
+        return .{
+            .ok = false,
+            .exit_code = 1,
+            .stdout = "",
+            .stderr = "FileNotFound",
+        };
     }
-    return null;
-}
+
+    fn commandRunner(self: *FakeTargetRunner) target_preflight.CommandRunner {
+        return .{
+            .context = self,
+            .runFn = runFakeCommand,
+        };
+    }
+};
 
 test "parseSolanaZigEnv defaults map to solana-zig" {
     try std.testing.expectEqualStrings("solana-zig", try driver_bpf.parseSolanaZigEnv(""));
@@ -355,4 +306,102 @@ test "versionMajor parses the leading integer" {
     try std.testing.expectEqual(@as(?u32, 5), versionMajor("5.1.1"));
     try std.testing.expectEqual(@as(?u32, 5), versionMajor("5.0"));
     try std.testing.expectEqual(@as(?u32, null), versionMajor("five"));
+}
+
+test "doctor renders shared BPF tool rows from the preflight contract in stable order" {
+    const bpf = target_registry.lookupByCliName("bpf") orelse return error.TestUnexpectedResult;
+    var runner = FakeTargetRunner{
+        .responses = &.{
+            .{
+                .argv = &.{ "zig", "version" },
+                .output = .{ .ok = true, .exit_code = 0, .stdout = "0.16.0\n", .stderr = "" },
+            },
+            .{
+                .argv = &.{ "solana-zig", "version" },
+                .output = .{ .ok = false, .exit_code = 1, .stdout = "", .stderr = "missing solana-zig" },
+            },
+            .{
+                .argv = &.{ "llvm-objcopy", "--version" },
+                .output = .{ .ok = false, .exit_code = 1, .stdout = "", .stderr = "FileNotFound" },
+            },
+            .{
+                .argv = &.{ "solana", "--version" },
+                .output = .{ .ok = true, .exit_code = 0, .stdout = "solana-cli 3.1.12\n", .stderr = "" },
+            },
+            .{
+                .argv = &.{ "cargo", "--version" },
+                .output = .{ .ok = true, .exit_code = 0, .stdout = "cargo 1.94.1\n", .stderr = "" },
+            },
+        },
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const probes = try target_preflight.collectTargetToolProbesWith(
+        arena.allocator(),
+        std.testing.io,
+        bpf,
+        null,
+        runner.commandRunner(),
+    );
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    var has_fail = false;
+    try writeTargetToolProbes(&output.writer, probes, &has_fail);
+
+    try std.testing.expect(has_fail);
+    try std.testing.expectEqualStrings(
+        \\zig: OK    0.16.0
+        \\solana-zig: FAIL  solana-zig: missing solana-zig
+        \\llvm-objcopy: WARN  not found; BPF source-map embedding will degrade to sidecar-only
+        \\solana: OK    solana-cli 3.1.12
+        \\cargo: OK    cargo 1.94.1
+        \\
+    ,
+        output.written(),
+    );
+}
+
+test "doctor preserves SOLANA_ZIG=0 failure wording through shared preflight" {
+    const bpf = target_registry.lookupByCliName("bpf") orelse return error.TestUnexpectedResult;
+    var runner = FakeTargetRunner{ .responses = &.{
+        .{
+            .argv = &.{ "zig", "version" },
+            .output = .{ .ok = true, .exit_code = 0, .stdout = "0.16.0\n", .stderr = "" },
+        },
+        .{
+            .argv = &.{ "llvm-objcopy", "--version" },
+            .output = .{ .ok = false, .exit_code = 1, .stdout = "", .stderr = "FileNotFound" },
+        },
+        .{
+            .argv = &.{ "solana", "--version" },
+            .output = .{ .ok = false, .exit_code = 1, .stdout = "", .stderr = "FileNotFound" },
+        },
+        .{
+            .argv = &.{ "cargo", "--version" },
+            .output = .{ .ok = false, .exit_code = 1, .stdout = "", .stderr = "FileNotFound" },
+        },
+    } };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const probes = try target_preflight.collectTargetToolProbesWith(
+        arena.allocator(),
+        std.testing.io,
+        bpf,
+        "0",
+        runner.commandRunner(),
+    );
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    var has_fail = false;
+    try writeTargetToolProbes(&output.writer, probes, &has_fail);
+
+    try std.testing.expect(has_fail);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "SOLANA_ZIG=0 is no longer supported") != null);
 }
