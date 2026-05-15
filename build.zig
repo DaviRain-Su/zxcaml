@@ -648,6 +648,25 @@ pub fn build(b: *std.Build) void {
     run_unmap_cli_tests.step.dependOn(&run_srcmap_cli_tests.step);
     run_unmap_cli_tests.setCwd(b.path(""));
 
+    // Direct BPF build characterization tests (M1): verify SOLANA_ZIG override
+    // semantics, current generated Zig refresh, and sidecar/unmap behavior.
+    const bpf_build_contract_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/bpf_build_contract_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const bpf_build_contract_options = b.addOptions();
+    bpf_build_contract_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    bpf_build_contract_test_module.addOptions("cli_options", bpf_build_contract_options);
+    bpf_build_contract_test_module.addImport("srcmap", srcmap_module);
+    const bpf_build_contract_tests = b.addTest(.{
+        .root_module = bpf_build_contract_test_module,
+    });
+    const run_bpf_build_contract_tests = b.addRunArtifact(bpf_build_contract_tests);
+    run_bpf_build_contract_tests.step.dependOn(b.getInstallStep());
+    run_bpf_build_contract_tests.step.dependOn(&run_unmap_cli_tests.step);
+    run_bpf_build_contract_tests.setCwd(b.path(""));
+
     // Source-map determinism property test (P9 / F-SRCMAP-6): verify repeated
     // BPF builds of the same source produce byte-identical `.map` JSON.
     const srcmap_determinism_test_module = b.createModule(.{
@@ -665,7 +684,7 @@ pub fn build(b: *std.Build) void {
     run_srcmap_determinism_tests.step.dependOn(b.getInstallStep());
     // The property build writes out/program.zig and out/hackathon_greet.map,
     // so keep it serialized with the other source-map CLI integration tests.
-    run_srcmap_determinism_tests.step.dependOn(&run_unmap_cli_tests.step);
+    run_srcmap_determinism_tests.step.dependOn(&run_bpf_build_contract_tests.step);
     run_srcmap_determinism_tests.setCwd(b.path(""));
 
     // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.
@@ -962,6 +981,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_report_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
     test_step.dependOn(&run_unmap_cli_tests.step);
+    test_step.dependOn(&run_bpf_build_contract_tests.step);
     test_step.dependOn(&run_srcmap_determinism_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);

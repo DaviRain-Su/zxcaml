@@ -79,16 +79,7 @@ jobs:
           zig-out/bin/omlz idl tests/idl/entrypoint.ml | python3 -m json.tool >/dev/null
 
       - name: Check examples corpus
-        run: |
-          set -euo pipefail
-          for file in examples/*.ml; do
-            if [[ "$file" == "examples/m0_unsupported.ml" ]]; then
-              echo "==> skipping diagnostic fixture $file"
-              continue
-            fi
-            echo "==> omlz check $file"
-            zig-out/bin/omlz check "$file"
-          done
+        run: ./scripts/check_examples_corpus.sh
 
       - name: Solana BPF acceptance
         if: env.SOLANA_BPF == '1'
