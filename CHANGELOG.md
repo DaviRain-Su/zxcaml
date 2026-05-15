@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — R14 IDL error metadata polish
+
+- IDL `error_` constants now include a derived human-readable `msg` field in
+  addition to the stable source-level `name` and numeric `code`.
+- Updated IDL tests for single and multiple error entries, including the
+  `account_guard` errors emitted as `Missing signer`, `Missing writable`, and
+  `Wrong owner`.
+- Documented the `error_` naming convention and derived message behavior in the
+  English and Chinese Solana/README docs.
+
 ### Changed — R13 closeout docs/status sync
 
 - Marked R13 as a sealed Solana account-guard polish slice in the English and

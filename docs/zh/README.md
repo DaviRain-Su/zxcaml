@@ -131,7 +131,7 @@ Anchor-compatible IDL。
 - **CPI 和 PDA helpers:** 内置 `instruction` / `account_meta` records、`invoke`、`invoke_signed`、PDA helpers 和 return-data syscalls,形状贴近 Solana C ABI
 - **SPL-Token:** helper 支持和 acceptance 示例覆盖 legacy Tokenkeg primitives:transfer、init_account、burn、close_account、revoke;当前 SPL primitive 示例包括 `spl_burn`、`spl_close_account` 和 `spl_revoke`
 - **no_alloc:** `omlz check --no-alloc` 运行保守的 Core IR allocation proof,失败时报告导致分配的 node
-- **IDL:** `omlz idl <file>` 发出 Anchor 0.30+ compatible JSON,包含 SHA-256 discriminators、instruction accounts/args、account types、events、errors 和 constants；`Account.is_signer` / `Account.is_writable` guard helper 会进入 signer/writable metadata，`error_` 常量会进入 IDL error table
+- **IDL:** `omlz idl <file>` 发出 Anchor 0.30+ compatible JSON,包含 SHA-256 discriminators、instruction accounts/args、account types、events、errors 和 constants；`Account.is_signer` / `Account.is_writable` guard helper 会进入 signer/writable metadata，`error_` 常量会进入 IDL error table，并带有派生的 `msg` 文本
 - **BPF 闭包:** 加固的一等闭包--捕获 ADT 值的闭包、多环境捕获和嵌套闭包都会 lower 成不依赖 BPF 不支持的 code-pointer relocations 的形态,并由 Solana closure acceptance tests 覆盖
 - **Solana 验收:** canonical hello harness、closure harness、account/syscall harness、simple CPI harness 和 SPL-Token transfer harness 都可在 `solana-test-validator` 上部署 + 调用
 - **Region inference:** 自动 escape analysis 会把不逃逸的局部值标成 stack allocation,降低 arena 压力并改善 BPF compute 效率

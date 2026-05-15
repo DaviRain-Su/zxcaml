@@ -237,6 +237,8 @@ R13 的 account helper call 也会进入 IDL account metadata pass。例如
 `writable: true`；这些 account 参数会出现在 instruction 的 `accounts` 中，而不是普通
 `args`。推荐把稳定 custom code 常量命名为 `error_` 前缀（例如
 `error_missing_signer = 1`），这样 `omlz idl` 可以把它们暴露在顶层 `errors` 数组中。
+R14 还会从这个 suffix 派生人类可读的 `msg`（`error_missing_signer` 对应
+`"Missing signer"`），同时保留源码里的 `name` 和数值 `code`。
 
 ## 7. CI 覆盖
 

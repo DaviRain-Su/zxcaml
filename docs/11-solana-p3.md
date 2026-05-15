@@ -251,7 +251,10 @@ R13 account helper calls also feed the IDL account metadata pass. For example,
 `writable: true`; those account parameters are emitted under instruction
 `accounts` instead of ordinary `args`. Prefer naming stable custom-code
 constants with an `error_` prefix (for example `error_missing_signer = 1`) so
-`omlz idl` can expose them in the top-level `errors` array.
+`omlz idl` can expose them in the top-level `errors` array. R14 also derives a
+human-readable `msg` from that suffix (`"Missing signer"` for
+`error_missing_signer`) while preserving the source-level `name` and numeric
+`code`.
 
 ## 7. CI coverage
 

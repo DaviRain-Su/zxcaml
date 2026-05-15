@@ -60,7 +60,7 @@ test "idl: entrypoint fixture emits valid instruction schema" {
     try expectContains(result.stdout, "\"name\":\"metadata\",\"type\":{\"kind\":\"struct\",\"fields\":[{\"name\":\"authority\",\"type\":\"bytes\"}]}");
     try expectContains(result.stdout, "\"name\":\"status\",\"type\":{\"kind\":\"enum\",\"variants\":[{\"name\":\"Ready\"},{\"name\":\"Frozen\",\"fields\":[{\"name\":\"field0\",\"type\":\"i64\"}]}]}");
     try expectContains(result.stdout, "\"events\":[]");
-    try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_insufficient_funds\",\"code\":65537}]");
+    try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_insufficient_funds\",\"code\":65537,\"msg\":\"Insufficient funds\"}]");
     try expectContains(result.stdout, "\"constants\":[]");
 }
 
@@ -129,7 +129,7 @@ test "idl: account guard helpers emit account metas instead of args" {
 
     try expectContains(result.stdout, "\"metadata\":{\"name\":\"account_guard\",\"version\":\"0.1.0\",\"spec\":\"0.1.0\"}");
     try expectContains(result.stdout, "\"instructions\":[{\"name\":\"entrypoint\",\"discriminator\":[237,127,171,8,17,8,23,233],\"accounts\":[{\"name\":\"authority\",\"writable\":false,\"signer\":true},{\"name\":\"guarded_account\",\"writable\":true,\"signer\":false}],\"args\":[{\"name\":\"instruction_data\",\"type\":\"bytes\"}]}]");
-    try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_missing_signer\",\"code\":1},{\"name\":\"error_missing_writable\",\"code\":2},{\"name\":\"error_wrong_owner\",\"code\":3}]");
+    try expectContains(result.stdout, "\"errors\":[{\"name\":\"error_missing_signer\",\"code\":1,\"msg\":\"Missing signer\"},{\"name\":\"error_missing_writable\",\"code\":2,\"msg\":\"Missing writable\"},{\"name\":\"error_wrong_owner\",\"code\":3,\"msg\":\"Wrong owner\"}]");
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"authority\",\"type\":{\"defined\":{\"name\":\"account\"}}") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"name\":\"guarded_account\",\"type\":{\"defined\":{\"name\":\"account\"}}") == null);
 }

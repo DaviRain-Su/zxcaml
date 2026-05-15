@@ -44,6 +44,7 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 | R11 — Fixed-point math surface | ✅ sealed | 2026-05-15 | 加入 deterministic `Fixed` / `Amount` helper、`fixed_amm_quote`、测试和双语文档。 |
 | R12 — Mutable state hardening | ✅ sealed | 2026-05-15 | 通过 stress coverage 加固解释器/native/BPF 上的 `int array`、`for` / `while`、`int` / `bool` ref。 |
 | R13 — Solana account guard polish | ✅ sealed | 2026-05-15 | 加入 `Account` guard/read helper、`account_guard`、Mollusk 覆盖、IDL metadata/error 输出、UI 误用诊断和双语文档。 |
+| R14 — IDL error metadata polish | ✅ sealed | 2026-05-15 | 为 `error_` 常量加入派生的人类可读 `msg` 字段，并刷新 IDL/文档覆盖。 |
 
 ## 未来 / 可选
 

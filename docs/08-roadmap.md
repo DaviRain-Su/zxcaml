@@ -96,6 +96,7 @@ the fmt corpus expansion.
 | R11 — Fixed-point math surface | ✅ sealed | 2026-05-15 | Added deterministic `Fixed` / `Amount` helpers, `fixed_amm_quote`, tests, and bilingual docs. |
 | R12 — Mutable state hardening | ✅ sealed | 2026-05-15 | Hardened `int array`, `for` / `while`, and `int` / `bool` refs across interpreter/native/BPF with stress coverage. |
 | R13 — Solana account guard polish | ✅ sealed | 2026-05-15 | Added `Account` guard/read helpers, `account_guard`, Mollusk coverage, IDL metadata/error output, UI misuse diagnostics, and bilingual docs. |
+| R14 — IDL error metadata polish | ✅ sealed | 2026-05-15 | Added derived human-readable `msg` fields for `error_` constants and refreshed IDL/docs coverage. |
 
 ### Phase 22+ candidates
 

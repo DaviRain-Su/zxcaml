@@ -273,8 +273,35 @@ fn emitErrors(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: ir.
         first = false;
         try append(out, allocator, "{\"name\":");
         try appendJsonString(out, allocator, let_decl.name);
-        try appendPrint(out, allocator, ",\"code\":{d}}}", .{code});
+        try appendPrint(out, allocator, ",\"code\":{d},\"msg\":", .{code});
+        try appendErrorMessage(out, allocator, let_decl.name);
+        try append(out, allocator, "}");
     }
+}
+
+fn appendErrorMessage(out: *std.ArrayList(u8), allocator: std.mem.Allocator, error_name: []const u8) !void {
+    const prefix = "error_";
+    const suffix = if (std.mem.startsWith(u8, error_name, prefix)) error_name[prefix.len..] else error_name;
+    var msg = std.ArrayList(u8).empty;
+    defer msg.deinit(allocator);
+
+    var first_alpha = true;
+    for (suffix) |byte| {
+        if (byte == '_') {
+            try msg.append(allocator, ' ');
+            continue;
+        }
+        const normalized = if (byte >= 'A' and byte <= 'Z') byte + ('a' - 'A') else byte;
+        if (first_alpha and normalized >= 'a' and normalized <= 'z') {
+            try msg.append(allocator, normalized - ('a' - 'A'));
+            first_alpha = false;
+        } else {
+            try msg.append(allocator, normalized);
+            if ((normalized >= 'a' and normalized <= 'z') or (normalized >= '0' and normalized <= '9')) first_alpha = false;
+        }
+    }
+
+    try appendJsonString(out, allocator, msg.items);
 }
 
 fn findProgramId(module: ir.Module) ?[]const u8 {
