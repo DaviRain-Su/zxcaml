@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-15  
-**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, and MTF-3 portable contract core API architecture
+**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, MTF-3 portable contract core API architecture, and MTF-4 EVM/Yul MVP architecture
 
 ## Context
 
@@ -587,6 +587,95 @@ Preflight failures must be specific. For example:
 - missing `solc` or `anvil` for `--target=evm` should explain which part of
   the validation flow cannot run.
 
+### 23. MTF-4 EVM/Yul is a sibling backend with a strict-assembly gate
+
+MTF-4 extends this ADR with an **EVM/Yul MVP architecture**, still as
+architecture only. It does **not** add `omlz build --target=evm`, a Yul
+emitter, bytecode artifacts, Foundry tests, or any EVM support claim in this
+slice.
+
+The backend relationship is explicit:
+
+```text
+Core IR / Lowered IR
+  -> backend facade
+  -> EVM lowering
+  -> Yul
+  -> solc strict-assembly validation
+  -> EVM bytecode artifact
+```
+
+This path is a **sibling backend** to the generated-Zig native/Solana/WASM
+family, not a variant of it. The EVM adapter therefore owns its own ABI,
+dispatch, revert, and artifact-assembly rules rather than pretending those can
+be inherited from the Zig-source path.
+
+The existing numeric-model blocker remains binding here. No MTF-4 mission may
+claim broad EVM lowering until a dedicated ADR resolves:
+
+- integer width and signedness policy;
+- overflow and modular arithmetic semantics;
+- conversion rules between portable values and EVM ABI words; and
+- whether target-specific surfaces such as `u256` or `bytes32` are introduced.
+
+Result: MTF-4 may define a narrow smoke-test ABI and lowering shape, but it may
+not overclaim general EVM numeric portability before that ADR lands.
+
+### 24. MTF-4 tool readiness and smoke validation use real local EVM tooling
+
+The verified local EVM toolchain state for this architecture slice is:
+
+| Tool | Verified state | Role in future MTF-4 validation |
+|---|---|---|
+| `solc` | available (`0.8.34`) | Validate Yul through `--strict-assembly` and emit bytecode. |
+| `anvil` | available (`1.5.1-stable`) | Provide the canonical local dev chain for deploy/call smoke tests. |
+| `cast` | available (`1.5.1-stable`) | Deploy bytecode, encode calldata, perform calls, and inspect return/revert bytes. |
+| `forge` | available (`1.5.1-stable`) | Ready for future fixture/workflow expansion, but not the canonical MVP acceptance gate. |
+| `revm` CLI | absent locally | Non-blocking for MTF-4 because the MVP validation path uses `solc` + `anvil` + `cast`. |
+
+Future MTF-4 acceptance must use real local chain tooling, not a mock-only
+surrogate. The minimum smoke path is:
+
+1. emit a Yul artifact from the EVM backend;
+2. validate and compile it with `solc --strict-assembly --bin <generated.yul>`;
+3. run a local `anvil` instance as the execution VM;
+4. deploy the compiled bytecode with `cast`;
+5. call the deployed contract with ABI-encoded calldata via `cast`;
+6. compare the observed ABI-encoded return bytes and revert bytes against the
+   expected portable-program behavior.
+
+`forge` may later wrap or automate parts of this flow, but the architecture
+contract is the underlying `solc` + `anvil` + `cast` evidence chain above.
+
+### 25. MTF-4 ABI dispatch/decode/encode/revert scope is deliberately narrow
+
+The EVM/Yul MVP surface is intentionally limited to pure function dispatch and
+ABI behavior that can be stated precisely:
+
+| Surface | MTF-4 MVP contract |
+|---|---|
+| Selector dispatch | Read the first four calldata bytes as the function selector and branch to a fixed dispatch table. |
+| Supported calldata decode | Decode only statically-sized ABI words for the documented MVP scalar surface; dynamic arrays, `string`, `bytes`, nested tuples, and rich structs are excluded. |
+| Supported return encoding | Encode only the documented statically-sized MVP return surface as Solidity-ABI word output; no rich metadata envelope is implied. |
+| Arithmetic / conditionals | Support pure arithmetic, comparisons, and deterministic conditional branching within the narrowed numeric contract. |
+| Unknown selector behavior | Deterministically reject unknown selectors with a plain `revert`, using empty revert data rather than rich error metadata. |
+
+This section deliberately defines the MVP as an ABI and control-flow slice, not
+as "general Solidity compatibility". In particular, MTF-4 excludes:
+
+- storage layout and `sload` / `sstore`;
+- events, logs, and event-topic metadata;
+- `address`, `msg.sender`, `msg.value`, and other call-context surfaces;
+- external calls, `staticcall`, `delegatecall`, contract creation, and other
+  inter-contract messaging;
+- Solidity ABI JSON generation and rich selector metadata products;
+- custom errors, string revert reasons, and other rich revert/error metadata.
+
+Those exclusions are architectural guardrails. Later milestones may add any of
+them only by defining explicit semantics, validation gates, and target-owned
+adapter surfaces rather than treating them as automatic consequences of Yul
+code generation.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
@@ -602,7 +691,8 @@ The following claims are explicitly disallowed:
 ## Consequences
 
 - Later milestones may extend this document, but they must preserve the MTF-0,
-  MTF-1, MTF-2, and MTF-3 statements above unless superseded by a later ADR.
+  MTF-1, MTF-2, MTF-3, and MTF-4 statements above unless superseded by a later
+  ADR.
 - Multichain work is now blocked on explicit target contracts rather than
   roadmap optimism.
 - The current native/Solana baseline remains authoritative and unchanged.
@@ -617,8 +707,8 @@ The following claims are explicitly disallowed:
 ## Relationship to `docs/19-functional-multichain-roadmap.md`
 
 `docs/19-functional-multichain-roadmap.md` remains the exploratory product and
-milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 + MTF-3 contract that
-constrains how later milestones may be implemented.
+milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 + MTF-3 + MTF-4
+contract that constrains how later milestones may be implemented.
 
 In short:
 
