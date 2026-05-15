@@ -112,7 +112,7 @@ OCaml runtime 或 GC。面向 BPF 的程序里，格式化能力仍然刻意保�
 BPF 有固定的调用栈。前端在 P1 不静态约束递归，因此：
 
 - Zig 后端发出 Zig 函数；`zig` 自己的栈分析适用。
-- runtime arena 大小在编译期通过 build 时常量决定（默认 32 KiB；可由 CLI 覆盖）。
+- runtime arena 大小在编译期决定。Native entry 程序保留 32 KiB arena；BPF entry 程序使用 3 KiB stack-bounded arena，以保持 loader entrypoint 低于 SBF 每帧 4 KiB 上限。
 - BPF 程序里栈溢出由 Solana 报告，不是我们。
 
 已封存的 P3 Solana 工作引入了 `omlz check --no-alloc`：这是一道面向 hot path 的保守分析，

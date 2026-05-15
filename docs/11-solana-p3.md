@@ -14,8 +14,9 @@ The implementation remains runtime-light:
 - account data is parsed in the Zig runtime as zero-copy views over the BPF
   input buffer;
 - syscalls and CPI use the Solana BPF ABI directly;
-- the arena model is still hidden from user OCaml, but the BPF entry arena is
-  now **32 KiB** instead of the old P1/P2 1 KiB buffer;
+- the arena model is still hidden from user OCaml; native builds keep a
+  **32 KiB** entry arena, while BPF builds use a **3 KiB** stack-bounded entry
+  arena to avoid SBF's 4 KiB stack-frame ceiling;
 - `no_alloc` is a conservative Core IR analysis, not a new type-system mode;
 - the current IDL output is Anchor-compatible JSON, expanded after the original
   P3 smoke schema by sealed P5 work.

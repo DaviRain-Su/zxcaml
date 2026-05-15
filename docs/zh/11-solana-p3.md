@@ -13,8 +13,8 @@ SPL-Token transfer，请 `omlz` 证明某个源文件不分配，并通过 `omlz
 
 - account 数据在 Zig runtime 中被解析为 BPF 输入 buffer 上的零拷贝视图；
 - syscall 和 CPI 直接使用 Solana BPF ABI；
-- arena 模型仍对 OCaml 用户隐藏，但 BPF entry arena 已从旧的 P1/P2 1 KiB
-  buffer 增加到 **32 KiB**；
+- arena 模型仍对 OCaml 用户隐藏；native build 保留 **32 KiB** entry arena，
+  BPF build 使用 **3 KiB** stack-bounded entry arena，以避开 SBF 4 KiB 栈帧上限；
 - `no_alloc` 是保守的 Core IR 分析，不是新的类型系统模式；
 - 当前 IDL 输出是 Anchor-compatible JSON：最初 P3 的 smoke schema 已在已封存 P5 工作中扩展。
 

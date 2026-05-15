@@ -1103,8 +1103,9 @@ fn runModule(init: std.process.Init, module: @import("frontend_bridge/ttree.zig"
     var interpreter: interp.Interpreter = .{};
     const value = interpreter.backend().evalModule(optimized_core_module) catch |err| {
         if (interp.panicMarker(err)) |marker| {
-            try writeStderr(init.io, marker);
-            try writeStderr(init.io, "\n");
+            var panic_buffer: [64]u8 = undefined;
+            const rendered = try std.fmt.bufPrint(&panic_buffer, "{s}\n", .{marker});
+            try writeStderr(init.io, rendered);
         } else {
             try writeStderr(init.io, "error: ");
             try writeStderr(init.io, interp.errorMessage(err));

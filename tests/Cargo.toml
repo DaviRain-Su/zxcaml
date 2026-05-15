@@ -128,6 +128,10 @@ name = "mutual_rec_test"
 path = "mutual_rec_test.rs"
 
 [[test]]
+name = "mutable_state_stress_test"
+path = "mutable_state_stress_test.rs"
+
+[[test]]
 name = "assert_panic_test"
 path = "assert_panic_test.rs"
 

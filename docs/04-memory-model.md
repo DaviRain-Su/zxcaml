@@ -142,8 +142,9 @@ bound recursion in P1, so:
 
 - The Zig backend emits Zig functions; `zig`'s own stack analysis
   applies.
-- The runtime arena is sized at compile time via a build-time
-  constant (default: 32 KiB; overridable via a CLI flag).
+- The runtime arena is sized at compile time. Native entry programs keep a
+  32 KiB arena; BPF entry programs use a 3 KiB stack-bounded arena so the
+  loader entrypoint remains below SBF's 4 KiB per-frame limit.
 - Stack overflow inside a BPF program is reported by Solana, not
   by us.
 

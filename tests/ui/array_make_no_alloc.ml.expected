@@ -1,0 +1,5 @@
+error[DX2-NOALLOC]: no_alloc failure in function `entrypoint`: int array allocation is not allowed in a no_alloc context
+ --> tests/ui/array_make_no_alloc.ml:1:15
+  |
+1 | let entrypoint _ =
+  |               ^^^^

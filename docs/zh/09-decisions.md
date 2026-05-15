@@ -234,8 +234,7 @@ BPF 入口 shim 从静态 buffer 创建 arena 并向下传递。
 
 ### 后果
 
-- 程序无法分配超过 arena buffer 的内存；buffer 大小通过 CLI flag
-  （`--arena-bytes`，默认 32 KiB）。
+- 程序无法分配超过 arena buffer 的内存。Native entry 程序使用 32 KiB buffer；BPF entry 程序使用 3 KiB stack-bounded buffer，以保持 loader entrypoint 低于 SBF 4 KiB 栈帧上限。
 - 多 arena 方案（per region、per call）属于 P4 细化，
   不需要 Core IR 变化。
 

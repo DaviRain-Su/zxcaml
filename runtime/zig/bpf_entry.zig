@@ -2,7 +2,7 @@
 //!
 //! RESPONSIBILITIES:
 //! - Export the `entrypoint` symbol that Solana's loader discovers.
-//! - Create the P1 32 KiB static-buffer arena for each invocation.
+//! - Create the stack-bounded BPF static-buffer arena for each invocation.
 //! - Call the generated `omlz_user_entrypoint` function with arena threading.
 
 const Arena = @import("runtime/arena.zig").Arena;
@@ -10,7 +10,9 @@ const AccountRuntime = @import("runtime/account.zig");
 const syscalls = @import("runtime/syscalls.zig");
 const program = @import("program.zig");
 
-const arena_bytes = 32 * 1024;
+// SBF stack frames are limited to 4096 bytes. Keep the entry arena below that
+// ceiling so allocation-heavy array/ref programs do not overflow `entrypoint`.
+const arena_bytes = 3 * 1024;
 // Keep account-view scratch storage below the BPF stack-frame limit. Current
 // examples need at most seven accounts (order_book fill path); oversized
 // storage can overflow the entrypoint frame before the first log syscall.

@@ -39,7 +39,8 @@ Solana BPF .so
 - Source language: **OCaml** (subset, growing).
 - Primary target: **Solana BPF/SBF** (via `solana-zig -target sbf-solana`).
 - Memory model (P3): **arena, fully inferred, hidden from the user**;
-  BPF entry programs use a 32 KiB arena.
+  native entry programs use a 32 KiB arena, while BPF entry programs use a
+  3 KiB stack-bounded arena to stay under SBF's 4 KiB frame limit.
 - Core IR shape: **ANF** (A-Normal Form), typed, layout-tagged.
 - CLI binary name: **`omlz`** (OCaml on Zig).
 - Build driver: a single **`build.zig`** orchestrates both the
@@ -142,8 +143,8 @@ or emit Anchor-compatible IDL.
 - `post-fmt-deepnested-baseline` sealed Phase 21's generic `) word` spacing
   rule with the corpus still at 20 fmt goldens.
 - Current no-regress floor: `zig build test --summary none` passes, and
-  `cargo test --manifest-path tests/Cargo.toml` passes across the 34
-  Rust/Mollusk integration-test files (42 Rust test cases). Future floor
+  `cargo test --manifest-path tests/Cargo.toml` passes across the 35
+  Rust/Mollusk integration-test files (43 Rust test cases). Future floor
   updates should record both the command and the commit that established it.
 
 ### Current features
@@ -153,7 +154,7 @@ or emit Anchor-compatible IDL.
 - **Wire format:** version 1.5 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4/P5 moved the wire through `1.0` for instruction data and external declarations; P8 moved to `1.1` for mutual-recursion groups; P9/DX2 moved to `1.2` for source-location plumbing; R8/R9 moved through typed-parameter/array surfaces; R10 moved to `1.5` for `ref-make` / `ref-get` / `ref-set` while older readers remain compatibility-only)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), `while` / counted `for` loops, string operations (`^`, length, get, sub), char operations (code, chr), mutable `int` arrays (`Array.make`, `Array.get`, `Array.set`, `Array.length`, `a.(i)`, `a.(i) <- v`), `ref`/`!`/`:=` for `int` and `bool`, and pattern matching over all of those forms
 - **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `map_error`, `map_err`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Bytes` (`length`, `get`, `sub`, `create`, `set`, `of_string`, `blit`, `fill`, `iter`, `iteri`, `fold_left`, `equal`, `compare`), `Char` (`code`, `chr`), `Fixed` / `Amount` deterministic six-decimal and bps helpers, `Format` (`int_to_string`, `hex_of_int`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
-- **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; BPF entry arena is 32 KiB
+- **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; native entry arena is 32 KiB, and BPF entry arena is 3 KiB to keep the loader entrypoint below SBF's 4 KiB stack-frame limit
 - **Backends:** tree-walk interpreter, Zig native codegen, and one-step `SOLANA_ZIG` direct `solana-zig build-lib` BPF path
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
 - **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
@@ -175,13 +176,13 @@ or emit Anchor-compatible IDL.
 - **Function inlining:** small single-expression functions (≤3 Core IR nodes) are inlined at call sites with alpha-renaming, enabling further constant folding; supports all types including String, ADT, Tuple, and Record
 - **Determinism:** interpreter ≡ Zig native across the current supported examples corpus
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, Mollusk tests, and an examples `omlz check` corpus loop
-- **Mollusk SVM tests:** 34 Rust integration-test files (42 Rust test cases) in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, real-world zignocchio ports, and SPL Token primitive coverage). `tests/bpf_test_support.rs` centralizes build/load helpers for these artifacts; the historical ELF post-pass has been removed (see `mission-internal/elf-patch-investigation.md`).
+- **Mollusk SVM tests:** 35 Rust integration-test files (43 Rust test cases) in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, mutable_state_stress, real-world zignocchio ports, and SPL Token primitive coverage). `tests/bpf_test_support.rs` centralizes build/load helpers for these artifacts; the historical ELF post-pass has been removed (see `mission-internal/elf-patch-investigation.md`).
 - **Diagnostics:** rustc-style diagnostics are the default, with `--error-format=human|json|oneline` and caret spans over source snippets
 - **LSP:** `omlz-lsp` is installed by `zig build` and provides LSP push diagnostics over stdio JSON-RPC
 - **LSP latency observability:** `make lsp-bench` rebuilds and runs `omlz lsp-bench --warmup 3 --rounds 10`, reporting p50/p99 diagnostics latency against the default 350/800 ms thresholds; see [`docs/17-lsp-latency.md`](./docs/17-lsp-latency.md)
 - **Source maps:** BPF builds emit deterministic source maps, embed `.zxcaml.srcmap` when `llvm-objcopy` is available, and let `omlz unmap` resolve BPF PCs back to OCaml locations.
   Default is direct `solana-zig`; set `SOLANA_ZIG` to any custom command/path (except `0`) to override the binary.
-- **Examples:** 84 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, zignocchio-port programs, dao_voting, ata_transfer, order_book, spl_burn, spl_close_account, spl_revoke, and fixed_amm_quote
+- **Examples:** 85 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, zignocchio-port programs, dao_voting, ata_transfer, order_book, spl_burn, spl_close_account, spl_revoke, fixed_amm_quote, and mutable_state_stress
 - **Golden/UI tests:** Core IR/sexp snapshot, UI, and fmt golden tests run
   through `zig build test`; the current committed floor is `zig build test --summary none`
   plus the full Cargo/Mollusk suite

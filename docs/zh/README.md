@@ -35,8 +35,9 @@ Solana BPF .so
 - 前端以下所有部分的宿主语言:**Zig 0.16**。
 - 源语言:**OCaml**(子集,持续扩展中)。
 - 主要目标平台:**Solana BPF/SBF**（通过 `solana-zig -target sbf-solana`）。
-- 内存模型(P3):**arena,完全推断,对用户隐藏**;BPF entry 程序使用
-  32 KiB arena。
+- 内存模型(P3):**arena,完全推断,对用户隐藏**;native entry 程序使用
+  32 KiB arena，BPF entry 程序使用 3 KiB stack-bounded arena，以避开 SBF
+  4 KiB 栈帧上限。
 - Core IR 形态:**ANF**(A-Normal Form),带类型,带 layout 标注。
 - CLI 二进制名:**`omlz`**(OCaml on Zig)。
 - 构建驱动:单一 **`build.zig`** 同时编排 OCaml 前端桥接和 Zig 管线(ADR-011)。
@@ -122,7 +123,7 @@ Anchor-compatible IDL。
 - **Wire 格式:** 版本 1.5(P1 为 `0.4`;P2 在 `0.5` 加用户 ADT、在 `0.6` 加嵌套/guarded pattern、在 `0.7` 加 tuple/record;P3 在 `0.8` 加 account/syscall 引用、在 `0.9` 加 CPI 类型/引用;P4/P5 让 instruction data 和 external declarations 走过 `1.0`;P8 为 mutual-recursion groups 升到 `1.1`;P9/DX2 为 source-location plumbing 升到 `1.2`;R8/R9 继续加入 typed-parameter/array surface;R10 为 `ref-make` / `ref-get` / `ref-set` 升到 `1.5`,旧 wire 仅作为兼容窗口)
 - **OCaml 子集:** let 绑定、嵌套 let、let rec、curried 函数、函数应用、算术/比较运算、if/then/else、用户自定义 ADT、嵌套构造器模式、带 guard 的 match arm、字面量常量模式、or-pattern、alias pattern、tuple、record、字段访问、函数式 record update、列表(`[]` / `::`)、sequence 表达式(`;`)、function cases(`function |`)、`while` / 计数 `for` loop、string 操作(`^`、length、get、sub)、char 操作(code、chr)、可变 `int` array（`Array.make`、`Array.get`、`Array.set`、`Array.length`、`a.(i)`、`a.(i) <- v`）、`int` / `bool` ref（`ref`、`!`、`:=`），以及覆盖这些形式的模式匹配
 - **Stdlib:** bundled `List`(`length`、`map`、`filter`、`fold_left`、`rev`、`append`、`hd`、`tl`、`nth`、`exists`、`for_all`、`find`、`sort`、`combine`、`split`)、`Option`(`is_none`、`is_some`、`value`、`get`、`fold`)、`Result`(`is_ok`、`is_error`、`ok`、`error`、`map`、`bind`)、`Fun`(`id`、`const`、`flip`)、`Map`(`empty`、`singleton`、`add`、`find`、`remove`、`mem`、`size`、`to_list`)、`Set`(`empty`、`singleton`、`add`、`mem`、`remove`、`size`、`to_list`、`union`、`inter`)、`String`(`length`、`get`、`sub`)、`Char`(`code`、`chr`)、`Fixed` / `Amount` deterministic 六位小数和 bps helper、`Crypto`(`sha256`、`keccak256`)和 `Pubkey`(`zero`、`token_program`、`of_hex`)模块
-- **内存模型:** arena-only,并通过 region inference 自动把不逃逸的局部值放到栈上;BPF entry arena 为 32 KiB
+- **内存模型:** arena-only,并通过 region inference 自动把不逃逸的局部值放到栈上;native entry arena 为 32 KiB，BPF entry arena 为 3 KiB，以保持 loader entrypoint 低于 SBF 4 KiB 栈帧上限
 - **后端：** tree-walk interpreter、Zig native codegen，以及默认 `solana-zig build-lib` 的 BPF codegen（单路径）
 - **Solana accounts:** 内置 `account` record 值把 BPF input buffer 解析出的 key、lamports、data、owner,以及 signer/writable/executable flags 暴露为零拷贝视图;runtime parser 还会跟踪 rent epoch
 - **Solana syscalls:** logging、`sol_log_64`、pubkey logging、SHA-256/Keccak、Clock/Rent sysvars 和 remaining compute units 都通过 `external` declarations 直接绑定到 Zig runtime symbols
@@ -140,11 +141,11 @@ Anchor-compatible IDL。
 - **Function inlining:** 小型单表达式函数(≤3 个 Core IR nodes)会带 alpha-renaming 地 inline 到 call site,触发更多 constant folding;String、ADT、Tuple 和 Record 等类型都受支持
 - **确定性:** 当前受支持 examples corpus 上,interpreter ≡ Zig native
 - **CI:** GitHub Actions 工作流以 `macos-latest` + `ubuntu-latest` matrix 运行 `./init.sh`、`zig build`、`zig build test`、`cargo test`(Mollusk SVM)、P3 `no_alloc` 与 IDL smoke checks、Mollusk tests,以及 examples `omlz check` corpus loop
-- **Mollusk SVM tests:** `tests/` 下有 34 个 Rust integration-test 文件（42 个 Rust test case），使用 Mollusk SVM v0.12.1(hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet、real-world zignocchio ports,以及 SPL Token primitive coverage)。`tests/bpf_test_support.rs` 统一了测试链路中 artifacts 的构建与加载逻辑；历史上的 ELF 后处理已移除（详见 `mission-internal/elf-patch-investigation.md`）。
+- **Mollusk SVM tests:** `tests/` 下有 35 个 Rust integration-test 文件（43 个 Rust test case），使用 Mollusk SVM v0.12.1(hello、demo、simple_cpi、counter、vault、external_demo、crypto_demo、hackathon_greet、mutable_state_stress、real-world zignocchio ports,以及 SPL Token primitive coverage)。`tests/bpf_test_support.rs` 统一了测试链路中 artifacts 的构建与加载逻辑；历史上的 ELF 后处理已移除（详见 `mission-internal/elf-patch-investigation.md`）。
 - **诊断信息:** 默认是 rustc-style 诊断,并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注
 - **LSP:** `zig build` 会安装 `omlz-lsp`,它通过 stdio JSON-RPC 提供 LSP push diagnostics
 - **Source maps:** BPF 构建会发出确定性的 source map,嵌入 `.zxcaml.srcmap`,并可用 `omlz unmap` 把 BPF PC 映回 OCaml 位置
-- **示例:** `examples/` 下 84 个程序,覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion(TCO)、hackathon greeting、zignocchio-port programs、dao_voting、ata_transfer、order_book、spl_burn、spl_close_account、spl_revoke 和 fixed_amm_quote
+- **示例:** `examples/` 下 85 个程序,覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL-Token、counter、vault、external demo、crypto demo、multi-instruction、region allocation、string demo、tail recursion(TCO)、hackathon greeting、zignocchio-port programs、dao_voting、ata_transfer、order_book、spl_burn、spl_close_account、spl_revoke、fixed_amm_quote 和 mutable_state_stress
 - **Golden/UI 测试:** Core IR/sexp snapshot、UI tests 和 fmt golden 通过 `zig build test` 运行;当前提交底线是 `zig build test --summary none` 加完整 Cargo/Mollusk suite 全部通过
 - **安装:** `./init.sh && zig build`(见 [INSTALLING.md](./INSTALLING.md))
 

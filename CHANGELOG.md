@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — R12 mutable-state hardening
+
+- Added `examples/mutable_state_stress.ml`, an interpreter/native/BPF smoke
+  program that composes mutable `int` arrays, `int`/`bool` refs, `while`,
+  `for`, and `downto` loops with internal assertions.
+- Added `examples/tests/mutable_state_test.ml` for cargo-style `omlz test`
+  coverage of array mutation, ref-driven loops, reverse iteration, and bool ref
+  branch state.
+- Added a Mollusk SVM acceptance test for `mutable_state_stress`, raising the
+  Rust integration baseline to 35 files / 43 test cases and the examples corpus
+  to 85 programs.
+- Hardened panic-marker rendering for `omlz run` so interpreter panics are
+  emitted atomically as `ZXCAML_PANIC:*` lines.
+- Adjusted the BPF entry arena to a 3 KiB stack-bounded buffer so
+  allocation-heavy array/ref programs remain below SBF's 4 KiB entrypoint stack
+  frame limit; native entry programs retain the 32 KiB arena.
+- Added UI coverage for negative array reads and `Array.make` under
+  `--no-alloc`.
+
 ### Added — R11 fixed-point math surface
 
 - Added pure-OCaml `Fixed` and `Amount` stdlib modules for deterministic

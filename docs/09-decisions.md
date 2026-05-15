@@ -271,8 +271,9 @@ this arena.
 
 ### Consequences
 
-- Programs cannot allocate beyond the arena's buffer; the buffer
-  size is a CLI flag (`--arena-bytes`, default 32 KiB).
+- Programs cannot allocate beyond the arena's buffer. Native entry programs
+  use a 32 KiB buffer; BPF entry programs use a 3 KiB stack-bounded buffer so
+  the loader entrypoint stays below SBF's 4 KiB stack-frame limit.
 - Multi-arena schemes (per region, per call) are a P4 refinement
   and do not require Core IR changes.
 
