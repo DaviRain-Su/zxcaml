@@ -8,6 +8,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Arena = @import("arena.zig").Arena;
+const vendored_sdk = @import("vendored_sdk");
+const sol = vendored_sdk.solana_program_sdk;
+const sdk_hash = sol.hash;
+const sdk_secp256k1_recover = sol.secp256k1_recover;
+const sdk_clock = sol.clock;
+const sdk_rent = sol.rent;
+const sdk_compute_budget = sol.compute_budget;
 
 /// 32-byte Solana public key or hash value.
 pub const Pubkey = [32]u8;
@@ -107,18 +114,9 @@ pub inline fn sol_log_pubkey(pubkey: *const Pubkey) void {
 
 /// Computes a SHA-256 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
 pub inline fn sol_sha256(payload: []const u8) Hash {
-    if (comptime is_bpf) {
-        var descriptor: [1]SolBytes = undefined;
-        descriptor[0].addr = payload.ptr;
-        descriptor[0].len = payload.len;
-        var out: Hash = undefined;
-        _ = Syscall.sol_sha256(@ptrCast(&descriptor[0]), descriptor.len, &out);
-        return out;
-    } else {
-        var out: Hash = undefined;
-        std.crypto.hash.sha2.Sha256.hash(payload, &out, .{});
-        return out;
-    }
+    const parts = [_][]const u8{payload};
+    const digest = sdk_hash.sha256(&parts) catch return std.mem.zeroes(Hash);
+    return digest.bytes;
 }
 
 /// Computes SHA-256 and returns an arena-owned byte slice suitable for OCaml `bytes`.
@@ -132,18 +130,9 @@ pub inline fn sol_sha256_alloc(arena: *Arena, payload: []const u8) []const u8 {
 
 /// Computes a Keccak-256 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
 pub inline fn sol_keccak256(payload: []const u8) Hash {
-    if (comptime is_bpf) {
-        var descriptor: [1]SolBytes = undefined;
-        descriptor[0].addr = payload.ptr;
-        descriptor[0].len = payload.len;
-        var out: Hash = undefined;
-        _ = Syscall.sol_keccak256(@ptrCast(&descriptor[0]), descriptor.len, &out);
-        return out;
-    } else {
-        var out: Hash = undefined;
-        std.crypto.hash.sha3.Keccak256.hash(payload, &out, .{});
-        return out;
-    }
+    const parts = [_][]const u8{payload};
+    const digest = sdk_hash.keccak256(&parts) catch return std.mem.zeroes(Hash);
+    return digest.bytes;
 }
 
 /// Computes Keccak-256 and returns an arena-owned byte slice suitable for OCaml `bytes`.
@@ -157,18 +146,9 @@ pub inline fn sol_keccak256_alloc(arena: *Arena, payload: []const u8) []const u8
 
 /// Computes a BLAKE3 digest through Solana's syscall on BPF, or std.crypto on hosted targets.
 pub inline fn sol_blake3(payload: []const u8) Hash {
-    if (comptime is_bpf) {
-        var descriptor: [1]SolBytes = undefined;
-        descriptor[0].addr = payload.ptr;
-        descriptor[0].len = payload.len;
-        var out: Hash = undefined;
-        _ = Syscall.sol_blake3(@ptrCast(&descriptor[0]), descriptor.len, &out);
-        return out;
-    } else {
-        var out: Hash = undefined;
-        std.crypto.hash.Blake3.hash(payload, &out, .{});
-        return out;
-    }
+    const parts = [_][]const u8{payload};
+    const digest = sdk_hash.blake3(&parts) catch return std.mem.zeroes(Hash);
+    return digest.bytes;
 }
 
 /// Computes BLAKE3 and returns an arena-owned 32-byte slice suitable for OCaml `bytes`.
@@ -191,19 +171,8 @@ pub inline fn sol_secp256k1_recover(hash: []const u8, recovery_id: i64, signatur
     if (hash.len != secp256k1_hash_len or signature.len != secp256k1_signature_len) return null;
     if (recovery_id < 0 or recovery_id > 3) return null;
 
-    var out: Secp256k1Pubkey = undefined;
-    if (comptime is_bpf) {
-        const rc = Syscall.sol_secp256k1_recover(hash.ptr, @intCast(recovery_id), signature.ptr, &out);
-        if (rc != 0) return null;
-        return out;
-    }
-
-    // Hosted builds do not link libsecp256k1. Provide a deterministic
-    // success-shaped fallback so codegen/native typechecks can exercise the
-    // wrapper signature; real recovery happens through the SVM syscall on BPF.
-    @memset(&out, 0);
-    out[0] = @intCast(recovery_id);
-    return out;
+    const recovered = sdk_secp256k1_recover.recover(hash, @intCast(recovery_id), signature) catch return null;
+    return recovered.bytes;
 }
 
 /// Recovers a secp256k1 pubkey directly into account data.
@@ -218,13 +187,8 @@ pub inline fn sol_secp256k1_recover_into_account_data(account_data: []u8, hash: 
     if (signature.len != secp256k1_signature_len) return 1;
     if (recid < 0 or recid > 3) return 1;
 
-    if (comptime is_bpf) {
-        return @intCast(Syscall.sol_secp256k1_recover(hash.ptr, @intCast(recid), signature.ptr, account_data.ptr));
-    }
-
-    const out = account_data[0..secp256k1_pubkey_len];
-    @memset(out, 0);
-    out[0] = @intCast(recid);
+    const recovered = sdk_secp256k1_recover.recover(hash, @intCast(recid), signature) catch return 1;
+    @memcpy(account_data[0..secp256k1_pubkey_len], &recovered.bytes);
     return 0;
 }
 
@@ -243,9 +207,14 @@ pub inline fn sol_secp256k1_recover_alloc(arena: *Arena, hash: []const u8, recov
 /// Reads the Clock sysvar through Solana's `sol_get_clock_sysvar` syscall.
 pub inline fn sol_get_clock_sysvar() Clock {
     if (comptime is_bpf) {
-        var clock: Clock = undefined;
-        _ = Syscall.sol_get_clock_sysvar(&clock);
-        return clock;
+        const clock = sdk_clock.Clock.get() catch return .{};
+        return .{
+            .slot = clock.slot,
+            .epoch_start_timestamp = clock.epoch_start_timestamp,
+            .epoch = clock.epoch,
+            .leader_schedule_epoch = clock.leader_schedule_epoch,
+            .unix_timestamp = clock.unix_timestamp,
+        };
     }
     return .{};
 }
@@ -253,9 +222,12 @@ pub inline fn sol_get_clock_sysvar() Clock {
 /// Reads the Rent sysvar through Solana's `sol_get_rent_sysvar` syscall.
 pub inline fn sol_get_rent_sysvar() Rent {
     if (comptime is_bpf) {
-        var rent: Rent = undefined;
-        _ = Syscall.sol_get_rent_sysvar(&rent);
-        return rent;
+        const rent = sdk_rent.Rent.get() catch return .{};
+        return .{
+            .lamports_per_byte_year = rent.lamports_per_byte_year,
+            .exemption_threshold = rent.exemption_threshold,
+            .burn_percent = rent.burn_percent,
+        };
     }
     return .{};
 }
@@ -270,7 +242,7 @@ pub inline fn sol_log_compute_units_() void {
 /// Returns the remaining compute units reported by Solana's runtime.
 pub inline fn sol_remaining_compute_units() u64 {
     if (comptime is_bpf) {
-        sol_log_compute_units_();
+        return sdk_compute_budget.remaining();
     }
     return 0;
 }
@@ -340,15 +312,15 @@ test "blake3 arena wrapper returns fixed 32-byte digest" {
     );
 }
 
-test "secp256k1_recover arena wrapper exposes 64-byte success-shaped result" {
+test "secp256k1_recover arena wrapper returns explicit zero-length sentinel off-chain" {
     var buf: [128]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&buf);
     const hash = [_]u8{0x11} ** secp256k1_hash_len;
     const signature = [_]u8{0x22} ** secp256k1_signature_len;
 
     const pubkey = sol_secp256k1_recover_alloc(&arena, &hash, 1, &signature);
-    try std.testing.expectEqual(@as(usize, secp256k1_pubkey_len), pubkey.len);
-    try std.testing.expectEqual(@as(usize, secp256k1_pubkey_len), arena.offset);
+    try std.testing.expectEqual(@as(usize, 0), pubkey.len);
+    try std.testing.expectEqual(@as(usize, 0), arena.offset);
 }
 
 test "secp256k1_recover arena wrapper maps invalid recovery id to zero-length bytes" {
@@ -395,15 +367,27 @@ test "secp256k1_recover_into_account_data rejects short account data" {
     try std.testing.expect(sol_secp256k1_recover_into_account_data(&account_data, &hash, 1, &signature) != 0);
 }
 
-test "secp256k1_recover_into_account_data hosted stub fills account data" {
+test "secp256k1_recover_into_account_data leaves caller buffer untouched off-chain" {
     var account_data = [_]u8{0xaa} ** (secp256k1_pubkey_len + 4);
     const hash = [_]u8{0x11} ** secp256k1_hash_len;
     const signature = [_]u8{0x22} ** secp256k1_signature_len;
 
     const rc = sol_secp256k1_recover_into_account_data(&account_data, &hash, 2, &signature);
-    try std.testing.expectEqual(@as(i64, 0), rc);
-    try std.testing.expectEqual(@as(u8, 2), account_data[0]);
-    try std.testing.expectEqual(@as(u8, 0), account_data[1]);
-    try std.testing.expectEqual(@as(u8, 0), account_data[secp256k1_pubkey_len - 1]);
+    try std.testing.expect(rc != 0);
+    try std.testing.expectEqual(@as(u8, 0xaa), account_data[0]);
+    try std.testing.expectEqual(@as(u8, 0xaa), account_data[1]);
+    try std.testing.expectEqual(@as(u8, 0xaa), account_data[secp256k1_pubkey_len - 1]);
     try std.testing.expectEqual(@as(u8, 0xaa), account_data[secp256k1_pubkey_len]);
+}
+
+test "unsupported hosted syscall fallbacks stay explicit" {
+    const clock = sol_get_clock_sysvar();
+    const rent = sol_get_rent_sysvar();
+
+    try std.testing.expectEqual(@as(u64, 0), clock.slot);
+    try std.testing.expectEqual(@as(i64, 0), clock.unix_timestamp);
+    try std.testing.expectEqual(@as(u64, 0), rent.lamports_per_byte_year);
+    try std.testing.expectEqual(@as(f64, 0), rent.exemption_threshold);
+    try std.testing.expectEqual(@as(u8, 0), rent.burn_percent);
+    try std.testing.expectEqual(@as(u64, 0), sol_remaining_compute_units());
 }

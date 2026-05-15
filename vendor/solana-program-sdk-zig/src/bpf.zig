@@ -39,8 +39,10 @@ pub fn getUpgradeableLoaderProgramDataId(program_id: *const PublicKey) !PublicKe
 }
 
 pub const is_bpf_program = !builtin.is_test and
-    ((builtin.os.tag == .freestanding and builtin.cpu.arch == .bpfel) or
-        builtin.cpu.arch == .sbf);
+    (builtin.os.tag == .freestanding or
+        std.mem.eql(u8, @tagName(builtin.cpu.arch), "sbf") or
+        std.mem.eql(u8, @tagName(builtin.cpu.arch), "bpfel") or
+        std.mem.eql(u8, @tagName(builtin.cpu.arch), "bpfeb"));
 
 // =============================================================================
 // Tests

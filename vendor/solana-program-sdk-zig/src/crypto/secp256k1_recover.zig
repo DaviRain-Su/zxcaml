@@ -23,7 +23,7 @@
 //! caller must guarantee the buffer lengths before invoking.
 
 const std = @import("std");
-const builtin = @import("builtin");
+const bpf = @import("../bpf.zig");
 const program_error = @import("../program_error/root.zig");
 
 const ProgramError = program_error.ProgramError;
@@ -56,8 +56,6 @@ pub const RecoveredPubkey = struct {
     bytes: [PUBKEY_LEN]u8,
 };
 
-const is_solana = builtin.os.tag == .freestanding and builtin.cpu.arch == .bpfel;
-
 extern fn sol_secp256k1_recover(
     hash: [*]const u8,
     recovery_id: u64,
@@ -84,7 +82,7 @@ pub fn recover(
     if (signature.len != SIGNATURE_LEN) return error.InvalidSignature;
     if (recovery_id > 3) return error.InvalidRecoveryId;
 
-    if (comptime !is_solana) {
+    if (comptime !bpf.is_bpf_program) {
         // Host fallback: we can't actually recover without pulling in
         // a secp256k1 implementation. Return a deterministic stub so
         // host tests can at least exercise the call path; flag the

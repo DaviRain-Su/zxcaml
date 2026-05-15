@@ -12,12 +12,10 @@ const vendored_sdk = @import("vendored_sdk");
 const program = @import("program.zig");
 
 comptime {
-    _ = vendored_sdk.solana_program_sdk.Pubkey;
-    _ = vendored_sdk.solana_codec.Error;
-    _ = vendored_sdk.spl_token.PROGRAM_ID;
-    _ = vendored_sdk.spl_ata.PROGRAM_ID;
-    _ = vendored_sdk.solana_system.PROGRAM_ID;
-    _ = vendored_sdk.spl_memo.PROGRAM_ID;
+    _ = vendored_sdk.solana_program_sdk.hash.HASH_BYTES;
+    _ = vendored_sdk.solana_program_sdk.secp256k1_recover.PUBKEY_LEN;
+    _ = vendored_sdk.solana_program_sdk.clock.Clock;
+    _ = vendored_sdk.solana_program_sdk.rent.Rent.Data;
 }
 
 const arena_bytes = 32 * 1024;

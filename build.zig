@@ -230,6 +230,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const vendored_solana_sdk_m2_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/src/zxcaml_m2_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const vendored_solana_codec_module = b.createModule(.{
         .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig"),
         .target = target,
@@ -267,12 +272,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    vendored_sdk_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
-    vendored_sdk_module.addImport("solana_codec", vendored_solana_codec_module);
-    vendored_sdk_module.addImport("spl_token", vendored_spl_token_module);
-    vendored_sdk_module.addImport("spl_ata", vendored_spl_ata_module);
-    vendored_sdk_module.addImport("solana_system", vendored_solana_system_module);
-    vendored_sdk_module.addImport("spl_memo", vendored_spl_memo_module);
+    vendored_sdk_module.addImport("solana_sdk_m2", vendored_solana_sdk_m2_module);
+    runtime_syscalls_test_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_sysvar_test_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_cpi_test_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_spl_token_test_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_ata_test_module.addImport("vendored_sdk", vendored_sdk_module);
 
     const vendored_sdk_import_smoke_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/sdk/import_smoke.zig"),
@@ -293,6 +298,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    runtime_programs_test_module.addImport("vendored_sdk", vendored_sdk_module);
     const runtime_programs_tests = b.addTest(.{
         .name = "runtime-programs-test",
         .root_module = runtime_programs_test_module,

@@ -12,6 +12,10 @@
 //! byte-aligned slices and for account data that is not naturally aligned.
 
 const std = @import("std");
+const vendored_sdk = @import("vendored_sdk");
+const sol = vendored_sdk.solana_program_sdk;
+const sdk_clock = sol.clock;
+const sdk_rent = sol.rent;
 
 pub const clock_account_data_len: usize = 40;
 pub const rent_account_data_len: usize = 17;
@@ -122,22 +126,24 @@ pub const EpochSchedule = struct {
 /// Reads a Clock sysvar account payload. Short data returns the zero value.
 pub fn readClock(account_data: []const u8) Clock {
     if (account_data.len < clock_account_data_len) return .{};
+    const raw: *align(1) const sdk_clock.Clock = @ptrCast(account_data.ptr);
     return .{
-        .slot = readU64Le(account_data, 0).?,
-        .epoch_start_timestamp = @bitCast(readU64Le(account_data, 8).?),
-        .epoch = readU64Le(account_data, 16).?,
-        .leader_schedule_epoch = readU64Le(account_data, 24).?,
-        .unix_timestamp = @bitCast(readU64Le(account_data, 32).?),
+        .slot = raw.slot,
+        .epoch_start_timestamp = raw.epoch_start_timestamp,
+        .epoch = raw.epoch,
+        .leader_schedule_epoch = raw.leader_schedule_epoch,
+        .unix_timestamp = raw.unix_timestamp,
     };
 }
 
 /// Reads a Rent sysvar account payload. Short data returns the zero value.
 pub fn readRent(account_data: []const u8) Rent {
     if (account_data.len < rent_account_data_len) return .{};
+    const raw: *align(1) const sdk_rent.Rent.Data = @ptrCast(account_data.ptr);
     return .{
-        .lamports_per_byte_year = readU64Le(account_data, 0).?,
-        .exemption_threshold = @bitCast(readU64Le(account_data, 8).?),
-        .burn_percent = account_data[16],
+        .lamports_per_byte_year = raw.lamports_per_byte_year,
+        .exemption_threshold = raw.exemption_threshold,
+        .burn_percent = raw.burn_percent,
     };
 }
 

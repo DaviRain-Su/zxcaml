@@ -95,3 +95,41 @@ fn secp_recover_demo_writes_recovered_pubkey_to_account_zero() {
     let output = &result.resulting_accounts[0].1.data;
     assert_eq!(&output[0..64], EXPECTED_PUBKEY.as_slice());
 }
+
+#[test]
+fn secp_recover_demo_rejects_invalid_recovery_id_without_clobbering_output() {
+    let mollusk = setup_mollusk();
+    let output_account = Pubkey::new_unique();
+    let mut invalid_instruction_data = instruction_data();
+    invalid_instruction_data[32] = 4;
+
+    let result = mollusk.process_instruction(
+        &Instruction {
+            program_id: program_id(),
+            accounts: vec![AccountMeta::new(output_account, false)],
+            data: invalid_instruction_data,
+        },
+        &[(
+            output_account,
+            Account {
+                lamports: 1_000_000,
+                data: vec![0u8; 64],
+                owner: program_id(),
+                ..Account::default()
+            },
+        )],
+    );
+
+    assert!(
+        !result.program_result.is_err(),
+        "invalid recovery-id path should still return cleanly: {:?}",
+        result.program_result
+    );
+
+    let output = &result.resulting_accounts[0].1.data;
+    assert_eq!(
+        output,
+        &vec![0u8; 64],
+        "invalid recovery id should leave the output buffer unchanged"
+    );
+}

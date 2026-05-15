@@ -80,6 +80,10 @@ name = "external_demo_test"
 path = "external_demo_test.rs"
 
 [[test]]
+name = "syscall_test"
+path = "syscall_test.rs"
+
+[[test]]
 name = "crypto_demo_test"
 path = "crypto_demo_test.rs"
 
@@ -90,6 +94,10 @@ path = "keccak_demo_test.rs"
 [[test]]
 name = "blake3_demo_test"
 path = "blake3_demo_test.rs"
+
+[[test]]
+name = "compute_units_demo_test"
+path = "compute_units_demo_test.rs"
 
 [[test]]
 name = "secp_recover_demo_test"

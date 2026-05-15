@@ -206,10 +206,7 @@ test "cli: custom SOLANA_ZIG wrapper records direct solana-zig argv" {
     try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-fentry=entrypoint") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Mroot=out/bpf_entry.zig") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Mvendored_sdk=out/runtime/sdk/root.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Msolana_program_sdk=vendor/solana-program-sdk-zig/src/root.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Msolana_codec=vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Mspl_token=vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Mspl_ata=vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig") != null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapper_log, "-Msolana_sdk_m2=vendor/solana-program-sdk-zig/src/zxcaml_m2_root.zig") != null);
 
     const bpf_entry = try cwd.readFileAlloc(io, "out/bpf_entry.zig", allocator, .limited(128 * 1024));
     defer allocator.free(bpf_entry);
