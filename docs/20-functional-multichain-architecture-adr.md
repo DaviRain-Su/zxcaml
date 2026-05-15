@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-15  
-**Scope:** MTF-0 target contract only
+**Scope:** MTF-0 target contract and MTF-1 generic WASM architecture
 
 ## Context
 
@@ -246,6 +246,116 @@ No target graduates to `supported` status until it has all of the following:
 Failing any gate means the target stays `reserved`, `experimental`, or
 `accepted`; it does not become `supported`.
 
+### 11. MTF-1 generic WASM architecture is a future pure-logic smoke target
+
+MTF-1 extends this ADR with the architecture for a future
+`omlz build --target=wasm` path. This section is still **architecture-only**:
+it does **not** add the CLI flag, artifact generation, runtime code, tests, or
+support claim in this slice.
+
+The MTF-1 target contract is deliberately narrow:
+
+- support status starts at **`experimental`** only;
+- the artifact target is **`wasm32-freestanding`**;
+- the scope is **deterministic pure portable logic only**;
+- storage, caller identity, host imports, cross-contract calls, chain metadata,
+  and adapter-specific APIs stay out of scope.
+
+In other words, MTF-1 is a freestanding smoke target for portable computation,
+not a contract-runtime adapter.
+
+Conceptually, the future path is:
+
+```text
+Core IR / Lowered IR
+  -> backend facade
+  -> generated Zig source (if still the right lowering boundary)
+  -> zig wasm32-freestanding build path
+  -> standalone .wasm artifact
+```
+
+The exact build-driver syntax may evolve, but the intended user-facing contract
+is a future `omlz build --target=wasm ...` command that emits a `.wasm`
+artifact for freestanding smoke validation. MTF-0 + MTF-1 do **not** claim
+that this command or artifact exists yet.
+
+### 12. MTF-1 import and runner contract
+
+The MTF-1 MVP acceptance gate is **import-free instantiation** under Node's
+built-in WebAssembly runtime.
+
+That contract is explicit because current tool readiness is also explicit:
+
+- **available:** `zig`, Node, and the JavaScript `WebAssembly` API;
+- **not available in the verified environment:** `wasmtime`, `wasmer`.
+
+Therefore the first canonical acceptance runner for generic WASM is Node, not a
+third-party WASM runtime.
+
+Future MTF-1 acceptance must prove one of the following equivalent facts:
+
+1. the emitted module instantiates successfully with an empty import object,
+   such as `WebAssembly.instantiate(bytes, {})`; or
+2. the emitted module has zero unexpected imports by inspection, with any
+   remaining imported surface explicitly justified by a later scoped ADR.
+
+The MVP expectation is stronger than "the toolchain produced a `.wasm` file":
+the module should be **freestanding and import-free for its pure-function
+smoke surface**.
+
+### 13. MTF-1 export ABI and scalar scope
+
+The MTF-1 smoke ABI is intentionally tiny and explicit:
+
+- exported functions are named smoke-test entrypoints corresponding to selected
+  top-level pure OCaml functions;
+- each export takes **zero or more scalar parameters** and returns **at most one
+  scalar result**;
+- supported MVP scalar shapes are:
+  - `i64` for portable `int` if ZxCaml keeps `int` aligned to signed 64-bit
+    semantics;
+  - `i32` for `bool`, encoded as `0` or `1`;
+- tuples, records, variants, lists, refs, arrays, strings, bytes, and any
+  pointer- or allocation-bearing surface are outside the MTF-1 MVP ABI.
+
+String/bytes support is therefore **deferred on purpose**. MTF-1 does not yet
+standardize:
+
+- linear-memory layout for user-visible buffers;
+- allocator/import contracts for memory management;
+- string encoding rules;
+- bytes ownership or slice lifetime rules.
+
+Those require a later memory/ABI slice and must not be smuggled into the pure
+WASM smoke target by implication.
+
+### 14. MTF-1 JavaScript `i64` behavior is part of the contract
+
+If portable `int` remains `i64`, Node-based acceptance must use JavaScript
+`BigInt` values for `i64` parameters and results. That is a WebAssembly runner
+contract, not an implementation detail.
+
+Consequences:
+
+- smoke fixtures must call `i64` exports with `1n`, `42n`, etc., not `Number`;
+- result comparison must likewise expect `BigInt`;
+- any future docs/examples for this target must state the `BigInt` requirement
+  directly so the runner semantics are not mistaken for JS `Number` semantics.
+
+### 15. Generic WASM success does not imply any WASM-chain adapter
+
+MTF-1 proves only that ZxCaml can eventually target a **generic freestanding
+pure-function WASM artifact**. It does **not** prove readiness for:
+
+- NEAR exported-method contracts;
+- CosmWasm `instantiate` / `execute` / `query`;
+- Substrate contract selectors and SCALE metadata;
+- Stylus, Internet Computer, or any other WASM-like runtime.
+
+Each of those targets needs its **own** target contract, host adapter, ABI,
+toolchain checks, and real acceptance runner. Generic WASM is a prerequisite
+building block, not inherited support for every WASM-chain family.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
@@ -273,8 +383,8 @@ The following claims are explicitly disallowed:
 ## Relationship to `docs/19-functional-multichain-roadmap.md`
 
 `docs/19-functional-multichain-roadmap.md` remains the exploratory product and
-milestone thesis. This ADR is the MTF-0 contract that constrains how later
-milestones may be implemented.
+milestone thesis. This ADR is the MTF-0 + MTF-1 contract that constrains how
+later milestones may be implemented.
 
 In short:
 
