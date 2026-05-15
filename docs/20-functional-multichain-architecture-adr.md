@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-15  
-**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, MTF-3 portable contract core API architecture, MTF-4 EVM/Yul MVP architecture, and MTF-5 verified extraction profile architecture
+**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, MTF-3 portable contract core API architecture, MTF-4 EVM/Yul MVP architecture, MTF-5 verified extraction profile architecture, and MTF-6 additional adapter reservation architecture
 
 ## Context
 
@@ -772,6 +772,54 @@ must say which links are **proven**, **checked**, **tested**, **assumed**, or
 still **out of scope** instead of collapsing the entire chain into a single
 "verified" label.
 
+### 29. MTF-6 additional adapters are reserved for later named use cases, not pre-committed roadmap debt
+
+MTF-6 reserves additional adapter families as **future candidates only**. It
+does not schedule implementation work, support claims, or acceptance promises
+for CosmWasm, Substrate contracts, Stylus, Internet Computer, or similar
+targets unless a later milestone names:
+
+1. a concrete user or product use case;
+2. an owner for the adapter work; and
+3. the canonical toolchain or simulator that can prove the adapter really
+   works.
+
+Until those conditions exist, these targets remain `reserved` in the target
+registry. They are not implied by generic WASM reachability, by Zig being able
+to emit `.wasm`, or by another adapter family already working.
+
+The reservation matrix future workers must fill for each candidate adapter is:
+
+| Reserved adapter dimension | Questions that must be answered before implementation can graduate |
+|---|---|
+| Entrypoints | What are the externally visible contract entrypoints (`instantiate` / `execute` / `query`, selector dispatch, canister methods, etc.) and how do they map from portable contract entrypoints? |
+| ABI / encoding | What wire format is canonical for inputs and outputs: JSON, Borsh, SCALE, Candid, Solidity ABI, or something else? |
+| Storage / account model | Does the target expose key-value storage, account/state objects, stable memory, or another persistence model, and what semantics are target-owned rather than portable? |
+| Caller / value context | How are caller identity, attached value/funds, signer semantics, and permission checks surfaced? |
+| Calls / messages | Are cross-contract calls synchronous, asynchronous, message-based, callback-based, or metered differently from local execution? |
+| Deterministic effects | What logging, event, response-message, randomness, time, or host-side effects are allowed, and which must stay outside the portable core? |
+| Gas / fee / weight model | How are execution cost, metering, deposits, rent, or weight accounted for, and what resource-boundary assumptions must the adapter preserve? |
+| Artifact / deployment format | Is the deliverable a `.wasm`, bytecode blob, package bundle, metadata pair, canister image, or another deployable artifact? |
+| Errors | What is the target's canonical failure surface: trap, revert, panic string, response enum, exit code, or structured error payload? |
+| Metadata / schema | What metadata, ABI schema, interface description, or manifest format is required by downstream tooling? |
+| Canonical testing harness | What real toolchain or canonical simulator proves behavior end to end: `cw-multi-test`/`wasmd`, `cargo-contract`/`substrate-contracts-node`, Stylus Nitro tooling, `dfx`/PocketIC, or another target-owned runner? |
+
+The architecture policy for these reserved adapters is strict:
+
+- **Real toolchain gates are mandatory.** Future acceptance must use the real
+  target toolchain or a canonical simulator where one exists. Mock-only tests
+  are allowed only for explicitly labeled readiness gaps and cannot on their
+  own graduate a target beyond `reserved`.
+- **Existing invariants remain binding.** Any future adapter must preserve the
+  current frontend boundary (upstream OCaml `compiler-libs`), Core IR semantic
+  center, determinism contract, and documented memory/resource boundaries
+  unless a later ADR explicitly introduces and validates a target-specific
+  exception.
+- **Support never inherits across WASM-like families.** Generic WASM, NEAR,
+  CosmWasm, Substrate, Stylus, Internet Computer, and any similar runtime each
+  need an independent target contract, adapter ABI, capability mapping, and
+  acceptance gate. Success for one does not imply readiness for another.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
@@ -787,8 +835,8 @@ The following claims are explicitly disallowed:
 ## Consequences
 
 - Later milestones may extend this document, but they must preserve the MTF-0,
-  MTF-1, MTF-2, MTF-3, MTF-4, and MTF-5 statements above unless superseded by
-  a later ADR.
+  MTF-1, MTF-2, MTF-3, MTF-4, MTF-5, and MTF-6 statements above unless
+  superseded by a later ADR.
 - Multichain work is now blocked on explicit target contracts rather than
   roadmap optimism.
 - The current native/Solana baseline remains authoritative and unchanged.
@@ -806,7 +854,8 @@ The following claims are explicitly disallowed:
 
 `docs/19-functional-multichain-roadmap.md` remains the exploratory product and
 milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 + MTF-3 + MTF-4 +
-MTF-5 contract that constrains how later milestones may be implemented.
+MTF-5 + MTF-6 contract that constrains how later milestones may be
+implemented.
 
 In short:
 
