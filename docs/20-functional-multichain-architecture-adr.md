@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-15  
-**Scope:** MTF-0 target contract and MTF-1 generic WASM architecture
+**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, and MTF-2 NEAR no-storage adapter architecture
 
 ## Context
 
@@ -356,6 +356,107 @@ Each of those targets needs its **own** target contract, host adapter, ABI,
 toolchain checks, and real acceptance runner. Generic WASM is a prerequisite
 building block, not inherited support for every WASM-chain family.
 
+### 16. MTF-2 NEAR adapter architecture is a method-export contract, not a pure-export smoke target
+
+MTF-2 extends the ADR with a **NEAR-compatible `.wasm` adapter MVP**. This is
+still architecture-only in the current slice: it does **not** implement
+`omlz build --target=near`, NEAR runtime code, sandbox tests, storage helpers,
+or support claims.
+
+The MTF-2 output contract is intentionally distinct from MTF-1:
+
+- **MTF-1** exports freestanding pure functions whose parameters/results are
+  expressed directly in the WASM export signature;
+- **MTF-2** exports **NEAR method-style entrypoints** whose observable contract
+  is the exported method name plus NEAR host interaction, not direct scalar
+  parameters/results in the WASM signature.
+
+The architectural consequence is that a future NEAR target is not "generic
+WASM plus a deployment wrapper". It is a separate adapter family with its own
+entrypoint, serialization, host-import, and acceptance rules.
+
+For the no-storage MVP, each exported method is treated as:
+
+- a named contract entrypoint emitted as a NEAR-visible WASM export;
+- a guest function that receives its call payload via `env.input`, not through
+  direct WASM parameters;
+- a guest function that returns observable output through
+  `env.value_return`, not through the WASM result slot.
+
+### 17. MTF-2 NEAR host surface and runtime semantics are deliberately minimal
+
+The NEAR no-storage MVP host surface is restricted to exactly the following
+imports:
+
+| Import | MVP role | Contract |
+|---|---|---|
+| `env.input` | inbound payload handoff | Runtime writes the raw method input into a guest-chosen register. |
+| `env.register_len` | inbound payload sizing | Guest queries how many bytes were written into that register. |
+| `env.read_register` | inbound payload materialization | Guest copies the register bytes into linear memory it owns. |
+| `env.value_return` | success output | Guest returns the final response bytes to the runtime. |
+| `env.log_utf8` | observable logging | Guest emits human-readable UTF-8 logs. |
+| `env.panic_utf8` | trap / failure surface | Guest aborts execution with a UTF-8 panic message. |
+
+Everything else is out of scope for MTF-2, including:
+
+- persistent storage host functions;
+- promise and cross-contract-call host functions;
+- async callback choreography;
+- metadata/schema generation;
+- richer SDK surfaces beyond input, output, log, and panic.
+
+The runtime contract for the no-storage adapter is:
+
+1. reserve a stable input register ID for the adapter MVP;
+2. call `env.input(register_id)` at method entry;
+3. call `env.register_len(register_id)` to learn the payload size;
+4. call `env.read_register(register_id, ptr)` to copy the payload bytes into
+   guest linear memory;
+5. run portable contract logic over that payload;
+6. on success, call `env.value_return(len, ptr)` with the response bytes;
+7. for human-visible diagnostics, call `env.log_utf8(len, ptr)` with UTF-8 log
+   text;
+8. for malformed input or contract-defined fatal failure, call
+   `env.panic_utf8(len, ptr)` with a UTF-8 panic message.
+
+This means the observable NEAR semantics are explicit:
+
+- **input** is register-mediated and byte-addressed;
+- **return** is explicit via `value_return`;
+- **logs** are explicit via `log_utf8`;
+- **failure** is explicit via `panic_utf8`.
+
+MTF-2 deliberately does **not** standardize success/failure through direct WASM
+return values, hidden traps, storage side effects, or promise scheduling.
+
+### 18. MTF-2 serialization stance and readiness gate stay narrow
+
+The no-storage NEAR MVP adopts a **raw-bytes input/output profile**:
+
+- method payloads arrive as uninterpreted bytes via `env.input`;
+- the adapter may decode those bytes into target-selected OCaml values in guest
+  memory;
+- method success returns uninterpreted bytes via `env.value_return`;
+- logs and panic text are the only UTF-8-specific surfaces in the MVP.
+
+This is a deliberate constraint, not an omission. It keeps MTF-2 aligned with
+the minimal host surface above and avoids prematurely locking the project into a
+JSON-first or Borsh-first policy before the portable capability layer and
+cross-target serialization rules exist. Any later JSON or Borsh profile must be
+added as a separate, explicit adapter contract with its own acceptance gates.
+
+Tool readiness is likewise explicit:
+
+- **verified available for architecture planning:** Zig, Node, and the generic
+  WASM path assumptions from MTF-1;
+- **verified absent locally:** `near`, `near-sandbox`, and
+  `near-workspaces`.
+
+Therefore sandbox-backed NEAR validation is a **future prerequisite**, not a
+current accomplishment. No implementation mission may claim MTF-2 runtime
+acceptance until NEAR Sandbox (and the companion local tooling needed to drive
+it) is installed and used to prove the method-export contract end to end.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
@@ -370,8 +471,8 @@ The following claims are explicitly disallowed:
 
 ## Consequences
 
-- Later milestones may extend this document, but they must preserve the MTF-0
-  statements above unless superseded by a later ADR.
+- Later milestones may extend this document, but they must preserve the MTF-0,
+  MTF-1, and MTF-2 statements above unless superseded by a later ADR.
 - Multichain work is now blocked on explicit target contracts rather than
   roadmap optimism.
 - The current native/Solana baseline remains authoritative and unchanged.
@@ -383,8 +484,8 @@ The following claims are explicitly disallowed:
 ## Relationship to `docs/19-functional-multichain-roadmap.md`
 
 `docs/19-functional-multichain-roadmap.md` remains the exploratory product and
-milestone thesis. This ADR is the MTF-0 + MTF-1 contract that constrains how
-later milestones may be implemented.
+milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 contract that
+constrains how later milestones may be implemented.
 
 In short:
 
