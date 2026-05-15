@@ -23,6 +23,7 @@ const driver_bpf = @import("driver/bpf.zig");
 const driver_doctor = @import("driver/doctor.zig");
 const driver_idl = @import("driver/idl.zig");
 const driver_srcmap = @import("driver/srcmap.zig");
+const target_registry = @import("target/registry.zig");
 const diag = @import("util/diag.zig");
 const diag_explain = @import("util/diag_explain.zig");
 const render = @import("util/render.zig");
@@ -258,11 +259,11 @@ pub fn main(init: std.process.Init) !void {
         };
         const frontend_options = try frontendOptions(init, build_args.diagnostics, null);
 
-        if (!std.mem.eql(u8, build_args.target, "native") and !std.mem.eql(u8, build_args.target, "bpf")) {
-            try writeStderr(init.io, "error: unsupported build target; expected native or bpf.\n");
+        const resolved_target = target_registry.resolveBuildTarget(build_args.target) catch {
+            try writeUnsupportedBuildTarget(init.io, init.gpa);
             std.process.exit(1);
-        }
-        if (std.mem.eql(u8, build_args.target, "native") and build_args.output_path == null) {
+        };
+        if (resolved_target.requires_output_path and build_args.output_path == null) {
             try writeStderr(init.io, "error: native builds require -o <out>.\n");
             std.process.exit(1);
         }
@@ -277,10 +278,9 @@ pub fn main(init: std.process.Init) !void {
 
         switch (result) {
             .success => |parsed| {
-                if (std.mem.eql(u8, build_args.target, "bpf")) {
-                    try buildBpf(init, parsed.module, build_args);
-                } else {
-                    try buildNative(init, parsed.module, build_args);
+                switch (resolved_target.build_dispatch) {
+                    .bpf => try buildBpf(init, parsed.module, build_args),
+                    .native => try buildNative(init, parsed.module, build_args),
                 }
             },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
@@ -1713,6 +1713,16 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
     try writer.flush();
 }
 
+fn writeUnsupportedBuildTarget(io: Io, allocator: std.mem.Allocator) !void {
+    const accepted = try target_registry.acceptedTargetNamesText(allocator);
+    defer allocator.free(accepted);
+
+    const message = try std.fmt.allocPrint(allocator, "error: unsupported build target; expected {s}.\n", .{accepted});
+    defer allocator.free(message);
+
+    try writeStderr(io, message);
+}
+
 fn shouldPrintGenericFrontendFailure(err: anyerror) bool {
     return switch (err) {
         error.FrontendNotFound,
@@ -1765,6 +1775,32 @@ test "parse F07 native build arguments without requiring keep-zig" {
     try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path.?);
 }
 
+test "parse build arguments rejects omitted target" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "examples/m0_zero.ml",
+        "-o",
+        "/tmp/m0",
+    };
+
+    try std.testing.expectError(error.UnsupportedBuildArgs, parseBuildArgs(&args));
+}
+
+test "parse build arguments rejects split target flag spelling" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "--target",
+        "native",
+        "examples/m0_zero.ml",
+        "-o",
+        "/tmp/m0",
+    };
+
+    try std.testing.expectError(error.UnsupportedBuildArgs, parseBuildArgs(&args));
+}
+
 test {
     _ = @import("backend/api.zig");
     _ = @import("backend/interp.zig");
@@ -1790,5 +1826,6 @@ test {
     _ = pipeline;
     _ = @import("frontend_bridge/sexp_lexer.zig");
     _ = @import("frontend_bridge/sexp_parser.zig");
+    _ = @import("target/registry.zig");
     _ = @import("frontend_bridge/ttree.zig");
 }
