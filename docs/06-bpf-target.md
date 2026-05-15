@@ -46,15 +46,15 @@ See ADR-013 for the SBPF version behavior used by the direct path.
 
 ## 3. Target triple
 
-```
-bpfel-freestanding
+The current direct path uses Solana Zig's target:
+
+```text
+sbf-solana
 ```
 
-- `bpfel` — little-endian eBPF, which is Solana's flavour.
-- `freestanding` — no host OS surface.
-
-We do **not** use the Solana-specific LLVM fork in P1. The direct
-`solana-zig` path emits the final Solana-loadable ELF directly.
+Historical experiments used Zig's generic `bpfel-freestanding` target plus a
+separate linker step; current `omlz build --target=bpf` goes through
+`solana-zig` and emits the final Solana-loadable ELF directly.
 
 ## 4. Entrypoint contract
 

@@ -164,13 +164,13 @@ tools can key on codes instead of matching message text.
 | E0010 | _n/a_ | Polymorphic variants. | Emitted for `Texp_variant`; polymorphic variants are outside the ZxCaml subset. |
 | E0011 | _n/a_ | Float constants. | Emitted for `Const_float`; floats cannot be lowered to BPF. |
 | E0012 | _n/a_ | Other unsupported constants. | Emitted for integer-width literals not represented in the current subset. |
-| E0013 | _n/a_ | Mutable references and mutable updates. | Emitted for `ref`, `:=`, `!`, and mutable field writes. |
+| E0013 | _n/a_ | Unsupported mutable references / mutable updates. | Emitted for ref element types outside the R10 whitelist and for mutable field/instance writes outside the supported array/ref/account paths. |
 | E0014 | _n/a_ | First-class modules. | Emitted for `Texp_pack` and local module expressions. |
 | E0015 | _n/a_ | Recursive modules. | Emitted for `Tstr_recmodule`; recursive modules are not yet supported. |
 | E0016 | _n/a_ | Exceptions. | Emitted for `try` / exception declarations. |
-| E0017 | _n/a_ | Loops. | Emitted for `for` / `while`; use recursion or higher-order functions. |
+| E0017 | _n/a_ | Unsupported loop fallback. | Reserved for `for` / `while` only if native ADR-015 loop desugaring is bypassed or the loop shape is outside the supported subset. |
 | E0018 | _n/a_ | Objects and method calls. | Emitted for OCaml object-oriented expression nodes. |
-| E0019 | _n/a_ | Arrays. | Emitted for `Texp_array`. |
+| E0019 | _n/a_ | Unsupported array forms. | Emitted for array forms outside the R9 `int`-array subset (for example non-literal `Array.make` sizes or unsupported array helpers). |
 | E0020 | _n/a_ | Lazy expressions. | Emitted for `Texp_lazy`. |
 | E0021 | _n/a_ | Binding operators. | Emitted for `Texp_letop`. |
 | E0022 | _n/a_ | Unreachable expressions. | Emitted for `Texp_unreachable`. |
@@ -184,7 +184,7 @@ tools can key on codes instead of matching message text.
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
 
-## Wire format 1.2
+## Wire format history (current default 1.5)
 
 DX2 bumps the frontend bridge wire from `1.1` to `1.2` so frontend-emitted
 S-expressions can carry source locations into the Zig bridge, following the
@@ -193,7 +193,7 @@ mission-local canonical facts snapshot,
 `mission-internal/canonical-facts.md`, is the historical citation for the
 pre-DX2 canonical wire value (`1.1`); the post-bump implementation source of
 truth is now `src/frontend_bridge/sexp_parser.zig`
-(`expected_wire_version = "1.3"`; the reader still accepts `1.2`).
+(`expected_wire_version = "1.5"`; the reader still accepts compatible `1.2+` shapes).
 
 ### Optional `(loc ...)` schema
 
@@ -218,13 +218,10 @@ The bridge also accepts a trailing `(loc ...)` field on expression nodes for
 tests and future printers. When a wire `1.1` expression or compatibility blob
 omits the tuple, the bridge uses `Loc.unknown`.
 
-For one mission's deprecation window, `omlz check --wire=1.1 ...` forwards
-`--wire=1.1` to `zxc-frontend` and asks it to emit the old location-free shape.
-That compatibility flag is deprecated and targeted for removal in the next
-mission after downstream consumers have moved to wire `1.2`/`1.3`. The current
-`1.3` reader continues to accept wire `1.2` (and `1.1` via the deprecated
-window) sexps; missing locations are treated as `Loc.unknown` and missing
-typed-param payloads as untyped (`null`).
+Older compatibility emitters remain available only as migration windows. The
+current `1.5` reader continues to accept prior additive shapes; missing
+locations are treated as `Loc.unknown`, missing typed-param payloads as untyped
+(`null`), and pre-ref wires simply omit the `ref-*` nodes.
 
 ### Wire `1.3` — typed lambda parameters
 
@@ -237,6 +234,11 @@ existing structural heuristics do not already pick a more specific shape; if
 the wire type is `null`, the lowerer falls back to the legacy heuristic chain
 (`Ty.Int` default). See `docs/wire-compat.md` for the cross-version reader
 behavior.
+
+Wire `1.4` / `1.5` add the ADR-015 mutable surface: `1.4` covers the narrow
+array/loop-era additive shapes, and `1.5` adds `ref-make`, `ref-get`, and
+`ref-set` for arena-backed `int` / `bool` ref cells. Diagnostics continue to
+report locations through the same optional `(loc ...)` schema.
 
 ## Examples
 

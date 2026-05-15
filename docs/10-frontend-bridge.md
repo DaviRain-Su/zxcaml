@@ -93,11 +93,12 @@ The serialised form is an S-expression because:
 
 ### 3.1 Top-level shape
 
-The current wire grammar is sexp **version `1.2`**. The header carries the
+The current wire grammar is sexp **version `1.5`**. The header carries the
 version so `omlz` can reject stale frontend output with an upgrade hint:
 
 ```text
-(zxcaml-cir 1.2
+;; locations elided for readability
+(zxcaml-cir 1.5
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -106,7 +107,7 @@ version so `omlz` can reject stale frontend output with an upgrade hint:
     (record_type_decl (name person) (params)
       (fields ((name (type-ref string)) (age (type-ref int)))))
     (let entrypoint
-      (lambda (_input)
+      (lambda ((_input (ty (type-ref unit))))
         (let alice (record (fields ((name (const-string "alice"))
                                     (age (const-int 30)))))
           (match (tuple (items (ctor Red) (field_access (var alice) age)))
@@ -126,6 +127,9 @@ Wire-format history:
 | `1.0` | external declarations, instruction-data/account attributes, and P4/P5 Solana/IDL metadata |
 | `1.1` | mutual-recursion groups and erased type aliases |
 | `1.2` | per-node source locations for DX2 diagnostics, LSP, and source maps |
+| `1.3` | typed lambda / `let rec` parameters with `(any)` fallback |
+| `1.4` | array / loop-era additive surface before refs |
+| `1.5` | `ref-make`, `ref-get`, and `ref-set` for arena-backed ref cells |
 
 Diagnostics carry locations separately on stderr; ordinary comments and
 formatting trivia are not serialized.
@@ -150,7 +154,7 @@ In:
 - Top-level `let` bindings (recursive groups preserved).
 - Expressions covered by the subset: `let`, `fun`, `match`, `if`,
   applications, constructors, records, projections, tuples,
-  literals.
+  literals, sequence, loops, arrays, and ref cells.
 - Patterns covered by the subset.
 - For every node: source span (`(span 12 5 18)` = file_id, line,
   col) and resolved `ty`.
@@ -163,11 +167,11 @@ Out:
   upstream of serialisation).
 
 
-## 4. The accepted subset (current P1-P8 surface)
+## 4. The accepted subset (current surface)
 
 The **definitive** list of `Typedtree` constructors accepted by the current
 `zxc-frontend` is the implementation in `src/frontend/zxc_subset.ml`. This
-section summarizes the as-built sealed P1-P8 surface.
+section summarizes the as-built current surface.
 
 ### 4.1 Top-level
 
@@ -201,16 +205,19 @@ Accepted:
 - `Texp_field` for record field access
 - `Texp_sequence` where it desugars to ordered Core IR effects
 - `Texp_assert` for supported assertion expressions
+- ADR-015 mutable primitives: `Texp_array`, `Array.get`, `Array.length`,
+  `Array.set`, literal-size `Array.make`, `ref`, `!`, `:=`, and native
+  `for` / `while` desugaring where their narrow element/loop constraints hold
 
-Rejected: arrays, loops, objects, polymorphic variants, `letop`,
-local opens/modules, `try`, `lazy`, labels/optional arguments, and
-mutation primitives (`ref`, `:=`, `!`, `Texp_setfield`) with dedicated
-diagnostics where available.
+Rejected: objects, polymorphic variants, `letop`, local opens/modules, `try`,
+`lazy`, labels/optional arguments outside the whitelist, general mutable
+record-field writes, unsupported ref element types, and array forms outside the
+R9 `int`-array subset, with dedicated diagnostics where available.
 
 Whitelisted primops:
 
 ```text
-+  -  *  /  mod  =  <>  <  <=  >  >=
++  -  *  /  mod  bitwise ops  =  <>  <  <=  >  >=
 ```
 
 ### 4.3 Patterns
@@ -226,14 +233,14 @@ Accepted:
 - literal constant patterns where supported
 - or-patterns and alias patterns where the bindings are valid
 
-Rejected: arrays, lazy patterns, polymorphic variants, exception patterns, and
+Rejected: lazy patterns, polymorphic variants, exception patterns, and
 mutation-related patterns.
 
 ### 4.4 Types
 
 User-authored subset type declarations are accepted. The type language covers
-variables, named references, tuple type payloads, variant declarations, tuple
-aliases, record declarations, and erased type aliases. External declaration
+variables, named references, tuple type payloads, array/ref type references,
+variant declarations, tuple aliases, record declarations, and erased type aliases. External declaration
 types use the same subset type language. GADTs, private types, record
 constructor payloads inside variants, and type constraints remain rejected.
 
@@ -306,8 +313,8 @@ its backend or its runtime model.
 
 ## 9. What this document does **not** cover
 
-- Multi-file modules (optional unsealed work outside P1-P8 scope).
-- `.mli` signatures (optional unsealed work outside P1-P8 scope).
+- Multi-file modules (future work outside the current single-file compiler).
+- `.mli` signatures (future work outside the current single-file compiler).
 - Functor support (out of scope per ADR-001).
 - Anything that requires reading OCaml's C runtime layout.
 

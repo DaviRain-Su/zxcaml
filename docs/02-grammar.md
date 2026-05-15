@@ -8,22 +8,24 @@ ZxCaml accepts a **strict subset of OCaml**. Every accepted program is
 parsed and type-checked by upstream OCaml first; ZxCaml then walks the
 `Typedtree` and rejects nodes outside the current subset.
 
-As of sealed P8, the user-program subset includes top-level `let`,
-mutually recursive `let rec ... and ...` groups, `external` declarations,
-and `type` declarations; integers, strings, chars, booleans, unit,
-functions, `let`, `if`, `match`, sequence expressions, applications,
-primitive integer/comparison/string operators, `assert`, user-defined ADTs,
+As of the current post-P9 baseline, the user-program subset includes
+top-level `let`, mutually recursive `let rec ... and ...` groups,
+`external` declarations, and `type` declarations; integers, strings, chars,
+booleans, unit, functions, `let`, `if`, `match`, sequence expressions,
+applications, `while` / counted `for` loops, primitive
+integer/comparison/string operators, `assert`, user-defined ADTs,
 nested/guarded/or/alias/literal patterns, tuples, records, field access,
-functional record update, and the bundled `Option`, `Result`, `List`,
-`Map`, `Set`, `String`, `Char`, `Crypto`, and `Pubkey` stdlib surfaces.
+functional record update, controlled mutable `int` arrays, `int` / `bool`
+ref cells, and the bundled `Option`, `Result`, `List`, `Map`, `Set`,
+`String`, `Char`, `Crypto`, and `Pubkey` stdlib surfaces.
 
 The authoritative implementation is `src/frontend/zxc_subset.ml`; the
-wire contract currently emitted by the frontend is sexp **version `1.2`**.
+wire contract currently emitted by the frontend is sexp **version `1.5`**.
 `src/frontend/zxc_sexp_format.md` is a lower-level wire-contract reference;
 this document describes the user-facing subset.
 
 File extension is `.ml`. There is no `.mli` or multi-file module support in
-the sealed P1-P8 compiler.
+the current compiler.
 
 ## 2. Lexical rules
 
@@ -37,7 +39,7 @@ Lexing is OCaml's lexer. The current subset consumes:
 - bundled stdlib constructors (`None`, `Some`, `Ok`, `Error`, `[]`, `::`) and
   user-defined ADT constructors introduced by accepted `type` declarations.
 
-## 3. Surface forms accepted in the sealed P1-P8 compiler
+## 3. Surface forms accepted in the current compiler
 
 ```ocaml
 (* user-defined ADTs *)
@@ -60,18 +62,19 @@ Accepted expression classes:
 
 | Surface form | Notes |
 |---|---|
-| `let x = e` / `let rec f x = e` / recursive `and` groups | top-level and nested; mutually recursive groups are preserved in wire `1.2` (introduced in `1.1`) |
+| `let x = e` / `let rec f x = e` / recursive `and` groups | top-level and nested; mutually recursive groups are preserved in wire `1.5` (introduced in `1.1`) |
 | `fun x -> e` / function-sugar lets | curried multi-argument functions are represented as nested lambdas / multi-arg arrows |
 | variable reference | identifiers resolved by OCaml before serialisation; stdlib paths such as `List.map` stay qualified |
 | integer, string, char, boolean, and unit constants | other constants rejected |
 | function application | unlabeled applications and accepted stdlib/external calls; partial/labeled/optional application is still out of scope |
 | `if c then a else b` | `else` is required |
-| `match e with ...` | supports nested constructor/tuple/record patterns and `when` guards |
+| `match e with ...` | supports arbitrary scrutinee expressions, nested constructor/tuple/record patterns, and `when` guards |
 | constructors | bundled stdlib constructors plus constructors from accepted user ADTs |
 | tuples | construction, pattern destructuring, and `fst`/`snd` projection helpers |
 | records | type declarations, construction, field access (`r.x`), pattern destructuring, and functional update (`{ r with x = v }`) |
-| primitive ops | `+`, `-`, `*`, `/`, `mod`, `=`, `<>`, `<`, `<=`, `>`, `>=`, string concatenation `^`, and supported string/char helpers |
-| `int` arrays (ADR-015 R9.1/R9.2) | `[\| 1; 2; 3 \|]` literals, `Array.get` / `a.(i)`, `Array.length`, `Array.set` / `a.(i) <- v`, and `Array.make N init` when `N` is a non-negative `int` literal; element type must be `int` |
+| primitive ops | `+`, `-`, `*`, `/`, `mod`, bitwise ops, `=`, `<>`, `<`, `<=`, `>`, `>=`, string concatenation `^`, and supported string/char helpers |
+| `while` / counted `for` loops | accepted for imperative-style accumulators and lowered without OCaml runtime support |
+| `int` arrays (ADR-015 R9.1/R9.2) | `[| 1; 2; 3 |]` literals, `Array.get` / `a.(i)`, `Array.length`, `Array.set` / `a.(i) <- v`, and `Array.make N init` when `N` is a non-negative `int` literal; element type must be `int` |
 | `ref` cells (ADR-015 R10) | `ref e`, `!r`, and `r := v` accepted when the element type is `int` or `bool`; single-cell only, no aliasing across function boundaries. Other element types (string, record, list, polymorphic) are rejected with `E0013` |
 
 Accepted patterns:
@@ -104,8 +107,9 @@ Restrictions:
 - no GADTs, polymorphic variants, private types, type constraints, or module
   signatures;
 - no record constructor payloads inside variant declarations;
-- no mutation expressions (`r.x <- v`), even though record field mutability is
-  visible in the OCaml `Typedtree`;
+- no general mutable record-field writes (`r.x <- v` outside the Solana
+  `AccountFieldSet` path), even though record field mutability is visible in
+  the OCaml `Typedtree`;
 - recursive ADTs and erased type aliases are supported where accepted by the frontend; full general recursive type inference remains intentionally narrow.
 
 Top-level `external name : type = "zig_symbol"` declarations are accepted for
@@ -122,9 +126,10 @@ exception  try  raise
 mutable record-field writes (`r.x <- v` outside `AccountFieldSet`)
 instance-variable writes  override expressions
 `ref` of unsupported element types (string, record, list, polymorphic)
+array forms outside the R9 int-array subset (dynamic-size `Array.make`, polymorphic arrays, `Array.init`, `Array.unsafe_get`)
 class  object  method  inherit  initializer
 lazy
-labelled arguments  optional arguments  local opens
+labelled arguments outside the whitelisted stdlib surface  optional arguments  local opens
 ```
 
 ## 6. Standard library visible to programs

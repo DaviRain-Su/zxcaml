@@ -13,9 +13,9 @@ in `src/core/layout.zig` and type declarations in `src/core/types.zig`.
 | Form | ANF-oriented expression tree; complex work is kept let-bound where lowering/codegen need it |
 | Typing | every expression node carries a resolved `Ty` |
 | Layout | every value-producing node that codegen needs carries a `Layout` |
-| Purity | no exceptions or mutation expressions; records use functional update |
+| Effects | no exceptions or GC; controlled mutation is explicit (`AccountFieldSet`, mutable `int` arrays, and arena-backed ref cells); ordinary records still use functional update |
 | Names | byte-string names from the frontend; codegen sanitizes them for Zig |
-| Source positions | frontend diagnostics carry locations; Core IR source spans are not populated yet |
+| Source positions | frontend wire `1.2+` carries locations; Core IR nodes expose optional `Loc` fields, with unknown locations still possible for legacy/derived nodes |
 
 The Zig model does **not** split atoms and RHS values into separate `Atom` /
 `RhsValue` variants. Expression variants hold pointers to child `Expr` values,
@@ -29,18 +29,25 @@ Module := {
   type_decls        : VariantType list,
   tuple_type_decls  : TupleType list,
   record_type_decls : RecordType list,
+  externals         : ExternalDecl list,
 }
 
 Decl :=
   | Let of Let
+  | LetGroup of LetGroup
 
 Let := { name, value, ty, layout, is_rec }
+LetGroup := { bindings : LetGroupBinding list }
+LetGroupBinding := { name, value, ty, layout }
+ExternalDecl := { name, ty, symbol }
 
 Expr :=
   | Lambda       of { params, body, ty, layout }
   | Constant     of { Int i64 | String string, ty, layout }
   | App          of { callee, args, ty, layout }
   | Let          of { name, value, body, ty, layout, is_rec }
+  | LetGroup     of { bindings, body, ty, layout }
+  | Assert       of { condition, ty, layout }
   | If           of { cond, then_branch, else_branch, ty, layout }
   | Prim         of { op, args, ty, layout }
   | Var          of { name, ty, layout }
@@ -51,15 +58,26 @@ Expr :=
   | Record       of { fields, ty, layout }
   | RecordField  of { record_expr, field_name, ty, layout }
   | RecordUpdate of { base_expr, fields, ty, layout }
+  | AccountFieldSet of { account_expr, field_name, value, ty, layout }
+  | ArrayLit     of { elem_ty, elems, ty, layout }
+  | ArrayGet     of { arr, idx, ty, layout }
+  | ArrayLength  of { arr, ty, layout }
+  | ArraySet     of { arr, idx, value, ty, layout }
+  | ArrayMake    of { elem_ty, size, init, ty, layout }
+  | RefMake      of { elem_ty, init, ty, layout }
+  | RefGet       of { target, ty, layout }
+  | RefSet       of { target, value, ty, layout }
 
 Arm := { pattern : Pattern, guard : Expr option, body : Expr }
 
 Pattern :=
   | Wildcard
-  | Var    of { name, ty, layout }
-  | Ctor   of { name, args, tag, type_name? }
-  | Tuple  of Pattern list
-  | Record of { name, pattern } list
+  | Var      of { name, ty, layout }
+  | Constant of { Int i64 | String string | Char i64 }
+  | Ctor     of { name, args, tag, type_name? }
+  | Tuple    of Pattern list
+  | Record   of { name, pattern } list
+  | Alias    of { pattern, name, ty, layout }
 
 Ty :=
   | Int | Bool | Unit | String
@@ -68,6 +86,8 @@ Ty :=
   | Tuple  of Ty list
   | Record of { name, params }
   | Arrow  of { params, ret }
+  | Array  of Ty
+  | Ref    of Ty
 ```
 
 `VariantType`, `TupleType`, and `RecordType` live in `src/core/types.zig` and
@@ -82,7 +102,7 @@ available. Nullary constructors use tagged-immediate/static layouts; payload
 constructors and recursive ADT payloads use arena-backed representations.
 
 Patterns are recursive. P2 relies on this for nested constructor patterns,
-tuple patterns, record patterns, wildcard defaults, and guarded arms. Guards
+tuple patterns, record patterns, literal patterns, alias patterns, wildcard defaults, and guarded arms. Guards
 are stored on `Arm.guard`; a false guard falls through to the next candidate arm.
 
 ## 4. Layout assignment (`src/core/layout.zig`)
@@ -104,6 +124,8 @@ Current default rules:
 | nullary constructors | `Static / TaggedImmediate` |
 | payload constructors / lists / recursive ADT payloads | `Arena / Boxed` |
 | tuples and records | lowered as product values; codegen may keep non-escaping packs stack-shaped |
+| `int` arrays | arena-backed mutable slices; `ArraySet` mutates existing storage and `ArrayMake` allocates |
+| `ref` cells | arena-backed single-slot pointers; `RefMake` allocates while `RefGet` / `RefSet` are pointer load/store operations |
 
 `Stack` exists as an extension point and for obvious non-escaping lowered
 values; the user never chooses regions explicitly.
@@ -121,7 +143,10 @@ current rules include:
 - constructors, tuple packs, record packs, field access, and updates become
   their corresponding Core variants;
 - guarded/nested matches keep their recursive `Pattern` trees and optional
-  guard expressions.
+  guard expressions;
+- ADR-015 mutable primitives lower to explicit `Array*` / `Ref*` nodes, so
+  allocation and mutation remain visible to `no_alloc`, static reports, the
+  interpreter, and codegen.
 
 Lowered IR (`src/lower/lir.zig`) then makes the arena-threaded calling
 convention explicit and adds closure-call/direct-call information for codegen.
@@ -150,6 +175,7 @@ The printed form is intentionally human-readable and not a parser input.
 ## 8. What Core IR does **not** carry yet
 
 - source-level comments or formatting trivia;
-- frontend source spans on every node;
+- guaranteed frontend source spans on every node (derived/desugared nodes may
+  still carry `Loc.unknown`);
 - optimisation hints beyond `Layout`;
 - backend-specific names after Zig identifier sanitisation.

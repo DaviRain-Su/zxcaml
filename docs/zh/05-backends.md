@@ -37,16 +37,14 @@ Stub（仅签名，必须能编译，被调用时返回"未实现"诊断）：
 ### 2.1 输入
 
 由 `ArenaStrategy` 产出的 `Lowered IR`。
-后端 **不允许** 回头读上游 `Typedtree`、当前 `1.2` 的 sexp wire 格式、Zig 的 `ttree` 镜像，
+后端 **不允许** 回头读上游 `Typedtree`、当前 `1.5` 的 sexp wire 格式、Zig 的 `ttree` 镜像，
 也不允许直接读 Core IR。
 
 ### 2.2 输出
 
 一个 `.zig` 源文件，外加一个 `build.zig` 片段驱动按目标平台调对应工具链。
-`--target=bpf` 时链路是
-`zig build-lib -target bpfel-freestanding -femit-llvm-bc`
-然后 `sbpf-linker --cpu v2 --export entrypoint`，
-产出 `program.so`（详见 `06-bpf-target.md` §2 / §6、ADR-012、ADR-013）。
+`--target=bpf` 时默认链路是直接调用 `solana-zig build-lib -target sbf-solana`，
+产出 `program.so` / `.so`（详见 `06-bpf-target.md` §2 / §6 和 ADR-013）。
 `--target=native` 时，发出的 Zig 会构建成 hosted developer binary。
 
 ```text
@@ -76,6 +74,8 @@ out/
 | `EIf` | `if (cond) ... else ...` |
 | closure | 已知 callee 走直接 helper 调用；一等值走 arena-backed closure record |
 | `RPrim IAdd / ...` | Zig 原生运算符（绕回 / 截断语义按 §2.5 规定） |
+| mutable arrays | arena-backed `int` slice，带显式 get/set/length/make helper |
+| ref cells | arena-backed 单槽指针，带显式 load/store helper |
 
 ### 2.4 Arena 穿线
 
@@ -96,9 +96,9 @@ P1 发 `i64`，算术用 Zig 的 `+%`、`-%`、`*%`（绕回）。
 
 ### 2.7 它 **不做** 的事
 
-- 后端本地优化保持最小；语义优化 pass 属于 Core IR（已封存 P8：constant folding、DCE、自递归 TCO 和小函数 inlining）。
+- 后端本地优化保持最小；语义优化 pass 属于 Core IR（constant folding、DCE、自递归 TCO 和小函数 inlining）。
 - 不做增量输出。每次都整模块。
-- source-map fidelity 是 P9 Developer Experience 预览主题，不属于已封存 P1-P8 范围。
+- source-map fidelity 已用于 BPF build：发出确定性 sidecar map，并可选嵌入 `.zxcaml.srcmap`。
 
 ## 3. 解释器
 
@@ -158,7 +158,7 @@ omlz run   foo.ml                                     # 始终走解释器
 
 ## 6. 确定性要求
 
-对于已封存 P1-P8 examples corpus 中任何程序和受支持输入：
+对于当前 examples corpus 中任何程序和受支持输入：
 
 ```
 Interpreter(P)  ≡  ZigBackend(P)   （在可观察输出上）

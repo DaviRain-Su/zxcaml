@@ -41,15 +41,14 @@ diagnostics if invoked):
 
 `Lowered IR` produced by `ArenaStrategy`. The backend is **not**
 allowed to read upstream `Typedtree`, the sexp wire format (currently
-`1.1`), the Zig `ttree` mirror, or Core IR directly.
+`1.5`), the Zig `ttree` mirror, or Core IR directly.
 
 ### 2.2 Output
 
 A single `.zig` source file plus a `build.zig` snippet that drives
 the toolchain for the requested target. For `--target=bpf` the
-chain is `zig build-lib -target bpfel-freestanding -femit-llvm-bc`
-followed by `sbpf-linker --cpu v2 --export entrypoint`, producing
-`program.so` (see `06-bpf-target.md` §2 / §6, ADR-012, ADR-013). For
+default chain is direct `solana-zig build-lib -target sbf-solana`, producing
+`program.so` / `.so` output (see `06-bpf-target.md` §2 / §6 and ADR-013). For
 `--target=native`, the emitted Zig is built as a hosted developer binary.
 
 ```text
@@ -79,6 +78,8 @@ out/
 | `EIf` | `if (cond) ... else ...` |
 | closures | direct helper calls for known callees; arena-backed closure records for first-class values |
 | `RPrim IAdd / ...` | Zig native operators (with wrap semantics decided per op; see §2.5) |
+| mutable arrays | arena-backed int slices with explicit get/set/length/make helpers |
+| ref cells | arena-backed single-slot pointers with explicit load/store helpers |
 
 ### 2.4 Arena threading
 
@@ -104,11 +105,11 @@ name collisions.
 ### 2.7 What it does **not** do
 
 - Backend-local optimisations stay minimal; the semantic optimisation passes
-  live over Core IR (sealed P8: constant folding, DCE, self-recursive TCO,
+  live over Core IR (constant folding, DCE, self-recursive TCO,
   and small-function inlining).
 - No incremental output. Whole module per invocation.
-- Source-map fidelity is a P9 Developer Experience preview topic, not sealed
-  P1-P8 scope.
+- Source-map fidelity is implemented for BPF builds via deterministic sidecar
+  maps and optional `.zxcaml.srcmap` embedding.
 
 ## 3. Interpreter
 
@@ -174,7 +175,7 @@ Driver logic:
 
 ## 6. Determinism requirement
 
-For any program in the sealed P1-P8 examples corpus and any supported input:
+For any program in the current examples corpus and any supported input:
 
 ```
 Interpreter(P)  ≡  ZigBackend(P)  (mod observable outputs)

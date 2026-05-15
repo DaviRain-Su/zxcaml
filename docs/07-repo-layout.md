@@ -15,7 +15,7 @@ ZxCaml/
 │   │   ├── zxc_frontend.ml
 │   │   ├── zxc_subset.ml
 │   │   ├── zxc_sexp.ml
-│   │   └── zxc_sexp_format.md  -- the wire contract (current 1.2)
+│   │   └── zxc_sexp_format.md  -- the wire contract (current 1.5)
 │   ├── frontend_bridge/        -- Zig sexp consumer
 │   │   ├── sexp_lexer.zig
 │   │   ├── sexp_parser.zig
@@ -73,7 +73,7 @@ src/
 │   ├── zxc_frontend.ml         -- main; drives compiler-libs
 │   ├── zxc_subset.ml           -- Typedtree subset whitelist + walker
 │   ├── zxc_sexp.ml             -- S-expression serialiser
-│   └── zxc_sexp_format.md      -- the versioned wire contract (current 1.2)
+│   └── zxc_sexp_format.md      -- the versioned wire contract (current 1.5)
 │
 ├── frontend_bridge/            -- Zig consumer of the sexp
 │   ├── sexp_lexer.zig

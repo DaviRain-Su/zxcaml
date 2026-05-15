@@ -123,7 +123,7 @@ P4-P8 phases.
 | Source file extension | `.ml` |
 | Core IR shape | **ANF**, typed, layout-tagged |
 | Memory model exposure | **Hidden**, fully inferred, arena-only |
-| Primary target | **Solana BPF** (`bpfel-freestanding` via Zig) |
+| Primary target | **Solana BPF/SBF** (direct `solana-zig -target sbf-solana`) |
 | Build driver | **single `build.zig`** (drives both OCaml and Zig steps) |
 | P1 endpoint | A `.ml` program produces a Solana-loadable `.so` that loads on `solana-test-validator` and returns 0 |
 
@@ -133,6 +133,6 @@ P4-P8 phases.
 - effect handlers (OCaml 5.x)
 - the OCaml C runtime, `Obj.magic`, ctypes
 - garbage collection
-- formatter, debugger
-- LSP integration is not in the sealed compiler phases; it is only a P9 Developer Experience preview item
+- debugger
+- full IDE semantics such as rename, code actions, and cross-file indexing (the current LSP intentionally covers diagnostics, hover, completion, definition, references, document symbols, formatting, and CodeLens only)
 - non-BPF targets as a goal (they may incidentally work)

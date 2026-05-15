@@ -15,7 +15,7 @@ The frontend is borrowed from upstream OCaml; everything from
    │   .cmt (binary Typedtree)
    ▼
 [ zxc-frontend (OCaml glue) ]        ◀── walks Typedtree, enforces subset
-   │   .cir.sexp (versioned wire format; current `1.2`)
+   │   .cir.sexp (versioned wire format; current `1.5`)
    ▼
 [ frontend_bridge (Zig) ]            ◀── parses sexp into Zig mirror types
    │   ttree.Module (Zig)
@@ -24,13 +24,13 @@ The frontend is borrowed from upstream OCaml; everything from
    │   Core IR  ◀────────────  THE STABLE CONTRACT
    ├───────────────────────────────► [ Tree-walk interpreter ] (dev only)
    ▼
-[ Lowering strategy ]                (P1: arena only)
+[ Lowering strategy ]                (arena + region/escape analysis)
    │   Lowered IR
    ▼
-[ Backend ]                          (P1: Zig codegen)
+[ Backend ]                          (Zig native / Solana BPF codegen)
    │   .zig source
    ▼
-[ Zig toolchain ]                    (solana-zig build-lib -target sbf-solana; ADR-013 default v2)
+[ Zig toolchain ]                    (solana-zig build-lib -target sbf-solana; ADR-013 SBPF pin)
    │   .so (Solana-loadable ELF)
    ▼
 Solana BPF .so
@@ -47,7 +47,7 @@ small. Above the bar is OCaml; below it is Zig.
                   type-checked AST. We do not own this format; we
                   consume a *subset* of it (see 10-frontend-bridge.md §4).
 
-.cir.sexp       — our wire format (current `1.2`): a versioned, lossless
+.cir.sexp       — our wire format (current `1.5`): a versioned, lossless
                   serialisation of the accepted Typedtree subset.
                   Carries `ty` and `span` on every node.
 
@@ -61,16 +61,16 @@ Core IR (ANF)   — small, regular, typed. Every non-trivial sub-expression
                   backends and the interpreter consume.
 
 Lowered IR      — Core IR with explicit allocation plans and closure
-                  representations. Strategy-specific. In P1 there is
-                  only one Lowered IR shape, produced by the Arena
-                  strategy.
+                  representations. Strategy-specific; the current path uses
+                  arena allocation plus region/escape information for
+                  non-escaping stack-shaped locals.
 ```
 
 **Invariant:** Core IR is the only stable contract. Backends never
 look at `.cmt`, `.cir.sexp`, or `ttree`. Lowered IR is allowed to
 differ per strategy — that is the whole point of having it.
 
-Why a sexp wire format (currently `1.2`) and a Zig mirror, instead of consuming
+Why a sexp wire format (currently `1.5`) and a Zig mirror, instead of consuming
 `.cmt` directly from Zig? Because `.cmt` is OCaml's marshal format
 and is unstable across releases. The sexp is **ours**, versioned by
 us, and decouples upstream OCaml's binary format from our consumer.

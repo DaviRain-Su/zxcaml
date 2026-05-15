@@ -7,18 +7,18 @@
 ZxCaml 接受 **OCaml 的严格子集**。每个被接受的程序都会先由上游 OCaml
 解析并完成类型检查；随后 ZxCaml 遍历 `Typedtree`，拒绝当前子集之外的节点。
 
-截至已封存的 P8，用户程序子集包含顶层 `let`、mutually recursive `let rec ... and ...`
+截至当前 post-P9 baseline，用户程序子集包含顶层 `let`、mutually recursive `let rec ... and ...`
 组、`external` 声明和 `type` 声明；整数、字符串、char、布尔值、unit、函数、`let`、
-`if`、`match`、sequence expression、函数应用、整数 / 比较 / 字符串原语、`assert`、
+`if`、`match`、sequence expression、函数应用、`while` / 计数 `for` loop、整数 / 比较 / 字符串原语、`assert`、
 用户自定义 ADT、嵌套 / guarded / or / alias / literal patterns、tuple、record、
-字段访问、函数式 record update，以及内置 `Option`、`Result`、`List`、`Map`、
+字段访问、函数式 record update、受控可变 `int` array、`int` / `bool` ref cell，以及内置 `Option`、`Result`、`List`、`Map`、
 `Set`、`String`、`Char`、`Crypto`、`Pubkey` stdlib 表面。
 
 权威实现是 `src/frontend/zxc_subset.ml`；当前前端发出的 wire contract 是 sexp
-**版本 `1.2`**。`src/frontend/zxc_sexp_format.md` 是更底层的 wire-contract 参考；
+**版本 `1.5`**。`src/frontend/zxc_sexp_format.md` 是更底层的 wire-contract 参考；
 本文描述用户可见的子集。
 
-文件扩展名是 `.ml`。已封存的 P1-P8 编译器不支持 `.mli` 或多文件模块。
+文件扩展名是 `.ml`。当前编译器不支持 `.mli` 或多文件模块。
 
 ## 2. 词法规则
 
@@ -31,7 +31,7 @@ ZxCaml 接受 **OCaml 的严格子集**。每个被接受的程序都会先由�
 - 内置 stdlib 构造器（`None`、`Some`、`Ok`、`Error`、`[]`、`::`），以及由已接受
   `type` 声明引入的用户 ADT 构造器。
 
-## 3. 已封存 P1-P8 编译器接受的表层形式
+## 3. 当前编译器接受的表层形式
 
 ```ocaml
 (* 用户自定义 ADT *)
@@ -54,17 +54,20 @@ let entrypoint _input =
 
 | 表层形式 | 说明 |
 |---|---|
-| `let x = e` / `let rec f x = e` / recursive `and` groups | 顶层和嵌套均可；mutually recursive groups 会保留在 sexp `1.2` 中；该分组形态最早由历史版本 `1.1` 引入 |
+| `let x = e` / `let rec f x = e` / recursive `and` groups | 顶层和嵌套均可；mutually recursive groups 会保留在 sexp `1.5` 中；该分组形态最早由历史版本 `1.1` 引入 |
 | `fun x -> e` / 函数语法糖 let | curried 多参数函数表示为嵌套 lambda / 多参数 arrow |
 | 变量引用 | OCaml 在序列化前完成解析；`List.map` 等 stdlib 路径保持 qualified |
 | 整数、字符串、char、布尔、unit 常量 | 其他常量拒绝 |
 | 函数应用 | 无 label 应用，以及已接受的 stdlib / external 调用；partial/labeled/optional application 仍在范围外 |
 | `if c then a else b` | `else` 必须存在 |
-| `match e with ...` | 支持嵌套构造器/tuple/record pattern 和 `when` guard |
+| `match e with ...` | 支持任意 scrutinee 表达式、嵌套构造器/tuple/record pattern 和 `when` guard |
 | 构造器 | 内置 stdlib 构造器 + 用户 ADT 构造器 |
 | tuple | 构造、模式解构，以及 `fst`/`snd` 投影 helper |
 | record | 类型声明、构造、字段访问（`r.x`）、模式解构、函数式更新（`{ r with x = v }`） |
-| 原语运算 | `+`、`-`、`*`、`/`、`mod`、`=`、`<>`、`<`、`<=`、`>`、`>=`、字符串拼接 `^`，以及已支持的 string/char helper |
+| 原语运算 | `+`、`-`、`*`、`/`、`mod`、bitwise ops、`=`、`<>`、`<`、`<=`、`>`、`>=`、字符串拼接 `^`，以及已支持的 string/char helper |
+| `while` / 计数 `for` loop | 支持 imperative-style accumulator，lower 后不依赖 OCaml runtime |
+| `int` array（ADR-015 R9.1/R9.2） | `[| 1; 2; 3 |]` literal、`Array.get` / `a.(i)`、`Array.length`、`Array.set` / `a.(i) <- v`，以及 `N` 为非负 `int` literal 时的 `Array.make N init`；element type 必须是 `int` |
+| ref cell（ADR-015 R10） | element type 为 `int` 或 `bool` 时支持 `ref e`、`!r` 和 `r := v`；single-cell only，不承诺跨函数/闭包 aliasing。string、record、list、polymorphic 等 element type 会用 `E0013` 拒绝 |
 
 接受的模式：
 
@@ -95,7 +98,7 @@ type pair = int * bool
 
 - 不支持 GADT、多态变体、private type、type constraint 或 module signature；
 - variant 声明中不支持 record constructor payload；
-- 不支持 mutation 表达式（`r.x <- v`），即使 OCaml `Typedtree` 中能看到 record 字段可变性；
+- 不支持普通 mutable record-field writes（`r.x <- v`，Solana `AccountFieldSet` 路径之外），即使 OCaml `Typedtree` 中能看到 record 字段可变性；
 - recursive ADT 和 erased type aliases 在前端接受的范围内受支持；完整的一般递归类型推断仍刻意保持很窄。
 
 顶层 `external name : type = "zig_symbol"` 声明受支持，用于把 Zig runtime 符号绑定成带类型的值。
@@ -107,10 +110,13 @@ OCaml parser 可能接受这些语法，但子集 walker 会用带位置的诊�
 ```text
 module  sig  struct  functor  open  include
 exception  try  raise
-mutable writes  ref  while  for  do  done
+普通 mutable record-field writes（`r.x <- v`，`AccountFieldSet` 之外）
+instance-variable writes  override expressions
+不在 R9 int-array 子集内的 array 形式（dynamic-size `Array.make`、polymorphic arrays、`Array.init`、`Array.unsafe_get`）
+不支持 element type 的 `ref`（string、record、list、polymorphic）
 class  object  method  inherit  initializer
 lazy
-arrays  labelled arguments  optional arguments  local opens
+whitelisted stdlib surface 之外的 labelled arguments  optional arguments  local opens
 ```
 
 ## 6. 程序可见的标准库

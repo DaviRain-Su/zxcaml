@@ -15,7 +15,7 @@
    │   .cmt（二进制 Typedtree）
    ▼
 [ zxc-frontend (OCaml 胶水) ]        ◀── 遍历 Typedtree，强制子集白名单
-   │   .cir.sexp（带版本的 wire 格式；当前 `1.2`）
+   │   .cir.sexp（带版本的 wire 格式；当前 `1.5`）
    ▼
 [ frontend_bridge (Zig) ]            ◀── 把 sexp 解析成 Zig 镜像类型
    │   ttree.Module（Zig）
@@ -24,13 +24,13 @@
    │   Core IR  ◀────────────  稳定契约
    ├───────────────────────────────► [ 树遍历解释器 ]（仅开发用）
    ▼
-[ Lowering 策略 ]                    （P1：仅 arena）
+[ Lowering 策略 ]                    （arena + region/escape analysis）
    │   Lowered IR
    ▼
-[ 后端 ]                             （P1：Zig 代码生成）
+[ 后端 ]                             （Zig native / Solana BPF codegen）
    │   .zig 源码
    ▼
-[ Zig 工具链 ]                       （solana-zig build-lib -target sbf-solana；ADR-013 默认 v2）
+[ Zig 工具链 ]                       （solana-zig build-lib -target sbf-solana；ADR-013 SBPF pin）
    │   .so（Solana 可加载 ELF）
    ▼
 Solana BPF .so
@@ -46,7 +46,7 @@ Solana BPF .so
                   我们不拥有这个格式；我们消费它的一个 *子集*
                  （见 10-frontend-bridge.md §4）。
 
-.cir.sexp       — 我们的 wire 格式（当前 `1.2`）：
+.cir.sexp       — 我们的 wire 格式（当前 `1.5`）：
                   对所接受 Typedtree 子集的有版本、无损 S-expression 序列化。
                   每个节点都带 `ty` 和 `span`。
 
@@ -58,14 +58,14 @@ Core IR (ANF)   — 小、规整、带类型。每个非平凡子表达式都通
                   这是后端和解释器 *唯一* 消费的东西。
 
 Lowered IR      — Core IR 加上显式的分配计划和闭包表示。
-                  和 strategy 强绑定。
-                  P1 只有一种 Lowered IR 形态，由 Arena 策略产出。
+                  和 strategy 强绑定；当前路径使用 arena allocation，并结合
+                  region/escape 信息把不逃逸局部值保持为 stack-shaped。
 ```
 
 **不变量：** Core IR 是唯一稳定契约。后端**绝不**回头看 `.cmt`、`.cir.sexp`、
 `ttree`。Lowered IR 允许因策略而异 —— 这正是它存在的意义。
 
-为什么要走当前 `1.2` 的 sexp wire + Zig 镜像，而不是直接从 Zig 读 `.cmt`？
+为什么要走当前 `1.5` 的 sexp wire + Zig 镜像，而不是直接从 Zig 读 `.cmt`？
 因为 `.cmt` 是 OCaml 的 marshal 格式，跨发行版不稳定。
 sexp 是 **我们的**，由我们定版本，把上游 OCaml 的二进制格式和我们的消费者解耦。
 

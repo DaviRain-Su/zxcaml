@@ -106,7 +106,7 @@ RC / ownership 一类机制仍是已封存 P4-P8 之外的可选研究方向。
 | 源文件后缀 | `.ml` |
 | Core IR 形态 | **ANF**，带类型，带 layout |
 | 内存模型对用户的可见性 | **隐藏**，完全推断，仅 arena |
-| 主要目标平台 | **Solana BPF**（通过 Zig，`bpfel-freestanding`） |
+| 主要目标平台 | **Solana BPF/SBF**（直接 `solana-zig -target sbf-solana`） |
 | 构建驱动 | **单一 `build.zig`**（同时驱动 OCaml 和 Zig 步骤） |
 | P1 终点 | 一个 `.ml` 程序产出的 Solana 可加载 `.so` 能在 `solana-test-validator` 上加载并返回 0 |
 
@@ -116,6 +116,6 @@ RC / ownership 一类机制仍是已封存 P4-P8 之外的可选研究方向。
 - effect handler（OCaml 5.x）
 - OCaml C runtime、`Obj.magic`、ctypes
 - 垃圾回收
-- formatter、debugger
-- LSP integration 不属于已封存的编译器阶段；它只是 P9 Developer Experience 预览项
+- debugger
+- 完整 IDE 语义（rename、code actions、跨文件索引等）；当前 LSP 只承诺 diagnostics、hover、completion、definition、references、document symbols、formatting 和 CodeLens
 - 把"非 BPF 平台"作为目标（顺带能跑可以，不是目标）

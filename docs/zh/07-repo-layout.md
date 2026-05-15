@@ -15,7 +15,7 @@ ZxCaml/
 │   │   ├── zxc_frontend.ml
 │   │   ├── zxc_subset.ml
 │   │   ├── zxc_sexp.ml
-│   │   └── zxc_sexp_format.md  -- wire 契约（当前 1.2）
+│   │   └── zxc_sexp_format.md  -- wire 契约（当前 1.5）
 │   ├── frontend_bridge/        -- Zig 端 sexp 消费者
 │   │   ├── sexp_lexer.zig
 │   │   ├── sexp_parser.zig
@@ -72,7 +72,7 @@ src/
 │   ├── zxc_frontend.ml         -- 主程序；驱动 compiler-libs
 │   ├── zxc_subset.ml           -- Typedtree 子集白名单 + walker
 │   ├── zxc_sexp.ml             -- S-expression 序列化器
-│   └── zxc_sexp_format.md      -- 有版本的 wire 契约（当前 1.2）
+│   └── zxc_sexp_format.md      -- 有版本的 wire 契约（当前 1.5）
 │
 ├── frontend_bridge/            -- Zig 端 sexp 消费者
 │   ├── sexp_lexer.zig

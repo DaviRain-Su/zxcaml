@@ -8,7 +8,7 @@ for the implementation rationale.
 
 `omlz check --wire=1.1 ...` is a deprecated one-mission compatibility window
 that forwards `--wire=1.1` to `zxc-frontend` and emits the old location-free
-shape. The `1.2` reader still accepts `1.1` sexps and treats missing locations
+shape. The current `1.5` reader still accepts `1.1`/`1.2` compatibility sexps and treats missing locations
 as `Loc.unknown`.
 
 ## Wire 1.3 — typed lambda parameters
@@ -20,10 +20,17 @@ of the bare atom shape that 1.2 used. Unknown/polymorphic types fall back
 to the `(any)` sentinel which the bridge maps to `null`, and the Core IR
 lowerer falls back to its existing structural heuristics in that case.
 
-The `1.3` reader still accepts `1.2` sexps; legacy bare-atom params parse as
+The current `1.5` reader still accepts `1.2`/`1.3` sexps; legacy bare-atom params parse as
 "untyped" and follow the original heuristic-only path. `omlz check --wire=1.2
 ...` (and `--wire=1.1`) remain available as one-mission compatibility windows
 that re-emit the older shapes.
+
+## Wire 1.4 — arrays and loops
+
+R9 advances the additive wire surface for ADR-015 array/loop work. It carries
+`int`-array literals and explicit array get/length/set/make nodes, plus the
+loop-era desugarings used by the frontend. These shapes remain accepted by the
+current `1.5` reader.
 
 ## Wire 1.5 — ref cells
 

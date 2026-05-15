@@ -4,8 +4,9 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.2`, the examples corpus contains 60
-`.ml` programs, the Mollusk SVM suite contains 27 integration tests, and P1-P9
+frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 83
+`.ml` programs, the Mollusk SVM suite contains 34 Rust integration-test files
+(42 Rust test cases), and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 Real-world Examples Batch 2 is tracked in [`CHANGELOG.md`](../CHANGELOG.md#real-world-examples-batch-2---2026-05-05).
 Real-world Examples Batch 3 adds the SPL Token primitive examples
@@ -97,7 +98,7 @@ the fmt corpus expansion.
 - **Maintenance hold:** pause new feature scope and keep the repository on
   validator, drift, and process-hygiene work if no high-confidence runtime or
   codegen direction is ready.
-- **Language-subset gap proposals (Proposed, not scheduled):** see ADR-015 (controlled mutable primitives: `array` / `for` / `ref`), ADR-016 (multi-file modules via frontend `open Foo`), and ADR-017 (float replacement via a bundled `Fixed` Q64.64 stdlib module) in [`09-decisions.md`](./09-decisions.md).
+- **Language-subset gap proposals:** ADR-015 is partially landed (controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs) with follow-ups still deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-016 (multi-file modules via frontend `open Foo`) and ADR-017 (float replacement via a bundled `Fixed` Q64.64 stdlib module) remain proposed in [`09-decisions.md`](./09-decisions.md).
 
 ## Future / optional
 

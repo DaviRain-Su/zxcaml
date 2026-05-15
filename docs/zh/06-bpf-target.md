@@ -47,15 +47,14 @@ SBPF 版本行为可见 ADR-013。
 
 ## 3. Target triple
 
-```
-bpfel-freestanding
+当前直接路径使用 Solana Zig 的 target：
+
+```text
+sbf-solana
 ```
 
-- `bpfel` —— 小端 eBPF，也就是 Solana 的方言。
-- `freestanding` —— 没有宿主操作系统接口。
-
-P1 **不** 使用 Solana 自己的 LLVM fork。
-`solana-zig` 的 `build-lib` 直接产出 Solana 可加载的 ELF。
+历史实验曾使用 Zig 的 generic `bpfel-freestanding` target 加单独 linker 步骤；
+当前 `omlz build --target=bpf` 走 `solana-zig`，直接发出最终 Solana-loadable ELF。
 
 ## 4. Entrypoint 契约
 

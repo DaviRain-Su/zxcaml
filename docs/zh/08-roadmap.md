@@ -2,7 +2,7 @@
 
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
-这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.2`，examples 语料包含 60 个 `.ml` 程序，Mollusk SVM 套件包含 27 个集成测试，并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
+这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.5`，examples 语料包含 83 个 `.ml` 程序，Mollusk SVM 套件包含 34 个 Rust 集成测试文件（42 个 Rust test case），并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
 Real-world Examples Batch 3 补齐了 `spl_burn`、`spl_close_account` 和 `spl_revoke` 这三个 SPL Token primitive 示例。
 Zig runtime 公契面见 [`docs/zh/runtime-api.md`](./runtime-api.md)。
 
@@ -47,9 +47,9 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 - `sbpf-linker` 不再是默认要求；仅保留其历史兼容说明。
 - 当前阶段只做迁移对齐（文档/测试/CI），不做默认策略的重大声明改动。
 
-### 语言子集差距提案（Proposed，未排期）
+### 语言子集差距提案
 
-- 见 [`09-decisions.md`](../09-decisions.md) 中的 ADR-015（受控可变原语：`array` / `for` / `ref`）、ADR-016（多文件模块，前端 `open Foo`），以及 ADR-017（用打包的 `Fixed` Q64.64 stdlib 模块替代 float）。
+- ADR-015 已部分落地：受控 `int` array、`for` / `while` loop，以及 `int` / `bool` ref 已可用；动态/泛型 array、更宽 ref 类型和跨函数/闭包 aliasing 仍是后续项。ADR-016（多文件模块，前端 `open Foo`）和 ADR-017（用打包的 `Fixed` Q64.64 stdlib 模块替代 float）仍保留为提案。
 
 ### PX — 多目标扩展（可选，有门槛）
 

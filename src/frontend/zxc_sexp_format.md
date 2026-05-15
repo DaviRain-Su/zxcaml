@@ -1,8 +1,10 @@
-# ZxCaml frontend S-expression wire format v0.5
+# ZxCaml frontend S-expression wire format
 
 `zxc-frontend --emit=sexp <input.ml>` emits exactly one S-expression on
-stdout. Version `0.5` widens the P1 format with user-authored ADT type
-declarations while preserving existing expression and match nodes.
+stdout. The current default wire is `1.5`. The grammar below records the
+historical `0.5` base (user-authored ADT type declarations over the P1
+expression/match nodes), followed by additive notes for the later `1.x` wire
+bumps, including the current `1.5` ref-cell shapes.
 
 ## Grammar
 
@@ -235,7 +237,8 @@ cross-version compatibility matrix. In summary:
   OCaml type as `(name (ty <type-expr>))`. Unresolved types use the
   `(any)` sentinel.
 - `1.2`: optional `(loc ...)` location metadata on expression nodes; lambda
-  params stay as bare-atom names. The `1.3` reader still accepts `1.2` sexps.
+  params stay as bare-atom names. The current `1.5` reader still accepts
+  `1.2` sexps.
 - `1.1` and earlier: legacy compatibility window kept alive via
   `omlz check --wire=1.1` / `--wire=1.2` for one mission's deprecation
   cycle.

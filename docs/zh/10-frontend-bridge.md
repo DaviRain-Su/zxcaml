@@ -85,11 +85,12 @@ zxc-frontend --emit=sexp <input.ml>
 
 ### 3.1 顶层形态
 
-当前 wire grammar 是 sexp **版本 `1.2`**。Header 携带版本，使 `omlz` 能对过期
+当前 wire grammar 是 sexp **版本 `1.5`**。Header 携带版本，使 `omlz` 能对过期
 前端输出给出 upgrade hint：
 
 ```text
-(zxcaml-cir 1.2
+;; 为了可读性省略 locations
+(zxcaml-cir 1.5
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -98,7 +99,7 @@ zxc-frontend --emit=sexp <input.ml>
     (record_type_decl (name person) (params)
       (fields ((name (type-ref string)) (age (type-ref int)))))
     (let entrypoint
-      (lambda (_input)
+      (lambda ((_input (ty (type-ref unit))))
         (let alice (record (fields ((name (const-string "alice"))
                                     (age (const-int 30)))))
           (match (tuple (items (ctor Red) (field_access (var alice) age)))
@@ -118,6 +119,9 @@ Wire-format history：
 | `1.0` | external declarations、instruction-data/account attributes，以及 P4/P5 Solana/IDL metadata |
 | `1.1` | mutual-recursion groups 和 erased type aliases |
 | `1.2` | 用于 DX2 diagnostics、LSP 和 source maps 的 per-node source locations |
+| `1.3` | 带 `(any)` fallback 的 typed lambda / `let rec` 参数 |
+| `1.4` | array / loop 阶段在 ref 之前的 additive surface |
+| `1.5` | arena-backed ref cell 的 `ref-make`、`ref-get`、`ref-set` |
 
 诊断位置仍通过 stderr 上的诊断单独携带；普通注释和格式 trivia 不会序列化。
 
@@ -137,7 +141,7 @@ sexp 的形式语法住在 `src/frontend/zxc_sexp_format.md`，是 wire 契约�
 - 子集内的类型声明（变体、记录、类型别名）。
 - 顶层 `let` 绑定（保留递归组）。
 - 子集覆盖的表达式：`let`、`fun`、`match`、`if`、应用、构造子、记录、
-  投影、元组、字面量。
+  投影、元组、字面量、sequence、loop、array 和 ref cell。
 - 子集覆盖的模式。
 - 每个节点：源 span（`(span 12 5 18)` = file_id, line, col）和已解析 `ty`。
 
@@ -148,10 +152,10 @@ sexp 的形式语法住在 `src/frontend/zxc_sexp_format.md`，是 wire 契约�
 - 子集外特性产生的节点（这些在序列化前已被拒绝）。
 
 
-## 4. 接受的子集（当前 P1-P8 表面）
+## 4. 接受的子集（当前表面）
 
 当前 `zxc-frontend` 接受的 `Typedtree` constructor **权威列表**在
-`src/frontend/zxc_subset.ml`。本节概述已封存 P1-P8 的 as-built 表面。
+`src/frontend/zxc_subset.ml`。本节概述当前 as-built 表面。
 
 ### 4.1 顶层
 
@@ -181,15 +185,17 @@ private/constraint-heavy type。
 - 用于 record 字段访问的 `Texp_field`
 - `Texp_sequence`，当它能 desugar 成有序 Core IR effects
 - `Texp_assert`，用于受支持的 assertion expressions
+- ADR-015 可变原语：在窄约束成立时支持 `Texp_array`、`Array.get`、`Array.length`、
+  `Array.set`、literal-size `Array.make`、`ref`、`!`、`:=`，以及 native `for` / `while` desugaring
 
-拒绝：array、loop、object、多态 variant、`letop`、local open/module、`try`、
-`lazy`、label/optional argument，以及 mutation primitive（`ref`、`:=`、`!`、
-`Texp_setfield`；可用处有专门诊断）。
+拒绝：object、多态 variant、`letop`、local open/module、`try`、`lazy`、
+whitelist 之外的 label/optional argument、普通 mutable record-field writes、
+不支持 element type 的 ref，以及 R9 `int`-array 子集之外的 array 形式；可用处有专门诊断。
 
 白名单 primop：
 
 ```text
-+  -  *  /  mod  =  <>  <  <=  >  >=
++  -  *  /  mod  bitwise ops  =  <>  <  <=  >  >=
 ```
 
 ### 4.3 模式
@@ -204,12 +210,12 @@ private/constraint-heavy type。
 - 支持的 literal constant patterns
 - or-patterns 和 alias patterns（绑定合法时）
 
-拒绝：array、lazy pattern、多态 variant、exception pattern，以及 mutation 相关 pattern。
+拒绝：lazy pattern、多态 variant、exception pattern，以及 mutation 相关 pattern。
 
 ### 4.4 类型
 
 接受子集内的用户 type declaration。类型语言覆盖变量、命名引用、tuple type payload、
-variant 声明、tuple alias、record 声明和 erased type aliases。External declaration types 使用同一套子集类型语言。
+array/ref type reference、variant 声明、tuple alias、record 声明和 erased type aliases。External declaration types 使用同一套子集类型语言。
 GADT、private type、variant 内的 record constructor payload，以及 type constraint 仍会被拒绝。
 
 ## 5. 诊断
@@ -273,8 +279,8 @@ src/frontend_bridge/
 
 ## 9. 这份文档 **不覆盖** 的内容
 
-- 多文件模块（P1-P8 之外的可选未封存工作）。
-- `.mli` 签名（P1-P8 之外的可选未封存工作）。
+- 多文件模块（当前单文件编译器之外的未来工作）。
+- `.mli` 签名（当前单文件编译器之外的未来工作）。
 - functor 支持（按 ADR-001，范围之外）。
 - 任何要求理解 OCaml C runtime 布局的事。
 
