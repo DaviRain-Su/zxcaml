@@ -12,6 +12,7 @@ const layout = @import("../core/layout.zig");
 
 const division_by_zero_marker = "ZXCAML_PANIC:division_by_zero";
 const assert_failure_marker = "ZXCAML_PANIC:assert_failure";
+const array_oob_marker = "ZXCAML_PANIC:array_oob";
 
 /// Stateless M0 interpreter backend.
 pub const Interpreter = struct {
@@ -32,7 +33,6 @@ pub const Interpreter = struct {
 /// Errors produced by M0 interpreter stubs.
 pub const EvalError = error{
     EntrypointNotFound,
-    NegativeIntegerResultUnsupported,
     UnsupportedDecl,
     UnsupportedExpr,
     UnsupportedTopLevelValue,
@@ -42,6 +42,9 @@ pub const EvalError = error{
     DivisionByZero,
     AssertFailure,
     OutOfMemory,
+    /// ADR-015 R9.1 read-only array out-of-bounds index. Maps to the
+    /// `array_oob` panic marker on `error.ArrayOutOfBounds`.
+    ArrayOutOfBounds,
 };
 
 const Value = union(enum) {
@@ -54,6 +57,21 @@ const Value = union(enum) {
     Record: RecordValue,
     Lambda: ir.Lambda,
     Closure: *const ClosureValue,
+    /// ADR-015 R9.1+R9.2 mutable int array. R9.2 promotes the backing
+    /// storage to a writable slice so `Array.set` / `a.(i) <- v` can
+    /// mutate elements in place; reads still work because `[]i64` coerces
+    /// to a read-only view where needed. The interpreter only supports
+    /// `int` element types; an OOB access returns the `array_oob` panic
+    /// marker via `error.ArrayOutOfBounds`.
+    Array: []i64,
+    /// ADR-015 option C / R10 mutable ref cell. The cell is allocated on
+    /// the per-evaluation arena and stores any supported element value
+    /// (`int`, `bool`, `option int`, `option bool`).
+    Ref: *RefCell,
+};
+
+const RefCell = struct {
+    value: Value,
 };
 
 const CtorValue = struct {
@@ -142,7 +160,6 @@ pub fn evalModule(module: ir.Module) EvalError!u64 {
 pub fn errorMessage(err: anyerror) []const u8 {
     return switch (err) {
         error.EntrypointNotFound => "interpreter does not yet implement module without entrypoint",
-        error.NegativeIntegerResultUnsupported => "interpreter does not yet implement negative int results",
         error.UnsupportedDecl => "interpreter does not yet implement declaration node",
         error.UnsupportedExpr => "interpreter does not yet implement expression node",
         error.UnsupportedTopLevelValue => "interpreter entrypoint must be a function",
@@ -151,6 +168,7 @@ pub fn errorMessage(err: anyerror) []const u8 {
         error.ArityMismatch => "interpreter function application arity mismatch",
         error.DivisionByZero => division_by_zero_marker,
         error.AssertFailure => assert_failure_marker,
+        error.ArrayOutOfBounds => array_oob_marker,
         error.NotImplemented => "interpreter does not yet implement source emission",
         else => "interpreter failed",
     };
@@ -161,6 +179,7 @@ pub fn panicMarker(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.DivisionByZero => division_by_zero_marker,
         error.AssertFailure => assert_failure_marker,
+        error.ArrayOutOfBounds => array_oob_marker,
         else => null,
     };
 }
@@ -171,7 +190,7 @@ fn evalBackend(_: *anyopaque, module: ir.Module) anyerror!u64 {
 
 fn evalTopLevelValue(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap(Value)) EvalError!Value {
     return switch (expr) {
-        .Constant, .Let, .LetGroup, .Assert, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => evalExpr(allocator, expr, env),
+        .Constant, .Let, .LetGroup, .Assert, .Var, .Ctor, .Match, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet, .ArrayLit, .ArrayGet, .ArrayLength, .ArraySet, .ArrayMake, .RefMake, .RefGet, .RefSet => evalExpr(allocator, expr, env),
         .App, .If, .Prim => evalExpr(allocator, expr, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
     };
@@ -199,7 +218,101 @@ fn evalExpr(allocator: std.mem.Allocator, expr: ir.Expr, env: *std.StringHashMap
         .RecordUpdate => |record_update| evalRecordUpdate(allocator, record_update, env),
         .AccountFieldSet => |field_set| evalAccountFieldSet(allocator, field_set, env),
         .Lambda => |lambda| .{ .Closure = try makeClosure(allocator, lambda, env, null) },
+        .ArrayLit => |array_lit| evalArrayLit(allocator, array_lit, env),
+        .ArrayGet => |array_get| evalArrayGet(allocator, array_get, env),
+        .ArrayLength => |array_length| evalArrayLength(allocator, array_length, env),
+        .ArraySet => |array_set| evalArraySet(allocator, array_set, env),
+        .ArrayMake => |array_make| evalArrayMake(allocator, array_make, env),
+        .RefMake => |ref_make| evalRefMake(allocator, ref_make, env),
+        .RefGet => |ref_get| evalRefGet(allocator, ref_get, env),
+        .RefSet => |ref_set| evalRefSet(allocator, ref_set, env),
     };
+}
+
+/// ADR-015 option C / R10 evaluate a `ref` allocation: alloc a cell on
+/// the per-eval arena and store the initializer value.
+fn evalRefMake(allocator: std.mem.Allocator, ref_make: ir.RefMake, env: *std.StringHashMap(Value)) EvalError!Value {
+    const init_value = try evalExpr(allocator, ref_make.init.*, env);
+    const cell = try allocator.create(RefCell);
+    cell.* = .{ .value = init_value };
+    return .{ .Ref = cell };
+}
+
+/// ADR-015 option C / R10 evaluate `!r`.
+fn evalRefGet(allocator: std.mem.Allocator, ref_get: ir.RefGet, env: *std.StringHashMap(Value)) EvalError!Value {
+    const target = try evalExpr(allocator, ref_get.target.*, env);
+    return switch (target) {
+        .Ref => |cell| cell.value,
+        else => error.UnsupportedExpr,
+    };
+}
+
+/// ADR-015 option C / R10 evaluate `r := v`; yields unit (encoded as Int 0).
+fn evalRefSet(allocator: std.mem.Allocator, ref_set: ir.RefSet, env: *std.StringHashMap(Value)) EvalError!Value {
+    const target = try evalExpr(allocator, ref_set.target.*, env);
+    const value = try evalExpr(allocator, ref_set.value.*, env);
+    switch (target) {
+        .Ref => |cell| cell.value = value,
+        else => return error.UnsupportedExpr,
+    }
+    return .{ .Int = 0 };
+}
+
+/// ADR-015 R9.1 interpreter evaluation of an int array literal.
+fn evalArrayLit(allocator: std.mem.Allocator, array_lit: ir.ArrayLit, env: *std.StringHashMap(Value)) EvalError!Value {
+    const elems = try allocator.alloc(i64, array_lit.elems.len);
+    for (array_lit.elems, 0..) |elem, index| {
+        elems[index] = try intValue(try evalExpr(allocator, elem.*, env));
+    }
+    return .{ .Array = elems };
+}
+
+/// ADR-015 R9.1 interpreter evaluation of `arr.(idx)`.
+fn evalArrayGet(allocator: std.mem.Allocator, array_get: ir.ArrayGet, env: *std.StringHashMap(Value)) EvalError!Value {
+    const arr_val = try evalExpr(allocator, array_get.arr.*, env);
+    const elems = switch (arr_val) {
+        .Array => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    const idx = try intValue(try evalExpr(allocator, array_get.idx.*, env));
+    if (idx < 0 or @as(usize, @intCast(idx)) >= elems.len) return error.ArrayOutOfBounds;
+    return .{ .Int = elems[@as(usize, @intCast(idx))] };
+}
+
+/// ADR-015 R9.1 interpreter evaluation of `Array.length arr`.
+fn evalArrayLength(allocator: std.mem.Allocator, array_length: ir.ArrayLength, env: *std.StringHashMap(Value)) EvalError!Value {
+    const arr_val = try evalExpr(allocator, array_length.arr.*, env);
+    const elems = switch (arr_val) {
+        .Array => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    return .{ .Int = @as(i64, @intCast(elems.len)) };
+}
+
+/// ADR-015 R9.2 interpreter evaluation of `a.(i) <- v` / `Array.set a i v`.
+/// Mutates the backing storage of `Value.Array` in place; OOB indices map
+/// to the `array_oob` panic marker via `error.ArrayOutOfBounds`. Returns
+/// the unit constructor.
+fn evalArraySet(allocator: std.mem.Allocator, array_set: ir.ArraySet, env: *std.StringHashMap(Value)) EvalError!Value {
+    const arr_val = try evalExpr(allocator, array_set.arr.*, env);
+    const elems = switch (arr_val) {
+        .Array => |value| value,
+        else => return error.UnsupportedExpr,
+    };
+    const idx = try intValue(try evalExpr(allocator, array_set.idx.*, env));
+    if (idx < 0 or @as(usize, @intCast(idx)) >= elems.len) return error.ArrayOutOfBounds;
+    const value = try intValue(try evalExpr(allocator, array_set.value.*, env));
+    elems[@as(usize, @intCast(idx))] = value;
+    return .{ .Ctor = .{ .name = "()", .args = &.{} } };
+}
+
+/// ADR-015 R9.2 interpreter evaluation of `Array.make N init` (literal N).
+/// Allocates a writable `[]i64` of length `size` filled with `init`.
+fn evalArrayMake(allocator: std.mem.Allocator, array_make: ir.ArrayMake, env: *std.StringHashMap(Value)) EvalError!Value {
+    const init_val = try intValue(try evalExpr(allocator, array_make.init.*, env));
+    const elems = try allocator.alloc(i64, @as(usize, array_make.size));
+    for (elems) |*slot| slot.* = init_val;
+    return .{ .Array = elems };
 }
 
 fn evalApp(allocator: std.mem.Allocator, app: ir.App, env: *std.StringHashMap(Value)) EvalError!Value {
@@ -366,6 +479,54 @@ fn evalStdlibApp(
     if (std.mem.eql(u8, name, "Result.error")) {
         if (args.len != 1) return error.ArityMismatch;
         return .{ .Ctor = try resultToOption(allocator, try evalExpr(allocator, args[0].*, env), "Error") };
+    }
+
+    if (std.mem.eql(u8, name, "Bytes.equal")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const a = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const b = try stringValue(try evalExpr(allocator, args[1].*, env));
+        return boolCtor(std.mem.eql(u8, a, b));
+    }
+    if (std.mem.eql(u8, name, "Bytes.compare")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const a = try stringValue(try evalExpr(allocator, args[0].*, env));
+        const b = try stringValue(try evalExpr(allocator, args[1].*, env));
+        return .{ .Int = switch (std.mem.order(u8, a, b)) {
+            .lt => @as(i64, -1),
+            .eq => @as(i64, 0),
+            .gt => @as(i64, 1),
+        } };
+    }
+    if (std.mem.eql(u8, name, "not")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const v = try boolValue(try evalExpr(allocator, args[0].*, env));
+        return boolCtor(!v);
+    }
+
+    if (std.mem.eql(u8, name, "Format.int_to_string")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const n = try intValue(try evalExpr(allocator, args[0].*, env));
+        const out = try std.fmt.allocPrint(allocator, "{d}", .{n});
+        return .{ .String = out };
+    }
+    if (std.mem.eql(u8, name, "Format.hex_of_int")) {
+        if (args.len != 2) return error.ArityMismatch;
+        const width = try intValue(try evalExpr(allocator, args[0].*, env));
+        const n = try intValue(try evalExpr(allocator, args[1].*, env));
+        const u: u64 = @bitCast(n);
+        var tmp: [32]u8 = undefined;
+        const hex = std.fmt.bufPrint(&tmp, "{x}", .{u}) catch unreachable;
+        const width_usize: usize = if (width < 0) 0 else @intCast(width);
+        if (width_usize <= hex.len) {
+            const out = try allocator.alloc(u8, hex.len);
+            @memcpy(out, hex);
+            return .{ .String = out };
+        }
+        const pad = width_usize - hex.len;
+        const out = try allocator.alloc(u8, width_usize);
+        @memset(out[0..pad], '0');
+        @memcpy(out[pad..], hex);
+        return .{ .String = out };
     }
 
     return null;
@@ -583,6 +744,13 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
             }
             return .{ .Ctor = .{ .name = "()", .args = &.{} } };
         },
+        .Eq, .Ne => {
+            if (prim.args.len != 2) return error.ArityMismatch;
+            const lhs = try evalExpr(allocator, prim.args[0].*, env);
+            const rhs = try evalExpr(allocator, prim.args[1].*, env);
+            const equal = try valuesEqual(lhs, rhs);
+            return boolCtor(if (prim.op == .Eq) equal else !equal);
+        },
         else => {
             if (prim.args.len != 2) return error.ArityMismatch;
             const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
@@ -598,16 +766,51 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
                 .BitXor => .{ .Int = lhs ^ rhs },
                 .ShiftLeft => .{ .Int = wrappingShl(lhs, rhs) },
                 .ShiftRight => .{ .Int = wrappingShr(lhs, rhs) },
-                .Eq => boolCtor(lhs == rhs),
-                .Ne => boolCtor(lhs != rhs),
                 .Lt => boolCtor(lhs < rhs),
                 .Le => boolCtor(lhs <= rhs),
                 .Gt => boolCtor(lhs > rhs),
                 .Ge => boolCtor(lhs >= rhs),
+                .Eq, .Ne => unreachable,
                 .StringLength, .StringGet, .StringSub, .StringConcat, .CharCode, .CharChr, .BitNot, .BytesCreate, .BytesSet, .BytesBlit, .BytesFill => unreachable,
             };
         },
     };
+}
+
+fn valuesEqual(lhs: Value, rhs: Value) EvalError!bool {
+    // Equality that mirrors the OCaml semantics across the small subset the
+    // interpreter currently handles: integers, booleans (native or `true`/
+    // `false` constructors), strings, and constructor values that compare
+    // structurally. Any unsupported shape surfaces the same UnsupportedExpr
+    // error used elsewhere in the evaluator.
+    switch (lhs) {
+        .Int => |l| return switch (rhs) {
+            .Int => |r| l == r,
+            else => error.UnsupportedExpr,
+        },
+        .String => |l| return switch (rhs) {
+            .String => |r| std.mem.eql(u8, l, r),
+            else => error.UnsupportedExpr,
+        },
+        .Bool, .Ctor => {
+            // Treat bools and "true"/"false" constructors as a single domain.
+            const lhs_is_bool = (lhs == .Bool) or (lhs == .Ctor and (std.mem.eql(u8, lhs.Ctor.name, "true") or std.mem.eql(u8, lhs.Ctor.name, "false")));
+            const rhs_is_bool = (rhs == .Bool) or (rhs == .Ctor and (std.mem.eql(u8, rhs.Ctor.name, "true") or std.mem.eql(u8, rhs.Ctor.name, "false")));
+            if (lhs_is_bool and rhs_is_bool) {
+                return (try boolValue(lhs)) == (try boolValue(rhs));
+            }
+            if (lhs == .Ctor and rhs == .Ctor) {
+                if (!std.mem.eql(u8, lhs.Ctor.name, rhs.Ctor.name)) return false;
+                if (lhs.Ctor.args.len != rhs.Ctor.args.len) return false;
+                for (lhs.Ctor.args, rhs.Ctor.args) |la, ra| {
+                    if (!try valuesEqual(la, ra)) return false;
+                }
+                return true;
+            }
+            return error.UnsupportedExpr;
+        },
+        else => return error.UnsupportedExpr,
+    }
 }
 
 fn boolCtor(value: bool) Value {
@@ -848,6 +1051,14 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }
 
@@ -979,8 +1190,11 @@ fn restoreEnv(env: *std.StringHashMap(Value), inserted: []const EnvBinding) void
 
 fn valueToU64(value: Value) EvalError!u64 {
     return switch (value) {
-        .Int => |int| std.math.cast(u64, int) orelse error.NegativeIntegerResultUnsupported,
-        .Bool, .String, .Ctor, .List, .Tuple, .Record, .Lambda, .Closure => error.UnsupportedExpr,
+        // Match the Solana BPF entrypoint contract: signed i64 results are
+        // reinterpreted via their bit pattern into u64, so a negative integer
+        // such as -1 surfaces to the loader as 0xFFFF_FFFF_FFFF_FFFF.
+        .Int => |int| @as(u64, @bitCast(int)),
+        .Bool, .String, .Ctor, .List, .Tuple, .Record, .Lambda, .Closure, .Array, .Ref => error.UnsupportedExpr,
     };
 }
 
@@ -1376,6 +1590,80 @@ test "interpreter backend trait exposes direct eval and rejects source emission"
     );
 }
 
+test "interpreter handles bool equality and not" {
+    // Models a program shaped like:
+    //   let entrypoint _ = if not (true = false) then 1 else 0
+    // After ANF lowering, `not` becomes `if e then false else true` and `=`
+    // on bools becomes `Prim Eq` on `Ctor true`/`Ctor false` values. The test
+    // covers both the bool-aware Eq path and the desugared not branch.
+
+    // (true = false) is false, so `not (true = false)` is true, taking the
+    // outer `then` branch, which yields 1.
+    const decls = comptime [_]ir.Decl{.{ .Let = .{
+        .name = "entrypoint",
+        .value = makeExpr(.{ .Lambda = .{
+            .params = &.{},
+            .body = makeExpr(.{ .If = .{
+                .cond = makeExpr(.{ .If = .{
+                    .cond = makeExpr(.{ .Prim = .{
+                        .op = .Eq,
+                        .args = &.{
+                            makeExpr(.{ .Ctor = .{ .name = "true", .args = &.{}, .ty = .Bool, .layout = layout.intConstant() } }),
+                            makeExpr(.{ .Ctor = .{ .name = "false", .args = &.{}, .ty = .Bool, .layout = layout.intConstant() } }),
+                        },
+                        .ty = .Bool,
+                        .layout = layout.intConstant(),
+                    } }),
+                    .then_branch = makeExpr(.{ .Ctor = .{ .name = "false", .args = &.{}, .ty = .Bool, .layout = layout.intConstant() } }),
+                    .else_branch = makeExpr(.{ .Ctor = .{ .name = "true", .args = &.{}, .ty = .Bool, .layout = layout.intConstant() } }),
+                    .ty = .Bool,
+                    .layout = layout.intConstant(),
+                } }),
+                .then_branch = makeExpr(.{ .Constant = .{ .value = .{ .Int = 1 }, .ty = .Int, .layout = layout.intConstant() } }),
+                .else_branch = makeExpr(.{ .Constant = .{ .value = .{ .Int = 0 }, .ty = .Int, .layout = layout.intConstant() } }),
+                .ty = .Int,
+                .layout = layout.intConstant(),
+            } }),
+            .ty = .Unit,
+            .layout = layout.topLevelLambda(),
+        } }),
+        .ty = .Unit,
+        .layout = layout.topLevelLambda(),
+    } }};
+
+    try std.testing.expectEqual(@as(u64, 1), try evalModule(.{ .decls = &decls }));
+
+    // Verify Prim Eq also works on string values directly via evalPrim.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var env = std.StringHashMap(Value).init(arena.allocator());
+    defer env.deinit();
+    const string_args = comptime [_]*const ir.Expr{
+        makeExpr(.{ .Constant = .{ .value = .{ .String = "abc" }, .ty = .String, .layout = layout.intConstant() } }),
+        makeExpr(.{ .Constant = .{ .value = .{ .String = "abc" }, .ty = .String, .layout = layout.intConstant() } }),
+    };
+    const cmp_strings = try evalPrim(arena.allocator(), .{
+        .op = .Eq,
+        .args = &string_args,
+        .ty = .Bool,
+        .layout = layout.intConstant(),
+    }, &env);
+    try std.testing.expect(try boolValue(cmp_strings));
+
+    // And on integers (unchanged path).
+    const int_args = comptime [_]*const ir.Expr{
+        makeExpr(.{ .Constant = .{ .value = .{ .Int = 1 }, .ty = .Int, .layout = layout.intConstant() } }),
+        makeExpr(.{ .Constant = .{ .value = .{ .Int = 2 }, .ty = .Int, .layout = layout.intConstant() } }),
+    };
+    const cmp_ints = try evalPrim(arena.allocator(), .{
+        .op = .Ne,
+        .args = &int_args,
+        .ty = .Bool,
+        .layout = layout.intConstant(),
+    }, &env);
+    try std.testing.expect(try boolValue(cmp_ints));
+}
+
 test "interpreter unsupported module shapes raise recognisable stub errors" {
     const missing_entrypoint_decls = [_]ir.Decl{testLet("not_entrypoint", 0)};
     const module_without_entrypoint = ir.Module{ .decls = &missing_entrypoint_decls };
@@ -1386,10 +1674,18 @@ test "interpreter unsupported module shapes raise recognisable stub errors" {
         errorMessage(error.EntrypointNotFound),
     );
 
+    // Negative integer results must be reinterpreted to u64 via their bit
+    // pattern, matching the Solana BPF entrypoint contract used by the Zig
+    // native and BPF backends. `-1` therefore lowers to 0xFFFF_FFFF_FFFF_FFFF.
     const negative_decls = [_]ir.Decl{testLet("entrypoint", -1)};
-    try std.testing.expectError(error.NegativeIntegerResultUnsupported, evalModule(.{ .decls = &negative_decls }));
-    try std.testing.expectEqualStrings(
-        "interpreter does not yet implement negative int results",
-        errorMessage(error.NegativeIntegerResultUnsupported),
+    try std.testing.expectEqual(
+        @as(u64, 0xFFFF_FFFF_FFFF_FFFF),
+        try evalModule(.{ .decls = &negative_decls }),
+    );
+
+    const min_decls = [_]ir.Decl{testLet("entrypoint", std.math.minInt(i64))};
+    try std.testing.expectEqual(
+        @as(u64, 0x8000_0000_0000_0000),
+        try evalModule(.{ .decls = &min_decls }),
     );
 }

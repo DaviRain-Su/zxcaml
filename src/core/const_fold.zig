@@ -203,6 +203,54 @@ const FoldContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
             } },
+            .ArrayLit => |array_lit| .{ .ArrayLit = .{
+                .elem_ty = array_lit.elem_ty,
+                .elems = try self.foldExprPtrs(array_lit.elems),
+                .ty = array_lit.ty,
+                .layout = array_lit.layout,
+            } },
+            .ArrayGet => |array_get| .{ .ArrayGet = .{
+                .arr = try self.foldExprPtr(array_get.arr.*),
+                .idx = try self.foldExprPtr(array_get.idx.*),
+                .ty = array_get.ty,
+                .layout = array_get.layout,
+            } },
+            .ArraySet => |array_set| .{ .ArraySet = .{
+                .arr = try self.foldExprPtr(array_set.arr.*),
+                .idx = try self.foldExprPtr(array_set.idx.*),
+                .value = try self.foldExprPtr(array_set.value.*),
+                .ty = array_set.ty,
+                .layout = array_set.layout,
+            } },
+            .ArrayMake => |array_make| .{ .ArrayMake = .{
+                .elem_ty = array_make.elem_ty,
+                .size = array_make.size,
+                .init = try self.foldExprPtr(array_make.init.*),
+                .ty = array_make.ty,
+                .layout = array_make.layout,
+            } },
+            .ArrayLength => |array_length| .{ .ArrayLength = .{
+                .arr = try self.foldExprPtr(array_length.arr.*),
+                .ty = array_length.ty,
+                .layout = array_length.layout,
+            } },
+            .RefMake => |ref_make| .{ .RefMake = .{
+                .elem_ty = ref_make.elem_ty,
+                .init = try self.foldExprPtr(ref_make.init.*),
+                .ty = ref_make.ty,
+                .layout = ref_make.layout,
+            } },
+            .RefGet => |ref_get| .{ .RefGet = .{
+                .target = try self.foldExprPtr(ref_get.target.*),
+                .ty = ref_get.ty,
+                .layout = ref_get.layout,
+            } },
+            .RefSet => |ref_set| .{ .RefSet = .{
+                .target = try self.foldExprPtr(ref_set.target.*),
+                .value = try self.foldExprPtr(ref_set.value.*),
+                .ty = ref_set.ty,
+                .layout = ref_set.layout,
+            } },
         };
     }
 
@@ -752,6 +800,14 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }
 
@@ -774,6 +830,14 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }
 

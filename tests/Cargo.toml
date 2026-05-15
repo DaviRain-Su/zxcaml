@@ -9,6 +9,7 @@ autotests = false
 
 [dependencies]
 mollusk-svm = "0.12.1-agave-4.0"
+agave-feature-set = "4.0.0-rc.0"
 solana-pubkey = "4.2.0"
 solana-account = "3.4.0"
 solana-instruction = "3.4.0"

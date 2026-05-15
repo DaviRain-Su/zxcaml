@@ -140,6 +140,40 @@ pub const Expr = union(enum) {
     RecordField: RecordField,
     RecordUpdate: RecordUpdate,
     AccountFieldSet: AccountFieldSet,
+    ArrayLit: ArrayLit,
+    ArrayGet: ArrayGet,
+    ArrayLength: ArrayLength,
+    ArraySet: ArraySet,
+    ArrayMake: ArrayMake,
+    RefMake: RefMake,
+    RefGet: RefGet,
+    RefSet: RefSet,
+};
+
+/// ADR-015 option C / R10 arena-allocated single-slot ref cell.
+pub const RefMake = struct {
+    elem_ty: Ty,
+    init: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
+/// ADR-015 option C / R10 ref dereference (`!r`).
+pub const RefGet = struct {
+    target: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
+/// ADR-015 option C / R10 ref assignment (`r := v`). Returns unit.
+pub const RefSet = struct {
+    target: *const Expr,
+    value: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
 };
 
 /// Returns the optional source location carried by any Core IR expression.
@@ -162,6 +196,14 @@ pub fn exprLoc(expr: Expr) ?Loc {
         .RecordField => |value| value.loc,
         .RecordUpdate => |value| value.loc,
         .AccountFieldSet => |value| value.loc,
+        .ArrayLit => |value| value.loc,
+        .ArrayGet => |value| value.loc,
+        .ArrayLength => |value| value.loc,
+        .ArraySet => |value| value.loc,
+        .ArrayMake => |value| value.loc,
+        .RefMake => |value| value.loc,
+        .RefGet => |value| value.loc,
+        .RefSet => |value| value.loc,
     };
 }
 
@@ -185,6 +227,14 @@ pub fn setExprLoc(expr: *Expr, loc: ?Loc) void {
         .RecordField => |*value| value.loc = loc,
         .RecordUpdate => |*value| value.loc = loc,
         .AccountFieldSet => |*value| value.loc = loc,
+        .ArrayLit => |*value| value.loc = loc,
+        .ArrayGet => |*value| value.loc = loc,
+        .ArrayLength => |*value| value.loc = loc,
+        .ArraySet => |*value| value.loc = loc,
+        .ArrayMake => |*value| value.loc = loc,
+        .RefMake => |*value| value.loc = loc,
+        .RefGet => |*value| value.loc = loc,
+        .RefSet => |*value| value.loc = loc,
     }
 }
 
@@ -372,6 +422,56 @@ pub const AccountFieldSet = struct {
     loc: ?Loc = null,
 };
 
+/// ADR-015 R9.1 read-only `int` array literal (e.g. `[| 1; 2; 3 |]`).
+pub const ArrayLit = struct {
+    elem_ty: Ty,
+    elems: []const *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
+/// ADR-015 R9.1 read-only array indexed access (`a.(i)` / `Array.get a i`).
+pub const ArrayGet = struct {
+    arr: *const Expr,
+    idx: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
+/// ADR-015 R9.1 read-only array length (`Array.length a`).
+pub const ArrayLength = struct {
+    arr: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
+/// ADR-015 R9.2 in-place int array write (`Array.set a i v` / `a.(i) <- v`).
+/// Returns `unit`; bounds violations trap with the `array_oob` marker.
+pub const ArraySet = struct {
+    arr: *const Expr,
+    idx: *const Expr,
+    value: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
+/// ADR-015 R9.2 `Array.make N init` with a literal size known at compile
+/// time. The element type is fixed to `Int` in R9.2; the IR still carries
+/// it explicitly so future ADR follow-ups can lift the restriction without
+/// changing variant shape.
+pub const ArrayMake = struct {
+    elem_ty: Ty,
+    size: u32,
+    init: *const Expr,
+    ty: Ty,
+    layout: layout.Layout,
+    loc: ?Loc = null,
+};
+
 /// Pattern match expression; arms are evaluated top-to-bottom.
 pub const Match = struct {
     scrutinee: *const Expr,
@@ -446,6 +546,16 @@ pub const Ty = union(enum) {
     Tuple: []const Ty,
     Record: RecordTy,
     Arrow: Arrow,
+    /// ADR-015 R9.1 read-only array type. The element type is restricted to
+    /// `Int` at the frontend boundary (E0040 on non-int) but the IR carries
+    /// it explicitly so later relaxations can extend the surface without
+    /// changing variant shape.
+    Array: *const Ty,
+    /// ADR-015 option C / R10 ref-cell type. The element type is restricted
+    /// to the frontend whitelist (int / bool / option<int|bool>) but the IR
+    /// carries the elem `Ty` explicitly so future relaxations can extend
+    /// the surface without changing variant shape.
+    Ref: *const Ty,
 };
 
 /// Algebraic data type reference with concrete parameter types.

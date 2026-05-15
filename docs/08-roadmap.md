@@ -97,6 +97,7 @@ the fmt corpus expansion.
 - **Maintenance hold:** pause new feature scope and keep the repository on
   validator, drift, and process-hygiene work if no high-confidence runtime or
   codegen direction is ready.
+- **Language-subset gap proposals (Proposed, not scheduled):** see ADR-015 (controlled mutable primitives: `array` / `for` / `ref`), ADR-016 (multi-file modules via frontend `open Foo`), and ADR-017 (float replacement via a bundled `Fixed` Q64.64 stdlib module) in [`09-decisions.md`](./09-decisions.md).
 
 ## Future / optional
 

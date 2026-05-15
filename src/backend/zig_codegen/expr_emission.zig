@@ -81,7 +81,162 @@ pub fn emitExpr(
         .RecordField => |record_field| try emitRecordFieldExpr(out, allocator, record_field, indent_level, ctx),
         .RecordUpdate => |record_update| try emitRecordUpdateExpr(out, allocator, record_update, indent_level, ctx),
         .AccountFieldSet => |field_set| try emitAccountFieldSetExpr(out, allocator, field_set, indent_level, ctx),
+        .ArrayLit => |array_lit| try emitArrayLitExpr(out, allocator, array_lit, indent_level, ctx),
+        .ArrayGet => |array_get| try emitArrayGetExpr(out, allocator, array_get, indent_level, ctx),
+        .ArrayLength => |array_length| try emitArrayLengthExpr(out, allocator, array_length, indent_level, ctx),
+        .ArraySet => |array_set| try emitArraySetExpr(out, allocator, array_set, indent_level, ctx),
+        .ArrayMake => |array_make| try emitArrayMakeExpr(out, allocator, array_make, indent_level, ctx),
+        .RefMake => |ref_make| try emitRefMakeExpr(out, allocator, ref_make, indent_level, ctx),
+        .RefGet => |ref_get| try emitRefGetExpr(out, allocator, ref_get, indent_level, ctx),
+        .RefSet => |ref_set| try emitRefSetExpr(out, allocator, ref_set, indent_level, ctx),
     }
+}
+
+/// ADR-015 option C / R10 ref-cell allocation. Uses the runtime's
+/// `arena.allocOneOrTrap(T)` helper to obtain a single arena slot, then
+/// stores the initializer. The block expression yields the pointer.
+pub fn emitRefMakeExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ref_make: lir.LRefMake,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const elem_ty = try zigTypeName(allocator, ref_make.elem_ty);
+    defer allocator.free(elem_ty);
+    try appendPrint(out, allocator, "blk_ref: {{ const __zxc_ref = arena.allocOneOrTrap({s}); __zxc_ref.* = ", .{elem_ty});
+    try emitExpr(out, allocator, ref_make.init.*, indent_level, ctx);
+    try append(out, allocator, "; break :blk_ref __zxc_ref; }");
+}
+
+/// ADR-015 option C / R10 ref-cell read. `r.*` is the natural Zig form.
+pub fn emitRefGetExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ref_get: lir.LRefGet,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "(");
+    try emitExpr(out, allocator, ref_get.target.*, indent_level, ctx);
+    try append(out, allocator, ").*");
+}
+
+/// ADR-015 option C / R10 ref-cell write. Returns unit (encoded as
+/// `@as(i64, 0)`) so it composes with surrounding expression contexts.
+pub fn emitRefSetExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    ref_set: lir.LRefSet,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "blk_refset: { const __zxc_r = ");
+    try emitExpr(out, allocator, ref_set.target.*, indent_level, ctx);
+    try append(out, allocator, "; __zxc_r.* = ");
+    try emitExpr(out, allocator, ref_set.value.*, indent_level, ctx);
+    try append(out, allocator, "; break :blk_refset @as(i64, 0); }");
+}
+
+/// ADR-015 R9.1 array literal emission. We allocate an arena-backed
+/// `[]i64` slice and populate it eagerly. The literal sits in a labelled
+/// block expression so it composes with surrounding expression contexts.
+/// R9.2 makes the slice mutable (drop `const` on the result type) so
+/// writes via ArraySet have a valid lvalue.
+pub fn emitArrayLitExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    array_lit: lir.LArrayLit,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const elem_ty = try zigTypeName(allocator, array_lit.elem_ty);
+    defer allocator.free(elem_ty);
+    try appendPrint(out, allocator, "blk_arr: {{ const __zxc_arr = arena.alloc({s}, @as(usize, {d})) catch unreachable;", .{ elem_ty, array_lit.elems.len });
+    for (array_lit.elems, 0..) |elem, index| {
+        try appendPrint(out, allocator, " __zxc_arr[{d}] = ", .{index});
+        try emitExpr(out, allocator, elem.*, indent_level, ctx);
+        try append(out, allocator, ";");
+    }
+    try append(out, allocator, " break :blk_arr @as([]");
+    try append(out, allocator, elem_ty);
+    try append(out, allocator, ", __zxc_arr); }");
+}
+
+/// ADR-015 R9.1 array get emission. Trapping bounds check via the
+/// generated runtime panic marker.
+pub fn emitArrayGetExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    array_get: lir.LArrayGet,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "blk_get: { const __zxc_a = ");
+    try emitExpr(out, allocator, array_get.arr.*, indent_level, ctx);
+    try append(out, allocator, "; const __zxc_i = ");
+    try emitExpr(out, allocator, array_get.idx.*, indent_level, ctx);
+    try append(out, allocator, "; if (__zxc_i < 0 or @as(usize, @intCast(__zxc_i)) >= __zxc_a.len) runtime_panic.arrayOob(); break :blk_get __zxc_a[@as(usize, @intCast(__zxc_i))]; }");
+}
+
+/// ADR-015 R9.1 array length emission.
+pub fn emitArrayLengthExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    array_length: lir.LArrayLength,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "@as(i64, @intCast((");
+    try emitExpr(out, allocator, array_length.arr.*, indent_level, ctx);
+    try append(out, allocator, ").len))");
+}
+
+/// ADR-015 R9.2 in-place array write emission. Returns the unit value
+/// shape so it composes with surrounding expression contexts that may
+/// discard or sequence it.
+pub fn emitArraySetExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    array_set: lir.LArraySet,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    try append(out, allocator, "blk_set: { const __zxc_a = ");
+    try emitExpr(out, allocator, array_set.arr.*, indent_level, ctx);
+    try append(out, allocator, "; const __zxc_i = ");
+    try emitExpr(out, allocator, array_set.idx.*, indent_level, ctx);
+    try append(out, allocator, "; const __zxc_v = ");
+    try emitExpr(out, allocator, array_set.value.*, indent_level, ctx);
+    try append(out, allocator, "; if (__zxc_i < 0 or @as(usize, @intCast(__zxc_i)) >= __zxc_a.len) runtime_panic.arrayOob(); __zxc_a[@as(usize, @intCast(__zxc_i))] = __zxc_v; break :blk_set @as(i64, 0); }");
+}
+
+/// ADR-015 R9.2 `Array.make N init` emission. Size is a compile-time
+/// literal; for small literals (<=8) unroll the fill, otherwise use a
+/// runtime for-loop to keep generated code size sane.
+pub fn emitArrayMakeExpr(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    array_make: lir.LArrayMake,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    const elem_ty = try zigTypeName(allocator, array_make.elem_ty);
+    defer allocator.free(elem_ty);
+    try appendPrint(out, allocator, "blk_mk: {{ const __zxc_arr = arena.alloc({s}, @as(usize, {d})) catch unreachable; const __zxc_init = ", .{ elem_ty, array_make.size });
+    try emitExpr(out, allocator, array_make.init.*, indent_level, ctx);
+    try append(out, allocator, ";");
+    if (array_make.size <= 8) {
+        var index: u32 = 0;
+        while (index < array_make.size) : (index += 1) {
+            try appendPrint(out, allocator, " __zxc_arr[{d}] = __zxc_init;", .{index});
+        }
+    } else {
+        try appendPrint(out, allocator, " var __zxc_k: usize = 0; while (__zxc_k < {d}) : (__zxc_k += 1) {{ __zxc_arr[__zxc_k] = __zxc_init; }}", .{array_make.size});
+    }
+    try append(out, allocator, " break :blk_mk @as([]");
+    try append(out, allocator, elem_ty);
+    try append(out, allocator, ", __zxc_arr); }");
 }
 
 pub fn emitTupleExpr(
@@ -393,6 +548,12 @@ fn tyUsesEntrypointAggregateStorage(ty: lir.LTy) bool {
     return switch (ty) {
         .Adt, .Tuple, .Record, .Closure => true,
         .Int, .Bool, .Unit, .String, .Var => false,
+        // R9.1 read-only arrays are arena-allocated slices, so they use
+        // aggregate storage just like other slice-shaped runtime values.
+        .Array => true,
+        // ADR-015 option C / R10 ref cells are arena-backed single-slot
+        // pointers; treat them as aggregate storage just like arrays.
+        .Ref => true,
     };
 }
 
@@ -475,6 +636,22 @@ fn exprMayRequireArena(expr: lir.LExpr, functions: []const lir.LFunc, current_fu
         .AccountFieldSet => |field_set| exprMayRequireArena(field_set.account_expr.*, functions, current_function, depth + 1) or
             exprMayRequireArena(field_set.value.*, functions, current_function, depth + 1),
         .Closure => true,
+        // ArrayLit always allocates an arena-backed slice in codegen, so we
+        // need the arena initialized at the entrypoint.
+        .ArrayLit => true,
+        .ArrayGet => |array_get| exprMayRequireArena(array_get.arr.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(array_get.idx.*, functions, current_function, depth + 1),
+        .ArrayLength => |array_length| exprMayRequireArena(array_length.arr.*, functions, current_function, depth + 1),
+        .ArraySet => |array_set| exprMayRequireArena(array_set.arr.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(array_set.idx.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(array_set.value.*, functions, current_function, depth + 1),
+        // ArrayMake allocates an arena-backed slice.
+        .ArrayMake => true,
+        // ADR-015 option C / R10 RefMake allocates a single arena slot.
+        .RefMake => true,
+        .RefGet => |ref_get| exprMayRequireArena(ref_get.target.*, functions, current_function, depth + 1),
+        .RefSet => |ref_set| exprMayRequireArena(ref_set.target.*, functions, current_function, depth + 1) or
+            exprMayRequireArena(ref_set.value.*, functions, current_function, depth + 1),
     };
 }
 

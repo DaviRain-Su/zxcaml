@@ -74,3 +74,72 @@ test "wire 1.2 optional loc populates node locations" {
     try std.testing.expectEqual(@as(u32, 2), body_var.loc.end_line);
     try std.testing.expectEqual(@as(u32, 15), body_var.loc.end_col);
 }
+
+// Verification anchor: wire_1_3|lambda_param_types|typed
+test "wire 1.3 typed lambda params populate param_types with typed and any entries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try ttree.parseModule(
+        &arena,
+        \\(zxcaml-cir 1.3
+        \\  (module
+        \\    (let entrypoint
+        \\      (lambda ((x (ty (type-ref int))) (y (ty (any))))
+        \\        (var x)))))
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), module.decls.len);
+    const let_decl = switch (module.decls[0]) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const lambda = switch (let_decl.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+
+    try std.testing.expectEqual(@as(usize, 2), lambda.params.len);
+    try std.testing.expectEqual(@as(usize, 2), lambda.param_types.len);
+    try std.testing.expectEqualStrings("x", lambda.params[0]);
+    try std.testing.expectEqualStrings("y", lambda.params[1]);
+
+    // First param: explicit int type.
+    const first_ty = lambda.param_types[0] orelse
+        return error.TestUnexpectedResult;
+    switch (first_ty) {
+        .TypeRef => |ref| {
+            try std.testing.expectEqualStrings("int", ref.name);
+            try std.testing.expectEqual(@as(usize, 0), ref.args.len);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Second param: `(any)` sentinel maps to null.
+    try std.testing.expect(lambda.param_types[1] == null);
+}
+
+// Verification anchor: wire_1_2|lambda_param_types|legacy
+test "wire 1.2 legacy bare-atom params produce all-null param_types" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try ttree.parseModule(
+        &arena,
+        "(zxcaml-cir 1.2 (module (let entrypoint (lambda (x y) (var x)))))",
+    );
+
+    const let_decl = switch (module.decls[0]) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const lambda = switch (let_decl.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+
+    try std.testing.expectEqual(@as(usize, 2), lambda.params.len);
+    try std.testing.expectEqual(@as(usize, 2), lambda.param_types.len);
+    try std.testing.expect(lambda.param_types[0] == null);
+    try std.testing.expect(lambda.param_types[1] == null);
+}

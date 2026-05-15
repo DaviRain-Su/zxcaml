@@ -102,13 +102,17 @@ pub const sol_get_return_data_address: usize = 0x5d2245e4;
 const success: u64 = 0;
 const invalid_seeds: u64 = 1;
 const return_data_capacity: usize = 1024;
-const is_bpf = builtin.target.cpu.arch == .bpfel or builtin.target.cpu.arch == .bpfeb;
+const is_bpf = std.mem.eql(u8, @tagName(builtin.target.cpu.arch), "sbf") or
+    std.mem.eql(u8, @tagName(builtin.target.cpu.arch), "bpfel") or
+    std.mem.eql(u8, @tagName(builtin.target.cpu.arch), "bpfeb");
 
-const SolInvokeSignedCFn = *align(1) const fn (*const SolInstruction, [*]const SolAccountInfo, u64, [*]const SolSignerSeedsC, u64) u64;
-const SolCreateProgramAddressFn = *align(1) const fn ([*]const SolSignerSeed, u64, *const Pubkey, *Pubkey) u64;
-const SolTryFindProgramAddressFn = *align(1) const fn ([*]const SolSignerSeed, u64, *const Pubkey, *Pubkey, *u8) u64;
-const SolSetReturnDataFn = *align(1) const fn ([*]const u8, u64) void;
-const SolGetReturnDataFn = *align(1) const fn ([*]u8, u64, *Pubkey) u64;
+const Syscall = struct {
+    extern fn sol_invoke_signed_c(instruction: *const SolInstruction, account_infos: [*]const SolAccountInfo, account_len: u64, signer_seed_groups: [*]const SolSignerSeedsC, signer_seed_len: u64) callconv(.c) u64;
+    extern fn sol_create_program_address(seeds: [*]const SolSignerSeed, seed_len: u64, program_id: *const Pubkey, out: *Pubkey) callconv(.c) u64;
+    extern fn sol_try_find_program_address(seeds: [*]const SolSignerSeed, seed_len: u64, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) callconv(.c) u64;
+    extern fn sol_set_return_data(data: [*]const u8, data_len: u64) callconv(.c) void;
+    extern fn sol_get_return_data(data: [*]u8, data_len: u64, program_id: *Pubkey) callconv(.c) u64;
+};
 
 var hosted_return_program_id: Pubkey = [_]u8{0} ** 32;
 var hosted_return_data: [return_data_capacity]u8 = undefined;
@@ -134,14 +138,13 @@ pub fn accountInfoFromView(view: account.AccountView) SolAccountInfo {
 /// Invokes another Solana program with optional signer seeds.
 pub inline fn sol_invoke_signed_c(instruction: *const SolInstruction, account_infos: []const SolAccountInfo, signer_seeds: []const SolSignerSeedsC) u64 {
     if (comptime is_bpf) {
-        const syscall: SolInvokeSignedCFn = @ptrFromInt(sol_invoke_signed_c_address);
         if (signer_seeds.len == 0) {
             var empty_seed_bytes = [_]u8{0};
             var empty_seed = [_]SolSignerSeed{.{ .addr = empty_seed_bytes[0..].ptr, .len = 0 }};
             var empty_seed_groups = [_]SolSignerSeedsC{.{ .addr = empty_seed[0..].ptr, .len = 0 }};
-            return syscall(instruction, account_infos.ptr, account_infos.len, empty_seed_groups[0..].ptr, 0);
+            return Syscall.sol_invoke_signed_c(instruction, account_infos.ptr, account_infos.len, empty_seed_groups[0..].ptr, 0);
         }
-        return syscall(instruction, account_infos.ptr, account_infos.len, signer_seeds.ptr, signer_seeds.len);
+        return Syscall.sol_invoke_signed_c(instruction, account_infos.ptr, account_infos.len, signer_seeds.ptr, signer_seeds.len);
     } else {
         return success;
     }
@@ -342,8 +345,7 @@ inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolAccou
 /// Derives a program address from seeds and a program id.
 pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
     if (comptime is_bpf) {
-        const syscall: SolCreateProgramAddressFn = @ptrFromInt(sol_create_program_address_address);
-        return syscall(seeds.ptr, seeds.len, program_id, out);
+        return Syscall.sol_create_program_address(seeds.ptr, seeds.len, program_id, out);
     }
     return createProgramAddressHosted(seeds, program_id, out);
 }
@@ -351,8 +353,7 @@ pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_i
 /// Finds a valid program address and bump seed for a seed prefix.
 pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
     if (comptime is_bpf) {
-        const syscall: SolTryFindProgramAddressFn = @ptrFromInt(sol_try_find_program_address_address);
-        return syscall(seeds.ptr, seeds.len, program_id, out, bump_seed);
+        return Syscall.sol_try_find_program_address(seeds.ptr, seeds.len, program_id, out, bump_seed);
     }
     return tryFindProgramAddressHosted(seeds, program_id, out, bump_seed);
 }
@@ -360,8 +361,7 @@ pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program
 /// Stores return data for the current instruction.
 pub inline fn sol_set_return_data(data: []const u8) void {
     if (comptime is_bpf) {
-        const syscall: SolSetReturnDataFn = @ptrFromInt(sol_set_return_data_address);
-        syscall(data.ptr, data.len);
+        Syscall.sol_set_return_data(data.ptr, data.len);
     } else {
         hosted_return_data_len = @min(data.len, hosted_return_data.len);
         @memcpy(hosted_return_data[0..hosted_return_data_len], data[0..hosted_return_data_len]);
@@ -371,8 +371,7 @@ pub inline fn sol_set_return_data(data: []const u8) void {
 /// Copies return data into `out` and writes the producing program id.
 pub inline fn sol_get_return_data(out: []u8, program_id: *Pubkey) u64 {
     if (comptime is_bpf) {
-        const syscall: SolGetReturnDataFn = @ptrFromInt(sol_get_return_data_address);
-        return syscall(out.ptr, out.len, program_id);
+        return Syscall.sol_get_return_data(out.ptr, out.len, program_id);
     }
     const copy_len = @min(out.len, hosted_return_data_len);
     @memcpy(out[0..copy_len], hosted_return_data[0..copy_len]);

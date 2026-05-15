@@ -2,8 +2,8 @@
 //!
 //! RESPONSIBILITIES:
 //! - Invoke the installed compiler driver health-check surface.
-//! - Assert required tool probes are named and use OK/WARN/MISS status lines.
-//! - Assert the command exits successfully on the mission-provisioned machine.
+//! - Assert each documented probe label appears as a status row.
+//! - Assert the command exits 0 (no FAIL) or 1 (at least one FAIL).
 
 const std = @import("std");
 const Io = std.Io;
@@ -28,32 +28,6 @@ fn runCommand(allocator: Allocator, io: Io, argv: []const []const u8) !CommandRe
     return .{ .stdout = result.stdout, .stderr = result.stderr, .exit_code = exit_code };
 }
 
-fn startsWithStatus(line: []const u8) bool {
-    return std.mem.startsWith(u8, line, "OK ") or
-        std.mem.startsWith(u8, line, "WARN ") or
-        std.mem.startsWith(u8, line, "MISS ");
-}
-
-fn statusLineCount(output: []const u8) usize {
-    var count: usize = 0;
-    var lines = std.mem.splitScalar(u8, output, '\n');
-    while (lines.next()) |line| {
-        if (startsWithStatus(line)) count += 1;
-    }
-    return count;
-}
-
-fn statusLineAt(output: []const u8, wanted_index: usize) ?[]const u8 {
-    var status_index: usize = 0;
-    var lines = std.mem.splitScalar(u8, output, '\n');
-    while (lines.next()) |line| {
-        if (!startsWithStatus(line)) continue;
-        if (status_index == wanted_index) return line;
-        status_index += 1;
-    }
-    return null;
-}
-
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return true;
     if (haystack.len < needle.len) return false;
@@ -71,7 +45,21 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
-test "cli: doctor reports toolchain health" {
+fn lineContainsProbe(output: []const u8, label: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        // Look for `label:` followed by space then a status keyword.
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        if (!std.mem.eql(u8, std.mem.trim(u8, line[0..colon], " \t"), label)) continue;
+        const after = std.mem.trimStart(u8, line[colon + 1 ..], " \t");
+        if (std.mem.startsWith(u8, after, "OK") or
+            std.mem.startsWith(u8, after, "WARN") or
+            std.mem.startsWith(u8, after, "FAIL")) return true;
+    }
+    return false;
+}
+
+test "cli: doctor reports every documented probe" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -80,37 +68,27 @@ test "cli: doctor reports toolchain health" {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    const observed_status_lines = statusLineCount(result.stdout);
-    const expected_order = [_][]const u8{
+    // Doctor must exit 0 (no FAIL) or 1 (at least one FAIL); it never crashes.
+    try std.testing.expect(result.exit_code == 0 or result.exit_code == 1);
+
+    const expected_labels = [_][]const u8{
         "zig",
-        "opam-switch (zxcaml-p1)",
+        "zxc-frontend",
         "ocamlc",
         "solana-zig",
-        "cargo",
         "llvm-objcopy",
-        "surfpool",
+        "solana",
+        "cargo",
     };
 
-    if (observed_status_lines != expected_order.len) {
-        std.debug.print(
-            "omlz doctor returned unexpected status-line count (expected {d}, got {d})\nstdout:\n{s}\nstderr:\n{s}\n",
-            .{ expected_order.len, observed_status_lines, result.stdout, result.stderr },
-        );
-        return error.UnexpectedStatusLineCount;
-    }
-
-    if (result.exit_code != 0 or observed_status_lines != expected_order.len) {
-        std.debug.print(
-            "omlz doctor failed expectations\nexit={d}\nstdout:\n{s}\nstderr:\n{s}\n",
-            .{ result.exit_code, result.stdout, result.stderr },
-        );
-    }
-
-    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
-    try std.testing.expectEqual(expected_order.len, observed_status_lines);
-    for (expected_order, 0..) |needle, index| {
-        const line = statusLineAt(result.stdout, index) orelse return error.MissingStatusLine;
-        try std.testing.expect(containsIgnoreCase(line, needle));
+    for (expected_labels) |label| {
+        if (!lineContainsProbe(result.stdout, label)) {
+            std.debug.print(
+                "omlz doctor missing probe `{s}`\nstdout:\n{s}\nstderr:\n{s}\n",
+                .{ label, result.stdout, result.stderr },
+            );
+            return error.MissingProbe;
+        }
     }
 }
 
@@ -125,4 +103,7 @@ test "cli: doctor --help exits successfully" {
 
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
     try std.testing.expect(containsIgnoreCase(result.stdout, "doctor"));
+    // The new help lists the probe set explicitly.
+    try std.testing.expect(containsIgnoreCase(result.stdout, "zxc-frontend"));
+    try std.testing.expect(containsIgnoreCase(result.stdout, "llvm-objcopy"));
 }

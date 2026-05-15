@@ -80,7 +80,149 @@ pub fn emitStdlibAppExpr(
         try emitStdlibResultOption(out, allocator, app, indent_level, ctx, ".err");
         return true;
     }
+    if (std.mem.eql(u8, name, "Bytes.equal")) {
+        try emitStdlibBytesEqual(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Bytes.compare")) {
+        try emitStdlibBytesCompare(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Format.int_to_string")) {
+        try emitStdlibFormatIntToString(out, allocator, app, indent_level, ctx);
+        return true;
+    }
+    if (std.mem.eql(u8, name, "Format.hex_of_int")) {
+        try emitStdlibFormatHexOfInt(out, allocator, app, indent_level, ctx);
+        return true;
+    }
     return false;
+}
+
+pub fn emitStdlibBytesEqual(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 2) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_bytes_eq_a_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_bytes_eq_b_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} prelude.Bool.fromNative(std.mem.eql(u8, omlz_bytes_eq_a_{d}, omlz_bytes_eq_b_{d}));\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitStdlibBytesCompare(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 2) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_bytes_cmp_a_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_bytes_cmp_b_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} switch (std.mem.order(u8, omlz_bytes_cmp_a_{d}, omlz_bytes_cmp_b_{d})) {{ .lt => @as(i64, -1), .eq => @as(i64, 0), .gt => @as(i64, 1) }};\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitStdlibFormatIntToString(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 1) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_fmt_n_{d}: i64 = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_fmt_buf_{d}: [32]u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_fmt_slice_{d} = std.fmt.bufPrint(&omlz_fmt_buf_{d}, \"{{d}}\", .{{omlz_fmt_n_{d}}}) catch unreachable;\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_fmt_out_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, omlz_fmt_slice_{d}.len, &omlz_fmt_out_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_fmt_out_{d}, omlz_fmt_slice_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} @as([]const u8, omlz_fmt_out_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+pub fn emitStdlibFormatHexOfInt(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 2) return error.UnsupportedExpr;
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_width_{d}: i64 = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_n_{d}: i64 = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_u_{d}: u64 = @bitCast(omlz_hex_n_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_hex_buf_{d}: [32]u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_slice_{d} = std.fmt.bufPrint(&omlz_hex_buf_{d}, \"{{x}}\", .{{omlz_hex_u_{d}}}) catch unreachable;\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_width_usize_{d}: usize = if (omlz_hex_width_{d} < 0) 0 else @intCast(omlz_hex_width_{d});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_total_{d}: usize = if (omlz_hex_width_usize_{d} > omlz_hex_slice_{d}.len) omlz_hex_width_usize_{d} else omlz_hex_slice_{d}.len;\n", .{ block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_hex_out_{d}: []u8 = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, omlz_hex_total_{d}, &omlz_hex_out_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_hex_pad_{d}: usize = omlz_hex_total_{d} - omlz_hex_slice_{d}.len;\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memset(omlz_hex_out_{d}[0..omlz_hex_pad_{d}], '0');\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_hex_out_{d}[omlz_hex_pad_{d}..], omlz_hex_slice_{d});\n", .{ block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} @as([]const u8, omlz_hex_out_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
 }
 
 pub fn emitBytesOfString(

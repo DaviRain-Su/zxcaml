@@ -1,0 +1,11 @@
+== Compute units (static estimate) ==
+estimated cu budget: 63
+breakdown:
+  - syscalls:
+      (none)
+  - arithmetic ops: 8  (≈ 8 cu, free in BPF but counted for completeness)
+  - control flow: 1
+  - function calls: 0 non-syscall
+notes:
+  - This is a STATIC estimate based on the post-optimization Core IR. Real BPF compute units are determined at runtime by the SVM and may differ.
+  - See https://docs.solana.com/developing/programming-model/runtime for the canonical cost table.

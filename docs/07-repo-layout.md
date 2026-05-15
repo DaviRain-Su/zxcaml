@@ -93,10 +93,9 @@ src/
 │
 ├── backend/
 │   ├── api.zig                 -- Backend interface (EXTENSION POINT)
-│   ├── zig_codegen.zig         -- ZigBackend
-│   ├── interp.zig              -- tree-walk interpreter
-│   ├── ocaml_stub.zig          -- compile-only stub (NOT the frontend; see frontend/)
-│   └── llvm_stub.zig           -- compile-only stub
+│   ├── zig_codegen.zig         -- ZigBackend facade (re-exports zig_codegen/)
+│   ├── zig_codegen/            -- ZigBackend implementation, split by concern
+│   └── interp.zig              -- tree-walk interpreter
 │
 └── driver/
     ├── pipeline.zig            -- spawns zxc-frontend, drives the rest

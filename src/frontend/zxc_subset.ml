@@ -47,9 +47,20 @@ type expr =
   | Record_update of record_update
   | Assert of expr
   | Match of match_expr
+  | Array_lit of expr list
+  | Array_get of array_get
+  | Array_length of expr
+  | Array_set of array_set
+  | Array_make of array_make
+  (* ADR-015 option C / R10: arena-allocated ref cells. The element type is
+     baked at parse time and limited to int / bool / option<int|bool>. *)
+  | Ref_make of ref_make
+  | Ref_get of expr
+  | Ref_set of ref_set
 
 and lambda = {
   params : param list;
+  param_types : type_expr option list;
   body : expr;
 }
 
@@ -73,6 +84,7 @@ and let_rec_group = {
 and let_rec_binding = {
   rec_name : string;
   rec_params : param list;
+  rec_param_types : type_expr option list;
   rec_body : expr;
   rec_loc : loc;
 }
@@ -117,6 +129,32 @@ and record_update = {
   fields : record_expr_field list;
 }
 
+and array_get = {
+  array_expr : expr;
+  index_expr : expr;
+}
+
+and array_set = {
+  set_array_expr : expr;
+  set_index_expr : expr;
+  set_value_expr : expr;
+}
+
+and array_make = {
+  make_size : int;
+  make_init : expr;
+}
+
+and ref_make = {
+  ref_elem_ty : type_expr;
+  ref_init : expr;
+}
+
+and ref_set = {
+  ref_set_target : expr;
+  ref_set_value : expr;
+}
+
 and match_expr = {
   scrutinee : expr;
   arms : match_arm list;
@@ -158,10 +196,11 @@ and record_pattern_field = {
   pattern_field_value : match_pattern;
 }
 
-type type_expr =
+and type_expr =
   | Type_var of string
   | Type_constr of type_constr
   | Type_tuple of type_expr list
+  | Type_any
 
 and type_constr = {
   type_name : string;
@@ -628,11 +667,21 @@ let unsupported_code_and_message node_kind =
   | "Texp_try" | "Texp_letexception" | "Tstr_exception" ->
       ("E0016", "exceptions are not supported")
   | "Texp_for" | "Texp_while" ->
+      (* ADR-015 option D: `for` and `while` are accepted natively and
+         desugared into self-recursive `let rec`. This branch is retained
+         defensively in case desugaring is bypassed but should not normally
+         fire. *)
       ("E0017", "loops are not supported; use recursion or higher-order functions")
   | "Texp_object" | "Texp_new" | "Texp_send" ->
       ("E0018", "objects and method calls are not part of the ZxCaml subset")
   | "Texp_array" ->
-      ("E0019", "arrays are not part of the ZxCaml subset")
+      (* ADR-015 option B / R9.2: int array literals + Array.get/length and
+         the writing surface (Array.set / Array.make / a.(i) <- v) are
+         accepted. This branch remains defensively for the rare unsupported
+         shapes (non-literal Array.make size, Array.init, etc.). *)
+      ("E0019", "this array form is not part of the ZxCaml subset")
+  | "Array.non_int_elem" ->
+      ("E0040", "array element type is not `int`; only int arrays are supported in R9.1")
   | "Texp_lazy" ->
       ("E0020", "lazy expressions are not supported")
   | "Texp_letop" ->
@@ -796,6 +845,76 @@ let pubkey_constant_expr = function
   | "Pubkey.token_program" -> Some (Const_string pubkey_token_program_bytes)
   | _ -> None
 
+(* R6b.1 labelled-argument whitelist: maps the qualified stdlib callee name
+   to the canonical positional order of its labelled parameters as declared
+   in `stdlib/core.ml`. Any positional (unlabelled) args at the call site
+   follow these labelled args in the order they appear. *)
+let labelled_callee_canonical_order = function
+  | "Option.fold" -> Some [ "none"; "some" ]
+  | _ -> None
+
+let arg_label_name = function
+  | Labelled name | Optional name -> Some name
+  | Nolabel -> None
+
+let reorder_labelled_args ~callee ~canonical_order args ~loc =
+  let labelled, positional =
+    List.partition (fun (label, _) -> arg_label_name label <> None) args
+  in
+  let label_map = Hashtbl.create (List.length labelled) in
+  List.iter
+    (fun (label, arg_opt) ->
+      match arg_label_name label, arg_opt with
+      | Some name, Some arg ->
+          if Hashtbl.mem label_map name then
+            unsupported ~node_kind:"labelled-application" ~loc:arg.exp_loc
+              ~code:"E0031"
+              ~message:
+                (Printf.sprintf
+                   "duplicate label `~%s:` in call to %s; each label may appear at most once"
+                   name callee)
+              ()
+          else Hashtbl.add label_map name arg
+      | Some name, None ->
+          unsupported ~node_kind:"labelled-application" ~loc
+            ~code:"E0030"
+            ~message:
+              (Printf.sprintf
+                 "missing required label `~%s:` in call to %s" name callee)
+            ()
+      | None, _ -> ())
+    labelled;
+  List.iter
+    (fun (label, _) ->
+      match arg_label_name label with
+      | Some name when not (List.mem name canonical_order) ->
+          unsupported ~node_kind:"labelled-application" ~loc
+            ~code:"E0031"
+            ~message:
+              (Printf.sprintf
+                 "unknown label `~%s:` for %s; expected one of: %s"
+                 name callee
+                 (String.concat ", "
+                    (List.map (fun n -> "~" ^ n ^ ":") canonical_order)))
+            ()
+      | _ -> ())
+    labelled;
+  let ordered_labelled =
+    List.map
+      (fun name ->
+        match Hashtbl.find_opt label_map name with
+        | Some arg -> (Nolabel, Some arg)
+        | None ->
+            unsupported ~node_kind:"labelled-application" ~loc
+              ~code:"E0030"
+              ~message:
+                (Printf.sprintf
+                   "missing required label `~%s:` in call to %s" name callee)
+              ())
+      canonical_order
+  in
+  ordered_labelled @ positional
+
 let hex_nibble ~loc = function
   | '0' .. '9' as c -> Char.code c - Char.code '0'
   | 'a' .. 'f' as c -> 10 + Char.code c - Char.code 'a'
@@ -831,6 +950,29 @@ let parse_pubkey_of_hex_args args ~loc =
         ~message:"Pubkey.of_hex requires exactly one unlabeled argument"
         ()
 
+(* Hygienic name counter for ADR-015 D loop desugaring. The counter is shared
+   across one frontend run; each desugared `for`/`while` allocates a fresh
+   suffix so nested loops do not collide. *)
+let loop_counter = ref 0
+
+let fresh_loop_id () =
+  let id = !loop_counter in
+  incr loop_counter;
+  id
+
+(* R11.5 hygienic name counter for synthetic-let desugaring used when a
+   match scrutinee or `let`-destructure right-hand side is not already in
+   atom form. The `__zxc_` prefix keeps the synthesized names disjoint
+   from user identifiers. *)
+let match_scrut_counter = ref 0
+
+let fresh_match_scrut_id () =
+  let id = !match_scrut_counter in
+  incr match_scrut_counter;
+  id
+
+let unit_expr = Ctor { name = "()"; args = [] }
+
 let parse_binding_name (pat : pattern) =
   match pat.pat_desc with
   | Tpat_any -> "_"
@@ -838,39 +980,94 @@ let parse_binding_name (pat : pattern) =
   | Tpat_alias (_, ident, _, _) -> ident_name ident
   | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ()
 
+(* Best-effort lowering of a fully-instantiated OCaml [Types.type_expr] into the
+   wire-format [type_expr] surface. This reuses the same encoding that
+   `parse_type_expr_raw` produces for ADT payloads: `(type-var 'a)`,
+   `(type-ref name args)`, `(tuple-type ...)`. Anything we cannot encode
+   becomes `Type_any` so the bridge knows the type is unconstrained. *)
+let rec type_of_ocaml_type_expr (ty : Types.type_expr) : type_expr =
+  match Types.get_desc ty with
+  | Tvar None -> Type_any
+  | Tvar (Some name) -> Type_var ("'" ^ name)
+  | Tunivar None -> Type_any
+  | Tunivar (Some name) -> Type_var ("'" ^ name)
+  | Tlink inner | Tsubst (inner, _) | Tpoly (inner, _) ->
+      type_of_ocaml_type_expr inner
+  | Ttuple items ->
+      Type_tuple (List.map type_of_ocaml_type_expr items)
+  | Tconstr (path, args, _) ->
+      (* Use [Path.last] so the wire emits unqualified names (e.g. [account]
+         rather than [Core.account]); the Core IR lowerer indexes record and
+         ADT declarations by their unqualified name. Path-collisions between
+         distinct user types from different modules are not a concern in the
+         current single-module program model. *)
+      let name = Path.last path in
+      Type_constr
+        {
+          type_name = name;
+          args = List.map type_of_ocaml_type_expr args;
+          is_recursive_ref = false;
+        }
+  | _ -> Type_any
+
+(* ADR-015 option C / R10: the element type stored in a `ref` cell is
+   restricted at the frontend boundary to keep the IR small. This helper
+   accepts the supported shapes and rejects everything else with the still-
+   active E0013 carrying an R10-specific hint. *)
+let is_supported_ref_elem_ty ty =
+  let is_simple = function
+    | Type_constr { type_name = "int"; args = []; _ }
+    | Type_constr { type_name = "bool"; args = []; _ } -> true
+    | _ -> false
+  in
+  match ty with
+  | Type_constr { type_name = "int"; args = []; _ }
+  | Type_constr { type_name = "bool"; args = []; _ } -> true
+  | Type_constr { type_name = "option"; args = [ inner ]; _ } -> is_simple inner
+  | _ -> false
+
+let unsupported_ref_elem ~node_kind ~loc =
+  unsupported ~node_kind ~loc ~code:"E0013"
+    ~message:"this `ref` element type is not part of the ZxCaml subset (R10)"
+    ~hint:"R10 accepts `int`, `bool`, and `option` of int/bool ref cells; refs of string/record/list/tuple are deferred"
+    ()
+
+(* Extracts the element type from a fully-instantiated `'a ref` OCaml type. *)
+let ref_elem_of_ocaml_type (ty : Types.type_expr) : type_expr option =
+  let rec strip ty =
+    match Types.get_desc ty with
+    | Tlink inner | Tsubst (inner, _) | Tpoly (inner, _) -> strip inner
+    | other -> other
+  in
+  match strip ty with
+  | Tconstr (path, [ arg ], _) when String.equal (Path.last path) "ref" ->
+      Some (type_of_ocaml_type_expr arg)
+  | _ -> None
+
 let parse_param (param : function_param) =
   match (param.fp_arg_label, param.fp_kind) with
-  | Nolabel, Tparam_pat pat -> (
-      match pat.pat_desc with
-      | Tpat_any -> Anonymous
-      | Tpat_var (ident, _, _) -> Param (ident_name ident)
-      | Tpat_alias (_, ident, _, _) -> Param (ident_name ident)
+  | Nolabel, Tparam_pat pat ->
+      let ty = Some (type_of_ocaml_type_expr pat.pat_type) in
+      (match pat.pat_desc with
+      | Tpat_any -> (Anonymous, ty)
+      | Tpat_var (ident, _, _) -> (Param (ident_name ident), ty)
+      | Tpat_alias (_, ident, _, _) -> (Param (ident_name ident), ty)
       | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ())
   | _, Tparam_pat pat ->
       unsupported ~node_kind:"labelled-parameter" ~loc:pat.pat_loc ()
   | _, Tparam_optional_default (pat, _) ->
       unsupported ~node_kind:"optional-parameter" ~loc:pat.pat_loc ()
 
-let rec parse_match_scrutinee env (expr : expression) =
-  match expr.exp_desc with
-  | Texp_constant (Const_int n) -> Const_int n
-  | Texp_constant (Const_char value) -> Const_int (Char.code value)
-  | Texp_constant (Const_string (value, _, _)) -> Const_string value
-  | Texp_ident (_, lid, _) -> Var (longident_name lid)
-  | Texp_construct (_lid, constructor, args) ->
-      let name = constructor.Types.cstr_name in
-      if type_env_has_constructor env name then
-        Ctor { name; args = List.map (parse_match_scrutinee env) args }
-      else unsupported ~node_kind:("Texp_construct(" ^ name ^ ")") ~loc:expr.exp_loc ()
-  | Texp_tuple items -> Tuple (List.map (parse_match_scrutinee env) items)
-  | Texp_field (record_expr, _lid, label) ->
-      Field_access
-        {
-          record_expr = parse_match_scrutinee env record_expr;
-          field_name = label.Types.lbl_name;
-        }
-  | Texp_constant constant -> unsupported_constant ~loc:expr.exp_loc constant
-  | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
+(* R11.5: returns true for expression forms that may appear directly as a
+   match scrutinee or `let`-destructure right-hand side without requiring a
+   synthetic-let lift. Anything else is lowered through `parse_expr` and
+   then bound to a fresh `__zxc_*` name by the caller. *)
+let rec is_scrutinee_atom = function
+  | Const_int _ | Const_string _ | Var _ -> true
+  | Ctor { args; _ } -> List.for_all is_scrutinee_atom args
+  | Tuple items -> List.for_all is_scrutinee_atom items
+  | Field_access { record_expr; _ } -> is_scrutinee_atom record_expr
+  | _ -> false
 
 let flatten_or_pattern = function
   | Pat_or alternatives -> alternatives
@@ -1052,13 +1249,16 @@ and parse_record_fields env fields =
     fields []
 
 and split_rec_binding_body = function
-  | Lambda lambda -> (lambda.params, lambda.body)
-  | body -> ([], body)
+  | Lambda lambda -> (lambda.params, lambda.param_types, lambda.body)
+  | body -> ([], [], body)
 
 and parse_let_rec_binding env (binding : value_binding) =
   let rec_name = parse_binding_name binding.vb_pat in
-  let rec_params, rec_body = split_rec_binding_body (parse_expr env binding.vb_expr) in
-  { rec_name; rec_params; rec_body; rec_loc = loc_of_location binding.vb_expr.exp_loc }
+  let rec_params, rec_param_types, rec_body =
+    split_rec_binding_body (parse_expr env binding.vb_expr)
+  in
+  { rec_name; rec_params; rec_param_types; rec_body;
+    rec_loc = loc_of_location binding.vb_expr.exp_loc }
 
 and parse_expr env (expr : expression) =
   match expr.exp_desc with
@@ -1070,11 +1270,15 @@ and parse_expr env (expr : expression) =
       | Some expr -> expr
       | None -> Var (longident_name lid))
   | Texp_function (params, Tfunction_body body) ->
-      let params = List.map parse_param params in
+      let parsed = List.map parse_param params in
+      let params = List.map fst parsed in
+      let param_types = List.map snd parsed in
       let body = parse_expr env body in
-      Lambda { params; body }
+      Lambda { params; param_types; body }
   | Texp_function (params, Tfunction_cases { cases; param; _ }) ->
-      let params = List.map parse_param params @ [ Param (ident_name param) ] in
+      let parsed = List.map parse_param params in
+      let params = List.map fst parsed @ [ Param (ident_name param) ] in
+      let param_types = List.map snd parsed @ [ None ] in
       let body =
         Match
           {
@@ -1082,12 +1286,43 @@ and parse_expr env (expr : expression) =
             arms = List.map (parse_value_match_case env) cases;
           }
       in
-      Lambda { params; body }
-  | Texp_let (Nonrecursive, [ binding ], body) ->
-      let name = parse_binding_name binding.vb_pat in
-      let value = parse_expr env binding.vb_expr in
-      let body = parse_expr env body in
-      Let { name; value; body; is_rec = false }
+      Lambda { params; param_types; body }
+  | Texp_let (Nonrecursive, [ binding ], body) -> (
+      (* R11.5: a `let (a, b, ...) = rhs in body` binding is desugared
+         into a synthetic `let __zxc_match_scrut_<n> = rhs in match
+         __zxc_match_scrut_<n> with (a, b, ...) -> body`. The synthetic
+         name keeps the right-hand side evaluated exactly once. Atomic
+         right-hand sides skip the temporary so the resulting IR is
+         identical to a hand-written `let v = ... in match v with ...`. *)
+      match binding.vb_pat.pat_desc with
+      | Tpat_tuple _ ->
+          let pattern = parse_match_pattern env binding.vb_pat in
+          let value = parse_expr env binding.vb_expr in
+          let body_expr = parse_expr env body in
+          let arm = { pattern; guard = None; body = body_expr } in
+          let scrutinee_expr, wrap =
+            if is_scrutinee_atom value then (value, fun e -> e)
+            else
+              let synth_name =
+                Printf.sprintf "__zxc_match_scrut_%d"
+                  (fresh_match_scrut_id ())
+              in
+              ( Var synth_name,
+                fun match_expr ->
+                  Let
+                    {
+                      name = synth_name;
+                      value;
+                      body = match_expr;
+                      is_rec = false;
+                    } )
+          in
+          wrap (Match { scrutinee = scrutinee_expr; arms = [ arm ] })
+      | _ ->
+          let name = parse_binding_name binding.vb_pat in
+          let value = parse_expr env binding.vb_expr in
+          let body = parse_expr env body in
+          Let { name; value; body; is_rec = false })
   | Texp_let (Recursive, [ binding ], body) ->
       let name = parse_binding_name binding.vb_pat in
       let value = parse_expr env binding.vb_expr in
@@ -1134,16 +1369,138 @@ and parse_expr env (expr : expression) =
     when String.equal (longident_name lid) "Error.encode_code" ->
       parse_error_encode_code env args ~loc:expr.exp_loc
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when (let name = longident_name lid in
+          String.equal name "Array.get" || String.equal name "Stdlib.Array.get") -> (
+      match parse_apply_args env args with
+      | [ array_expr; index_expr ] -> Array_get { array_expr; index_expr }
+      | _ ->
+          unsupported ~node_kind:"Array.get-arity" ~loc:expr.exp_loc
+            ~message:"Array.get requires exactly two unlabeled arguments"
+            ())
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when (let name = longident_name lid in
+          String.equal name "Array.length" || String.equal name "Stdlib.Array.length") -> (
+      match parse_apply_args env args with
+      | [ array_expr ] -> Array_length array_expr
+      | _ ->
+          unsupported ~node_kind:"Array.length-arity" ~loc:expr.exp_loc
+            ~message:"Array.length requires exactly one unlabeled argument"
+            ())
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when (let name = longident_name lid in
+          String.equal name "Array.set" || String.equal name "Stdlib.Array.set"
+          || String.equal name "Array.unsafe_set") -> (
+      (* ADR-015 option B / R9.2: accept `Array.set a i v` writes. *)
+      match parse_apply_args env args with
+      | [ array_expr; index_expr; value_expr ] ->
+          Array_set
+            {
+              set_array_expr = array_expr;
+              set_index_expr = index_expr;
+              set_value_expr = value_expr;
+            }
+      | _ ->
+          unsupported ~node_kind:"Array.set-arity" ~loc:expr.exp_loc
+            ~message:"Array.set requires exactly three unlabeled arguments"
+            ())
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when (let name = longident_name lid in
+          String.equal name "Array.make" || String.equal name "Stdlib.Array.make") -> (
+      (* ADR-015 option B / R9.2: accept `Array.make N init` when the size is
+         a positive int literal known at parse time. Non-literal sizes still
+         raise E0019. *)
+      match parse_apply_args env args with
+      | [ Const_int n; init_expr ] when n >= 0 ->
+          Array_make { make_size = n; make_init = init_expr }
+      | [ Const_int _; _ ] ->
+          unsupported ~node_kind:"Array.make-negative" ~loc:expr.exp_loc
+            ~message:"Array.make requires a non-negative size literal"
+            ()
+      | [ _; _ ] ->
+          unsupported ~node_kind:"Texp_array" ~loc:expr.exp_loc
+            ~message:"Array.make's size must be an integer literal in R9.2"
+            ~hint:"ADR-015 option B/R9.2 only accepts statically-known sizes; dynamic-size Array.make is deferred"
+            ()
+      | _ ->
+          unsupported ~node_kind:"Array.make-arity" ~loc:expr.exp_loc
+            ~message:"Array.make requires exactly two unlabeled arguments"
+            ())
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, _args)
+    when (let name = longident_name lid in
+          String.equal name "Array.unsafe_get" || String.equal name "Array.init") ->
+      unsupported ~node_kind:"Texp_array" ~loc:expr.exp_loc
+        ~message:"Array.init / Array.unsafe_get are not part of the ZxCaml subset"
+        ~hint:"Use [| ... |], Array.get, Array.length, Array.set, or Array.make instead"
+        ()
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when is_whitelisted_prim (longident_last lid) ->
       Prim { op = longident_last lid; args = parse_apply_args env args }
-  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, _args)
-    when is_mutation_primitive (longident_last lid) ->
-      unsupported_mutation ~feature:(longident_last lid) ~node_kind:"Texp_apply"
-        ~loc:expr.exp_loc
+  | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
+    when is_mutation_primitive (longident_last lid) -> (
+      (* ADR-015 option C / R10: desugar `ref e`, `!r`, `r := v` into typed
+         ref-cell Core IR nodes. The element type is extracted from the
+         OCaml type of the surrounding expression and restricted to the R10
+         whitelist; everything else falls through to E0013. *)
+      let op = longident_last lid in
+      let parsed = parse_apply_args env args in
+      match op, parsed with
+      | "ref", [ init ] -> (
+          let elem_ty = type_of_ocaml_type_expr expr.exp_type in
+          let elem_ty =
+            match elem_ty with
+            | Type_constr { type_name = "ref"; args = [ inner ]; _ } -> inner
+            | other -> other
+          in
+          if not (is_supported_ref_elem_ty elem_ty) then
+            unsupported_ref_elem ~node_kind:"Texp_apply(ref)" ~loc:expr.exp_loc;
+          Ref_make { ref_elem_ty = elem_ty; ref_init = init })
+      | "!", [ target ] ->
+          (* Validate the element type via the ref target's OCaml type. *)
+          let target_ocaml_ty =
+            match args with
+            | [ (_, Some arg) ] -> Some arg.exp_type
+            | _ -> None
+          in
+          (match target_ocaml_ty with
+           | Some ty -> (
+               match ref_elem_of_ocaml_type ty with
+               | Some elem_ty ->
+                   if not (is_supported_ref_elem_ty elem_ty) then
+                     unsupported_ref_elem ~node_kind:"Texp_apply(!)" ~loc:expr.exp_loc
+               | None -> ())
+           | None -> ());
+          Ref_get target
+      | ":=", [ target; value ] ->
+          let target_ocaml_ty =
+            match args with
+            | (_, Some arg) :: _ -> Some arg.exp_type
+            | _ -> None
+          in
+          (match target_ocaml_ty with
+           | Some ty -> (
+               match ref_elem_of_ocaml_type ty with
+               | Some elem_ty ->
+                   if not (is_supported_ref_elem_ty elem_ty) then
+                     unsupported_ref_elem ~node_kind:"Texp_apply(:=)" ~loc:expr.exp_loc
+               | None -> ())
+           | None -> ());
+          Ref_set { ref_set_target = target; ref_set_value = value }
+      | _ ->
+          unsupported_mutation ~feature:op ~node_kind:"Texp_apply"
+            ~loc:expr.exp_loc)
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args) -> (
       match tuple_projection_index (longident_last lid) with
       | Some index -> parse_tuple_projection_args env ~index args ~loc:expr.exp_loc
-      | None -> App { callee = Var (longident_name lid); args = parse_apply_args env args })
+      | None ->
+          let callee_name = longident_name lid in
+          let args =
+            match labelled_callee_canonical_order callee_name with
+            | Some canonical_order ->
+                reorder_labelled_args ~callee:callee_name ~canonical_order args
+                  ~loc:expr.exp_loc
+            | None -> args
+          in
+          App { callee = Var callee_name; args = parse_apply_args env args })
   | Texp_apply (callee, args) ->
       App { callee = parse_expr env callee; args = parse_apply_args env args }
   | Texp_ifthenelse (cond, then_branch, Some else_branch) ->
@@ -1161,9 +1518,27 @@ and parse_expr env (expr : expression) =
           else_branch = Ctor { name = "()"; args = [] };
         }
   | Texp_match (scrutinee, cases, _) ->
-      let scrutinee = parse_match_scrutinee env scrutinee in
+      (* R11.5: lift non-atom scrutinees (e.g. function applications,
+         dereferences, `if`/`match`/`let` bodies) into a synthetic
+         `__zxc_match_scrut_<n>` binding before the match. Atom-shaped
+         scrutinees pass through unchanged so existing sexp output and
+         downstream lowering paths stay byte-identical for the common
+         case. *)
+      let scrutinee_expr = parse_expr env scrutinee in
       let arms = List.map (parse_match_case env) cases in
-      Match { scrutinee; arms }
+      if is_scrutinee_atom scrutinee_expr then
+        Match { scrutinee = scrutinee_expr; arms }
+      else
+        let synth_name =
+          Printf.sprintf "__zxc_match_scrut_%d" (fresh_match_scrut_id ())
+        in
+        Let
+          {
+            name = synth_name;
+            value = scrutinee_expr;
+            body = Match { scrutinee = Var synth_name; arms };
+            is_rec = false;
+          }
   | Texp_sequence (first, second) ->
       Let
         {
@@ -1173,6 +1548,180 @@ and parse_expr env (expr : expression) =
           is_rec = false;
         }
   | Texp_assert (condition, _) -> Assert (parse_expr env condition)
+  | Texp_for (ident, _pat, lo_expr, hi_expr, direction, body_expr) ->
+      (* ADR-015 option D: desugar `for` into a self-recursive `let rec`. The
+         recursive helper is tail-called at the back edge so the ANF tail-call
+         pass (`src/core/anf/tail.zig`) lowers it to `while (true)` in
+         generated Zig.
+
+         Implementation note: the helper returns `int 0` rather than `()` so
+         the lowered lambda has an `int` return type. The Zig codegen has
+         existing limitations around unit-returning recursive lambdas, and
+         the `for`/`while` surface always appears in a value-discard
+         position in practice (OCaml's `for` is `unit`, but downstream code
+         either wraps with `let _ = ... in ...` or sequences with `;`, both
+         of which throw the value away). The discarded `int 0` is observably
+         equivalent to a discarded `()`. *)
+      let loop_id = fresh_loop_id () in
+      let loop_name = Printf.sprintf "__zxc_loop_%d" loop_id in
+      let lo_name = Printf.sprintf "__zxc_loop_lo_%d" loop_id in
+      let bound_name = Printf.sprintf "__zxc_loop_bound_%d" loop_id in
+      let iter_name = ident_name ident in
+      let lo_value = parse_expr env lo_expr in
+      let hi_value = parse_expr env hi_expr in
+      let body_value = parse_expr env body_expr in
+      let op_cmp, op_step =
+        match direction with
+        | Upto -> (">", "+")
+        | Downto -> ("<", "-")
+      in
+      let recursive_call =
+        App
+          {
+            callee = Var loop_name;
+            args =
+              [
+                Prim
+                  {
+                    op = op_step;
+                    args = [ Var iter_name; Const_int 1 ];
+                  };
+              ];
+          }
+      in
+      let loop_body =
+        If
+          {
+            cond =
+              Prim { op = op_cmp; args = [ Var iter_name; Var bound_name ] };
+            then_branch = Const_int 0;
+            else_branch =
+              Let
+                {
+                  name = "_";
+                  value = body_value;
+                  body = recursive_call;
+                  is_rec = false;
+                };
+          }
+      in
+      let loop_lambda =
+        Lambda
+          {
+            params = [ Param iter_name ];
+            param_types =
+              [ Some (Type_constr { type_name = "int"; args = []; is_recursive_ref = false }) ];
+            body = loop_body;
+          }
+      in
+      Let
+        {
+          name = lo_name;
+          value = lo_value;
+          body =
+            Let
+              {
+                name = bound_name;
+                value = hi_value;
+                body =
+                  Let
+                    {
+                      name = loop_name;
+                      value = loop_lambda;
+                      body =
+                        App
+                          {
+                            callee = Var loop_name;
+                            args = [ Var lo_name ];
+                          };
+                      is_rec = true;
+                    };
+                is_rec = false;
+              };
+          is_rec = false;
+        }
+  | Texp_array elements ->
+      (* ADR-015 option B / R9.1: accept `[| ... |]` array literals whose
+         elements are `int`-typed expressions. Element type is determined by
+         OCaml's inference; we sanity-check using the constant payload shape
+         and reject anything we can structurally see is not int via E0040. *)
+      let elem_check elem =
+        match elem.exp_desc with
+        | Texp_constant (Const_string _) ->
+            unsupported ~node_kind:"Array.non_int_elem" ~loc:elem.exp_loc
+              ~message:"array element type is not `int`; only int arrays are supported in R9.1"
+              ()
+        | Texp_constant (Const_float _) ->
+            unsupported ~node_kind:"Array.non_int_elem" ~loc:elem.exp_loc
+              ~message:"array element type is not `int`; only int arrays are supported in R9.1"
+              ()
+        | _ -> ()
+      in
+      List.iter elem_check elements;
+      Array_lit (List.map (parse_expr env) elements)
+  | Texp_while (cond_expr, body_expr) ->
+      (* ADR-015 option D: desugar `while cond do body done` into a
+         single-argument self-recursive `let rec` whose body re-tests `cond`
+         on every iteration. The back-edge tail call is rewritten to
+         `while (true)` by the ANF tail-call pass. See the comment on
+         `Texp_for` for why the helper returns `int 0` rather than `()`. *)
+      let loop_id = fresh_loop_id () in
+      let loop_name = Printf.sprintf "__zxc_loop_%d" loop_id in
+      let cond_value = parse_expr env cond_expr in
+      let body_value = parse_expr env body_expr in
+      (* Use an int counter parameter rather than a true unit parameter:
+         the OCaml `while` semantics permit any value as long as it is
+         discarded by the caller, and using an `int` here sidesteps the
+         backend's existing limitation around `unit`/`void` parameter
+         lowering. The else branch returns `counter + 0` so the parameter is
+         used in an `int` context regardless of whether `cond` is a literal
+         (e.g. `while false`). Without this anchor the inferred lambda
+         signature defaults to `unit -> ...` when DCE collapses the body. *)
+      (* Avoid a leading underscore in the parameter name: the ANF lowerer
+         types `_`-prefixed lambda params as `unit`, but we need this counter
+         to be `int` so the desugared loop lowers to a clean
+         `int -> int` self-recursive function. *)
+      let counter_name = Printf.sprintf "zxc_loop_counter_%d" loop_id in
+      let recursive_call =
+        App
+          {
+            callee = Var loop_name;
+            args =
+              [ Prim { op = "+"; args = [ Var counter_name; Const_int 1 ] } ];
+          }
+      in
+      let loop_body =
+        If
+          {
+            cond = cond_value;
+            then_branch =
+              Let
+                {
+                  name = "_";
+                  value = body_value;
+                  body = recursive_call;
+                  is_rec = false;
+                };
+            else_branch =
+              Prim { op = "+"; args = [ Var counter_name; Const_int 0 ] };
+          }
+      in
+      let loop_lambda =
+        Lambda
+          {
+            params = [ Param counter_name ];
+            param_types =
+              [ Some (Type_constr { type_name = "int"; args = []; is_recursive_ref = false }) ];
+            body = loop_body;
+          }
+      in
+      Let
+        {
+          name = loop_name;
+          value = loop_lambda;
+          body = App { callee = Var loop_name; args = [ Const_int 0 ] };
+          is_rec = true;
+        }
   | other -> unsupported ~node_kind:(expr_kind other) ~loc:expr.exp_loc ()
 
 let type_var_name name = "'" ^ name
@@ -1203,6 +1752,7 @@ let rec substitute_type_vars substitutions = function
       match StringMap.find_opt name substitutions with
       | Some replacement -> replacement
       | None -> ty)
+  | Type_any -> Type_any
   | Type_tuple items -> Type_tuple (List.map (substitute_type_vars substitutions) items)
   | Type_constr constr ->
       Type_constr
@@ -1221,6 +1771,7 @@ let instantiate_alias binding args =
 
 let rec resolve_type_aliases env seen = function
   | Type_var _ as ty -> ty
+  | Type_any -> Type_any
   | Type_tuple items -> Type_tuple (List.map (resolve_type_aliases env seen) items)
   | Type_constr constr -> (
       let args = List.map (resolve_type_aliases env seen) constr.args in
@@ -1248,7 +1799,7 @@ let parse_type_param (param, _) =
         ()
 
 let rec type_expr_has_recursive_ref = function
-  | Type_var _ -> false
+  | Type_var _ | Type_any -> false
   | Type_constr constr ->
       constr.is_recursive_ref
       || List.exists type_expr_has_recursive_ref constr.args
@@ -1473,7 +2024,7 @@ let parse_external_decl (value : value_description) =
     }
 
 let rec type_expr_uses_type type_name = function
-  | Type_var _ -> false
+  | Type_var _ | Type_any -> false
   | Type_tuple items -> List.exists (type_expr_uses_type type_name) items
   | Type_constr constr ->
       String.equal constr.type_name type_name
@@ -1540,6 +2091,25 @@ let rec expr_uses_record_fields field_names = function
   | Match match_expr ->
       expr_uses_record_fields field_names match_expr.scrutinee
       || List.exists (match_arm_uses_record_fields field_names) match_expr.arms
+  | Array_lit elems ->
+      List.exists (expr_uses_record_fields field_names) elems
+  | Array_get { array_expr; index_expr } ->
+      expr_uses_record_fields field_names array_expr
+      || expr_uses_record_fields field_names index_expr
+  | Array_length array_expr ->
+      expr_uses_record_fields field_names array_expr
+  | Array_set { set_array_expr; set_index_expr; set_value_expr } ->
+      expr_uses_record_fields field_names set_array_expr
+      || expr_uses_record_fields field_names set_index_expr
+      || expr_uses_record_fields field_names set_value_expr
+  | Array_make { make_size = _; make_init } ->
+      expr_uses_record_fields field_names make_init
+  | Ref_make { ref_init; _ } ->
+      expr_uses_record_fields field_names ref_init
+  | Ref_get target -> expr_uses_record_fields field_names target
+  | Ref_set { ref_set_target; ref_set_value } ->
+      expr_uses_record_fields field_names ref_set_target
+      || expr_uses_record_fields field_names ref_set_value
 
 and match_arm_uses_record_fields field_names arm =
   pattern_uses_record_fields field_names arm.pattern
@@ -1600,6 +2170,20 @@ let rec expr_uses_var var_name = function
   | Match match_expr ->
       expr_uses_var var_name match_expr.scrutinee
       || List.exists (match_arm_uses_var var_name) match_expr.arms
+  | Array_lit elems -> List.exists (expr_uses_var var_name) elems
+  | Array_get { array_expr; index_expr } ->
+      expr_uses_var var_name array_expr || expr_uses_var var_name index_expr
+  | Array_length array_expr -> expr_uses_var var_name array_expr
+  | Array_set { set_array_expr; set_index_expr; set_value_expr } ->
+      expr_uses_var var_name set_array_expr
+      || expr_uses_var var_name set_index_expr
+      || expr_uses_var var_name set_value_expr
+  | Array_make { make_size = _; make_init } ->
+      expr_uses_var var_name make_init
+  | Ref_make { ref_init; _ } -> expr_uses_var var_name ref_init
+  | Ref_get target -> expr_uses_var var_name target
+  | Ref_set { ref_set_target; ref_set_value } ->
+      expr_uses_var var_name ref_set_target || expr_uses_var var_name ref_set_value
 
 and match_arm_uses_var var_name arm =
   Option.fold ~none:false ~some:(expr_uses_var var_name) arm.guard

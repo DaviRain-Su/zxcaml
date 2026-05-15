@@ -301,6 +301,58 @@ const InlineContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
             } },
+            .ArrayLit => |array_lit| blk: {
+                const elems = try self.allocator().alloc(*const ir.Expr, array_lit.elems.len);
+                for (array_lit.elems, 0..) |elem, index| elems[index] = try self.inlineExprPtr(elem.*);
+                break :blk .{ .ArrayLit = .{
+                    .elem_ty = array_lit.elem_ty,
+                    .elems = elems,
+                    .ty = array_lit.ty,
+                    .layout = array_lit.layout,
+                } };
+            },
+            .ArrayGet => |array_get| .{ .ArrayGet = .{
+                .arr = try self.inlineExprPtr(array_get.arr.*),
+                .idx = try self.inlineExprPtr(array_get.idx.*),
+                .ty = array_get.ty,
+                .layout = array_get.layout,
+            } },
+            .ArrayLength => |array_length| .{ .ArrayLength = .{
+                .arr = try self.inlineExprPtr(array_length.arr.*),
+                .ty = array_length.ty,
+                .layout = array_length.layout,
+            } },
+            .ArraySet => |array_set| .{ .ArraySet = .{
+                .arr = try self.inlineExprPtr(array_set.arr.*),
+                .idx = try self.inlineExprPtr(array_set.idx.*),
+                .value = try self.inlineExprPtr(array_set.value.*),
+                .ty = array_set.ty,
+                .layout = array_set.layout,
+            } },
+            .ArrayMake => |array_make| .{ .ArrayMake = .{
+                .elem_ty = array_make.elem_ty,
+                .size = array_make.size,
+                .init = try self.inlineExprPtr(array_make.init.*),
+                .ty = array_make.ty,
+                .layout = array_make.layout,
+            } },
+            .RefMake => |ref_make| .{ .RefMake = .{
+                .elem_ty = ref_make.elem_ty,
+                .init = try self.inlineExprPtr(ref_make.init.*),
+                .ty = ref_make.ty,
+                .layout = ref_make.layout,
+            } },
+            .RefGet => |ref_get| .{ .RefGet = .{
+                .target = try self.inlineExprPtr(ref_get.target.*),
+                .ty = ref_get.ty,
+                .layout = ref_get.layout,
+            } },
+            .RefSet => |ref_set| .{ .RefSet = .{
+                .target = try self.inlineExprPtr(ref_set.target.*),
+                .value = try self.inlineExprPtr(ref_set.value.*),
+                .ty = ref_set.ty,
+                .layout = ref_set.layout,
+            } },
         };
     }
 
@@ -709,6 +761,58 @@ const AlphaContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
             } },
+            .ArrayLit => |array_lit| blk: {
+                const elems = try self.allocator().alloc(*const ir.Expr, array_lit.elems.len);
+                for (array_lit.elems, 0..) |elem, index| elems[index] = try self.cloneExprPtr(elem.*);
+                break :blk .{ .ArrayLit = .{
+                    .elem_ty = array_lit.elem_ty,
+                    .elems = elems,
+                    .ty = array_lit.ty,
+                    .layout = array_lit.layout,
+                } };
+            },
+            .ArrayGet => |array_get| .{ .ArrayGet = .{
+                .arr = try self.cloneExprPtr(array_get.arr.*),
+                .idx = try self.cloneExprPtr(array_get.idx.*),
+                .ty = array_get.ty,
+                .layout = array_get.layout,
+            } },
+            .ArrayLength => |array_length| .{ .ArrayLength = .{
+                .arr = try self.cloneExprPtr(array_length.arr.*),
+                .ty = array_length.ty,
+                .layout = array_length.layout,
+            } },
+            .ArraySet => |array_set| .{ .ArraySet = .{
+                .arr = try self.cloneExprPtr(array_set.arr.*),
+                .idx = try self.cloneExprPtr(array_set.idx.*),
+                .value = try self.cloneExprPtr(array_set.value.*),
+                .ty = array_set.ty,
+                .layout = array_set.layout,
+            } },
+            .ArrayMake => |array_make| .{ .ArrayMake = .{
+                .elem_ty = array_make.elem_ty,
+                .size = array_make.size,
+                .init = try self.cloneExprPtr(array_make.init.*),
+                .ty = array_make.ty,
+                .layout = array_make.layout,
+            } },
+            .RefMake => |ref_make| .{ .RefMake = .{
+                .elem_ty = ref_make.elem_ty,
+                .init = try self.cloneExprPtr(ref_make.init.*),
+                .ty = ref_make.ty,
+                .layout = ref_make.layout,
+            } },
+            .RefGet => |ref_get| .{ .RefGet = .{
+                .target = try self.cloneExprPtr(ref_get.target.*),
+                .ty = ref_get.ty,
+                .layout = ref_get.layout,
+            } },
+            .RefSet => |ref_set| .{ .RefSet = .{
+                .target = try self.cloneExprPtr(ref_set.target.*),
+                .value = try self.cloneExprPtr(ref_set.value.*),
+                .ty = ref_set.ty,
+                .layout = ref_set.layout,
+            } },
         };
     }
 
@@ -970,6 +1074,24 @@ fn collectFreeNames(
             try collectFreeNames(allocator, field_set.account_expr.*, bound, bound_changes, free_names, free_changes);
             try collectFreeNames(allocator, field_set.value.*, bound, bound_changes, free_names, free_changes);
         },
+        .ArrayLit => |array_lit| try collectFreeNamesInExprs(allocator, array_lit.elems, bound, bound_changes, free_names, free_changes),
+        .ArrayGet => |array_get| {
+            try collectFreeNames(allocator, array_get.arr.*, bound, bound_changes, free_names, free_changes);
+            try collectFreeNames(allocator, array_get.idx.*, bound, bound_changes, free_names, free_changes);
+        },
+        .ArrayLength => |array_length| try collectFreeNames(allocator, array_length.arr.*, bound, bound_changes, free_names, free_changes),
+        .ArraySet => |array_set| {
+            try collectFreeNames(allocator, array_set.arr.*, bound, bound_changes, free_names, free_changes);
+            try collectFreeNames(allocator, array_set.idx.*, bound, bound_changes, free_names, free_changes);
+            try collectFreeNames(allocator, array_set.value.*, bound, bound_changes, free_names, free_changes);
+        },
+        .ArrayMake => |array_make| try collectFreeNames(allocator, array_make.init.*, bound, bound_changes, free_names, free_changes),
+        .RefMake => |ref_make| try collectFreeNames(allocator, ref_make.init.*, bound, bound_changes, free_names, free_changes),
+        .RefGet => |ref_get| try collectFreeNames(allocator, ref_get.target.*, bound, bound_changes, free_names, free_changes),
+        .RefSet => |ref_set| {
+            try collectFreeNames(allocator, ref_set.target.*, bound, bound_changes, free_names, free_changes);
+            try collectFreeNames(allocator, ref_set.value.*, bound, bound_changes, free_names, free_changes);
+        },
     }
 }
 
@@ -1061,6 +1183,24 @@ fn boundedNodeCount(expr: ir.Expr, max_nodes: usize) ?usize {
             count += boundedNodeCount(field_set.account_expr.*, max_nodes) orelse return null;
             count += boundedNodeCount(field_set.value.*, max_nodes) orelse return null;
         },
+        .ArrayLit => |array_lit| count += boundedNodeCountInExprs(array_lit.elems, max_nodes) orelse return null,
+        .ArrayGet => |array_get| {
+            count += boundedNodeCount(array_get.arr.*, max_nodes) orelse return null;
+            count += boundedNodeCount(array_get.idx.*, max_nodes) orelse return null;
+        },
+        .ArrayLength => |array_length| count += boundedNodeCount(array_length.arr.*, max_nodes) orelse return null,
+        .ArraySet => |array_set| {
+            count += boundedNodeCount(array_set.arr.*, max_nodes) orelse return null;
+            count += boundedNodeCount(array_set.idx.*, max_nodes) orelse return null;
+            count += boundedNodeCount(array_set.value.*, max_nodes) orelse return null;
+        },
+        .ArrayMake => |array_make| count += boundedNodeCount(array_make.init.*, max_nodes) orelse return null,
+        .RefMake => |ref_make| count += boundedNodeCount(ref_make.init.*, max_nodes) orelse return null,
+        .RefGet => |ref_get| count += boundedNodeCount(ref_get.target.*, max_nodes) orelse return null,
+        .RefSet => |ref_set| {
+            count += boundedNodeCount(ref_set.target.*, max_nodes) orelse return null;
+            count += boundedNodeCount(ref_set.value.*, max_nodes) orelse return null;
+        },
     }
     if (count > max_nodes) return null;
     return count;
@@ -1105,6 +1245,14 @@ fn containsLet(expr: ir.Expr) bool {
         .RecordField => |record_field| containsLet(record_field.record_expr.*),
         .RecordUpdate => |record_update| containsLet(record_update.base_expr.*) or anyRecordFieldContainsLet(record_update.fields),
         .AccountFieldSet => |field_set| containsLet(field_set.account_expr.*) or containsLet(field_set.value.*),
+        .ArrayLit => |array_lit| anyContainsLet(array_lit.elems),
+        .ArrayGet => |array_get| containsLet(array_get.arr.*) or containsLet(array_get.idx.*),
+        .ArrayLength => |array_length| containsLet(array_length.arr.*),
+        .ArraySet => |array_set| containsLet(array_set.arr.*) or containsLet(array_set.idx.*) or containsLet(array_set.value.*),
+        .ArrayMake => |array_make| containsLet(array_make.init.*),
+        .RefMake => |ref_make| containsLet(ref_make.init.*),
+        .RefGet => |ref_get| containsLet(ref_get.target.*),
+        .RefSet => |ref_set| containsLet(ref_set.target.*) or containsLet(ref_set.value.*),
     };
 }
 
@@ -1149,6 +1297,21 @@ fn containsAppOrMutation(expr: ir.Expr) bool {
         .Record => |record_expr| anyRecordFieldContainsAppOrMutation(record_expr.fields),
         .RecordField => |record_field| containsAppOrMutation(record_field.record_expr.*),
         .RecordUpdate => |record_update| containsAppOrMutation(record_update.base_expr.*) or anyRecordFieldContainsAppOrMutation(record_update.fields),
+        // ArrayLit allocates and ArrayGet may trap; conservatively treat
+        // both as "AppOrMutation-like" so DCE/inline don't unsafely sink them.
+        .ArrayLit => true,
+        .ArrayGet => true,
+        .ArrayLength => |array_length| containsAppOrMutation(array_length.arr.*),
+        // ArraySet mutates and ArrayMake allocates+fills; treat as opaque.
+        .ArraySet => true,
+        .ArrayMake => true,
+        // ADR-015 option C / R10 refs: RefMake allocates and RefSet mutates,
+        // so treat both as opaque side-effecting. RefGet is conservative
+        // here: a read after a write is not observably commutable, so the
+        // inliner treats it like an effectful operand too.
+        .RefMake => true,
+        .RefGet => true,
+        .RefSet => true,
     };
 }
 
@@ -1225,6 +1388,14 @@ fn containsAppThroughParam(expr: ir.Expr, params: []const ir.Param) bool {
         .RecordField => |record_field| containsAppThroughParam(record_field.record_expr.*, params),
         .RecordUpdate => |record_update| containsAppThroughParam(record_update.base_expr.*, params) or anyRecordFieldContainsAppThroughParam(record_update.fields, params),
         .AccountFieldSet => |field_set| containsAppThroughParam(field_set.account_expr.*, params) or containsAppThroughParam(field_set.value.*, params),
+        .ArrayLit => |array_lit| anyContainsAppThroughParam(array_lit.elems, params),
+        .ArrayGet => |array_get| containsAppThroughParam(array_get.arr.*, params) or containsAppThroughParam(array_get.idx.*, params),
+        .ArrayLength => |array_length| containsAppThroughParam(array_length.arr.*, params),
+        .ArraySet => |array_set| containsAppThroughParam(array_set.arr.*, params) or containsAppThroughParam(array_set.idx.*, params) or containsAppThroughParam(array_set.value.*, params),
+        .ArrayMake => |array_make| containsAppThroughParam(array_make.init.*, params),
+        .RefMake => |ref_make| containsAppThroughParam(ref_make.init.*, params),
+        .RefGet => |ref_get| containsAppThroughParam(ref_get.target.*, params),
+        .RefSet => |ref_set| containsAppThroughParam(ref_set.target.*, params) or containsAppThroughParam(ref_set.value.*, params),
     };
 }
 
@@ -1284,6 +1455,8 @@ fn tyInlineSafe(ty: ir.Ty) bool {
             }
             break :blk tyInlineSafe(arrow.ret.*);
         },
+        .Array => |elem| tyInlineSafe(elem.*),
+        .Ref => |elem| tyInlineSafe(elem.*),
     };
 }
 
@@ -1351,6 +1524,14 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }
 
@@ -1373,5 +1554,13 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }

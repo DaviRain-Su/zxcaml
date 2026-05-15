@@ -33,10 +33,9 @@ pub const VTable = struct {
     emitModule: *const fn (ptr: *anyopaque, module: ir.Module) anyerror![]const u8,
 };
 
-/// Standard error used when a backend does not support direct evaluation.
-pub fn unsupportedEvalModule(_: *anyopaque, _: ir.Module) !u64 {
-    return error.NotImplemented;
-}
+// `unsupportedEvalModule` was removed alongside the deleted backend stubs
+// (`llvm_stub.zig`, `ocaml_stub.zig`); reintroduce it next to its first real
+// non-evaluating backend.
 
 /// Standard error used when a backend does not support source emission.
 pub fn unsupportedEmitModule(_: *anyopaque, _: ir.Module) ![]const u8 {

@@ -336,6 +336,16 @@ fn emitAnchorTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty
             try emitAnchorTy(out, allocator, arrow.ret.*);
             try append(out, allocator, "]}}");
         },
+        // ADR-015 R9.1: model read-only arrays as Anchor `vec` for the IDL.
+        .Array => |elem| {
+            try append(out, allocator, "{\"vec\":");
+            try emitAnchorTy(out, allocator, elem.*);
+            try append(out, allocator, "}");
+        },
+        // ADR-015 option C / R10: ref cells are not part of the on-wire
+        // Anchor IDL surface (they are an internal mutable storage form),
+        // so render them as their underlying element type.
+        .Ref => |elem| try emitAnchorTy(out, allocator, elem.*),
     }
 }
 
@@ -443,6 +453,18 @@ fn accountFlagReferenced(expr: ir.Expr, param_name: []const u8, flag_name: []con
         .Record => |record| recordFieldsFlagReferenced(record.fields, param_name, flag_name),
         .RecordUpdate => |record_update| accountFlagReferenced(record_update.base_expr.*, param_name, flag_name) or
             recordFieldsFlagReferenced(record_update.fields, param_name, flag_name),
+        .ArrayLit => |array_lit| exprSliceFlagReferenced(array_lit.elems, param_name, flag_name),
+        .ArrayGet => |array_get| accountFlagReferenced(array_get.arr.*, param_name, flag_name) or
+            accountFlagReferenced(array_get.idx.*, param_name, flag_name),
+        .ArrayLength => |array_length| accountFlagReferenced(array_length.arr.*, param_name, flag_name),
+        .ArraySet => |array_set| accountFlagReferenced(array_set.arr.*, param_name, flag_name) or
+            accountFlagReferenced(array_set.idx.*, param_name, flag_name) or
+            accountFlagReferenced(array_set.value.*, param_name, flag_name),
+        .ArrayMake => |array_make| accountFlagReferenced(array_make.init.*, param_name, flag_name),
+        .RefMake => |ref_make| accountFlagReferenced(ref_make.init.*, param_name, flag_name),
+        .RefGet => |ref_get| accountFlagReferenced(ref_get.target.*, param_name, flag_name),
+        .RefSet => |ref_set| accountFlagReferenced(ref_set.target.*, param_name, flag_name) or
+            accountFlagReferenced(ref_set.value.*, param_name, flag_name),
         .Constant, .Var => false,
     };
 }
@@ -498,6 +520,18 @@ fn accountParamMutated(expr: ir.Expr, param_name: []const u8) bool {
         .RecordField => |field| accountParamMutated(field.record_expr.*, param_name),
         .RecordUpdate => |record_update| accountParamMutated(record_update.base_expr.*, param_name) or
             recordFieldsMutateAccount(record_update.fields, param_name),
+        .ArrayLit => |array_lit| exprSliceMutatesAccount(array_lit.elems, param_name),
+        .ArrayGet => |array_get| accountParamMutated(array_get.arr.*, param_name) or
+            accountParamMutated(array_get.idx.*, param_name),
+        .ArrayLength => |array_length| accountParamMutated(array_length.arr.*, param_name),
+        .ArraySet => |array_set| accountParamMutated(array_set.arr.*, param_name) or
+            accountParamMutated(array_set.idx.*, param_name) or
+            accountParamMutated(array_set.value.*, param_name),
+        .ArrayMake => |array_make| accountParamMutated(array_make.init.*, param_name),
+        .RefMake => |ref_make| accountParamMutated(ref_make.init.*, param_name),
+        .RefGet => |ref_get| accountParamMutated(ref_get.target.*, param_name),
+        .RefSet => |ref_set| accountParamMutated(ref_set.target.*, param_name) or
+            accountParamMutated(ref_set.value.*, param_name),
         .Constant, .Var => false,
     };
 }

@@ -10,14 +10,26 @@
 open Format
 open Zxc_subset
 
-type wire_version = Wire_1_1 | Wire_1_2
+type wire_version = Wire_1_1 | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5
 
-let version = function Wire_1_1 -> "1.1" | Wire_1_2 -> "1.2"
+let version = function
+  | Wire_1_1 -> "1.1"
+  | Wire_1_2 -> "1.2"
+  | Wire_1_3 -> "1.3"
+  | Wire_1_4 -> "1.4"
+  | Wire_1_5 -> "1.5"
 
 let wire_version_of_string = function
   | "1.1" -> Some Wire_1_1
   | "1.2" -> Some Wire_1_2
+  | "1.3" -> Some Wire_1_3
+  | "1.4" -> Some Wire_1_4
+  | "1.5" -> Some Wire_1_5
   | _ -> None
+
+let emit_param_types = function
+  | Wire_1_1 | Wire_1_2 -> false
+  | Wire_1_3 | Wire_1_4 | Wire_1_5 -> true
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
@@ -35,86 +47,175 @@ let pp_loc ppf (loc : loc) =
   fprintf ppf "(loc %S %d %d %d %d)" loc.file loc.line loc.col loc.end_line
     loc.end_col
 
-let rec pp_expr ppf = function
+let rec pp_type_expr ppf = function
+  | Type_var name -> fprintf ppf "(type-var %a)" pp_atom name
+  | Type_any -> fprintf ppf "(any)"
+  | Type_tuple items ->
+      fprintf ppf "(tuple-type";
+      List.iter (fun item -> fprintf ppf " %a" pp_type_expr item) items;
+      fprintf ppf ")"
+  | Type_constr constr ->
+      fprintf ppf "(%s %a"
+        (if constr.is_recursive_ref then "recursive-ref" else "type-ref")
+        pp_atom constr.type_name;
+      List.iter (fun arg -> fprintf ppf " %a" pp_type_expr arg) constr.args;
+      fprintf ppf ")"
+
+let rec pp_expr ~wire ppf = function
   | Const_int n -> fprintf ppf "(const-int %d)" n
   | Const_string value -> fprintf ppf "(const-string %S)" value
   | Var name -> fprintf ppf "(var %a)" pp_atom name
   | Lambda lambda ->
       fprintf ppf "(lambda (";
-      pp_params ppf lambda.params;
-      fprintf ppf ") %a)" pp_expr lambda.body
+      pp_lambda_params ~wire ppf lambda.params lambda.param_types;
+      fprintf ppf ") %a)" (pp_expr ~wire) lambda.body
   | App app ->
-      fprintf ppf "(app %a" pp_expr app.callee;
-      List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) app.args;
+      fprintf ppf "(app %a" (pp_expr ~wire) app.callee;
+      List.iter (fun arg -> fprintf ppf " %a" (pp_expr ~wire) arg) app.args;
       fprintf ppf ")"
   | Let let_expr ->
       fprintf ppf "(%s %a %a %a)"
         (if let_expr.is_rec then "let-rec" else "let")
-        pp_atom let_expr.name pp_expr let_expr.value
-        pp_expr let_expr.body
+        pp_atom let_expr.name (pp_expr ~wire) let_expr.value
+        (pp_expr ~wire) let_expr.body
   | Let_rec_group group ->
       fprintf ppf "(Let_rec_group (bindings";
       List.iter
-        (fun binding -> fprintf ppf " %a" pp_let_rec_binding binding)
+        (fun binding -> fprintf ppf " %a" (pp_let_rec_binding ~wire) binding)
         group.bindings;
-      fprintf ppf ") %a)" pp_expr group.group_body
+      fprintf ppf ") %a)" (pp_expr ~wire) group.group_body
   | If if_expr ->
-      fprintf ppf "(if %a %a %a)" pp_expr if_expr.cond pp_expr
-        if_expr.then_branch pp_expr if_expr.else_branch
+      fprintf ppf "(if %a %a %a)" (pp_expr ~wire) if_expr.cond (pp_expr ~wire)
+        if_expr.then_branch (pp_expr ~wire) if_expr.else_branch
   | Prim prim ->
       fprintf ppf "(prim %a" pp_atom prim.op;
-      List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) prim.args;
+      List.iter (fun arg -> fprintf ppf " %a" (pp_expr ~wire) arg) prim.args;
       fprintf ppf ")"
   | Ctor ctor ->
       fprintf ppf "(ctor %a" pp_atom ctor.name;
-      List.iter (fun arg -> fprintf ppf " %a" pp_expr arg) ctor.args;
+      List.iter (fun arg -> fprintf ppf " %a" (pp_expr ~wire) arg) ctor.args;
       fprintf ppf ")"
   | Tuple items ->
       fprintf ppf "(tuple (items";
-      List.iter (fun item -> fprintf ppf " %a" pp_expr item) items;
+      List.iter (fun item -> fprintf ppf " %a" (pp_expr ~wire) item) items;
       fprintf ppf "))"
   | Tuple_project tuple_project ->
-      fprintf ppf "(tuple_project %a (index %d))" pp_expr
+      fprintf ppf "(tuple_project %a (index %d))" (pp_expr ~wire)
         tuple_project.tuple_expr tuple_project.index
   | Record record ->
       fprintf ppf "(record (fields (";
-      pp_record_expr_fields ppf record.fields;
+      pp_record_expr_fields ~wire ppf record.fields;
       fprintf ppf ")))"
   | Field_access field_access ->
-      fprintf ppf "(field_access %a %a)" pp_expr field_access.record_expr pp_atom
+      fprintf ppf "(field_access %a %a)" (pp_expr ~wire) field_access.record_expr pp_atom
         field_access.field_name
   | Record_update record_update ->
-      fprintf ppf "(record_update %a (fields (" pp_expr record_update.base_expr;
-      pp_record_expr_fields ppf record_update.fields;
+      fprintf ppf "(record_update %a (fields (" (pp_expr ~wire) record_update.base_expr;
+      pp_record_expr_fields ~wire ppf record_update.fields;
       fprintf ppf ")))"
-  | Assert condition -> fprintf ppf "(Assert %a)" pp_expr condition
+  | Assert condition -> fprintf ppf "(Assert %a)" (pp_expr ~wire) condition
   | Match match_expr ->
-      fprintf ppf "(match %a" pp_expr match_expr.scrutinee;
-      List.iter (fun arm -> fprintf ppf " %a" pp_match_arm arm) match_expr.arms;
+      fprintf ppf "(match %a" (pp_expr ~wire) match_expr.scrutinee;
+      List.iter (fun arm -> fprintf ppf " %a" (pp_match_arm ~wire) arm) match_expr.arms;
       fprintf ppf ")"
+  | Array_lit elems ->
+      (* ADR-015 option B / R9.1: int array literal. Element type is pinned
+         to (type-ref int) on the wire; downstream layers reject non-int
+         element types with E0040 before reaching this emitter. *)
+      fprintf ppf "(array-lit (ty (type-ref int))";
+      List.iter (fun elem -> fprintf ppf " %a" (pp_expr ~wire) elem) elems;
+      fprintf ppf ")"
+  | Array_get { array_expr; index_expr } ->
+      fprintf ppf "(array-get %a %a)" (pp_expr ~wire) array_expr (pp_expr ~wire) index_expr
+  | Array_length array_expr ->
+      fprintf ppf "(array-length %a)" (pp_expr ~wire) array_expr
+  | Array_set { set_array_expr; set_index_expr; set_value_expr } ->
+      (* ADR-015 option B / R9.2: in-place int array write. *)
+      fprintf ppf "(array-set %a %a %a)" (pp_expr ~wire) set_array_expr
+        (pp_expr ~wire) set_index_expr (pp_expr ~wire) set_value_expr
+  | Array_make { make_size; make_init } ->
+      (* ADR-015 option B / R9.2: literal-size int array make. *)
+      fprintf ppf "(array-make %d %a (ty (type-ref int)))" make_size
+        (pp_expr ~wire) make_init
+  | Ref_make { ref_elem_ty; ref_init } ->
+      (* ADR-015 option C / R10: 1-slot arena-allocated ref cell. The
+         element type is baked into the sexp envelope and restricted to the
+         R10 whitelist (int / bool / option<int|bool>). *)
+      fprintf ppf "(ref-make (ty %a) %a)" pp_type_expr ref_elem_ty
+        (pp_expr ~wire) ref_init
+  | Ref_get target -> fprintf ppf "(ref-get %a)" (pp_expr ~wire) target
+  | Ref_set { ref_set_target; ref_set_value } ->
+      fprintf ppf "(ref-set %a %a)" (pp_expr ~wire) ref_set_target
+        (pp_expr ~wire) ref_set_value
 
-and pp_expr_with_loc ppf (loc, expr) =
-  fprintf ppf "(located %a %a)" pp_loc loc pp_expr expr
+and pp_expr_with_loc ~wire ppf (loc, expr) =
+  fprintf ppf "(located %a %a)" pp_loc loc (pp_expr ~wire) expr
 
-and pp_record_expr_fields ppf = function
+and pp_record_expr_fields ~wire ppf = function
   | [] -> ()
-  | [ field ] -> pp_record_expr_field ppf field
+  | [ field ] -> pp_record_expr_field ~wire ppf field
   | field :: rest ->
-      pp_record_expr_field ppf field;
-      List.iter (fun field -> fprintf ppf " %a" pp_record_expr_field field) rest
+      pp_record_expr_field ~wire ppf field;
+      List.iter (fun field -> fprintf ppf " %a" (pp_record_expr_field ~wire) field) rest
 
-and pp_record_expr_field ppf field =
-  fprintf ppf "(%a %a)" pp_atom field.field_name pp_expr field.field_value
+and pp_record_expr_field ~wire ppf field =
+  fprintf ppf "(%a %a)" pp_atom field.field_name (pp_expr ~wire) field.field_value
 
-and pp_let_rec_binding ppf binding =
+and pp_let_rec_binding ~wire ppf binding =
   fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
-  List.iter (fun param -> fprintf ppf " %a" pp_param param) binding.rec_params;
-  fprintf ppf ") (body %a))" pp_expr binding.rec_body
+  pp_rec_params ~wire ppf binding.rec_params binding.rec_param_types;
+  fprintf ppf ") (body %a))" (pp_expr ~wire) binding.rec_body
 
-and pp_let_rec_binding_with_loc ppf binding =
+and pp_let_rec_binding_with_loc ~wire ppf binding =
   fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
-  List.iter (fun param -> fprintf ppf " %a" pp_param param) binding.rec_params;
-  fprintf ppf ") (body %a))" pp_expr_with_loc (binding.rec_loc, binding.rec_body)
+  pp_rec_params ~wire ppf binding.rec_params binding.rec_param_types;
+  fprintf ppf ") (body %a))" (pp_expr_with_loc ~wire) (binding.rec_loc, binding.rec_body)
+
+and pp_lambda_params ~wire ppf params param_types =
+  if emit_param_types wire then
+    pp_typed_lambda_params ppf params param_types
+  else
+    pp_params ppf params
+
+and pp_typed_lambda_params ppf params param_types =
+  let typed_list =
+    let rec zip ps ts =
+      match (ps, ts) with
+      | [], _ -> []
+      | p :: prest, [] -> (p, None) :: zip prest []
+      | p :: prest, t :: trest -> (p, t) :: zip prest trest
+    in
+    zip params param_types
+  in
+  let pp_one ppf (param, ty_opt) =
+    let ty = match ty_opt with Some ty -> ty | None -> Type_any in
+    fprintf ppf "(%a (ty %a))" pp_param param pp_type_expr ty
+  in
+  match typed_list with
+  | [] -> ()
+  | [ one ] -> pp_one ppf one
+  | first :: rest ->
+      pp_one ppf first;
+      List.iter (fun pair -> fprintf ppf " %a" pp_one pair) rest
+
+and pp_rec_params ~wire ppf params param_types =
+  if emit_param_types wire then begin
+    let pad_types =
+      let rec pad ps ts =
+        match (ps, ts) with
+        | [], _ -> []
+        | _ :: prest, [] -> None :: pad prest []
+        | _ :: prest, t :: trest -> t :: pad prest trest
+      in
+      pad params param_types
+    in
+    List.iter2
+      (fun param ty_opt ->
+        let ty = match ty_opt with Some ty -> ty | None -> Type_any in
+        fprintf ppf " (%a (ty %a))" pp_param param pp_type_expr ty)
+      params pad_types
+  end else
+    List.iter (fun param -> fprintf ppf " %a" pp_param param) params
 
 and pp_params ppf = function
   | [] -> ()
@@ -123,12 +224,13 @@ and pp_params ppf = function
       fprintf ppf "%a" pp_param param;
       List.iter (fun param -> fprintf ppf " %a" pp_param param) rest
 
-and pp_match_arm ppf arm =
+and pp_match_arm ~wire ppf arm =
   match arm.guard with
-  | None -> fprintf ppf "(case %a %a)" pp_match_pattern arm.pattern pp_expr arm.body
+  | None ->
+      fprintf ppf "(case %a %a)" pp_match_pattern arm.pattern (pp_expr ~wire) arm.body
   | Some guard ->
       fprintf ppf "(case %a (when_guard %a %a))" pp_match_pattern arm.pattern
-        pp_expr guard pp_expr arm.body
+        (pp_expr ~wire) guard (pp_expr ~wire) arm.body
 
 and pp_match_pattern ppf = function
   | Pat_any -> fprintf ppf "_"
@@ -173,20 +275,24 @@ and pp_record_pattern_field ppf field =
     field.pattern_field_value
 
 let rec pp_decl ~wire ppf decl =
-  let emit_locs = match wire with Wire_1_2 -> true | Wire_1_1 -> false in
+  let emit_locs =
+    match wire with Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 -> true | Wire_1_1 -> false
+  in
   match decl with
   | Let_decl decl ->
       fprintf ppf "(%s %a %a)"
         (if decl.is_rec then "let-rec" else "let")
         pp_atom decl.name
-        (if emit_locs then pp_expr_with_loc else fun ppf (_, expr) -> pp_expr ppf expr)
+        (if emit_locs then pp_expr_with_loc ~wire
+         else fun ppf (_, expr) -> pp_expr ~wire ppf expr)
         (decl.loc, decl.body)
   | Let_rec_group_decl bindings ->
       fprintf ppf "(Let_rec_group (bindings";
       List.iter
         (fun binding ->
           fprintf ppf " %a"
-            (if emit_locs then pp_let_rec_binding_with_loc else pp_let_rec_binding)
+            (if emit_locs then pp_let_rec_binding_with_loc ~wire
+             else pp_let_rec_binding ~wire)
             binding)
         bindings;
       fprintf ppf "))"
@@ -254,19 +360,6 @@ and pp_record_type_field ppf field =
   if field.record_field_mutable then fprintf ppf " (mutable true)";
   fprintf ppf ")"
 
-and pp_type_expr ppf = function
-  | Type_var name -> fprintf ppf "(type-var %a)" pp_atom name
-  | Type_tuple items ->
-      fprintf ppf "(tuple-type";
-      List.iter (fun item -> fprintf ppf " %a" pp_type_expr item) items;
-      fprintf ppf ")"
-  | Type_constr constr ->
-      fprintf ppf "(%s %a"
-        (if constr.is_recursive_ref then "recursive-ref" else "type-ref")
-        pp_atom constr.type_name;
-      List.iter (fun arg -> fprintf ppf " %a" pp_type_expr arg) constr.args;
-      fprintf ppf ")"
-
 and pp_external_type_expr ppf = function
   | External_type_constr { external_type_name; external_type_args = [] } ->
       pp_atom ppf external_type_name
@@ -290,4 +383,4 @@ let pp_module ~wire ppf = function
       List.iter (fun decl -> fprintf ppf " %a" (pp_decl ~wire) decl) decls;
       fprintf ppf "))"
 
-let to_string ?(wire = Wire_1_2) modul = asprintf "%a@." (pp_module ~wire) modul
+let to_string ?(wire = Wire_1_5) modul = asprintf "%a@." (pp_module ~wire) modul

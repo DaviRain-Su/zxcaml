@@ -176,7 +176,10 @@ tools can key on codes instead of matching message text.
 | E0022 | _n/a_ | Unreachable expressions. | Emitted for `Texp_unreachable`. |
 | E0023 | _n/a_ | Extension constructors. | Emitted for extension-constructor nodes. |
 | E0024 | _n/a_ | Unknown constructors. | Emitted when a constructor is not present in the subset type environment. |
+| E0030 | _n/a_ | Missing required label. | Emitted when a call to a whitelisted labelled stdlib function omits a required `~label:` argument. |
+| E0031 | _n/a_ | Unknown or duplicate label. | Emitted when a call to a whitelisted labelled stdlib function uses an unknown label or supplies the same label more than once. |
 | E0090–E0099 | _n/a_ | Generic subset fallback buckets. | Used only when a more specific tailored subset code does not apply. |
+| E0200 | _n/a_ | Unknown `--report` kind. | Emitted by `omlz check --report=<kind>` when `<kind>` is not one of `cu`, `stack`, or `all`. |
 
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
@@ -190,7 +193,7 @@ mission-local canonical facts snapshot,
 `mission-internal/canonical-facts.md`, is the historical citation for the
 pre-DX2 canonical wire value (`1.1`); the post-bump implementation source of
 truth is now `src/frontend_bridge/sexp_parser.zig`
-(`expected_wire_version = "1.2"`).
+(`expected_wire_version = "1.3"`; the reader still accepts `1.2`).
 
 ### Optional `(loc ...)` schema
 
@@ -218,9 +221,22 @@ omits the tuple, the bridge uses `Loc.unknown`.
 For one mission's deprecation window, `omlz check --wire=1.1 ...` forwards
 `--wire=1.1` to `zxc-frontend` and asks it to emit the old location-free shape.
 That compatibility flag is deprecated and targeted for removal in the next
-mission after downstream consumers have moved to wire `1.2`. The `1.2` reader
-continues to accept wire `1.1` sexps; missing locations are treated as
-`Loc.unknown`.
+mission after downstream consumers have moved to wire `1.2`/`1.3`. The current
+`1.3` reader continues to accept wire `1.2` (and `1.1` via the deprecated
+window) sexps; missing locations are treated as `Loc.unknown` and missing
+typed-param payloads as untyped (`null`).
+
+### Wire `1.3` — typed lambda parameters
+
+R8 bumps the wire to `1.3` so each lambda or `let rec` parameter carries an
+inferred OCaml type. Parameters are emitted as `(name (ty <type-expr>))`
+where `<type-expr>` follows the existing Core IR type-expression grammar; the
+new `(any)` sentinel marks unresolved/polymorphic params and the bridge maps
+it to `null`. The Core IR lowerer prefers explicit wire types when its
+existing structural heuristics do not already pick a more specific shape; if
+the wire type is `null`, the lowerer falls back to the legacy heuristic chain
+(`Ty.Int` default). See `docs/wire-compat.md` for the cross-version reader
+behavior.
 
 ## Examples
 

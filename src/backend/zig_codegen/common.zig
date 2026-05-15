@@ -143,7 +143,120 @@ pub fn exprUsesName(expr: lir.LExpr, name: []const u8) bool {
             }
             return false;
         },
+        .ArrayLit => |array_lit| {
+            for (array_lit.elems) |elem| {
+                if (exprUsesName(elem.*, name)) return true;
+            }
+            return false;
+        },
+        .ArrayGet => |array_get| exprUsesName(array_get.arr.*, name) or exprUsesName(array_get.idx.*, name),
+        .ArrayLength => |array_length| exprUsesName(array_length.arr.*, name),
+        .ArraySet => |array_set| exprUsesName(array_set.arr.*, name) or exprUsesName(array_set.idx.*, name) or exprUsesName(array_set.value.*, name),
+        .ArrayMake => |array_make| exprUsesName(array_make.init.*, name),
+        .RefMake => |ref_make| exprUsesName(ref_make.init.*, name),
+        .RefGet => |ref_get| exprUsesName(ref_get.target.*, name),
+        .RefSet => |ref_set| exprUsesName(ref_set.target.*, name) or exprUsesName(ref_set.value.*, name),
     };
+}
+
+pub fn exprUsesNameOutsideRuntimeProcessArgs(expr: lir.LExpr, name: []const u8) bool {
+    return switch (expr) {
+        .App => |app| blk: {
+            if (exprUsesNameOutsideRuntimeProcessArgs(app.callee.*, name)) break :blk true;
+            switch (app.callee.*) {
+                .Var => |callee| {
+                    if (std.mem.eql(u8, callee.name, "transfer_sol")) {
+                        if (app.args.len > 3 and exprUsesNameOutsideRuntimeProcessArgs(app.args[3].*, name)) break :blk true;
+                        break :blk false;
+                    }
+                    if (isRuntimeDerivedProcessName(callee.name)) break :blk false;
+                },
+                else => {},
+            }
+            for (app.args) |arg| {
+                if (exprUsesNameOutsideRuntimeProcessArgs(arg.*, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .Let => |let_expr| exprUsesNameOutsideRuntimeProcessArgs(let_expr.value.*, name) or
+            (!std.mem.eql(u8, let_expr.name, name) and exprUsesNameOutsideRuntimeProcessArgs(let_expr.body.*, name)),
+        .Assert => |assert_expr| exprUsesNameOutsideRuntimeProcessArgs(assert_expr.condition.*, name),
+        .If => |if_expr| exprUsesNameOutsideRuntimeProcessArgs(if_expr.cond.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(if_expr.then_branch.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(if_expr.else_branch.*, name),
+        .Prim => |prim| blk: {
+            for (prim.args) |arg| if (exprUsesNameOutsideRuntimeProcessArgs(arg.*, name)) break :blk true;
+            break :blk false;
+        },
+        .Ctor => |ctor_expr| blk: {
+            for (ctor_expr.args) |arg| if (exprUsesNameOutsideRuntimeProcessArgs(arg.*, name)) break :blk true;
+            break :blk false;
+        },
+        .Tuple => |tuple_expr| blk: {
+            for (tuple_expr.items) |item| if (exprUsesNameOutsideRuntimeProcessArgs(item.*, name)) break :blk true;
+            break :blk false;
+        },
+        .TupleProj => |tuple_proj| exprUsesNameOutsideRuntimeProcessArgs(tuple_proj.tuple_expr.*, name),
+        .Record => |record_expr| blk: {
+            for (record_expr.fields) |field| if (exprUsesNameOutsideRuntimeProcessArgs(field.value.*, name)) break :blk true;
+            break :blk false;
+        },
+        .RecordField => |record_field| exprUsesNameOutsideRuntimeProcessArgs(record_field.record_expr.*, name),
+        .RecordUpdate => |record_update| blk: {
+            if (exprUsesNameOutsideRuntimeProcessArgs(record_update.base_expr.*, name)) break :blk true;
+            for (record_update.fields) |field| if (exprUsesNameOutsideRuntimeProcessArgs(field.value.*, name)) break :blk true;
+            break :blk false;
+        },
+        .AccountFieldSet => |field_set| exprUsesNameOutsideRuntimeProcessArgs(field_set.account_expr.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(field_set.value.*, name),
+        .Match => |match_expr| blk: {
+            if (exprUsesNameOutsideRuntimeProcessArgs(match_expr.scrutinee.*, name)) break :blk true;
+            for (match_expr.arms) |arm| {
+                if (!patternBindsName(arm.pattern, name)) {
+                    if (arm.guard) |guard_expr| if (exprUsesNameOutsideRuntimeProcessArgs(guard_expr.*, name)) break :blk true;
+                    if (exprUsesNameOutsideRuntimeProcessArgs(arm.body.*, name)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        .Closure => |closure| blk: {
+            for (closure.captures) |capture| if (std.mem.eql(u8, capture.name, name)) break :blk true;
+            break :blk false;
+        },
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| if (exprUsesNameOutsideRuntimeProcessArgs(elem.*, name)) break :blk true;
+            break :blk false;
+        },
+        .ArrayGet => |array_get| exprUsesNameOutsideRuntimeProcessArgs(array_get.arr.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(array_get.idx.*, name),
+        .ArrayLength => |array_length| exprUsesNameOutsideRuntimeProcessArgs(array_length.arr.*, name),
+        .ArraySet => |array_set| exprUsesNameOutsideRuntimeProcessArgs(array_set.arr.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(array_set.idx.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(array_set.value.*, name),
+        .ArrayMake => |array_make| exprUsesNameOutsideRuntimeProcessArgs(array_make.init.*, name),
+        .RefMake => |ref_make| exprUsesNameOutsideRuntimeProcessArgs(ref_make.init.*, name),
+        .RefGet => |ref_get| exprUsesNameOutsideRuntimeProcessArgs(ref_get.target.*, name),
+        .RefSet => |ref_set| exprUsesNameOutsideRuntimeProcessArgs(ref_set.target.*, name) or
+            exprUsesNameOutsideRuntimeProcessArgs(ref_set.value.*, name),
+        .Constant => false,
+        .Var => |var_ref| std.mem.eql(u8, var_ref.name, name),
+    };
+}
+
+pub fn isRuntimeDerivedProcessName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "vault_deposit") or
+        std.mem.eql(u8, name, "vault_withdraw") or
+        std.mem.eql(u8, name, "vault_v2_deposit") or
+        std.mem.eql(u8, name, "vault_v2_withdraw") or
+        std.mem.eql(u8, name, "hackathon_greet_process") or
+        std.mem.eql(u8, name, "token_vault_process") or
+        std.mem.eql(u8, name, "escrow_full_process") or
+        std.mem.eql(u8, name, "dao_voting_process") or
+        std.mem.eql(u8, name, "ata_transfer_process") or
+        std.mem.eql(u8, name, "spl_burn_process") or
+        std.mem.eql(u8, name, "spl_close_account_process") or
+        std.mem.eql(u8, name, "spl_revoke_process") or
+        std.mem.eql(u8, name, "order_book_process");
 }
 
 pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
@@ -213,6 +326,17 @@ pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
         },
         .Closure => false,
         .Constant, .Var => false,
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| if (exprUsesCpiInvoke(elem.*)) break :blk true;
+            break :blk false;
+        },
+        .ArrayGet => |array_get| exprUsesCpiInvoke(array_get.arr.*) or exprUsesCpiInvoke(array_get.idx.*),
+        .ArrayLength => |array_length| exprUsesCpiInvoke(array_length.arr.*),
+        .ArraySet => |array_set| exprUsesCpiInvoke(array_set.arr.*) or exprUsesCpiInvoke(array_set.idx.*) or exprUsesCpiInvoke(array_set.value.*),
+        .ArrayMake => |array_make| exprUsesCpiInvoke(array_make.init.*),
+        .RefMake => |ref_make| exprUsesCpiInvoke(ref_make.init.*),
+        .RefGet => |ref_get| exprUsesCpiInvoke(ref_get.target.*),
+        .RefSet => |ref_set| exprUsesCpiInvoke(ref_set.target.*) or exprUsesCpiInvoke(ref_set.value.*),
     };
 }
 
@@ -451,6 +575,23 @@ pub fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const 
                 break :blk try std.fmt.allocPrint(allocator, "[]const {s}", .{inner});
             }
             break :blk try zigUserAdtNameFromAdt(allocator, adt);
+        },
+        // ADR-015 R9.1/R9.2 array: lowered as a writable Zig slice (R9.2
+        // promotes the backing storage to mutable so ArraySet has a valid
+        // lvalue; reads still work via implicit `[]T` -> `[]const T`
+        // coercion where needed).
+        .Array => |elem| blk: {
+            const inner = try zigTypeName(allocator, elem.*);
+            defer allocator.free(inner);
+            break :blk try std.fmt.allocPrint(allocator, "[]{s}", .{inner});
+        },
+        // ADR-015 option C / R10 ref cell: lowered as a single-pointer
+        // arena slot. The codegen materializes a `*T` so dereference is
+        // `r.*` and store is `r.* = v`.
+        .Ref => |elem| blk: {
+            const inner = try zigTypeName(allocator, elem.*);
+            defer allocator.free(inner);
+            break :blk try std.fmt.allocPrint(allocator, "*{s}", .{inner});
         },
     };
 }
@@ -692,6 +833,14 @@ pub fn tyEql(a: lir.LTy, b: lir.LTy) bool {
                 if (!tyEql(left, right)) break :blk false;
             }
             break :blk tyEql(closure.ret.*, other.ret.*);
+        },
+        .Array => |elem| switch (b) {
+            .Array => |other| tyEql(elem.*, other.*),
+            else => false,
+        },
+        .Ref => |elem| switch (b) {
+            .Ref => |other| tyEql(elem.*, other.*),
+            else => false,
         },
     };
 }

@@ -193,8 +193,8 @@ Core IR 上的 `Layout` 描述符（ADR-004）是扩展点。P4 会加新的 `Re
 
 主路径上 **没有** OCaml 后端。
 
-仅保留一个仅编译占位 `src/backend/ocaml_stub.zig`，让 backend trait 自洽。
-它返回 `error.NotImplemented`。
+不再保留任何 `OCamlBackend` 占位文件。原先 `src/backend/` 下的仅编译占位
+已被删除；待真正排期实现 OCaml 后端时再重新引入。
 
 ### 理由
 

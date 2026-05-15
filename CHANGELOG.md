@@ -4,6 +4,122 @@ All notable user-visible changes to ZxCaml are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added — R11.5 lift the match-scrutinee / `let`-destructure form restriction
+
+- The frontend now accepts arbitrary expressions as a `match` scrutinee,
+  including function applications (`match foo () with ...`), `ref`
+  dereferences (`match !cur with ...`), and `if` / `match` / `let` /
+  sequence expressions. Non-atomic scrutinees are desugared to a
+  synthetic `let __zxc_match_scrut_<n> = <expr> in match
+  __zxc_match_scrut_<n> with ...` binding so the right-hand side is
+  evaluated exactly once and downstream lowering sees an atom-shaped
+  scrutinee.
+- The same lift applies to `let`-destructure of tuple patterns
+  (`let (a, b) = <expr> in body`). When the right-hand side is not
+  already atomic it is bound to a fresh `__zxc_match_scrut_<n>` name
+  before being matched on with a tuple pattern.
+- Frontend-only change: no wire bump, no Core IR change. Atom-shaped
+  scrutinees (`var`, constants, `Ctor`, `Tuple`, `Field_access`) skip
+  the synthetic let so the resulting sexp is byte-identical to the
+  previous frontend output for the common case.
+- Recovers `tests/ui/ref_option.ml` that R10 cleanup had to drop, and
+  adds new fixtures `tests/ui/match_apply_scrutinee.ml`,
+  `tests/ui/match_if_scrutinee.ml`, and
+  `tests/ui/let_destructure_apply.ml`.
+
+### Added — R10 OCaml `ref` cells accepted (ADR-015 option C, wire 1.5)
+
+- The frontend now accepts single-cell `ref` of `int` and `bool`
+  element types: `ref e`, `!r`, and `r := v` parse and type-check
+  through to interp and Zig codegen. Storage is one arena slot per
+  `ref e`; `!r` lowers to a pointer load and `r := v` lowers to a
+  pointer store.
+- Wire bumped to `1.5` with three new sexp shapes — `ref-make`,
+  `ref-get`, `ref-set` (see `src/frontend/zxc_sexp_format.md` and
+  `docs/wire-compat.md`).
+- `--no-alloc` rejects every `ref e` site with
+  `DX2-NOALLOC: ref cell allocation is not allowed in a no_alloc
+  context`. `!r` and `r := v` are allocation-free.
+- E0013 wording updated to describe the accepted R10 surface and
+  the still-rejected mutation forms (`setfield` outside
+  `AccountFieldSet`, instance-variable writes, override
+  expressions, and `ref` of unsupported element types).
+- New UI fixtures `tests/ui/ref_basic.ml`,
+  `tests/ui/ref_for_loop_accumulator.ml`,
+  `tests/ui/ref_bool.ml`, `tests/ui/ref_string.ml`,
+  `tests/ui/ref_record.ml`, and `tests/ui/ref_no_alloc.ml`; new
+  example `examples/ref_loop_demo.ml` with a CU report golden
+  under `tests/golden/report_ref_loop.expected.txt`.
+
+### Deferred — R10 follow-ups
+
+- `ref` of `string`, record, list, and polymorphic element types
+  remains rejected by `E0013`; lifting these is a follow-up task
+  that needs a frontend-level element-type filter rather than the
+  current node-level acceptance.
+- `ref` aliasing across function boundaries (sharing a ref through
+  a closure or returning one) is not exercised and remains
+  untested surface.
+- ~~A `ref (Some 3)` / option-of-int positive UI fixture was
+  attempted as `tests/ui/ref_option.ml`; the frontend currently
+  rejects the surrounding `match` with `E0090` on the dereference
+  position.~~ Resolved in R11.5: `match` now accepts `ref-get`
+  (and other non-atomic forms) as a scrutinee via synthetic-let
+  desugaring; `tests/ui/ref_option.ml` is restored.
+
+### Added — R9.2 mutable `int` arrays (ADR-015 option B)
+
+- The frontend now accepts `Array.set a i v` / `Array.unsafe_set a i v` /
+  `a.(i) <- v` for `int` arrays, and `Array.make N init` when `N` is a
+  non-negative `int` literal. R9.1's read-only surface (literals,
+  `Array.get` / `a.(i)`, `Array.length`) is unchanged.
+- New Core IR / LIR nodes `ArraySet { arr; idx; value }` and
+  `ArrayMake { elem_ty; size; init }`, wired through ANF lowering,
+  region inference, arena promotion, codegen, and the interpreter.
+- Codegen emits a single bounds-checked store for `ArraySet` (panics
+  with the `array_oob` marker on out-of-bounds writes) and an arena
+  `arena.alloc` plus fill for `ArrayMake`; unrolled for `N <= 8`,
+  runtime for-loop otherwise. The slice type is now writable (`[]T`).
+- Interpreter promotes `Value.Array` from `[]const i64` to `[]i64` so
+  in-place writes are observable from subsequent `Array.get` /
+  `a.(i)` reads in the same evaluation.
+- `no_alloc` reports a `.Array` site on `Array.make` (so `--no-alloc`
+  rejects it), but allows `Array.set` because it mutates existing
+  storage without allocating. `static_report` charges 2 CU per write
+  and `1 + N` CU per `Array.make`.
+- E0019 wording relaxed to describe the accepted R9.2 surface and to
+  list the still-rejected forms (polymorphic element types,
+  dynamic-size `Array.make`, `Array.init`, `Array.unsafe_get`).
+- New UI tests `tests/ui/array_set.ml`, `array_make.ml`, and
+  `array_set_oob.ml`; `examples/array_mutation_demo.ml` shows the
+  combined R9.1 + R9.2 surface end-to-end.
+
+### Added — R8 lambda parameter type inference (wire 1.3)
+
+- Bumped the frontend ↔ bridge wire from `1.2` to `1.3`. The OCaml frontend
+  now publishes each lambda and `let rec` parameter with its inferred OCaml
+  type as `(name (ty <type-expr>))`, using the new `(any)` sentinel for
+  polymorphic / unresolved parameters.
+- The Core IR lowerer (`src/core/anf/module.zig`) consults the wire-supplied
+  type after its existing structural heuristics but before the legacy
+  `Ty.Int` default. `char` is also treated as `Ty.Int` for codegen
+  purposes so `'a'`-style match scrutinees lower cleanly.
+- `omlz check --wire=1.2` and `--wire=1.1` continue to emit the legacy
+  shapes; the `1.3` reader accepts both `1.2` and `1.3` payloads.
+- See `docs/wire-compat.md` for the cross-version compatibility matrix and
+  `src/frontend/zxc_sexp_format.md` for the param-encoding sketch.
+
+### Fixed
+
+- BPF codegen for entrypoints that hand explicit account/data args to a
+  runtime-derived processor (`hackathon_greet_process`) no longer surfaces
+  `unused local constant` errors when wire-typed params now bind a fresh
+  runtime view. The call site emits `_ = &name;` pointer-discards for each
+  swallowed Var argument so the binding stays "used" without conflicting
+  with sibling uses elsewhere in the entrypoint body.
+
 ## Route B — 2025-05-11
 
 ### Added — Bitwise Operations (Step 1)
@@ -50,6 +166,25 @@ milestones rather than semver releases so far. Commit hashes cite the `git log`
 evidence for each major bullet.
 
 ## [Unreleased]
+
+### Removed — SBPF ELF post-pass in `tests/bpf_test_support.rs`
+
+- Removed the `patch_elf_for_sbpf_v2` function, its helpers, the
+  `SbpfPatchConfig` plumbing, the `ZXCAML_TEST_PATCH_SBPF_ELF` and
+  `ZXCAML_TEST_PATCH_SBPF_ELF_EXCLUDE` env-var toggles, and the seven
+  unit tests that exercised them. The post-pass mutated bytes the
+  current `omlz` + `solana-zig 0.16.0 / solana-v1.53.0` toolchain
+  already emits correctly (`e_flags=1` and `BPF_CALL_IMM` source-register
+  bits), so it is a no-op on shipping artifacts. See
+  `mission-internal/elf-patch-investigation.md` for the full
+  investigation and 246-test parity evidence.
+- Added a CI guard step (`Guard: SBPF ELF patch must stay removed`) in
+  `.github/workflows/ci.yml` that fails the build if the patch
+  symbols ever reappear in `tests/`, `docs/`, or `README.md`.
+- The `new_mollusk()` feature-set clamp (deactivating
+  `enable_sbpf_v3_deployment_and_execution` and
+  `disable_sbpf_v0_execution`) is retained — it is a separate,
+  legitimate Mollusk-lane setting.
 
 ### Changed — SOLANA_ZIG + source-map tool fallback behavior
 

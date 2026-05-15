@@ -142,16 +142,23 @@ or emit Anchor-compatible IDL.
 - `post-fmt-deepnested-baseline` sealed Phase 21's generic `) word` spacing
   rule with the corpus still at 20 fmt goldens.
 - Current no-regress floor: strict-parallel `zig build test --summary all`
-  reports at least 668/669 Zig tests passing, and the Mollusk/Cargo suite stays
-  at ≥40 passing checks.
+  reports 676/677 Zig tests passing, and the Mollusk/Cargo suite stays
+  at ≥40 passing checks. The single accounted-for skip is
+  `inline honors configured max body node threshold`
+  (`tests/inline/run.zig`), which is gated on
+  `-Dinline_max_nodes>=5` (skipped when `inline_max_nodes < 5`) and emits
+  `error.SkipZigTest` at the default build option (`inline_max_nodes=3`). The
+  `determinism: interpreter ≡ Zig native on tests/ui corpus` test
+  also reports `error.SkipZigTest` when `tests/ui/` is absent, so any
+  future floor change should reconcile `passed + skipped == total`.
 
 ### Current features
 
 - **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz idl <file>`, `omlz unmap --map <file.map> --pc <addr>`, and `omlz unmap --so <file.so> --pc <addr>`
 - **Formatter:** `omlz fmt` formats `.ml` sources with `--check`, `--write`, `--stdin`, JSON summaries, LSP `textDocument/formatting` / `rangeFormatting`, a 20-golden fmt corpus, and bytewise idempotency; see [`docs/16-omlz-fmt.md`](./docs/16-omlz-fmt.md)
 - **Wire format:** version 1.2 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4/P5 moved the wire through `1.0` for instruction data and external declarations; P8 moved to `1.1` for mutual-recursion groups; P9/DX2 moved to `1.2` for source-location plumbing while keeping a deprecated `--wire=1.1` compatibility emitter)
-- **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), string operations (`^`, length, get, sub), char operations (code, chr), and pattern matching over all of those forms
-- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Char` (`code`, `chr`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
+- **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), string operations (`^`, length, get, sub), char operations (code, chr), `ref`/`!`/`:=` for `int` and `bool`, and pattern matching over all of those forms
+- **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `map_error`, `map_err`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Bytes` (`length`, `get`, `sub`, `create`, `set`, `of_string`, `blit`, `fill`, `iter`, `iteri`, `fold_left`, `equal`, `compare`), `Char` (`code`, `chr`), `Format` (`int_to_string`, `hex_of_int`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; BPF entry arena is 32 KiB
 - **Backends:** tree-walk interpreter, Zig native codegen, and one-step `SOLANA_ZIG` direct `solana-zig build-lib` BPF path
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
@@ -162,6 +169,7 @@ or emit Anchor-compatible IDL.
 - **CPI and PDA helpers:** built-in `instruction` / `account_meta` records, `invoke`, `invoke_signed`, PDA helpers, and return-data syscalls mirror the Solana C ABI
 - **SPL-Token:** helper support and acceptance examples cover the legacy Tokenkeg primitives transfer, init_account, burn, close_account, and revoke; the current SPL primitive examples are `spl_burn`, `spl_close_account`, and `spl_revoke`
 - **no_alloc:** `omlz check --no-alloc` runs a conservative Core IR allocation proof and reports the allocation-causing node on failure
+- **Static profiling reports:** `omlz check --report=cu,stack <file>` emits a deterministic, opt-in static estimate of compute units (with per-syscall breakdown) and per-function stack depth; see [docs/06-bpf-target.md](./docs/06-bpf-target.md) §7.5
 - **OCaml-native tests:** `let%test_unit "name" = expr` and `let%test_prop "name" generator = fun x -> expr` bindings are discovered by `omlz test`, which runs `examples/tests/*.ml` by default, supports `--filter`, `--format=cargo|json`, `--num-cases`, and `--seed`, reports shrunk counterexamples for property failures, and powers LSP CodeLens one-test runs
 - **IDL:** `omlz idl <file>` emits Anchor 0.30+ compatible JSON with SHA-256 discriminators, instruction accounts/args, account types, events, errors, and constants
 - **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
@@ -173,7 +181,7 @@ or emit Anchor-compatible IDL.
 - **Function inlining:** small single-expression functions (≤3 Core IR nodes) are inlined at call sites with alpha-renaming, enabling further constant folding; supports all types including String, ADT, Tuple, and Record
 - **Determinism:** interpreter ≡ Zig native across the sealed P1-P9 examples corpus
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, Mollusk tests, and an examples `omlz check` corpus loop
-- **Mollusk SVM tests:** 27 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, real-world zignocchio ports, and SPL Token primitive coverage)
+- **Mollusk SVM tests:** 27 integration tests in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, real-world zignocchio ports, and SPL Token primitive coverage). `tests/bpf_test_support.rs` centralizes build/load helpers for these artifacts; the historical ELF post-pass has been removed (see `mission-internal/elf-patch-investigation.md`).
 - **Diagnostics:** rustc-style diagnostics are the default, with `--error-format=human|json|oneline` and caret spans over source snippets
 - **LSP:** `omlz-lsp` is installed by `zig build` and provides LSP push diagnostics over stdio JSON-RPC
 - **LSP latency observability:** `make lsp-bench` rebuilds and runs `omlz lsp-bench --warmup 3 --rounds 10`, reporting p50/p99 diagnostics latency against the default 350/800 ms thresholds; see [`docs/17-lsp-latency.md`](./docs/17-lsp-latency.md)
@@ -181,7 +189,7 @@ or emit Anchor-compatible IDL.
   Default is direct `solana-zig`; set `SOLANA_ZIG` to any custom command/path (except `0`) to override the binary.
 - **Examples:** 60 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, zignocchio-port programs, dao_voting, ata_transfer, order_book, spl_burn, spl_close_account, and spl_revoke
 - **Golden/UI tests:** Core IR/sexp snapshot, UI, and fmt golden tests run
-  through `zig build test`; the current Phase 21 floor is ≥668/669 Zig tests
+  through `zig build test`; the current Phase 21 floor is 676/677 Zig tests
   plus ≥40 Cargo/Mollusk checks
 - **Install:** `./init.sh && zig build` (see [INSTALLING.md](./INSTALLING.md))
 

@@ -1,5 +1,1 @@
-error[E0017]: loops are not supported; use recursion or higher-order functions
- --> tests/ui/for_loop.ml:1:19
-  |
-1 | let entrypoint _ = for i = 1 to 10 do () done
-  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+0

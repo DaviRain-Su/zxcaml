@@ -20,6 +20,7 @@ const build_options = @import("build_options");
 const pipeline = @import("driver/pipeline.zig");
 const driver_build = @import("driver/build.zig");
 const driver_bpf = @import("driver/bpf.zig");
+const driver_doctor = @import("driver/doctor.zig");
 const driver_idl = @import("driver/idl.zig");
 const driver_srcmap = @import("driver/srcmap.zig");
 const diag = @import("util/diag.zig");
@@ -34,6 +35,7 @@ const core_inline = @import("core/inline.zig");
 const core_ir = @import("core/ir.zig");
 const core_no_alloc = @import("core/no_alloc.zig");
 const core_pretty = @import("core/pretty.zig");
+const core_static_report = @import("core/static_report.zig");
 const arena_lower = @import("lower/arena.zig");
 const region_infer = @import("lower/region_infer.zig");
 const omlz_test = @import("omlz/test.zig");
@@ -104,7 +106,7 @@ pub fn main(init: std.process.Init) !void {
             try writeStderr(init.io, "error: unsupported doctor option; run `omlz doctor --help` for usage.\n");
             std.process.exit(1);
         }
-        try runDoctor(init);
+        try runDoctor(init, args[0]);
         return;
     }
 
@@ -172,6 +174,19 @@ pub fn main(init: std.process.Init) !void {
                     try writeStderr(init.io, "error: --no-alloc cannot be combined with --emit\n");
                     std.process.exit(1);
                 }
+                // Validate --report=<csv> early so a bad value fails before
+                // any expensive analysis runs. See E0200 in
+                // docs/diagnostics.md.
+                const report_kinds_opt: ?core_static_report.Kinds = blk: {
+                    if (check_args.report) |raw| {
+                        const parsed_kinds = core_static_report.parseKinds(raw) catch {
+                            try writeStderr(init.io, "error[E0200]: unknown --report kind; expected csv of cu,stack or all\n");
+                            std.process.exit(1);
+                        };
+                        break :blk parsed_kinds;
+                    }
+                    break :blk null;
+                };
                 if (check_args.emit) |emit_kind| {
                     if (std.mem.eql(u8, emit_kind, "core-ir") or std.mem.eql(u8, emit_kind, "core-ir-with-loc")) {
                         try emitCoreIr(init, parsed.module, check_args);
@@ -182,10 +197,10 @@ pub fn main(init: std.process.Init) !void {
                     std.process.exit(1);
                 }
                 if (check_args.no_alloc) {
-                    try runNoAllocCheck(init, parsed.module, check_args.diagnostics);
+                    try runNoAllocCheck(init, parsed.module, check_args.diagnostics, report_kinds_opt);
                     return;
                 }
-                try runRegionInferenceCheck(init, parsed.module, check_args.diagnostics);
+                try runRegionInferenceCheck(init, parsed.module, check_args.diagnostics, report_kinds_opt);
                 return;
             },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
@@ -311,6 +326,7 @@ fn writeCheckHelp(io: Io) !void {
         \\Usage:
         \\  omlz check <file.ml>
         \\  omlz check --no-alloc <file.ml>
+        \\  omlz check --report=<kinds> <file.ml>
         \\  omlz check --explain <CODE>
         \\  omlz check --emit=core-ir [--bless] [--wire=1.1] <file.ml>
         \\  omlz check --emit=core-ir-with-loc <file.ml>
@@ -321,6 +337,9 @@ fn writeCheckHelp(io: Io) !void {
         \\  --emit=core-ir   Print the lowered Core IR instead of only checking.
         \\  --emit=core-ir-with-loc
         \\                   Print Core IR with source-location annotations.
+        \\  --report=<kinds> Emit a static profiling report. Accepts a comma-
+        \\                   separated list of `cu`, `stack`, or the literal
+        \\                   `all`. Output is opt-in and goes to stdout.
         \\  --wire=1.1       Deprecated: ask zxc-frontend to emit old wire 1.1 sexp.
         \\  --bless          Rewrite the Core IR golden snapshot for the input.
         \\  --error-format=human|json|oneline
@@ -336,9 +355,20 @@ fn writeDoctorHelp(io: Io) !void {
         \\Usage:
         \\  omlz doctor
         \\
-        \\Runs local toolchain self-checks for Zig, opam/OCaml, Cargo, the
-        \\Solana BPF linker, llvm-objcopy, and optional Surfpool support.
-        \\Each probe prints an OK, WARN, or MISS status line.
+        \\Runs local toolchain self-checks for the prerequisites that matter
+        \\for `omlz build --target=bpf`. Each probe prints a single status row
+        \\formatted as `label: STATUS detail`.
+        \\
+        \\Probes (in order):
+        \\  zig            zig version (expects 0.16.x)
+        \\  zxc-frontend   path to the OCaml frontend binary used by omlz check
+        \\  ocamlc         OCaml compiler version (expects 5.x)
+        \\  solana-zig     solana-zig resolver (env SOLANA_ZIG -> PATH)
+        \\  llvm-objcopy   required for embedding BPF source maps
+        \\  solana         optional; needed for the Mollusk path
+        \\  cargo          optional; needed for the Mollusk path
+        \\
+        \\Exit code is 0 unless any probe reports FAIL; WARN does not fail.
         \\
     );
 }
@@ -445,6 +475,7 @@ const CheckArgs = struct {
     no_alloc: bool = false,
     wire_version: ?[]const u8 = null,
     explain_code: ?[]const u8 = null,
+    report: ?[]const u8 = null,
     diagnostics: DiagnosticFlags = .{},
 };
 
@@ -455,6 +486,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
     var no_alloc = false;
     var wire_version: ?[]const u8 = null;
     var explain_code: ?[]const u8 = null;
+    var report: ?[]const u8 = null;
     var diagnostics: DiagnosticFlags = .{};
 
     var index: usize = 2;
@@ -476,6 +508,8 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         } else if (std.mem.startsWith(u8, arg, "--explain=")) {
             if (explain_code != null) return error.UnsupportedCheckArgs;
             explain_code = arg["--explain=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--report=")) {
+            report = arg["--report=".len..];
         } else if (std.mem.startsWith(u8, arg, "--wire=")) {
             const requested = arg["--wire=".len..];
             if (!std.mem.eql(u8, requested, "1.1")) return error.UnsupportedCheckArgs;
@@ -489,7 +523,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         }
     }
 
-    if (explain_code != null and (input_file != null or emit != null or bless or no_alloc or wire_version != null)) {
+    if (explain_code != null and (input_file != null or emit != null or bless or no_alloc or wire_version != null or report != null)) {
         return error.UnsupportedCheckArgs;
     }
 
@@ -500,6 +534,7 @@ fn parseCheckArgs(args: []const []const u8) !CheckArgs {
         .no_alloc = no_alloc,
         .wire_version = wire_version,
         .explain_code = explain_code,
+        .report = report,
         .diagnostics = diagnostics,
     };
 }
@@ -657,226 +692,21 @@ fn parseDiagnosticFlag(arg: []const u8, flags: *DiagnosticFlags) !bool {
     return false;
 }
 
-const DoctorCommandOutput = struct {
-    ok: bool,
-    detail: []const u8,
-};
+fn runDoctor(init: std.process.Init, argv0: []const u8) !void {
+    var buffer: [4096]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(.stdout(), init.io, &buffer);
+    const writer = &file_writer.interface;
 
-const DoctorStatus = enum {
-    ok,
-    warn,
-    miss,
-};
-
-fn runDoctor(init: std.process.Init) !void {
-    var required_misses: usize = 0;
-
-    const solana_zig = blk: {
-        const command = resolveSolanaZigCommand(init.arena.allocator(), init.minimal.environ) catch |err| switch (err) {
-            error.InvalidSolanaZigCommand => {
-                try writeDoctorProbeLine(init, .warn, "solana-zig", "SOLANA_ZIG=0 is not supported; use unset/empty/1 or a command/path value");
-                break :blk try init.arena.allocator().dupe(u8, "solana-zig");
-            },
-            else => return err,
-        };
-        break :blk command;
-    };
-    defer init.arena.allocator().free(solana_zig);
-
-    try runRequiredDoctorCommand(init, "zig", &.{ "zig", "version" }, &required_misses);
-    try runOpamSwitchDoctorProbe(init, &required_misses);
-    try runOcamlcDoctorProbe(init, &required_misses);
-
-    const result = runDoctorCommand(init, &.{ solana_zig, "--version" });
-    if (result.ok) {
-        try writeDoctorProbeLine(init, .ok, "solana-zig", result.detail);
-    } else {
-        try writeDoctorProbeLine(init, .warn, "solana-zig", result.detail);
-    }
-
-    try runOptionalDoctorCommand(init, "cargo", &.{ "cargo", "--version" });
-    try runOptionalDoctorCommand(init, "llvm-objcopy", &.{ "llvm-objcopy", "--version" });
-
-    try runSurfpoolDoctorProbe(init);
-
-    if (required_misses != 0) {
-        const summary = try std.fmt.allocPrint(
-            init.arena.allocator(),
-            "{d} required probes missing\n",
-            .{required_misses},
-        );
-        try writeStderr(init.io, summary);
-        std.process.exit(1);
-    }
-}
-
-fn runOptionalDoctorCommand(
-    init: std.process.Init,
-    name: []const u8,
-    argv: []const []const u8,
-) !void {
-    const result = runDoctorCommand(init, argv);
-    if (result.ok) {
-        try writeDoctorProbeLine(init, .ok, name, result.detail);
-    } else {
-        try writeDoctorProbeLine(init, .warn, name, result.detail);
-    }
-}
-
-fn runRequiredDoctorCommand(
-    init: std.process.Init,
-    name: []const u8,
-    argv: []const []const u8,
-    required_misses: *usize,
-) !void {
-    const result = runDoctorCommand(init, argv);
-    if (result.ok) {
-        try writeDoctorProbeLine(init, .ok, name, result.detail);
-    } else {
-        required_misses.* += 1;
-        try writeDoctorProbeLine(init, .miss, name, result.detail);
-    }
-}
-
-fn runOcamlcDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
-    const direct = runDoctorCommand(init, &.{ "ocamlc", "-version" });
-    if (direct.ok) {
-        try writeDoctorProbeLine(init, .ok, "ocamlc", direct.detail);
-        return;
-    }
-
-    const via_opam = runDoctorCommand(init, &.{ "opam", "exec", "--switch=zxcaml-p1", "--", "ocamlc", "-version" });
-    if (via_opam.ok) {
-        const detail = try std.fmt.allocPrint(
-            init.arena.allocator(),
-            "{s} (via opam switch zxcaml-p1)",
-            .{via_opam.detail},
-        );
-        try writeDoctorProbeLine(init, .ok, "ocamlc", detail);
-        return;
-    }
-
-    required_misses.* += 1;
-    try writeDoctorProbeLine(init, .miss, "ocamlc", via_opam.detail);
-}
-
-fn runOpamSwitchDoctorProbe(init: std.process.Init, required_misses: *usize) !void {
-    const result = runDoctorCommand(init, &.{ "opam", "switch", "list" });
-    if (result.ok and std.mem.indexOf(u8, result.detail, "zxcaml-p1") != null) {
-        try writeDoctorProbeLine(init, .ok, "opam-switch (zxcaml-p1)", "present");
-        return;
-    }
-
-    if (result.ok) {
-        const full_output = runDoctorCommandFullOutput(init, &.{ "opam", "switch", "list" });
-        if (full_output.ok and std.mem.indexOf(u8, full_output.detail, "zxcaml-p1") != null) {
-            try writeDoctorProbeLine(init, .ok, "opam-switch (zxcaml-p1)", "present");
-            return;
-        }
-        required_misses.* += 1;
-        try writeDoctorProbeLine(init, .miss, "opam-switch (zxcaml-p1)", "not listed");
-        return;
-    }
-
-    required_misses.* += 1;
-    try writeDoctorProbeLine(init, .miss, "opam-switch (zxcaml-p1)", result.detail);
-}
-
-fn runSurfpoolDoctorProbe(init: std.process.Init) !void {
-    const result = runDoctorCommand(init, &.{ "surfpool", "--version" });
-    if (result.ok or commandExistsOnPath(init, "surfpool")) {
-        try writeDoctorProbeLine(init, .ok, "surfpool", result.detail);
-    } else {
-        try writeDoctorProbeLine(init, .warn, "surfpool", result.detail);
-    }
-}
-
-fn runDoctorCommand(init: std.process.Init, argv: []const []const u8) DoctorCommandOutput {
-    const result = std.process.run(init.arena.allocator(), init.io, .{ .argv = argv }) catch |err| {
-        return .{ .ok = false, .detail = @errorName(err) };
-    };
-    const exit_code: u8 = switch (result.term) {
-        .exited => |code| code,
-        .signal, .stopped, .unknown => 1,
-    };
-
-    const detail = firstNonEmptyLine(result.stdout, result.stderr);
-    return .{
-        .ok = exit_code == 0,
-        .detail = if (detail.len != 0) detail else if (exit_code == 0) "ok" else "non-zero exit",
-    };
-}
-
-fn runDoctorCommandFullOutput(init: std.process.Init, argv: []const []const u8) DoctorCommandOutput {
-    const result = std.process.run(init.arena.allocator(), init.io, .{ .argv = argv }) catch |err| {
-        return .{ .ok = false, .detail = @errorName(err) };
-    };
-    const exit_code: u8 = switch (result.term) {
-        .exited => |code| code,
-        .signal, .stopped, .unknown => 1,
-    };
-
-    return .{
-        .ok = exit_code == 0,
-        .detail = if (result.stdout.len != 0) result.stdout else result.stderr,
-    };
-}
-
-fn firstNonEmptyLine(stdout: []const u8, stderr: []const u8) []const u8 {
-    const stdout_line = firstLine(stdout);
-    if (stdout_line.len != 0) return stdout_line;
-    return firstLine(stderr);
-}
-
-fn resolveSolanaZigCommand(allocator: std.mem.Allocator, environ: std.process.Environ) ![]const u8 {
-    const env_val_raw = std.process.Environ.getAlloc(environ, allocator, "SOLANA_ZIG") catch return try allocator.dupe(u8, "solana-zig");
-    defer allocator.free(env_val_raw);
-
-    const env_val = std.mem.trim(u8, env_val_raw, " \t\r\n");
-    if (env_val.len == 0) {
-        return try allocator.dupe(u8, "solana-zig");
-    }
-    if (std.mem.eql(u8, env_val, "1")) {
-        return try allocator.dupe(u8, "solana-zig");
-    }
-    if (std.mem.eql(u8, env_val, "0")) {
-        return error.InvalidSolanaZigCommand;
-    }
-
-    return try allocator.dupe(u8, env_val);
-}
-
-fn firstLine(text: []const u8) []const u8 {
-    const trimmed = std.mem.trim(u8, text, " \t\r\n");
-    if (trimmed.len == 0) return "";
-    const end = std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len;
-    return std.mem.trim(u8, trimmed[0..end], " \t\r");
-}
-
-fn commandExistsOnPath(init: std.process.Init, command: []const u8) bool {
-    const path = std.process.Environ.getAlloc(init.minimal.environ, init.arena.allocator(), "PATH") catch return false;
-    var dirs = std.mem.splitScalar(u8, path, ':');
-    while (dirs.next()) |dir| {
-        if (dir.len == 0) continue;
-        const candidate = std.fmt.allocPrint(init.arena.allocator(), "{s}/{s}", .{ dir, command }) catch return false;
-        std.Io.Dir.cwd().access(init.io, candidate, .{}) catch continue;
-        return true;
-    }
-    return false;
-}
-
-fn writeDoctorProbeLine(init: std.process.Init, status: DoctorStatus, name: []const u8, detail: []const u8) !void {
-    const prefix = switch (status) {
-        .ok => "OK",
-        .warn => "WARN",
-        .miss => "MISS",
-    };
-    const rendered = try std.fmt.allocPrint(
+    const ok = try driver_doctor.run(
         init.arena.allocator(),
-        "{s} {s}: {s}\n",
-        .{ prefix, name, detail },
+        init.io,
+        init.minimal.environ,
+        argv0,
+        writer,
     );
-    try writeStdout(init.io, rendered);
+    try writer.flush();
+
+    if (!ok) std.process.exit(1);
 }
 
 fn runExplain(init: std.process.Init, code: []const u8) !void {
@@ -996,7 +826,7 @@ fn emitCoreIr(init: std.process.Init, module: @import("frontend_bridge/ttree.zig
     }
 }
 
-fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, flags: DiagnosticFlags) !void {
+fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, flags: DiagnosticFlags, report_kinds: ?core_static_report.Kinds) !void {
     var core_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer core_arena.deinit();
 
@@ -1038,13 +868,20 @@ fn runNoAllocCheck(init: std.process.Init, module: @import("frontend_bridge/ttre
         std.process.exit(1);
     };
 
+    var failed = false;
     switch (result) {
         .Pass => try writeStdout(init.io, "no_alloc: PASS\n"),
         .Fail => |site| {
             try renderNoAllocFailure(init, site, flags);
-            std.process.exit(1);
+            failed = true;
         },
     }
+
+    if (report_kinds) |kinds| {
+        try emitStaticReport(init, optimized_core_module, kinds);
+    }
+
+    if (failed) std.process.exit(1);
 }
 
 fn renderNoAllocFailure(init: std.process.Init, site: core_no_alloc.Site, flags: DiagnosticFlags) !void {
@@ -1094,7 +931,7 @@ fn noAllocFailureMessage(allocator: std.mem.Allocator, site: core_no_alloc.Site)
     );
 }
 
-fn runRegionInferenceCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, flags: DiagnosticFlags) !void {
+fn runRegionInferenceCheck(init: std.process.Init, module: @import("frontend_bridge/ttree.zig").Module, flags: DiagnosticFlags, report_kinds: ?core_static_report.Kinds) !void {
     var core_arena = std.heap.ArenaAllocator.init(init.gpa);
     defer core_arena.deinit();
 
@@ -1129,7 +966,28 @@ fn runRegionInferenceCheck(init: std.process.Init, module: @import("frontend_bri
         std.process.exit(1);
     };
 
-    _ = try inferRegionsOrExit(init, &core_arena, optimized_core_module, flags);
+    const region_result = region_infer.inferModuleChecked(&core_arena, optimized_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to infer Core IR regions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    var inferred_or_fallback: core_ir.Module = optimized_core_module;
+    var region_failed = false;
+    switch (region_result) {
+        .Pass => |inferred| inferred_or_fallback = inferred,
+        .Fail => |site| {
+            try renderRegionFailure(init, site, flags);
+            region_failed = true;
+        },
+    }
+
+    if (report_kinds) |kinds| {
+        try emitStaticReport(init, inferred_or_fallback, kinds);
+    }
+
+    if (region_failed) std.process.exit(1);
 }
 
 fn inferRegionsOrExit(
@@ -1152,6 +1010,21 @@ fn inferRegionsOrExit(
             std.process.exit(1);
         },
     };
+}
+
+fn emitStaticReport(
+    init: std.process.Init,
+    module: core_ir.Module,
+    kinds: core_static_report.Kinds,
+) !void {
+    const rendered = core_static_report.run(init.gpa, module, kinds) catch |err| {
+        try writeStderr(init.io, "report failed: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        return;
+    };
+    defer init.gpa.free(rendered);
+    try writeStdout(init.io, rendered);
 }
 
 fn renderRegionFailure(init: std.process.Init, site: region_infer.Site, flags: DiagnosticFlags) !void {
@@ -1894,8 +1767,6 @@ test "parse F07 native build arguments without requiring keep-zig" {
 test {
     _ = @import("backend/api.zig");
     _ = @import("backend/interp.zig");
-    _ = @import("backend/llvm_stub.zig");
-    _ = @import("backend/ocaml_stub.zig");
     _ = @import("backend/zig_codegen.zig");
     _ = @import("core/anf.zig");
     _ = @import("core/const_fold.zig");
@@ -1904,9 +1775,11 @@ test {
     _ = @import("core/ir.zig");
     _ = @import("core/layout.zig");
     _ = @import("core/pretty.zig");
+    _ = @import("core/static_report.zig");
     _ = @import("core/types.zig");
     _ = @import("driver/build.zig");
     _ = @import("driver/bpf.zig");
+    _ = @import("driver/doctor.zig");
     _ = @import("driver/idl.zig");
     _ = @import("lower/arena.zig");
     _ = @import("lower/lir.zig");

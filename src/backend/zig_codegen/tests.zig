@@ -80,6 +80,40 @@ test "ZigBackend keeps only referenced runtime program imports" {
     try expectNotContains(source, "runtime/programs/escrow_full.zig");
 }
 
+test "ZigBackend skips account bindings used only by swallowed runtime program args" {
+    const account_ty = lir.LTy{ .Record = .{ .name = "account", .params = &.{} } };
+    const module: lir.LModule = .{ .entrypoint = .{
+        .name = "entrypoint",
+        .params = &.{
+            .{ .name = "account0", .ty = account_ty },
+            .{ .name = "account1", .ty = account_ty },
+            .{ .name = "instruction_data", .ty = .String },
+        },
+        .body = .{ .App = .{
+            .callee = &.{ .Var = .{ .name = "spl_revoke_process" } },
+            .args = &.{
+                &.{ .Var = .{ .name = "account0" } },
+                &.{ .Var = .{ .name = "account1" } },
+                &.{ .Constant = .{ .String = "auth_pubkey_32_bytes_____________" } },
+                &.{ .Var = .{ .name = "instruction_data" } },
+            },
+            .ty = .Int,
+        } },
+    } };
+
+    const source = try emitModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(source);
+
+    try expectNotContains(source, "const account0 = if (omlz_runtime_accounts.len > 0)");
+    try expectNotContains(source, "const account1 = if (omlz_runtime_accounts.len > 1)");
+    try expectNotContains(source, "_ = account0;");
+    try expectNotContains(source, "_ = account1;");
+    try expectNotContains(source, "_ = instruction_data;");
+    try expectNotContains(source, "_ = &instruction_data;");
+    try expectNotContains(source, "_ = &account0;");
+    try expectContains(source, "break :blk0 spl_revoke.zxcaml_spl_revoke_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);");
+}
+
 test "ZigBackend binds entrypoint instruction_data parameter from runtime bytes" {
     const module: lir.LModule = .{ .entrypoint = .{
         .name = "entrypoint",
@@ -479,7 +513,7 @@ test "ZigBackend emits counter byte writes from arena without discarding arena" 
 
     const func_start = std.mem.indexOf(u8, source, "fn omlz_user_make_bytes") orelse return error.TestUnexpectedResult;
     const func_tail = source[func_start..];
-    const entry_start = std.mem.indexOf(u8, func_tail, "\n// source span: unavailable (M0 frontend bridge does not emit spans yet)\npub inline fn") orelse func_tail.len;
+    const entry_start = std.mem.indexOf(u8, func_tail, "\n// source span: unavailable (M0 frontend bridge does not emit spans yet)\npub fn") orelse func_tail.len;
     const func_source = func_tail[0..entry_start];
 
     try std.testing.expect(std.mem.indexOf(u8, func_source, "_ = arena;") == null);

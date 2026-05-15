@@ -64,6 +64,7 @@ and returns `error.OutOfMemory` when the static buffer is exhausted.
 | payload constructors / list cons cells | Arena | Boxed |
 | top-level lambdas | Arena | Flat |
 | first-class closure records | Arena | Boxed |
+| `ref` cells (int / bool, ADR-015 R10) | Arena | Boxed (single-slot) |
 | proven non-escaping lowered values | Stack | Boxed |
 
 These rules live in `Typed AST → Core IR` lowering (see
@@ -118,7 +119,18 @@ programs.
 
 ## 8. What is **not** allowed
 
-- Mutation of any value (`ref`, mutable record fields, arrays).
+- Mutation of values via mutable record fields outside the
+  `AccountFieldSet` Solana surface.
+  - ADR-015 R9.2 lifts the array exception: `int` arrays accept in-place
+    writes via `Array.set` / `a.(i) <- v`, and `Array.make N init` (with
+    literal `N`) returns a writable arena slice. The storage is still
+    arena-owned and never escapes the per-call lifetime.
+  - ADR-015 R10 lifts a `ref`-cell exception: single-cell `ref` of `int`
+    and `bool` is accepted. Ref cells are arena-allocated: each `ref e`
+    reserves a single slot in the arena; reads (`!r`) and writes
+    (`r := v`) compile to direct pointer ops with no GC or RC. `ref` of
+    unsupported element types (string, record, list, polymorphic)
+    remains rejected with `E0013`.
 - Exceptions (no `try` / `raise`).
 - Recursion that allocates without bound (allowed; see §9).
 - Any allocation outside the arena.

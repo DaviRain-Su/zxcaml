@@ -726,3 +726,69 @@ test "lower nullary user ADT constructor without context stays polymorphic" {
     };
     try std.testing.expectEqualStrings("'a", type_var);
 }
+
+test "R6b.3: Option.map call site inline-expands to a Match over Some/None" {
+    var frontend_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer frontend_arena.deinit();
+
+    // (Option.map (fun x -> x + 1) (Some 5)) at the body of entrypoint.
+    const frontend = try ttree.parseModule(
+        &frontend_arena,
+        "(zxcaml-cir 0.6 (module (let entrypoint (lambda (_input) (app (var Option.map) (lambda (x) (prim \"+\" (var x) (const-int 1))) (ctor Some (const-int 5)))))))",
+    );
+
+    var core_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer core_arena.deinit();
+
+    const module = try lowerModule(&core_arena, frontend);
+    const entrypoint = switch (module.decls[0]) {
+        .Let => |value| value,
+        .LetGroup => unreachable,
+    };
+    const lambda = switch (entrypoint.value.*) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+
+    // After lowering, the body is `let f = lambda in let scrut = ctor Some 5 in match scrut ...`.
+    const outer_let = switch (lambda.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(std.mem.startsWith(u8, outer_let.name, "__zxc_hof_f"));
+
+    const inner_let = switch (outer_let.body.*) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(std.mem.startsWith(u8, inner_let.name, "__zxc_opt_scrut"));
+
+    const match_expr = switch (inner_let.body.*) {
+        .Match => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 2), match_expr.arms.len);
+    const some_pattern = switch (match_expr.arms[0].pattern) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("Some", some_pattern.name);
+    const none_pattern = switch (match_expr.arms[1].pattern) {
+        .Ctor => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("None", none_pattern.name);
+
+    // The match result should be an option<int>.
+    const match_adt = switch (match_expr.ty) {
+        .Adt => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings("option", match_adt.name);
+
+    // The rendered Core IR contains the synthesized `match` form, not a residual `Option.map` call.
+    const printed = try pretty.formatModule(std.testing.allocator, module);
+    defer std.testing.allocator.free(printed);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "(match") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "(var Option.map") == null);
+}

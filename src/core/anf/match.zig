@@ -251,6 +251,23 @@ pub fn inferSimpleExprTy(arena: *std.heap.ArenaAllocator, pattern_var_tys: *Type
             break :blk .{ .Tuple = tys };
         },
         .Lambda, .App, .Ctor, .Match, .TupleProj, .Record, .RecordField, .RecordUpdate, .FieldSet => null,
+        // R9.1 read-only arrays: only the length probe has a known shape we
+        // can specialize on; arrays themselves can't appear in match
+        // scrutinees in the current surface, so return null/Int and rely on
+        // the lowerer to handle the actual types.
+        .ArrayLit => null,
+        .ArrayGet => .Int,
+        .ArrayLength => .Int,
+        // ArraySet returns unit; ArrayMake yields an int array (carry null
+        // because the helper can't speak the array element type here).
+        .ArraySet => .Unit,
+        .ArrayMake => null,
+        // ADR-015 option C / R10: refs can't appear in match scrutinees in
+        // the current surface, so we return null/.Unit and let the lowerer
+        // resolve types from the typed-tree context.
+        .RefMake => null,
+        .RefGet => null,
+        .RefSet => .Unit,
     };
 }
 
@@ -315,6 +332,32 @@ pub fn inferExprVarExpectations(arena: *std.heap.ArenaAllocator, pattern_var_tys
             }
         },
         .Lambda, .Constant => {},
+        .ArrayLit => |array_lit| {
+            for (array_lit.elems) |elem| try inferExprVarExpectations(arena, pattern_var_tys, elem, .Int);
+        },
+        .ArrayGet => |array_get| {
+            try inferExprVarExpectations(arena, pattern_var_tys, array_get.arr.*, null);
+            try inferExprVarExpectations(arena, pattern_var_tys, array_get.idx.*, .Int);
+        },
+        .ArrayLength => |array_length| try inferExprVarExpectations(arena, pattern_var_tys, array_length.arr.*, null),
+        .ArraySet => |array_set| {
+            try inferExprVarExpectations(arena, pattern_var_tys, array_set.arr.*, null);
+            try inferExprVarExpectations(arena, pattern_var_tys, array_set.idx.*, .Int);
+            try inferExprVarExpectations(arena, pattern_var_tys, array_set.value.*, .Int);
+        },
+        .ArrayMake => |array_make| {
+            try inferExprVarExpectations(arena, pattern_var_tys, array_make.init.*, .Int);
+        },
+        .RefMake => |ref_make| {
+            try inferExprVarExpectations(arena, pattern_var_tys, ref_make.init.*, null);
+        },
+        .RefGet => |ref_get| {
+            try inferExprVarExpectations(arena, pattern_var_tys, ref_get.target.*, null);
+        },
+        .RefSet => |ref_set| {
+            try inferExprVarExpectations(arena, pattern_var_tys, ref_set.target.*, null);
+            try inferExprVarExpectations(arena, pattern_var_tys, ref_set.value.*, null);
+        },
     }
 }
 

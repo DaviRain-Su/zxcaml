@@ -92,10 +92,9 @@ src/
 │
 ├── backend/
 │   ├── api.zig                 -- Backend 接口（EXTENSION POINT）
-│   ├── zig_codegen.zig         -- ZigBackend
-│   ├── interp.zig              -- 树遍历解释器
-│   ├── ocaml_stub.zig          -- 仅编译占位（不是前端；前端在 frontend/）
-│   └── llvm_stub.zig           -- 仅编译占位
+│   ├── zig_codegen.zig         -- ZigBackend 门面（re-export zig_codegen/）
+│   ├── zig_codegen/            -- ZigBackend 实现，按职责拆分
+│   └── interp.zig              -- 树遍历解释器
 │
 └── driver/
     ├── pipeline.zig            -- spawn zxc-frontend，驱动剩下流水线

@@ -224,8 +224,9 @@ and rejected.
 
 There is **no** OCaml backend on the main path.
 
-A compile-only stub (`src/backend/ocaml_stub.zig`) exists solely to
-keep the backend trait honest. It returns `error.NotImplemented`.
+No `OCamlBackend` is shipped, even as a stub. The earlier compile-only
+placeholder under `src/backend/` was removed; reintroduce one only when
+a real OCaml backend is scheduled.
 
 ### Reasons
 
@@ -879,3 +880,404 @@ This is the same posture ADR-009 takes toward OxCaml.
   evolution is fine; copy-paste is not.
 - See `docs/zignocchio-relationship.md` for the longer narrative
   of what we learned from reading it and how that shaped P1.
+
+---
+
+## ADR-015 — Controlled mutable primitives (`array` / `for` / `ref`)
+
+**Status:** Accepted (options B / R9.2 and C / R10; option D landed earlier; sub-option B.2 remains deferred)
+**Date:** 2026-05-12
+
+> **Status note (R9.2, 2026-05-12)** — Option B is landed for `int`
+> element types: `[| ... |]` literals, `Array.get` / `a.(i)`,
+> `Array.length`, `Array.set` / `a.(i) <- v`, and `Array.make N init`
+> where `N` is an `int` literal. Storage stays arena-backed and writes
+> in place. Polymorphic / non-int element types and dynamic-size
+> `Array.make` from non-literal `N` remain deferred to a follow-up
+> (working name B.2).
+>
+> **Status note (R10, 2026-05-12)** — Option C is now **accepted**.
+> Single-cell `ref` of `int` and `bool` is plumbed through the
+> frontend, Core IR, ANF, interpreter, and Zig codegen with
+> arena-allocated storage (one slot per `ref e`). `!r` and `r := v`
+> compile to direct pointer load/store. The determinism oracle
+> covers `ref` programs via interp/native parity. `--no-alloc`
+> rejects every `ref e` site (`DX2-NOALLOC`).
+>
+> **Still deferred (R10):**
+> - `ref` of unsupported element types: `string`, `record`, `list`,
+>   polymorphic. The frontend continues to reject these with
+>   `E0013` ("this `ref` element type is not part of the ZxCaml
+>   subset (R10)").
+> - `ref` aliasing across function boundaries (single cell only;
+>   sharing a `ref` through a closure or returning one is not
+>   currently exercised and remains untested surface).
+> - Other mutation forms — `setfield` outside `AccountFieldSet`,
+>   instance-variable writes, override expressions — keep E0013
+>   defensively.
+> - Wire 1.5 freezes the new `ref-make` / `ref-get` / `ref-set`
+>   sexps (see `docs/wire-compat.md`).
+> - Sub-option B.2 (dynamic-size `Array.make` and non-int element
+>   types) is still future work.
+>
+> **Status note (R11.5, 2026-05-12)** — Match scrutinee and
+> `let`-destructure forms are no longer restricted to atom-shaped
+> expressions. `match !cur with ...`, `match foo () with ...`,
+> `match (if c then a else b) with ...`, and `let (a, b) = <expr>
+> in ...` are accepted by the frontend via a synthetic
+> `__zxc_match_scrut_<n>` binding lift. The `match`/`ref-get`
+> deferred item is resolved; `tests/ui/ref_option.ml` is restored.
+
+### Context
+
+The current subset (`src/frontend/zxc_subset.ml`) rejects all of
+OCaml's primary mutation surface: `Texp_array` (E0019),
+`Texp_for` / `Texp_while` (E0017), and `ref` / `:=` / `!` (E0013).
+This fit P1–P9 because the arena model (ADR-005, ADR-007) and the
+determinism invariant (ADR-008) are easiest to reason about when
+every value is immutable and every iteration is recursive.
+
+Real OCaml programs lean on bounded mutation: fixed-size `int`
+buffers, `ref` accumulators, counted `for` loops. Porting such a
+program to ZxCaml today forces a `let rec` rewrite even when the
+original was already verifier-friendly (stack-bounded loop, no
+escape, no GC).
+
+This ADR re-opens a small, controlled slice that fits the arena
+model, the BPF verifier's preference for bounded loops, the
+`no_alloc` checker (P3), and the determinism oracle (ADR-008).
+
+### Options considered
+
+- **A** — Status quo — keep the full ban on `array`, `for`, `while`,
+  and `ref`. Programs continue to use `let rec` and immutable data.
+- **B** — Bytes-style fixed-size arrays — allow a `bytes`-like
+  `array` of `int` / `u8` whose length is fixed at allocation time,
+  arena-backed, no GC objects as elements.
+- **C** — Arena-allocated `ref` cells — accept OCaml's `ref` / `:=`
+  / `!` but lower it to a one-slot arena allocation; reads and
+  writes become explicit load/store on that slot.
+- **D** — `for` / `while` as syntactic sugar — accept the surface
+  syntax and desugar at the frontend bridge into the existing
+  `let rec` tail-call lowering (P8). The runtime sees no new IR.
+
+### Decision
+
+Adopt **D + B + C** in that order:
+
+1. **D first.** Desugar `for` / `while` to tail-recursive helpers
+   at the frontend bridge: zero new Core IR, zero new runtime, no
+   wire bump. Loop body purity is preserved because the loop
+   variable is bound by recursion, not by mutation.
+2. **B next.** Add a `Bytes`-shaped fixed-size mutable array of
+   `int` / `u8` only. Length is fixed at allocation, storage is
+   arena-allocated (ADR-005, ADR-007), elements never carry
+   tracked pointers. Verifier sees bounded indexing; `no_alloc`
+   sees a visible allocation site.
+3. **C (R10, accepted).** Accept `ref` cells with `int` / `bool`
+   element type as a single-slot arena allocation. The
+   interpreter models the slot explicitly; the Zig backend emits
+   a single pointer-load/store per `!r` / `r := v`. The
+   determinism oracle treats interp and native as equivalent on
+   ref-using programs (ADR-008). The "values are immutable"
+   invariant is preserved everywhere else: only `ref` cells (and
+   the previously accepted array slots) carry mutation, and the
+   mutation is visible at every site through the explicit
+   `ref-make` / `ref-get` / `ref-set` Core IR nodes.
+
+Option **A** is rejected: real Solana programs (escrow state,
+fee accumulators, vote tallies) want bounded indexed buffers and
+counted loops, and forcing every such program through `let rec`
+increases the porting tax without making the output safer.
+
+### Consequences
+
+- Positive: ports of OCaml code with `for` loops and small mutable
+  byte/int buffers stop hitting E0017 / E0019.
+- Negative: the interpreter grows a mutable-array primitive that
+  ADR-008 must keep in lockstep with the Zig backend; out-of-bounds
+  access becomes a new panic class.
+- Wire format impact: option **D** is zero wire bump. Option **B**
+  adds `Earray_make` / `Earray_get` / `Earray_set` Core IR nodes,
+  i.e. a minor bump from `1.2` to `1.3`, gated by
+  `docs/wire-compat.md`. Option **C** (R10) adds `ref-make` /
+  `ref-get` / `ref-set` sexps, bumping the wire to `1.5`.
+- `no_alloc` impact: `Earray_make` is an allocation site;
+  `--no-alloc` rejects it. `get`/`set` and the `for`/`while`
+  desugaring are allocation-free. `ref-make` is also an
+  allocation site; `--no-alloc` rejects it with
+  `DX2-NOALLOC` ("ref cell allocation is not allowed in a
+  no_alloc context"). `ref-get` and `ref-set` are
+  allocation-free.
+- Codegen complexity: D reuses P8's tail-call lowering; B lowers
+  to an arena bump plus bounds-checked load/store. No new BPF
+  intrinsic.
+- Documentation impact: update `02-grammar.md` (surface forms),
+  `04-memory-model.md` (arrays live in the arena), and this ADR.
+
+### Acceptance criteria for implementation
+
+- [ ] Frontend accepts `for i = a to b do e done` and
+      `while c do e done` and emits a desugared `let rec` Core IR.
+- [ ] Frontend accepts `Array.make n x` / `Array.get` / `Array.set`
+      for `int` and `u8` element types only; other element types
+      keep raising E0019.
+- [ ] Wire format bumped to `1.3` with a backwards-read shim for
+      `1.2` until the next phase seal.
+- [ ] Interpreter and Zig backend implement the new array ops and
+      pass the determinism oracle on `examples/for_loop.ml` and
+      `examples/byte_buffer.ml`.
+- [ ] `no_alloc` rejects `Array.make` under `--no-alloc`; existing
+      `--no-alloc` examples keep passing.
+- [ ] Mollusk SVM test covers a program that uses a fixed-size
+      byte buffer to assemble CPI instruction data.
+- [ ] BPF byte-reproducibility (G13, ADR-008) covers the new
+      examples.
+
+### Alternatives rejected
+
+- **A (status quo)** — rejected: porting tax is now the largest
+  single subset complaint; keeping the ban indefinitely turns
+  "subset of OCaml" into "different language".
+- **C as "rejected for now"** — superseded by R10, which accepted
+  option C for `int` / `bool` element types only (see status note
+  above). The original concern (duplicates B at length 1,
+  complicates the interpreter, weakens determinism) is addressed
+  by limiting the element types and by keeping interp/native in
+  lockstep through the determinism oracle.
+
+---
+
+## ADR-016 — Multi-file modules
+
+**Status:** Proposed
+**Date:** 2026-05-12
+
+### Context
+
+Today `omlz` accepts exactly one `.ml` file per build. The bundled
+stdlib (P5 / P7) is the only multi-source surface, and it is
+special-cased inside the frontend bridge rather than treated as a
+real module system. There is no `open Foo` that points at another
+user-written file, no per-file `.cmt` joining, and no notion of a
+"project" in the sense `dune` uses.
+
+This is a real limitation. The Mollusk suite currently has 27
+integration tests, and several of them duplicate helper code
+verbatim because there is no way to factor it into a shared file.
+Real Solana programs (escrow + vault + token + admin) want at
+least one shared `Types.ml` plus per-instruction files.
+
+ADR-010 commits us to using upstream OCaml `compiler-libs` as the
+frontend, and ADR-011 commits us to `build.zig` as the only build
+driver with no `dune`. Any multi-file story has to live inside
+those constraints: it must be drivable from a single `zig build`
+step and it must reuse `ocamlc -bin-annot` cleanly.
+
+### Options considered
+
+- **A** — Stay single-file. Users keep concatenating manually or
+  inlining helpers.
+- **B** — Frontend-level `open Foo` — allow `open Foo` to refer
+  to another `.ml` file in the same directory; the OCaml frontend
+  bridge type-checks the dependency closure, concatenates the
+  resulting `Typedtree`s in topological order, and emits a single
+  sexp. No on-disk `.cmi` cache, no incremental compilation.
+- **C** — Full `dune`-style project — adopt a `dune-project`
+  file, per-library directories, dependency resolution, `.cmi`
+  caching. This would supersede ADR-011's "no `dune`" rule.
+
+### Decision
+
+Adopt **option B**. The frontend bridge is extended to accept a
+list of `.ml` files in dependency order (or, equivalently, an
+entry file plus a project root from which `open Foo` resolves to
+`./foo.ml`). The frontend type-checks all of them with
+`compiler-libs`, joins the resulting `Typedtree`s, and emits a
+single sexp that the Zig pipeline consumes unchanged from the
+single-file shape, save for a new optional `file_id` annotation
+on every node.
+
+This is the smallest change that unblocks `open Types`, shared
+helpers, and per-instruction files, while keeping ADR-011 intact
+(no `dune`) and the existing wire contract stable except for that
+additive annotation.
+
+Option **A** is rejected because the cost of duplicating helpers
+is now visible in the Mollusk suite and in the SPL examples
+(ADR-014 cascade). Option **C** is rejected as out of proportion:
+adopting `dune` would mean two build systems, a transitive opam
+footprint, and a direct conflict with ADR-011, none of which is
+justified by the current corpus size.
+
+### Consequences
+
+- Positive: `open Foo` works for user code. Shared `Types.ml` and
+  multi-file Solana programs become natural. The Mollusk suite
+  can deduplicate its helpers.
+- Negative: there is no incremental compilation; every `omlz
+  build` re-type-checks the full closure. Acceptable while the
+  corpus is small.
+- Wire format impact: each Core IR node grows an optional
+  `file_id` field so source maps (P9 SRCMAP, see ADR-008 and
+  `docs/source-map.md`) can attribute spans to the right file.
+  This is an additive minor bump on top of whatever ADR-015
+  lands on.
+- `no_alloc` checker impact: none. `--no-alloc` operates on Core
+  IR after the closure is joined, so it sees the same shape it
+  sees today.
+- Codegen complexity: zero. The Zig pipeline still reads one
+  sexp, lowers one Core IR, and emits one artefact.
+- Documentation impact: `07-repo-layout.md` documents the
+  expected per-project file layout; `10-frontend-bridge.md`
+  documents the closure-resolution rules and the
+  `--entry` / `--root` CLI flags; `02-grammar.md` notes that
+  `open Foo` resolves to `./foo.ml`.
+
+### Acceptance criteria for implementation
+
+- [ ] `omlz build --entry main.ml` resolves `open Foo` to
+      `./foo.ml`, type-checks the closure, and produces the same
+      sexp shape as today plus a `file_id` annotation.
+- [ ] Cycles in `open` are reported as an `E01xx` diagnostic at
+      the frontend (not as an OCaml type error).
+- [ ] Wire format bumped (minor) to carry `file_id`; old wire
+      readers continue to accept the new sexp (`file_id`
+      optional).
+- [ ] Source-map sidecars (`docs/source-map.md`) include the
+      file path for every PC, and `omlz unmap` resolves PCs into
+      `file:line:col` across files.
+- [ ] Mollusk suite has at least one test that uses a shared
+      `Types.ml` between two instruction files; previously
+      duplicated helpers are removed.
+- [ ] Determinism oracle (ADR-008) runs across the multi-file
+      examples.
+
+### Alternatives rejected
+
+- **A (single-file)** — rejected because the duplication cost in
+  the Mollusk suite and the SPL examples is now concrete, and the
+  porting tax on real Solana programs is no longer abstract.
+- **C (full `dune` project)** — rejected because it directly
+  contradicts ADR-011 and pulls in an `opam` footprint we have
+  explicitly avoided. If multi-file ever grows into "real
+  packages with separate compilation", we revisit ADR-011 and
+  this ADR together; until then, option B is the smaller commit.
+
+---
+
+## ADR-017 — Float replacement strategy
+
+**Status:** Proposed
+**Date:** 2026-05-12
+
+### Context
+
+Solana BPF has no FPU; the SBPF instruction set (ADR-013) omits
+floating-point. The ZxCaml subset therefore rejects every
+`Texp_constant(float)` at the frontend (`zxc_subset.ml`, E0011).
+
+The ban is correct, but it cuts off a large class of programs.
+Real Solana code computes percentages, interest rates, slippage
+bounds, AMM prices, and oracle weights. In Rust those use `u128`
+fixed-point math or crates like `rust_decimal`. In our subset the
+author writes `0.05`, hits E0011, and either gives up or
+hand-rolls Q-format math without library support.
+
+This ADR is about replacing — not relaxing — the float ban with a
+sanctioned answer.
+
+### Options considered
+
+- **A** — Keep the ban with no replacement. Authors hand-roll
+  fixed-point arithmetic on `int` / `u64`.
+- **B** — Ship a bundled `Decimal` / `Fixed` module backed by
+  integer Q-format (e.g. Q64.64 or signed Q63.64), with
+  documented overflow and rounding semantics and a tested
+  arithmetic surface.
+- **C** — Accept `float` syntactically and lower it to fixed-point
+  silently at the frontend. The user writes `0.05`; the compiler
+  rewrites it to a Q-format integer pair.
+
+### Decision
+
+Adopt **option B**. Add a `Fixed` module (working name) to the
+bundled stdlib, backed by signed Q64.64 stored as a pair of
+`int64`s (or, more likely, a struct of two `u64`s). The module
+exports `of_int`, `to_int`, `of_parts num den`, `add`, `sub`,
+`mul`, `div`, `cmp`, plus saturating and checked variants. The
+representation, rounding mode (truncation toward zero), and
+overflow behaviour (panic on `mul` / `div` overflow, wrap on
+`add` / `sub`, matching ADR-008's pinned arithmetic semantics)
+are documented in `05-backends.md` so the interpreter and the
+BPF backend cannot diverge.
+
+Option **A** is rejected because the answer "hand-roll it" is the
+opposite of what a strict OCaml subset should offer; the entire
+point of the subset is to make safe BPF code easy to write, and
+two programs that hand-roll their own Q-format will disagree on
+rounding.
+
+Option **C** is rejected as actively dangerous. Silently rewriting
+`0.05` into Q64.64 fixed-point would mean ZxCaml's interpreter and
+the reference OCaml compiler (ADR-001's "must also be accepted by
+the reference OCaml compiler") disagree on the value of every
+float literal. That breaks ADR-008's determinism invariant by
+construction, and it ambushes anyone who reads OCaml semantics
+into the program.
+
+### Consequences
+
+- Positive: real-world Solana math (rates, prices, percentages)
+  becomes expressible without leaving the subset. The bundled
+  module gives one canonical implementation, so two programs that
+  multiply a rate by an amount cannot disagree on rounding.
+- Negative: precision is bounded by Q64.64. Users who need more
+  precision must drop to bigint-style code, which is not in scope
+  for this ADR.
+- Wire format impact: minimal. `Fixed` values are represented as
+  two `int` Core IR nodes; no new IR shape is required. The
+  module surface is a stdlib addition, not a wire change.
+- `no_alloc` checker impact: `Fixed` is a pair of unboxed
+  integers in the BPF lowering and a small tuple in the
+  interpreter; on the BPF path it allocates nothing. The
+  `--no-alloc` checker stays truthful.
+- Codegen complexity: moderate. `Fixed.mul` and `Fixed.div`
+  require 128-bit intermediate products. The Zig backend can
+  emit `u128` arithmetic (which LLVM lowers for SBPF v2 per
+  ADR-013); the interpreter does the same in software. A
+  determinism test pins their equivalence.
+- Documentation impact: a new `docs/stdlib-fixed.md` (or a
+  section in an existing stdlib doc) describes the type, the
+  rounding mode, and the overflow rules. `02-grammar.md` notes
+  that float literals remain rejected.
+
+### Acceptance criteria for implementation
+
+- [ ] `Fixed.t` and its operations are exported from the bundled
+      stdlib.
+- [ ] Rounding mode and overflow semantics are documented in
+      `05-backends.md` and tested in `inline_tests.zig` and the
+      determinism oracle.
+- [ ] Determinism oracle covers `Fixed.add`, `sub`, `mul`, `div`
+      across edge cases (zero, negative, overflow boundary).
+- [ ] At least one Mollusk example (e.g. an AMM-style swap with
+      a fee rate) uses `Fixed` end-to-end and passes.
+- [ ] `Texp_constant(float)` continues to raise E0011 with a
+      diagnostic hint that points authors at the `Fixed` module.
+- [ ] BPF byte-reproducibility check (ADR-008 / G13) covers a
+      `Fixed`-using example.
+
+### Alternatives rejected
+
+- **A (keep ban, no replacement)** — rejected because the cost of
+  "hand-roll Q-format math" lands on every author who needs a
+  rate or percentage, and two authors will not agree on rounding.
+- **C (silent lowering of `float`)** — rejected because it breaks
+  ADR-001 (program must also be accepted by reference OCaml) and
+  ADR-008 (interpreter and backend must agree); reference OCaml's
+  `0.05` is an IEEE-754 binary64 value, not Q64.64, so the two
+  semantics diverge by construction. Cross-reference: this is
+  also why option C in ADR-015 (silent rewrites of `ref` cells)
+  was rejected — silent semantic shifts away from upstream OCaml
+  are out of bounds.

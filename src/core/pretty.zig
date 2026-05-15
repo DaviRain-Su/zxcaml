@@ -153,6 +153,14 @@ fn exprLoc(expr: ir.Expr) ?ir.Loc {
         .RecordField => |value| value.loc,
         .RecordUpdate => |value| value.loc,
         .AccountFieldSet => |value| value.loc,
+        .ArrayLit => |value| value.loc,
+        .ArrayGet => |value| value.loc,
+        .ArrayLength => |value| value.loc,
+        .ArraySet => |value| value.loc,
+        .ArrayMake => |value| value.loc,
+        .RefMake => |value| value.loc,
+        .RefGet => |value| value.loc,
+        .RefSet => |value| value.loc,
     };
 }
 
@@ -437,6 +445,96 @@ fn formatExpr(out: *std.ArrayList(u8), allocator: std.mem.Allocator, expr: ir.Ex
             try formatLayout(out, allocator, field_set.layout);
             try append(out, allocator, ")");
         },
+        .ArrayLit => |array_lit| {
+            try append(out, allocator, "(array-lit");
+            try append(out, allocator, " :elem-ty ");
+            try formatTy(out, allocator, array_lit.elem_ty);
+            for (array_lit.elems) |elem| {
+                try append(out, allocator, " ");
+                try formatExpr(out, allocator, elem.*);
+            }
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, array_lit.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, array_lit.layout);
+            try append(out, allocator, ")");
+        },
+        .ArrayGet => |array_get| {
+            try append(out, allocator, "(array-get ");
+            try formatExpr(out, allocator, array_get.arr.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, array_get.idx.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, array_get.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, array_get.layout);
+            try append(out, allocator, ")");
+        },
+        .ArrayLength => |array_length| {
+            try append(out, allocator, "(array-length ");
+            try formatExpr(out, allocator, array_length.arr.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, array_length.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, array_length.layout);
+            try append(out, allocator, ")");
+        },
+        .ArraySet => |array_set| {
+            try append(out, allocator, "(array-set ");
+            try formatExpr(out, allocator, array_set.arr.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, array_set.idx.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, array_set.value.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, array_set.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, array_set.layout);
+            try append(out, allocator, ")");
+        },
+        .ArrayMake => |array_make| {
+            try append(out, allocator, "(array-make");
+            try append(out, allocator, " :elem-ty ");
+            try formatTy(out, allocator, array_make.elem_ty);
+            try appendPrint(out, allocator, " :size {d} ", .{array_make.size});
+            try formatExpr(out, allocator, array_make.init.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, array_make.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, array_make.layout);
+            try append(out, allocator, ")");
+        },
+        .RefMake => |ref_make| {
+            try append(out, allocator, "(ref-make :elem-ty ");
+            try formatTy(out, allocator, ref_make.elem_ty);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, ref_make.init.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, ref_make.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, ref_make.layout);
+            try append(out, allocator, ")");
+        },
+        .RefGet => |ref_get| {
+            try append(out, allocator, "(ref-get ");
+            try formatExpr(out, allocator, ref_get.target.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, ref_get.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, ref_get.layout);
+            try append(out, allocator, ")");
+        },
+        .RefSet => |ref_set| {
+            try append(out, allocator, "(ref-set ");
+            try formatExpr(out, allocator, ref_set.target.*);
+            try append(out, allocator, " ");
+            try formatExpr(out, allocator, ref_set.value.*);
+            try append(out, allocator, " :ty ");
+            try formatTy(out, allocator, ref_set.ty);
+            try append(out, allocator, " :layout ");
+            try formatLayout(out, allocator, ref_set.layout);
+            try append(out, allocator, ")");
+        },
     }
 }
 
@@ -536,6 +634,16 @@ fn formatTy(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: ir.Ty) !v
                 try append(out, allocator, " ");
                 try formatTy(out, allocator, param_ty);
             }
+            try append(out, allocator, ")");
+        },
+        .Array => |elem| {
+            try append(out, allocator, "(array ");
+            try formatTy(out, allocator, elem.*);
+            try append(out, allocator, ")");
+        },
+        .Ref => |elem| {
+            try append(out, allocator, "(ref ");
+            try formatTy(out, allocator, elem.*);
             try append(out, allocator, ")");
         },
     }

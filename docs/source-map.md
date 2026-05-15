@@ -63,6 +63,33 @@ developers can still use the `.map` sidecar.
 - CI and `omlz` tests that validate `.so` sections are tolerant when `objcopy`
 or `objdump` tooling is not installed.
 
+### Degradation modes
+
+Source-map emission supports two modes; the BPF build never fails or changes
+its exit code based on which mode is active:
+
+1. **Embedded section + sidecar (default).** `llvm-objcopy` is on `PATH`, the
+   `.so` contains a non-allocated `.zxcaml.srcmap` section with the
+   deterministic, gzip-compressed JSON payload, and the `.map` sidecar is
+   written alongside the artifact. `omlz unmap --so` and `omlz unmap --map`
+   both resolve PCs.
+2. **Sidecar only (degraded).** `llvm-objcopy` is missing on `PATH`. The
+   BPF driver emits a single non-fatal warning to stderr the first time it
+   detects the missing tool during a build:
+
+   ```text
+   warning: llvm-objcopy not found on PATH; .zxcaml.srcmap section will not be embedded in the .so. The .map sidecar is still written. omlz unmap --map can still resolve PCs.
+   ```
+
+   The `.so` is produced normally without the embedded section, and the `.map`
+   sidecar is still written. Reverse PC lookup remains available via
+   `omlz unmap --map out/<name>.map --pc ...`; only `omlz unmap --so` lacks
+   the embedded fallback.
+
+Use `omlz doctor` to diagnose which mode applies on the current host: it
+reports `llvm-objcopy` availability alongside the other BPF toolchain checks
+so users can install or expose the binary when they want full embedding.
+
 ## Section Flags
 
 The embedded section is metadata only:

@@ -153,6 +153,54 @@ pub fn renameExprValueVars(arena: *std.heap.ArenaAllocator, expr: ir.Expr, renam
             .ty = field_set.ty,
             .layout = field_set.layout,
         } },
+        .ArrayLit => |array_lit| .{ .ArrayLit = .{
+            .elem_ty = array_lit.elem_ty,
+            .elems = try renameExprSliceVars(arena, array_lit.elems, renames),
+            .ty = array_lit.ty,
+            .layout = array_lit.layout,
+        } },
+        .ArrayGet => |array_get| .{ .ArrayGet = .{
+            .arr = try renameExprVars(arena, array_get.arr, renames),
+            .idx = try renameExprVars(arena, array_get.idx, renames),
+            .ty = array_get.ty,
+            .layout = array_get.layout,
+        } },
+        .ArrayLength => |array_length| .{ .ArrayLength = .{
+            .arr = try renameExprVars(arena, array_length.arr, renames),
+            .ty = array_length.ty,
+            .layout = array_length.layout,
+        } },
+        .ArraySet => |array_set| .{ .ArraySet = .{
+            .arr = try renameExprVars(arena, array_set.arr, renames),
+            .idx = try renameExprVars(arena, array_set.idx, renames),
+            .value = try renameExprVars(arena, array_set.value, renames),
+            .ty = array_set.ty,
+            .layout = array_set.layout,
+        } },
+        .ArrayMake => |array_make| .{ .ArrayMake = .{
+            .elem_ty = array_make.elem_ty,
+            .size = array_make.size,
+            .init = try renameExprVars(arena, array_make.init, renames),
+            .ty = array_make.ty,
+            .layout = array_make.layout,
+        } },
+        .RefMake => |ref_make| .{ .RefMake = .{
+            .elem_ty = ref_make.elem_ty,
+            .init = try renameExprVars(arena, ref_make.init, renames),
+            .ty = ref_make.ty,
+            .layout = ref_make.layout,
+        } },
+        .RefGet => |ref_get| .{ .RefGet = .{
+            .target = try renameExprVars(arena, ref_get.target, renames),
+            .ty = ref_get.ty,
+            .layout = ref_get.layout,
+        } },
+        .RefSet => |ref_set| .{ .RefSet = .{
+            .target = try renameExprVars(arena, ref_set.target, renames),
+            .value = try renameExprVars(arena, ref_set.value, renames),
+            .ty = ref_set.ty,
+            .layout = ref_set.layout,
+        } },
     };
 }
 

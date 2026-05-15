@@ -1,0 +1,5 @@
+error[E0030]: missing required label `~some:` in call to Option.fold
+ --> tests/ui/labelled_missing_required.ml:1:19
+  |
+1 | let entrypoint _ = Option.fold ~none:0 (Some 5)
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

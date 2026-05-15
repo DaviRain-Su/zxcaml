@@ -1,3 +1,3 @@
 let entrypoint _ =
-  let x = ref 0 in
+  let x = ref "abc" in
   !x

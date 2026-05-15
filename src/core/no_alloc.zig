@@ -16,6 +16,12 @@ pub const AllocationKind = enum {
     RecordUpdate,
     ConstructorPayload,
     LambdaCapture,
+    /// ADR-015 R9.1 read-only int array literal allocates onto the program
+    /// arena, so it is rejected by the no-alloc analysis with E0001.
+    Array,
+    /// ADR-015 option C / R10 ref cell allocates a 1-slot region in the
+    /// arena, so RefMake is rejected by the no-alloc analysis with E0001.
+    Ref,
 };
 
 /// The Core IR site that made a function fail no_alloc analysis.
@@ -246,6 +252,49 @@ const Analyzer = struct {
                 if (try self.checkExpr(function_name, field_set.account_expr.*, scope, current_loc)) |site| return site;
                 return self.checkExpr(function_name, field_set.value.*, scope, current_loc);
             },
+            .ArrayLit => |array_lit| {
+                for (array_lit.elems) |elem| {
+                    if (try self.checkExpr(function_name, elem.*, scope, current_loc)) |site| return site;
+                }
+                return Site{ .function_name = function_name, .kind = .Array, .loc = firstKnownLoc(array_lit.loc, current_loc) };
+            },
+            .ArrayGet => |array_get| {
+                if (try self.checkExpr(function_name, array_get.arr.*, scope, current_loc)) |site| return site;
+                return self.checkExpr(function_name, array_get.idx.*, scope, current_loc);
+            },
+            .ArrayLength => |array_length| return self.checkExpr(function_name, array_length.arr.*, scope, current_loc),
+            .ArraySet => |array_set| {
+                // ADR-015 R9.2: ArraySet mutates existing arena storage; it
+                // does NOT itself allocate. Recurse into operands only.
+                if (try self.checkExpr(function_name, array_set.arr.*, scope, current_loc)) |site| return site;
+                if (try self.checkExpr(function_name, array_set.idx.*, scope, current_loc)) |site| return site;
+                return self.checkExpr(function_name, array_set.value.*, scope, current_loc);
+            },
+            .ArrayMake => |array_make| {
+                // ADR-015 R9.2: ArrayMake of literal size N allocates a slice
+                // onto the arena; report a Site of kind .Array, mirroring
+                // R9.1's ArrayLit reporting.
+                if (try self.checkExpr(function_name, array_make.init.*, scope, current_loc)) |site| return site;
+                return Site{ .function_name = function_name, .kind = .Array, .loc = firstKnownLoc(array_make.loc, current_loc) };
+            },
+            .RefMake => |ref_make| {
+                // ADR-015 option C / R10: RefMake allocates a 1-slot arena
+                // cell. Recurse into the initializer expression first so
+                // any nested allocations are reported with their own loc.
+                if (try self.checkExpr(function_name, ref_make.init.*, scope, current_loc)) |site| return site;
+                return Site{ .function_name = function_name, .kind = .Ref, .loc = firstKnownLoc(ref_make.loc, current_loc) };
+            },
+            .RefGet => |ref_get| {
+                // RefGet reads a slot but doesn't allocate.
+                return self.checkExpr(function_name, ref_get.target.*, scope, current_loc);
+            },
+            .RefSet => |ref_set| {
+                // ADR-015 option C / R10: RefSet mutates existing arena
+                // storage; it doesn't allocate by itself. Recurse into the
+                // target/value expressions for any nested allocations.
+                if (try self.checkExpr(function_name, ref_set.target.*, scope, current_loc)) |site| return site;
+                return self.checkExpr(function_name, ref_set.value.*, scope, current_loc);
+            },
         }
     }
 };
@@ -265,6 +314,8 @@ pub fn nodeLabel(kind: AllocationKind) []const u8 {
         .RecordUpdate => "Core.RecordUpdate",
         .ConstructorPayload => "Core.Constr(payload)",
         .LambdaCapture => "Core.Lambda(captures)",
+        .Array => "Core.ArrayLit",
+        .Ref => "Core.RefMake",
     };
 }
 
@@ -276,6 +327,8 @@ pub fn allocationDescription(kind: AllocationKind) []const u8 {
         .RecordUpdate => "record update allocation",
         .ConstructorPayload => "constructor payload allocation",
         .LambdaCapture => "capturing lambda allocation",
+        .Array => "int array allocation",
+        .Ref => "ref cell allocation",
     };
 }
 
@@ -382,6 +435,29 @@ fn exprCapturesAny(allocator: std.mem.Allocator, expr: ir.Expr, visible: *const 
         .AccountFieldSet => |field_set| {
             return try exprCapturesAny(allocator, field_set.account_expr.*, visible, shadowed) or
                 try exprCapturesAny(allocator, field_set.value.*, visible, shadowed);
+        },
+        .ArrayLit => |array_lit| {
+            for (array_lit.elems) |elem| {
+                if (try exprCapturesAny(allocator, elem.*, visible, shadowed)) return true;
+            }
+            return false;
+        },
+        .ArrayGet => |array_get| {
+            return try exprCapturesAny(allocator, array_get.arr.*, visible, shadowed) or
+                try exprCapturesAny(allocator, array_get.idx.*, visible, shadowed);
+        },
+        .ArrayLength => |array_length| return exprCapturesAny(allocator, array_length.arr.*, visible, shadowed),
+        .ArraySet => |array_set| {
+            return try exprCapturesAny(allocator, array_set.arr.*, visible, shadowed) or
+                try exprCapturesAny(allocator, array_set.idx.*, visible, shadowed) or
+                try exprCapturesAny(allocator, array_set.value.*, visible, shadowed);
+        },
+        .ArrayMake => |array_make| return exprCapturesAny(allocator, array_make.init.*, visible, shadowed),
+        .RefMake => |ref_make| return exprCapturesAny(allocator, ref_make.init.*, visible, shadowed),
+        .RefGet => |ref_get| return exprCapturesAny(allocator, ref_get.target.*, visible, shadowed),
+        .RefSet => |ref_set| {
+            return try exprCapturesAny(allocator, ref_set.target.*, visible, shadowed) or
+                try exprCapturesAny(allocator, ref_set.value.*, visible, shadowed);
         },
     }
 }

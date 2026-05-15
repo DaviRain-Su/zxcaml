@@ -139,11 +139,13 @@ test "determinism: interpreter ≡ Zig native on tests/ui corpus" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    // tests/ui/ may not exist yet (F18 is pending). If it doesn't, skip gracefully.
+    // tests/ui/ may not exist yet (F18 is pending). If it doesn't, mark the
+    // test as skipped explicitly so `zig build test --summary all` accounts
+    // for it instead of counting it as a silent pass.
     const cwd = std.Io.Dir.cwd();
     {
         var probe = cwd.openDir(io, "tests/ui", .{}) catch |err| switch (err) {
-            error.FileNotFound => return, // tests/ui/ not yet created — skip
+            error.FileNotFound => return error.SkipZigTest,
             else => return err,
         };
         probe.close(io);

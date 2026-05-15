@@ -11,6 +11,9 @@ pub const Entry = struct {
     title: []const u8,
     description: []const u8,
     fix: []const u8,
+    /// Optional rustc-style fix-it hint. When present, the human renderer
+    /// surfaces it as `  = help: <hint>` after the source caret block.
+    hint: ?[]const u8 = null,
 };
 
 pub const entries = [_]Entry{
@@ -43,6 +46,7 @@ pub const entries = [_]Entry{
         .title = "Float constants cannot be lowered to BPF",
         .description = "Floating-point literals and operations are intentionally excluded from the deterministic Solana BPF target surface. The compiler cannot emit stable BPF code for OCaml float constants.",
         .fix = "Use integers, fixed-point scaling, or explicit decimal encoding instead of float literals.",
+        .hint = "ZxCaml has no FPU on BPF. Use scaled integers (e.g. lamports as u64) or model fixed-point manually.",
     },
     .{
         .code = "E0012",
@@ -52,9 +56,10 @@ pub const entries = [_]Entry{
     },
     .{
         .code = "E0013",
-        .title = "Mutable references or mutable updates are unsupported",
-        .description = "Reference cells, assignment, dereference, and mutable field writes would introduce mutation that the current Core IR and BPF lowering do not model. ZxCaml expects values to flow through explicit bindings.",
-        .fix = "Thread state through function arguments/returns, use immutable record updates, or encode state in Solana account data helpers.",
+        .title = "This mutable update or ref-cell element type is unsupported",
+        .description = "ADR-015 option C (R10) accepts single-cell `ref` of `int` and `bool` (`ref e`, `!r`, `r := v`), arena-allocated as one slot per call. E0013 remains defensive for other mutation forms: `ref` of unsupported element types (string, record, list, polymorphic), `setfield` writes outside the `AccountFieldSet` Solana surface, instance-variable writes, and override expressions. These would introduce mutation that the current Core IR / BPF lowering does not model.",
+        .fix = "Use the accepted ref surface (`ref`/`!`/`:=` over `int` or `bool`), or thread state through function arguments/returns, immutable record updates, or Solana account data helpers.",
+        .hint = "R10 accepts `let r = ref 0 in r := !r + 1; !r` when the element type is `int` or `bool`. For other element types, thread state explicitly or use a recursive `let rec` over an accumulator.",
     },
     .{
         .code = "E0014",
@@ -73,12 +78,14 @@ pub const entries = [_]Entry{
         .title = "Exceptions are unsupported",
         .description = "Exception declarations, raises, and handlers do not fit the explicit, deterministic error surface used by the current BPF pipeline. ZxCaml does not emit exception runtime support.",
         .fix = "Return `option`, `result`, or a domain-specific ADT and handle failures with pattern matching.",
+        .hint = "Return `result` (`Ok x` / `Error msg`) instead of `raise`; pattern-match at call sites.",
     },
     .{
         .code = "E0017",
-        .title = "Loops are unsupported",
-        .description = "`for` and `while` loops are not part of the currently accepted subset. The compiler supports recursion and higher-order list helpers for repeatable control flow.",
-        .fix = "Rewrite loops as recursive functions, tail-recursive accumulators, or `List.fold_left` over a bounded list.",
+        .title = "Loops are accepted; this diagnostic is retained defensively",
+        .description = "Per ADR-015 option D, `for` and `while` are accepted by the frontend and desugared into a self-recursive `let rec` whose tail call is lowered to `while (true)` by the ANF tail-call pass. The E0017 code is preserved for defensive use if desugaring is ever bypassed; in practice it should not fire on supported sources.",
+        .fix = "If you see this code, you are likely on an older toolchain build. Update to a ZxCaml that implements ADR-015 D, or rewrite the loop as an explicit `let rec` tail-recursive helper as a workaround.",
+        .hint = "ZxCaml accepts `for i = lo to hi do body done` and `while cond do body done` natively; they desugar to a tail-recursive helper that compiles to `while (true)` in generated Zig.",
     },
     .{
         .code = "E0018",
@@ -88,9 +95,10 @@ pub const entries = [_]Entry{
     },
     .{
         .code = "E0019",
-        .title = "Arrays are unsupported",
-        .description = "OCaml arrays imply mutable indexed storage that is not currently lowered by the arena-only Core/BPF pipeline. Lists and explicit records are the supported aggregate forms.",
-        .fix = "Use lists for fixed functional sequences, records/tuples for small fixed layouts, or account-data helpers for Solana byte storage.",
+        .title = "This array form is unsupported",
+        .description = "ADR-015 R9.2 accepts read-only int array literals, `Array.get`, `Array.length`, in-place writes via `Array.set` / `a.(i) <- v`, and `Array.make N init` when `N` is a non-negative int literal. Other forms (polymorphic element types, dynamic-size `Array.make`, `Array.init`, `Array.unsafe_get`) remain outside the subset.",
+        .fix = "Use the accepted int-array surface: `[| 1; 2; 3 |]`, `Array.get`, `Array.length`, `Array.set`, `a.(i) <- v`, and `Array.make N init` with a literal `N`.",
+        .hint = "For dynamic-size buffers and non-int element types, fall back to `Bytes.create`/`Bytes.set` or lists/records.",
     },
     .{
         .code = "E0020",
@@ -123,6 +131,49 @@ pub const entries = [_]Entry{
         .fix = "Check the constructor name and define/import a regular ADT constructor that the ZxCaml subset supports.",
     },
     .{
+        .code = "E0030",
+        .title = "Missing required label in labelled call",
+        .description = "A call site to a whitelisted labelled stdlib function omitted a required `~label:` argument. The frontend only accepts these calls when every required label declared in the stdlib signature is supplied.",
+        .fix = "Add the missing labelled argument at the call site; consult the stdlib definition for the full label list.",
+    },
+    .{
+        .code = "E0031",
+        .title = "Unknown or duplicate label in labelled call",
+        .description = "A call site to a whitelisted labelled stdlib function used a label that is not declared in the stdlib signature, or supplied the same label twice. The frontend only accepts the documented labels exactly once each.",
+        .fix = "Remove the unknown/duplicate label or rename it to match the stdlib signature.",
+    },
+    .{
+        .code = "E0200",
+        .title = "Unknown --report kind",
+        .description = "The `--report` flag accepts a comma-separated list of report kinds. Currently supported kinds: `cu`, `stack`, `all`.",
+        .fix = "Pass one of the supported kinds, optionally combining them, e.g. `--report=cu`, `--report=stack`, or `--report=all`.",
+        .hint = "Try --report=cu, --report=stack, or --report=all. Multiple kinds may be combined as --report=cu,stack.",
+    },
+    .{
+        .code = "E0090",
+        .title = "Catch-all for unsupported Texp_* expressions",
+        .description = "The frontend rejected a typedtree expression node (a `Texp_*` form) that has no dedicated diagnostic yet. This is a catch-all bucket meaning the OCaml expression construct is outside the supported ZxCaml subset.",
+        .fix = "Rewrite the expression using supported subset features such as let bindings, ADT constructors, records, pattern matching, lists, and pure functions.",
+    },
+    .{
+        .code = "E0091",
+        .title = "Catch-all for unsupported Tstr_* declarations",
+        .description = "The frontend rejected a typedtree structure item (a `Tstr_*` form) that has no dedicated diagnostic yet. This is a catch-all bucket meaning the OCaml top-level declaration is outside the supported ZxCaml subset.",
+        .fix = "Replace the declaration with supported subset forms such as `let`, `let rec`, type, or simple module declarations.",
+    },
+    .{
+        .code = "E0092",
+        .title = "Catch-all for unsupported Tpat_* patterns",
+        .description = "The frontend rejected a typedtree pattern node (a `Tpat_*` form) that has no dedicated diagnostic yet. This is a catch-all bucket meaning the OCaml pattern construct is outside the supported ZxCaml subset.",
+        .fix = "Rewrite the pattern using supported forms: literal constants, variables, wildcards, tuples, records, lists, and ADT constructors.",
+    },
+    .{
+        .code = "E0099",
+        .title = "Catch-all for any other unsupported node kind",
+        .description = "The frontend rejected a typedtree node that did not match any of the more specific Texp_/Tstr_/Tpat_ buckets. This is a catch-all bucket for OCaml constructs outside the supported ZxCaml subset.",
+        .fix = "Inspect the diagnostic node-kind/message and rewrite the construct into supported subset features, or report a reduced case so a tailored code can be added.",
+    },
+    .{
         .code = "E0090-E0099",
         .title = "Generic subset fallback bucket",
         .description = "The compiler uses this bucket when a subset rejection does not yet have a narrower tailored code. It still means the source contains an OCaml construct outside the supported ZxCaml lowering surface.",
@@ -153,6 +204,35 @@ pub fn render(writer: anytype, requested_code: []const u8, entry: Entry) !void {
     try writer.print("Suggested fix: {s}\n", .{entry.fix});
 }
 
+test "diag explain covers every frontend error code" {
+    // Mirror of every E00xx code that `src/frontend/zxc_subset.ml`
+    // (`unsupported_code_and_message` around line 612) can emit, including
+    // the prefix-fallback bucket codes:
+    //   * `Texp_*` -> E0090
+    //   * `Tstr_*` -> E0091
+    //   * `Tpat_*` -> E0092
+    //   * default  -> E0099
+    const frontend_codes = [_][]const u8{
+        "E0010", "E0011", "E0012", "E0013", "E0014",
+        "E0015", "E0016", "E0017", "E0018", "E0019",
+        "E0020", "E0021", "E0022", "E0023", "E0024",
+        "E0030", "E0031",
+        "E0090", "E0091", "E0092", "E0099",
+    };
+    for (frontend_codes) |code| {
+        const entry = lookup(code) orelse {
+            std.debug.print("missing diag_explain entry for {s}\n", .{code});
+            return error.MissingExplanation;
+        };
+        try std.testing.expect(entry.title.len > 0);
+        try std.testing.expect(entry.description.len > 0);
+        // The lookup must resolve to an entry with this exact code (i.e. the
+        // dedicated entry rather than the generic E0090-E0099 bucket fallback),
+        // so the catch-all buckets each carry their own title/description.
+        try std.testing.expectEqualStrings(code, entry.code);
+    }
+}
+
 test "lookup covers catalog codes and E0090-E0099 bucket" {
     const codes = [_][]const u8{
         "E0001", "E0002", "E0003",
@@ -161,6 +241,7 @@ test "lookup covers catalog codes and E0090-E0099 bucket" {
         "E0016", "E0017", "E0018",
         "E0019", "E0020", "E0021",
         "E0022", "E0023", "E0024",
+        "E0030", "E0031",
         "E0090", "E0095", "E0099",
     };
     for (codes) |code| {

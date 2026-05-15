@@ -37,6 +37,14 @@ fn exprLoc(expr: ir.Expr) ?ir.Loc {
         .RecordField => |value| value.loc,
         .RecordUpdate => |value| value.loc,
         .AccountFieldSet => |value| value.loc,
+        .ArrayLit => |value| value.loc,
+        .ArrayGet => |value| value.loc,
+        .ArrayLength => |value| value.loc,
+        .ArraySet => |value| value.loc,
+        .ArrayMake => |value| value.loc,
+        .RefMake => |value| value.loc,
+        .RefGet => |value| value.loc,
+        .RefSet => |value| value.loc,
     };
 }
 

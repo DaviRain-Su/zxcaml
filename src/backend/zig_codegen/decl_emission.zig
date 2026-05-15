@@ -8,6 +8,7 @@ const TailCallParam = common.TailCallParam;
 const LetBindingStorage = common.LetBindingStorage;
 const freeEmittedFunctionName = common.freeEmittedFunctionName;
 const exprUsesName = common.exprUsesName;
+const exprUsesNameOutsideRuntimeProcessArgs = common.exprUsesNameOutsideRuntimeProcessArgs;
 const zigTypeName = common.zigTypeName;
 const zigTypeExprName = common.zigTypeExprName;
 const payloadTypeName = common.payloadTypeName;
@@ -170,7 +171,11 @@ pub fn emitFunction(
 ) EmitError!void {
     try append(out, allocator, "// source span: unavailable (M0 frontend bridge does not emit spans yet)\n");
     const is_entrypoint = std.mem.eql(u8, func.name, "entrypoint");
-    try append(out, allocator, if (is_entrypoint) "pub inline fn " else "fn ");
+    // Keep the generated entrypoint wrapper out-of-line. Inlining it into
+    // runtime/zig/bpf_entry.zig can combine the loader arena/account-storage
+    // frame with large program-specific locals and overflow Solana's BPF
+    // stack before the first log syscall runs.
+    try append(out, allocator, if (is_entrypoint) "pub fn " else "fn ");
     const function_name = switch (func.calling_convention) {
         .ArenaThreaded => try emittedFunctionName(allocator, func.name),
         .Closure => try emittedClosureFunctionName(allocator, func.name),
@@ -336,6 +341,23 @@ pub fn exprHasSelfTailCall(expr: lir.LExpr, function_name: []const u8) bool {
         .AccountFieldSet => |field_set| exprHasSelfTailCall(field_set.account_expr.*, function_name) or
             exprHasSelfTailCall(field_set.value.*, function_name),
         .Constant, .Var, .Closure => false,
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (exprHasSelfTailCall(elem.*, function_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .ArrayGet => |array_get| exprHasSelfTailCall(array_get.arr.*, function_name) or
+            exprHasSelfTailCall(array_get.idx.*, function_name),
+        .ArrayLength => |array_length| exprHasSelfTailCall(array_length.arr.*, function_name),
+        .ArraySet => |array_set| exprHasSelfTailCall(array_set.arr.*, function_name) or
+            exprHasSelfTailCall(array_set.idx.*, function_name) or
+            exprHasSelfTailCall(array_set.value.*, function_name),
+        .ArrayMake => |array_make| exprHasSelfTailCall(array_make.init.*, function_name),
+        .RefMake => |ref_make| exprHasSelfTailCall(ref_make.init.*, function_name),
+        .RefGet => |ref_get| exprHasSelfTailCall(ref_get.target.*, function_name),
+        .RefSet => |ref_set| exprHasSelfTailCall(ref_set.target.*, function_name) or
+            exprHasSelfTailCall(ref_set.value.*, function_name),
     };
 }
 
@@ -437,6 +459,9 @@ pub fn emitEntrypointRuntimeBindings(
             continue;
         }
         if (!paramNeedsEntrypointAccounts(param)) continue;
+        const param_used_anywhere = exprUsesName(body, param.name);
+        const param_used_outside_swallowed_args = exprUsesNameOutsideRuntimeProcessArgs(body, param.name);
+        if (param_used_anywhere and !param_used_outside_swallowed_args) continue;
         bindings.accounts_used = true;
         if (isAccountTy(param.ty)) {
             try append(out, allocator, "    const ");

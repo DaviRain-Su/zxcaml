@@ -204,6 +204,22 @@ CASES: list[tuple[str, str, str]] = [
         "(app (var Option.value) (ctor Some (const-int 7)) (const-int 3))))))\n",
     ),
     (
+        "stdlib Option.fold labelled call reorders to positional",
+        "let entrypoint _ = Option.fold ~none:0 ~some:(fun x -> x + 1) (Some 5)\n",
+        "(zxcaml-cir 1.1 (module (let entrypoint (lambda (_) "
+        "(app (var Option.fold) (const-int 0) "
+        "(lambda (x) (prim \"+\" (var x) (const-int 1))) "
+        "(ctor Some (const-int 5)))))))\n",
+    ),
+    (
+        "stdlib Option.fold labelled call accepts reversed label order",
+        "let entrypoint _ = Option.fold ~some:(fun x -> x + 1) ~none:0 (Some 5)\n",
+        "(zxcaml-cir 1.1 (module (let entrypoint (lambda (_) "
+        "(app (var Option.fold) (const-int 0) "
+        "(lambda (x) (prim \"+\" (var x) (const-int 1))) "
+        "(ctor Some (const-int 5)))))))\n",
+    ),
+    (
         "stdlib Result.ok uses bundled function",
         "let entrypoint _ = Result.ok (Ok 7)\n",
         "(zxcaml-cir 1.1 (module (let entrypoint (lambda (_) "
@@ -806,6 +822,16 @@ REJECT_CASES: list[tuple[str, str, str]] = [
         "otest rejects nested test unit",
         "let entrypoint _ =\n  let%test_unit \"nested\" = () in\n  ()\n",
         "let%test_unit is only supported as a top-level binding",
+    ),
+    (
+        "labelled call rejects missing required label",
+        "let entrypoint _ = Option.fold ~none:0 (Some 5)\n",
+        "missing required label `~some:` in call to Option.fold",
+    ),
+    (
+        "labelled call rejects unknown callee with E0099",
+        "let entrypoint _ = ListLabels.fold_left ~init:0 ~f:(fun acc x -> acc + x) [1; 2; 3]\n",
+        "labelled-application is not part of the ZxCaml subset",
     ),
 ]
 

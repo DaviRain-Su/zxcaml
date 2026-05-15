@@ -54,6 +54,19 @@ jobs:
       - name: Build
         run: zig build
 
+      - name: Guard: SBPF ELF patch must stay removed
+        run: |
+          set -euo pipefail
+          matches=$(rg -n 'patch_elf_for_sbpf_v2|ZXCAML_TEST_PATCH_SBPF_ELF|SbpfPatchConfig' \
+            tests/ docs/ README.md \
+            --glob '!CHANGELOG.md' \
+            --glob '!mission-internal/**' || true)
+          if [ -n "$matches" ]; then
+            echo "Forbidden references to the removed SBPF ELF post-pass:"
+            echo "$matches"
+            exit 1
+          fi
+
       - name: Test
         run: zig build test
 

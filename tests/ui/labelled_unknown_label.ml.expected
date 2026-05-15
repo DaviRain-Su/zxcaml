@@ -1,0 +1,5 @@
+error[OCAML-FRONTEND]: This expression has type "int" but an expression was expected of type "bogus:'a -> 'b"
+ --> tests/ui/labelled_unknown_label.ml:1:37
+  |
+1 | let entrypoint _ = Option.fold ~none:0 ~bogus:1 (Some 5)
+  |                                     ^

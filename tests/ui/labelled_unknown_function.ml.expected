@@ -1,0 +1,5 @@
+error[E0099]: labelled-application is not part of the ZxCaml subset
+ --> tests/ui/labelled_unknown_function.ml:1:51
+  |
+1 | let entrypoint _ = ListLabels.fold_left ~init:0 ~f:(fun acc x -> acc + x) [1; 2; 3]
+  |                                                   ^^^^^^^^^^^^^^^^^^^^^^

@@ -11,15 +11,19 @@ const syscalls = @import("runtime/syscalls.zig");
 const program = @import("program.zig");
 
 const arena_bytes = 32 * 1024;
-const max_entrypoint_accounts = 64;
+// Keep account-view scratch storage below the BPF stack-frame limit. Current
+// examples need at most seven accounts (order_book fill path); oversized
+// storage can overflow the entrypoint frame before the first log syscall.
+const max_entrypoint_accounts = 16;
 
-const loader_log_message linksection(".rodata") = "ZxCaml entrypoint".*;
+const loader_log_message_bytes = "ZxCaml entrypoint";
 
 /// Solana loader entrypoint; returns the user program's u64 status code.
 export fn entrypoint(input: [*]u8) callconv(.c) u64 {
     // Minimal `return 0` programs can otherwise link to a section-only ELF that
     // `solana program deploy` rejects. A tiny log syscall keeps the dynamic
     // relocation/program-header shape expected by Solana's BPF loader.
+    var loader_log_message = [_]u8{ 'Z', 'x', 'C', 'a', 'm', 'l', ' ', 'e', 'n', 't', 'r', 'y', 'p', 'o', 'i', 'n', 't', 0 };
     syscalls.sol_log_(loader_log_message[0..]);
 
     var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;

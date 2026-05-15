@@ -47,6 +47,10 @@ let () =
   assert (Result.error (Error 12) = Some 12);
   assert (Result.map (fun x -> x + 1) (Ok 4) = Ok 5);
   assert (Result.bind (Ok 4) (fun x -> Ok (x + 1)) = Ok 5);
+  assert (Result.map_error (fun e -> e + 1) (Error 9) = Error 10);
+  assert (Result.map_error (fun e -> e + 1) (Ok 4) = Ok 4);
+  assert (Result.map_err (fun e -> e ^ "!") (Error "x") = Error "x!");
+  assert (Result.map_err (fun e -> e ^ "!") (Ok 1) = Ok 1);
   assert (Fun.id 42 = 42);
   assert (Fun.const 1 2 = 1);
   assert (Fun.flip (fun x y -> x - y) 1 3 = 2);
@@ -159,6 +163,34 @@ let () =
   assert (
     try_find_program_address [| Bytes.of_string "seed" |] instruction.program_id
     = Some (instruction.program_id, 0));
+  let bytes_iter_total = ref 0 in
+  Bytes.iter (fun c -> bytes_iter_total := !bytes_iter_total + Char.code c)
+    (Bytes.of_string "AB");
+  assert (!bytes_iter_total = 65 + 66);
+  let bytes_iteri_acc = ref 0 in
+  Bytes.iteri
+    (fun i c -> bytes_iteri_acc := !bytes_iteri_acc + i + Char.code c)
+    (Bytes.of_string "AB");
+  assert (!bytes_iteri_acc = 0 + 65 + 1 + 66);
+  assert (
+    Bytes.fold_left (fun acc c -> acc + Char.code c) 0 (Bytes.of_string "AB")
+    = 65 + 66);
+  assert (Bytes.equal (Bytes.of_string "abc") (Bytes.of_string "abc"));
+  assert (not (Bytes.equal (Bytes.of_string "abc") (Bytes.of_string "abd")));
+  assert (not (Bytes.equal (Bytes.of_string "ab") (Bytes.of_string "abc")));
+  assert (Bytes.compare (Bytes.of_string "abc") (Bytes.of_string "abc") = 0);
+  assert (Bytes.compare (Bytes.of_string "abc") (Bytes.of_string "abd") < 0);
+  assert (Bytes.compare (Bytes.of_string "abd") (Bytes.of_string "abc") > 0);
+  assert (Bytes.compare (Bytes.of_string "ab") (Bytes.of_string "abc") < 0);
+  assert (Bytes.compare (Bytes.of_string "abc") (Bytes.of_string "ab") > 0);
+  assert (Format.int_to_string 0 = "0");
+  assert (Format.int_to_string 42 = "42");
+  assert (Format.int_to_string 1234567 = "1234567");
+  assert (Format.int_to_string (-7) = "-7");
+  assert (Format.hex_of_int 2 255 = "ff");
+  assert (Format.hex_of_int 4 0 = "0000");
+  assert (Format.hex_of_int 4 16 = "0010");
+  assert (Format.hex_of_int 8 0xdeadbeef = "deadbeef");
   assert (Bytes.length Pubkey.zero = 32);
   assert (Bytes.for_all (( = ) '\000') Pubkey.zero);
   assert (Bytes.length Pubkey.token_program = 32);

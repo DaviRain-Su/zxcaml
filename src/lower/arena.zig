@@ -455,6 +455,24 @@ fn collectNestedFunctions(
             try collectNestedFunctions(allocator, field_set.account_expr.*, functions, next_closure_id, bound);
             try collectNestedFunctions(allocator, field_set.value.*, functions, next_closure_id, bound);
         },
+        .ArrayLit => |array_lit| for (array_lit.elems) |elem| try collectNestedFunctions(allocator, elem.*, functions, next_closure_id, bound),
+        .ArrayGet => |array_get| {
+            try collectNestedFunctions(allocator, array_get.arr.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, array_get.idx.*, functions, next_closure_id, bound);
+        },
+        .ArrayLength => |array_length| try collectNestedFunctions(allocator, array_length.arr.*, functions, next_closure_id, bound),
+        .ArraySet => |array_set| {
+            try collectNestedFunctions(allocator, array_set.arr.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, array_set.idx.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, array_set.value.*, functions, next_closure_id, bound);
+        },
+        .ArrayMake => |array_make| try collectNestedFunctions(allocator, array_make.init.*, functions, next_closure_id, bound),
+        .RefMake => |ref_make| try collectNestedFunctions(allocator, ref_make.init.*, functions, next_closure_id, bound),
+        .RefGet => |ref_get| try collectNestedFunctions(allocator, ref_get.target.*, functions, next_closure_id, bound),
+        .RefSet => |ref_set| {
+            try collectNestedFunctions(allocator, ref_set.target.*, functions, next_closure_id, bound);
+            try collectNestedFunctions(allocator, ref_set.value.*, functions, next_closure_id, bound);
+        },
         .Match => |match_expr| {
             try collectNestedFunctions(allocator, match_expr.scrutinee.*, functions, next_closure_id, bound);
             for (match_expr.arms) |arm| {
@@ -591,6 +609,54 @@ fn lowerExpr(allocator: std.mem.Allocator, expr: ir.Expr, ctx: *LowerContext) Lo
             .account_expr = try lowerExprPtrWithContext(allocator, field_set.account_expr.*, ctx),
             .field_name = try allocator.dupe(u8, field_set.field_name),
             .value = try lowerExprPtrWithContext(allocator, field_set.value.*, ctx),
+        } },
+        .ArrayLit => |array_lit| .{ .ArrayLit = .{
+            .elem_ty = try lowerTy(allocator, array_lit.elem_ty),
+            .elems = try lowerExprPtrs(allocator, array_lit.elems, ctx),
+            .ty = try lowerTy(allocator, array_lit.ty),
+            .layout = array_lit.layout,
+        } },
+        .ArrayGet => |array_get| .{ .ArrayGet = .{
+            .arr = try lowerExprPtrWithContext(allocator, array_get.arr.*, ctx),
+            .idx = try lowerExprPtrWithContext(allocator, array_get.idx.*, ctx),
+            .ty = try lowerTy(allocator, array_get.ty),
+            .layout = array_get.layout,
+        } },
+        .ArrayLength => |array_length| .{ .ArrayLength = .{
+            .arr = try lowerExprPtrWithContext(allocator, array_length.arr.*, ctx),
+            .ty = try lowerTy(allocator, array_length.ty),
+            .layout = array_length.layout,
+        } },
+        .ArraySet => |array_set| .{ .ArraySet = .{
+            .arr = try lowerExprPtrWithContext(allocator, array_set.arr.*, ctx),
+            .idx = try lowerExprPtrWithContext(allocator, array_set.idx.*, ctx),
+            .value = try lowerExprPtrWithContext(allocator, array_set.value.*, ctx),
+            .ty = try lowerTy(allocator, array_set.ty),
+            .layout = array_set.layout,
+        } },
+        .ArrayMake => |array_make| .{ .ArrayMake = .{
+            .elem_ty = try lowerTy(allocator, array_make.elem_ty),
+            .size = array_make.size,
+            .init = try lowerExprPtrWithContext(allocator, array_make.init.*, ctx),
+            .ty = try lowerTy(allocator, array_make.ty),
+            .layout = array_make.layout,
+        } },
+        .RefMake => |ref_make| .{ .RefMake = .{
+            .elem_ty = try lowerTy(allocator, ref_make.elem_ty),
+            .init = try lowerExprPtrWithContext(allocator, ref_make.init.*, ctx),
+            .ty = try lowerTy(allocator, ref_make.ty),
+            .layout = ref_make.layout,
+        } },
+        .RefGet => |ref_get| .{ .RefGet = .{
+            .target = try lowerExprPtrWithContext(allocator, ref_get.target.*, ctx),
+            .ty = try lowerTy(allocator, ref_get.ty),
+            .layout = ref_get.layout,
+        } },
+        .RefSet => |ref_set| .{ .RefSet = .{
+            .target = try lowerExprPtrWithContext(allocator, ref_set.target.*, ctx),
+            .value = try lowerExprPtrWithContext(allocator, ref_set.value.*, ctx),
+            .ty = try lowerTy(allocator, ref_set.ty),
+            .layout = ref_set.layout,
         } },
     };
 }
@@ -811,6 +877,24 @@ fn collectCaptures(
             try collectCaptures(allocator, field_set.account_expr.*, bound, excluded, captures);
             try collectCaptures(allocator, field_set.value.*, bound, excluded, captures);
         },
+        .ArrayLit => |array_lit| for (array_lit.elems) |elem| try collectCaptures(allocator, elem.*, bound, excluded, captures),
+        .ArrayGet => |array_get| {
+            try collectCaptures(allocator, array_get.arr.*, bound, excluded, captures);
+            try collectCaptures(allocator, array_get.idx.*, bound, excluded, captures);
+        },
+        .ArrayLength => |array_length| try collectCaptures(allocator, array_length.arr.*, bound, excluded, captures),
+        .ArraySet => |array_set| {
+            try collectCaptures(allocator, array_set.arr.*, bound, excluded, captures);
+            try collectCaptures(allocator, array_set.idx.*, bound, excluded, captures);
+            try collectCaptures(allocator, array_set.value.*, bound, excluded, captures);
+        },
+        .ArrayMake => |array_make| try collectCaptures(allocator, array_make.init.*, bound, excluded, captures),
+        .RefMake => |ref_make| try collectCaptures(allocator, ref_make.init.*, bound, excluded, captures),
+        .RefGet => |ref_get| try collectCaptures(allocator, ref_get.target.*, bound, excluded, captures),
+        .RefSet => |ref_set| {
+            try collectCaptures(allocator, ref_set.target.*, bound, excluded, captures);
+            try collectCaptures(allocator, ref_set.value.*, bound, excluded, captures);
+        },
         .Match => |match_expr| {
             try collectCaptures(allocator, match_expr.scrutinee.*, bound, excluded, captures);
             for (match_expr.arms) |arm| {
@@ -952,6 +1036,14 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }
 
@@ -974,6 +1066,14 @@ fn exprLayout(expr: ir.Expr) @import("../core/layout.zig").Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }
 
@@ -1124,6 +1224,16 @@ fn lowerTy(allocator: std.mem.Allocator, ty: ir.Ty) LowerError!lir.LTy {
             .name = try allocator.dupe(u8, record.name),
             .params = try lowerTySlice(allocator, record.params),
         } },
+        .Array => |elem| blk: {
+            const lowered_elem = try allocator.create(lir.LTy);
+            lowered_elem.* = try lowerTy(allocator, elem.*);
+            break :blk .{ .Array = lowered_elem };
+        },
+        .Ref => |elem| blk: {
+            const lowered_elem = try allocator.create(lir.LTy);
+            lowered_elem.* = try lowerTy(allocator, elem.*);
+            break :blk .{ .Ref = lowered_elem };
+        },
     };
 }
 
@@ -1191,6 +1301,19 @@ fn recBindingEscapes(name: []const u8, expr: ir.Expr) bool {
             break :blk false;
         },
         .AccountFieldSet => |field_set| recBindingEscapes(name, field_set.account_expr.*) or recBindingEscapes(name, field_set.value.*),
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (recBindingEscapes(name, elem.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .ArrayGet => |array_get| recBindingEscapes(name, array_get.arr.*) or recBindingEscapes(name, array_get.idx.*),
+        .ArrayLength => |array_length| recBindingEscapes(name, array_length.arr.*),
+        .ArraySet => |array_set| recBindingEscapes(name, array_set.arr.*) or recBindingEscapes(name, array_set.idx.*) or recBindingEscapes(name, array_set.value.*),
+        .ArrayMake => |array_make| recBindingEscapes(name, array_make.init.*),
+        .RefMake => |ref_make| recBindingEscapes(name, ref_make.init.*),
+        .RefGet => |ref_get| recBindingEscapes(name, ref_get.target.*),
+        .RefSet => |ref_set| recBindingEscapes(name, ref_set.target.*) or recBindingEscapes(name, ref_set.value.*),
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {

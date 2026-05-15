@@ -581,6 +581,26 @@ pub fn build(b: *std.Build) void {
     run_doctor_cli_tests.step.dependOn(&run_bench_cli_tests.step);
     run_doctor_cli_tests.setCwd(b.path(""));
 
+    // Static profiling report CLI integration tests (R5):
+    // verify `omlz check --report=<kinds>` emits deterministic CU/stack
+    // sections, rejects unknown kinds with E0200, and matches the golden
+    // snapshot for the factorial example.
+    const report_cli_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/report_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const report_cli_options = b.addOptions();
+    report_cli_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    report_cli_test_module.addOptions("cli_options", report_cli_options);
+    const report_cli_tests = b.addTest(.{
+        .root_module = report_cli_test_module,
+    });
+    const run_report_cli_tests = b.addRunArtifact(report_cli_tests);
+    run_report_cli_tests.step.dependOn(b.getInstallStep());
+    run_report_cli_tests.step.dependOn(&run_doctor_cli_tests.step);
+    run_report_cli_tests.setCwd(b.path(""));
+
     // Source-map CLI integration tests (P9 / F-SRCMAP-3): verify BPF builds
     // emit deterministic sidecar maps by default and honor --no-srcmap.
     const srcmap_cli_test_module = b.createModule(.{
@@ -605,6 +625,7 @@ pub fn build(b: *std.Build) void {
     // Avoid concurrent tests racing on out/program.zig.
     run_srcmap_cli_tests.step.dependOn(&run_determinism_tests.step);
     run_srcmap_cli_tests.step.dependOn(&run_doctor_cli_tests.step);
+    run_srcmap_cli_tests.step.dependOn(&run_report_cli_tests.step);
     run_srcmap_cli_tests.setCwd(b.path(""));
 
     // Source-map unmap CLI integration tests (P9 / F-SRCMAP-5): verify
@@ -938,6 +959,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_property_shrinking_tests.step);
     test_step.dependOn(&run_explain_cli_tests.step);
     test_step.dependOn(&run_bench_cli_tests.step);
+    test_step.dependOn(&run_report_cli_tests.step);
     test_step.dependOn(&run_srcmap_cli_tests.step);
     test_step.dependOn(&run_unmap_cli_tests.step);
     test_step.dependOn(&run_srcmap_determinism_tests.step);

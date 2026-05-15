@@ -908,7 +908,7 @@ fn layoutForTy(ty: ir.Ty) layout.Layout {
         .Int, .Bool => layout.intConstant(),
         .Unit => layout.unitValue(),
         .String => layout.defaultFor(.StringLiteral),
-        .Adt, .Tuple, .Record, .Var, .Arrow => layout.structPack(),
+        .Adt, .Tuple, .Record, .Var, .Arrow, .Array, .Ref => layout.structPack(),
     };
 }
 

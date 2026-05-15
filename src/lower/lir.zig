@@ -70,6 +70,78 @@ pub const LExpr = union(enum) {
     RecordField: LRecordField,
     RecordUpdate: LRecordUpdate,
     AccountFieldSet: LAccountFieldSet,
+    ArrayLit: LArrayLit,
+    ArrayGet: LArrayGet,
+    ArrayLength: LArrayLength,
+    ArraySet: LArraySet,
+    ArrayMake: LArrayMake,
+    RefMake: LRefMake,
+    RefGet: LRefGet,
+    RefSet: LRefSet,
+};
+
+/// ADR-015 R9.1 lowered int-array literal.
+pub const LArrayLit = struct {
+    elem_ty: LTy,
+    elems: []const *const LExpr,
+    ty: LTy = .Int,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 R9.1 lowered read-only array index access.
+pub const LArrayGet = struct {
+    arr: *const LExpr,
+    idx: *const LExpr,
+    ty: LTy = .Int,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 R9.1 lowered array length probe.
+pub const LArrayLength = struct {
+    arr: *const LExpr,
+    ty: LTy = .Int,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 R9.2 lowered in-place int array write.
+pub const LArraySet = struct {
+    arr: *const LExpr,
+    idx: *const LExpr,
+    value: *const LExpr,
+    ty: LTy = .Unit,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 R9.2 lowered `Array.make N init` with literal size.
+pub const LArrayMake = struct {
+    elem_ty: LTy,
+    size: u32,
+    init: *const LExpr,
+    ty: LTy,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 option C / R10 lowered ref-cell allocation.
+pub const LRefMake = struct {
+    elem_ty: LTy,
+    init: *const LExpr,
+    ty: LTy,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 option C / R10 lowered ref-cell read.
+pub const LRefGet = struct {
+    target: *const LExpr,
+    ty: LTy,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
+};
+
+/// ADR-015 option C / R10 lowered ref-cell write (yields unit/int 0).
+pub const LRefSet = struct {
+    target: *const LExpr,
+    value: *const LExpr,
+    ty: LTy = .Unit,
+    layout: @import("../core/layout.zig").Layout = .{ .region = .Static, .repr = .Flat },
 };
 
 /// Lowered function application.
@@ -339,6 +411,10 @@ pub const LTy = union(enum) {
     Tuple: []const LTy,
     Record: LRecordTy,
     Closure: LClosureTy,
+    /// ADR-015 R9.1 lowered array type. Mirrors `ir.Ty.Array`.
+    Array: *const LTy,
+    /// ADR-015 option C / R10 lowered ref-cell type. Mirrors `ir.Ty.Ref`.
+    Ref: *const LTy,
 };
 
 /// Lowered ADT type reference.

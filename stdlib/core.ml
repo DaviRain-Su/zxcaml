@@ -107,6 +107,10 @@ end
 module Result = struct
   let map f = function Ok x -> Ok (f x) | Error e -> Error e
 
+  let map_error f = function Ok v -> Ok v | Error e -> Error (f e)
+
+  let map_err f r = map_error f r
+
   let bind x f = match x with Ok v -> f v | Error e -> Error e
 
   let is_ok x = match x with Ok _ -> true | Error _ -> false
@@ -526,6 +530,91 @@ module Sysvar = struct
 
   external epoch_schedule_from_account : account_data -> epoch_schedule_record
     = "sysvar.readEpochSchedule"
+end
+
+module Bytes = struct
+  include Stdlib.Bytes
+
+  let iter f b =
+    let len = length b in
+    let rec loop i =
+      if i >= len then ()
+      else (let _ = f (get b i) in loop (i + 1))
+    in
+    loop 0
+
+  let iteri f b =
+    let len = length b in
+    let rec loop i =
+      if i >= len then ()
+      else (let _ = f i (get b i) in loop (i + 1))
+    in
+    loop 0
+
+  let fold_left f acc b =
+    let len = length b in
+    let rec loop i a = if i >= len then a else loop (i + 1) (f a (get b i)) in
+    loop 0 acc
+
+  let equal a b =
+    let la = length a in
+    let lb = length b in
+    if la <> lb then false
+    else
+      let rec loop i =
+        if i >= la then true
+        else if get a i <> get b i then false
+        else loop (i + 1)
+      in
+      loop 0
+
+  let compare a b =
+    let la = length a in
+    let lb = length b in
+    let rec loop i =
+      if i >= la && i >= lb then 0
+      else if i >= la then -1
+      else if i >= lb then 1
+      else
+        let ca = get a i in
+        let cb = get b i in
+        if ca < cb then -1 else if ca > cb then 1 else loop (i + 1)
+    in
+    loop 0
+end
+
+module Format = struct
+  (* Digit lookup string; using String.sub keeps each digit as a 1-character
+     string and avoids relying on Char-to-string conversions that the
+     Solana subset does not lower. *)
+  let digits = "0123456789"
+
+  let digit_char d = Stdlib.String.sub digits d 1
+
+  let hex_digits = "0123456789abcdef"
+
+  let hex_digit_char d = Stdlib.String.sub hex_digits d 1
+
+  let rec int_to_string_pos x acc =
+    if x = 0 then acc
+    else
+      let d = x - ((x / 10) * 10) in
+      int_to_string_pos (x / 10) (digit_char d ^ acc)
+
+  let int_to_string n =
+    if n = 0 then "0"
+    else if n < 0 then "-" ^ int_to_string_pos (0 - n) ""
+    else int_to_string_pos n ""
+
+  let rec hex_loop width n acc =
+    if width <= 0 then acc
+    else
+      let d = n - ((n / 16) * 16) in
+      hex_loop (width - 1) (n / 16) (hex_digit_char d ^ acc)
+
+  (* hex_of_int width n: width = number of hex digits, n = non-negative int.
+     The result is zero-padded to `width` digits using lowercase a-f. *)
+  let hex_of_int width n = hex_loop width n ""
 end
 
 module Pubkey = struct

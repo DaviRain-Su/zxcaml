@@ -53,7 +53,9 @@ test "cli: check --explain covers every diagnostics catalog code" {
         "E0016", "E0017", "E0018",
         "E0019", "E0020", "E0021",
         "E0022", "E0023", "E0024",
+        "E0030", "E0031",
         "E0090", "E0099",
+        "E0200",
     };
 
     for (codes) |code| {

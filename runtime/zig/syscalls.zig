@@ -67,39 +67,41 @@ pub const sol_log_compute_units_address: usize = 0x52ba5096;
 /// MurmurHash3-32 dispatch address for `sol_remaining_compute_units`.
 pub const sol_remaining_compute_units_address: usize = 0xedef5aee;
 
-const is_bpf = builtin.target.cpu.arch == .bpfel or builtin.target.cpu.arch == .bpfeb;
+const is_bpf = std.mem.eql(u8, @tagName(builtin.target.cpu.arch), "sbf") or
+    std.mem.eql(u8, @tagName(builtin.target.cpu.arch), "bpfel") or
+    std.mem.eql(u8, @tagName(builtin.target.cpu.arch), "bpfeb");
 
-const SolLogFn = *align(1) const fn ([*]const u8, u64) void;
-const SolLog64Fn = *align(1) const fn (u64, u64, u64, u64, u64) void;
-const SolLogPubkeyFn = *align(1) const fn (*const Pubkey) void;
-const SolHashFn = *align(1) const fn ([*]const u8, u64, [*]u8) u64;
-const SolSecp256k1RecoverFn = *align(1) const fn ([*]const u8, u64, [*]const u8, [*]u8) u64;
-const SolGetClockSysvarFn = *align(1) const fn (*Clock) u64;
-const SolGetRentSysvarFn = *align(1) const fn (*Rent) u64;
-const SolLogComputeUnitsFn = *align(1) const fn () void;
-const SolRemainingComputeUnitsFn = *align(1) const fn () u64;
+const Syscall = struct {
+    extern fn sol_log_(ptr: [*]const u8, len: u64) callconv(.c) void;
+    extern fn sol_log_64_(a: u64, b: u64, c: u64, d: u64, e: u64) callconv(.c) void;
+    extern fn sol_log_pubkey(pubkey: *const Pubkey) callconv(.c) void;
+    extern fn sol_sha256(descriptor: [*]const SolBytes, descriptor_len: u64, out: [*]u8) callconv(.c) u64;
+    extern fn sol_keccak256(descriptor: [*]const SolBytes, descriptor_len: u64, out: [*]u8) callconv(.c) u64;
+    extern fn sol_blake3(descriptor: [*]const SolBytes, descriptor_len: u64, out: [*]u8) callconv(.c) u64;
+    extern fn sol_secp256k1_recover(hash: [*]const u8, recovery_id: u64, signature: [*]const u8, out: [*]u8) callconv(.c) u64;
+    extern fn sol_get_clock_sysvar(out: *Clock) callconv(.c) u64;
+    extern fn sol_get_rent_sysvar(out: *Rent) callconv(.c) u64;
+    extern fn sol_log_compute_units_() callconv(.c) void;
+};
 
 /// Logs a UTF-8 byte slice through Solana's `sol_log_` syscall.
 pub inline fn sol_log_(message: []const u8) void {
     if (comptime is_bpf) {
-        const syscall: SolLogFn = @ptrFromInt(sol_log_address);
-        syscall(message.ptr, message.len);
+        Syscall.sol_log_(message.ptr, message.len);
     }
 }
 
 /// Logs five unsigned 64-bit values through Solana's `sol_log_64_` syscall.
 pub inline fn sol_log_64_(a: i64, b: i64, c: i64, d: i64, e: i64) void {
     if (comptime is_bpf) {
-        const syscall: SolLog64Fn = @ptrFromInt(sol_log_64_address);
-        syscall(@bitCast(a), @bitCast(b), @bitCast(c), @bitCast(d), @bitCast(e));
+        Syscall.sol_log_64_(@bitCast(a), @bitCast(b), @bitCast(c), @bitCast(d), @bitCast(e));
     }
 }
 
 /// Logs a public key through Solana's `sol_log_pubkey` syscall.
 pub inline fn sol_log_pubkey(pubkey: *const Pubkey) void {
     if (comptime is_bpf) {
-        const syscall: SolLogPubkeyFn = @ptrFromInt(sol_log_pubkey_address);
-        syscall(pubkey);
+        Syscall.sol_log_pubkey(pubkey);
     }
 }
 
@@ -110,8 +112,7 @@ pub inline fn sol_sha256(payload: []const u8) Hash {
         descriptor[0].addr = payload.ptr;
         descriptor[0].len = payload.len;
         var out: Hash = undefined;
-        const syscall: SolHashFn = @ptrFromInt(sol_sha256_address);
-        _ = syscall(@ptrCast(&descriptor[0]), descriptor.len, &out);
+        _ = Syscall.sol_sha256(@ptrCast(&descriptor[0]), descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -136,8 +137,7 @@ pub inline fn sol_keccak256(payload: []const u8) Hash {
         descriptor[0].addr = payload.ptr;
         descriptor[0].len = payload.len;
         var out: Hash = undefined;
-        const syscall: SolHashFn = @ptrFromInt(sol_keccak256_address);
-        _ = syscall(@ptrCast(&descriptor[0]), descriptor.len, &out);
+        _ = Syscall.sol_keccak256(@ptrCast(&descriptor[0]), descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -162,8 +162,7 @@ pub inline fn sol_blake3(payload: []const u8) Hash {
         descriptor[0].addr = payload.ptr;
         descriptor[0].len = payload.len;
         var out: Hash = undefined;
-        const syscall: SolHashFn = @ptrFromInt(sol_blake3_address);
-        _ = syscall(@ptrCast(&descriptor[0]), descriptor.len, &out);
+        _ = Syscall.sol_blake3(@ptrCast(&descriptor[0]), descriptor.len, &out);
         return out;
     } else {
         var out: Hash = undefined;
@@ -194,8 +193,7 @@ pub inline fn sol_secp256k1_recover(hash: []const u8, recovery_id: i64, signatur
 
     var out: Secp256k1Pubkey = undefined;
     if (comptime is_bpf) {
-        const syscall: SolSecp256k1RecoverFn = @ptrFromInt(sol_secp256k1_recover_address);
-        const rc = syscall(hash.ptr, @intCast(recovery_id), signature.ptr, &out);
+        const rc = Syscall.sol_secp256k1_recover(hash.ptr, @intCast(recovery_id), signature.ptr, &out);
         if (rc != 0) return null;
         return out;
     }
@@ -221,8 +219,7 @@ pub inline fn sol_secp256k1_recover_into_account_data(account_data: []u8, hash: 
     if (recid < 0 or recid > 3) return 1;
 
     if (comptime is_bpf) {
-        const syscall: SolSecp256k1RecoverFn = @ptrFromInt(sol_secp256k1_recover_address);
-        return @intCast(syscall(hash.ptr, @intCast(recid), signature.ptr, account_data.ptr));
+        return @intCast(Syscall.sol_secp256k1_recover(hash.ptr, @intCast(recid), signature.ptr, account_data.ptr));
     }
 
     const out = account_data[0..secp256k1_pubkey_len];
@@ -247,8 +244,7 @@ pub inline fn sol_secp256k1_recover_alloc(arena: *Arena, hash: []const u8, recov
 pub inline fn sol_get_clock_sysvar() Clock {
     if (comptime is_bpf) {
         var clock: Clock = undefined;
-        const syscall: SolGetClockSysvarFn = @ptrFromInt(sol_get_clock_sysvar_address);
-        _ = syscall(&clock);
+        _ = Syscall.sol_get_clock_sysvar(&clock);
         return clock;
     }
     return .{};
@@ -258,8 +254,7 @@ pub inline fn sol_get_clock_sysvar() Clock {
 pub inline fn sol_get_rent_sysvar() Rent {
     if (comptime is_bpf) {
         var rent: Rent = undefined;
-        const syscall: SolGetRentSysvarFn = @ptrFromInt(sol_get_rent_sysvar_address);
-        _ = syscall(&rent);
+        _ = Syscall.sol_get_rent_sysvar(&rent);
         return rent;
     }
     return .{};
@@ -268,8 +263,7 @@ pub inline fn sol_get_rent_sysvar() Rent {
 /// Logs the currently consumed compute units through Solana's runtime.
 pub inline fn sol_log_compute_units_() void {
     if (comptime is_bpf) {
-        const syscall: SolLogComputeUnitsFn = @ptrFromInt(sol_log_compute_units_address);
-        syscall();
+        Syscall.sol_log_compute_units_();
     }
 }
 

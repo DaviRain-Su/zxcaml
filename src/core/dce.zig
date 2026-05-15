@@ -133,6 +133,60 @@ const DceContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
             } },
+            .ArrayLit => |array_lit| blk: {
+                const elems = try self.allocator().alloc(*const ir.Expr, array_lit.elems.len);
+                for (array_lit.elems, 0..) |elem, index| {
+                    elems[index] = try self.eliminateExprPtr(elem.*);
+                }
+                break :blk .{ .ArrayLit = .{
+                    .elem_ty = array_lit.elem_ty,
+                    .elems = elems,
+                    .ty = array_lit.ty,
+                    .layout = array_lit.layout,
+                } };
+            },
+            .ArrayGet => |array_get| .{ .ArrayGet = .{
+                .arr = try self.eliminateExprPtr(array_get.arr.*),
+                .idx = try self.eliminateExprPtr(array_get.idx.*),
+                .ty = array_get.ty,
+                .layout = array_get.layout,
+            } },
+            .ArrayLength => |array_length| .{ .ArrayLength = .{
+                .arr = try self.eliminateExprPtr(array_length.arr.*),
+                .ty = array_length.ty,
+                .layout = array_length.layout,
+            } },
+            .ArraySet => |array_set| .{ .ArraySet = .{
+                .arr = try self.eliminateExprPtr(array_set.arr.*),
+                .idx = try self.eliminateExprPtr(array_set.idx.*),
+                .value = try self.eliminateExprPtr(array_set.value.*),
+                .ty = array_set.ty,
+                .layout = array_set.layout,
+            } },
+            .ArrayMake => |array_make| .{ .ArrayMake = .{
+                .elem_ty = array_make.elem_ty,
+                .size = array_make.size,
+                .init = try self.eliminateExprPtr(array_make.init.*),
+                .ty = array_make.ty,
+                .layout = array_make.layout,
+            } },
+            .RefMake => |ref_make| .{ .RefMake = .{
+                .elem_ty = ref_make.elem_ty,
+                .init = try self.eliminateExprPtr(ref_make.init.*),
+                .ty = ref_make.ty,
+                .layout = ref_make.layout,
+            } },
+            .RefGet => |ref_get| .{ .RefGet = .{
+                .target = try self.eliminateExprPtr(ref_get.target.*),
+                .ty = ref_get.ty,
+                .layout = ref_get.layout,
+            } },
+            .RefSet => |ref_set| .{ .RefSet = .{
+                .target = try self.eliminateExprPtr(ref_set.target.*),
+                .value = try self.eliminateExprPtr(ref_set.value.*),
+                .ty = ref_set.ty,
+                .layout = ref_set.layout,
+            } },
         };
     }
 
@@ -333,6 +387,14 @@ fn containsFreeName(expr: ir.Expr, name: []const u8) bool {
             anyRecordFieldContainsFreeName(record_update.fields, name),
         .AccountFieldSet => |field_set| containsFreeName(field_set.account_expr.*, name) or
             containsFreeName(field_set.value.*, name),
+        .ArrayLit => |array_lit| anyExprContainsFreeName(array_lit.elems, name),
+        .ArrayGet => |array_get| containsFreeName(array_get.arr.*, name) or containsFreeName(array_get.idx.*, name),
+        .ArrayLength => |array_length| containsFreeName(array_length.arr.*, name),
+        .ArraySet => |array_set| containsFreeName(array_set.arr.*, name) or containsFreeName(array_set.idx.*, name) or containsFreeName(array_set.value.*, name),
+        .ArrayMake => |array_make| containsFreeName(array_make.init.*, name),
+        .RefMake => |ref_make| containsFreeName(ref_make.init.*, name),
+        .RefGet => |ref_get| containsFreeName(ref_get.target.*, name),
+        .RefSet => |ref_set| containsFreeName(ref_set.target.*, name) or containsFreeName(ref_set.value.*, name),
     };
 }
 
@@ -407,6 +469,27 @@ fn hasSideEffects(expr: ir.Expr) bool {
         .Record => |record_expr| anyRecordFieldHasSideEffects(record_expr.fields),
         .RecordField => |record_field| hasSideEffects(record_field.record_expr.*),
         .RecordUpdate => |record_update| hasSideEffects(record_update.base_expr.*) or anyRecordFieldHasSideEffects(record_update.fields),
+        // ArrayLit allocates (an arena/region allocation surface in BPF
+        // codegen), so even with pure elements it is not safe to drop a
+        // bound array literal that is never used: dropping it would change
+        // observable allocation behavior. Treat as a side effect.
+        .ArrayLit => true,
+        // ArrayGet may trap on out-of-bounds index; preserve the trap.
+        .ArrayGet => true,
+        .ArrayLength => |array_length| hasSideEffects(array_length.arr.*),
+        // ArraySet mutates the array's backing storage; it is observably
+        // side-effecting just like BytesSet.
+        .ArraySet => true,
+        // ArrayMake allocates and fills; treat as a side effect.
+        .ArrayMake => true,
+        // ADR-015 option C / R10: RefMake allocates an arena slot.
+        .RefMake => true,
+        // RefGet reads from a slot; the slot itself was made visible by a
+        // side-effecting allocation, so a dangling get without a write is
+        // pure. Recurse on the target expression for completeness.
+        .RefGet => |ref_get| hasSideEffects(ref_get.target.*),
+        // RefSet mutates an arena slot; treat as observably side-effecting.
+        .RefSet => true,
     };
 }
 
@@ -479,6 +562,14 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }
 
@@ -501,6 +592,14 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }
 

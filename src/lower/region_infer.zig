@@ -291,6 +291,76 @@ fn inferExpr(arena: *std.heap.ArenaAllocator, expr: ir.Expr, escape_context: boo
             .layout = field_set.layout,
             .loc = field_set.loc,
         } },
+        .ArrayLit => |array_lit| blk: {
+            // ArrayLit always allocates onto the arena (escape context true).
+            const elems = try arena.allocator().alloc(*const ir.Expr, array_lit.elems.len);
+            for (array_lit.elems, 0..) |elem, index| elems[index] = try inferExprPtr(arena, elem.*, false);
+            break :blk .{ .ArrayLit = .{
+                .elem_ty = array_lit.elem_ty,
+                .elems = elems,
+                .ty = array_lit.ty,
+                .layout = if (array_lit.layout.region == .Stack) arenaLayout(array_lit.layout) else array_lit.layout,
+                .loc = array_lit.loc,
+            } };
+        },
+        .ArrayGet => |array_get| .{ .ArrayGet = .{
+            .arr = try inferExprPtr(arena, array_get.arr.*, false),
+            .idx = try inferExprPtr(arena, array_get.idx.*, false),
+            .ty = array_get.ty,
+            .layout = array_get.layout,
+            .loc = array_get.loc,
+        } },
+        .ArrayLength => |array_length| .{ .ArrayLength = .{
+            .arr = try inferExprPtr(arena, array_length.arr.*, false),
+            .ty = array_length.ty,
+            .layout = array_length.layout,
+            .loc = array_length.loc,
+        } },
+        .ArraySet => |array_set| .{ .ArraySet = .{
+            .arr = try inferExprPtr(arena, array_set.arr.*, false),
+            .idx = try inferExprPtr(arena, array_set.idx.*, false),
+            .value = try inferExprPtr(arena, array_set.value.*, false),
+            .ty = array_set.ty,
+            .layout = array_set.layout,
+            .loc = array_set.loc,
+        } },
+        .ArrayMake => |array_make| blk: {
+            // ArrayMake always allocates onto the arena.
+            const init_expr = try inferExprPtr(arena, array_make.init.*, false);
+            break :blk .{ .ArrayMake = .{
+                .elem_ty = array_make.elem_ty,
+                .size = array_make.size,
+                .init = init_expr,
+                .ty = array_make.ty,
+                .layout = if (array_make.layout.region == .Stack) arenaLayout(array_make.layout) else array_make.layout,
+                .loc = array_make.loc,
+            } };
+        },
+        .RefMake => |ref_make| blk: {
+            // ADR-015 option C / R10: RefMake always allocates onto the
+            // arena, mirroring ArrayMake.
+            const init_expr = try inferExprPtr(arena, ref_make.init.*, false);
+            break :blk .{ .RefMake = .{
+                .elem_ty = ref_make.elem_ty,
+                .init = init_expr,
+                .ty = ref_make.ty,
+                .layout = if (ref_make.layout.region == .Stack) arenaLayout(ref_make.layout) else ref_make.layout,
+                .loc = ref_make.loc,
+            } };
+        },
+        .RefGet => |ref_get| .{ .RefGet = .{
+            .target = try inferExprPtr(arena, ref_get.target.*, false),
+            .ty = ref_get.ty,
+            .layout = ref_get.layout,
+            .loc = ref_get.loc,
+        } },
+        .RefSet => |ref_set| .{ .RefSet = .{
+            .target = try inferExprPtr(arena, ref_set.target.*, false),
+            .value = try inferExprPtr(arena, ref_set.value.*, false),
+            .ty = ref_set.ty,
+            .layout = ref_set.layout,
+            .loc = ref_set.loc,
+        } },
     };
 }
 
@@ -472,6 +542,24 @@ const AnalyzeContext = struct {
                 try self.analyzeExpr(field_set.account_expr.*, true);
                 try self.analyzeExpr(field_set.value.*, true);
             },
+            .ArrayLit => |array_lit| for (array_lit.elems) |elem| try self.analyzeExpr(elem.*, escape_context),
+            .ArrayGet => |array_get| {
+                try self.analyzeExpr(array_get.arr.*, false);
+                try self.analyzeExpr(array_get.idx.*, false);
+            },
+            .ArrayLength => |array_length| try self.analyzeExpr(array_length.arr.*, false),
+            .ArraySet => |array_set| {
+                try self.analyzeExpr(array_set.arr.*, false);
+                try self.analyzeExpr(array_set.idx.*, false);
+                try self.analyzeExpr(array_set.value.*, false);
+            },
+            .ArrayMake => |array_make| try self.analyzeExpr(array_make.init.*, false),
+            .RefMake => |ref_make| try self.analyzeExpr(ref_make.init.*, false),
+            .RefGet => |ref_get| try self.analyzeExpr(ref_get.target.*, false),
+            .RefSet => |ref_set| {
+                try self.analyzeExpr(ref_set.target.*, false);
+                try self.analyzeExpr(ref_set.value.*, false);
+            },
         }
     }
 
@@ -638,6 +726,24 @@ const FreeVarCollector = struct {
             .AccountFieldSet => |field_set| {
                 try self.visit(field_set.account_expr.*);
                 try self.visit(field_set.value.*);
+            },
+            .ArrayLit => |array_lit| for (array_lit.elems) |elem| try self.visit(elem.*),
+            .ArrayGet => |array_get| {
+                try self.visit(array_get.arr.*);
+                try self.visit(array_get.idx.*);
+            },
+            .ArrayLength => |array_length| try self.visit(array_length.arr.*),
+            .ArraySet => |array_set| {
+                try self.visit(array_set.arr.*);
+                try self.visit(array_set.idx.*);
+                try self.visit(array_set.value.*);
+            },
+            .ArrayMake => |array_make| try self.visit(array_make.init.*),
+            .RefMake => |ref_make| try self.visit(ref_make.init.*),
+            .RefGet => |ref_get| try self.visit(ref_get.target.*),
+            .RefSet => |ref_set| {
+                try self.visit(ref_set.target.*);
+                try self.visit(ref_set.value.*);
             },
         }
     }
@@ -855,6 +961,72 @@ const CloneContext = struct {
                 .ty = field_set.ty,
                 .layout = field_set.layout,
                 .loc = field_set.loc,
+            } },
+            .ArrayLit => |array_lit| blk: {
+                const elems = try self.allocator.alloc(*const ir.Expr, array_lit.elems.len);
+                for (array_lit.elems, 0..) |elem, index| elems[index] = try self.cloneExprPtr(elem.*, false);
+                break :blk .{ .ArrayLit = .{
+                    .elem_ty = array_lit.elem_ty,
+                    .elems = elems,
+                    .ty = array_lit.ty,
+                    .layout = if (array_lit.layout.region == .Stack) arenaLayout(array_lit.layout) else array_lit.layout,
+                    .loc = array_lit.loc,
+                } };
+            },
+            .ArrayGet => |array_get| .{ .ArrayGet = .{
+                .arr = try self.cloneExprPtr(array_get.arr.*, false),
+                .idx = try self.cloneExprPtr(array_get.idx.*, false),
+                .ty = array_get.ty,
+                .layout = array_get.layout,
+                .loc = array_get.loc,
+            } },
+            .ArrayLength => |array_length| .{ .ArrayLength = .{
+                .arr = try self.cloneExprPtr(array_length.arr.*, false),
+                .ty = array_length.ty,
+                .layout = array_length.layout,
+                .loc = array_length.loc,
+            } },
+            .ArraySet => |array_set| .{ .ArraySet = .{
+                .arr = try self.cloneExprPtr(array_set.arr.*, false),
+                .idx = try self.cloneExprPtr(array_set.idx.*, false),
+                .value = try self.cloneExprPtr(array_set.value.*, false),
+                .ty = array_set.ty,
+                .layout = array_set.layout,
+                .loc = array_set.loc,
+            } },
+            .ArrayMake => |array_make| blk: {
+                const init_expr = try self.cloneExprPtr(array_make.init.*, false);
+                break :blk .{ .ArrayMake = .{
+                    .elem_ty = array_make.elem_ty,
+                    .size = array_make.size,
+                    .init = init_expr,
+                    .ty = array_make.ty,
+                    .layout = if (array_make.layout.region == .Stack) arenaLayout(array_make.layout) else array_make.layout,
+                    .loc = array_make.loc,
+                } };
+            },
+            .RefMake => |ref_make| blk: {
+                const init_expr = try self.cloneExprPtr(ref_make.init.*, false);
+                break :blk .{ .RefMake = .{
+                    .elem_ty = ref_make.elem_ty,
+                    .init = init_expr,
+                    .ty = ref_make.ty,
+                    .layout = if (ref_make.layout.region == .Stack) arenaLayout(ref_make.layout) else ref_make.layout,
+                    .loc = ref_make.loc,
+                } };
+            },
+            .RefGet => |ref_get| .{ .RefGet = .{
+                .target = try self.cloneExprPtr(ref_get.target.*, false),
+                .ty = ref_get.ty,
+                .layout = ref_get.layout,
+                .loc = ref_get.loc,
+            } },
+            .RefSet => |ref_set| .{ .RefSet = .{
+                .target = try self.cloneExprPtr(ref_set.target.*, false),
+                .value = try self.cloneExprPtr(ref_set.value.*, false),
+                .ty = ref_set.ty,
+                .layout = ref_set.layout,
+                .loc = ref_set.loc,
             } },
         };
     }
@@ -1128,6 +1300,62 @@ fn forceExprLayout(expr: ir.Expr, new_layout: layout.Layout) ir.Expr {
             .layout = new_layout,
             .loc = field_set.loc,
         } },
+        .ArrayLit => |array_lit| .{ .ArrayLit = .{
+            .elem_ty = array_lit.elem_ty,
+            .elems = array_lit.elems,
+            .ty = array_lit.ty,
+            .layout = new_layout,
+            .loc = array_lit.loc,
+        } },
+        .ArrayGet => |array_get| .{ .ArrayGet = .{
+            .arr = array_get.arr,
+            .idx = array_get.idx,
+            .ty = array_get.ty,
+            .layout = new_layout,
+            .loc = array_get.loc,
+        } },
+        .ArrayLength => |array_length| .{ .ArrayLength = .{
+            .arr = array_length.arr,
+            .ty = array_length.ty,
+            .layout = new_layout,
+            .loc = array_length.loc,
+        } },
+        .ArraySet => |array_set| .{ .ArraySet = .{
+            .arr = array_set.arr,
+            .idx = array_set.idx,
+            .value = array_set.value,
+            .ty = array_set.ty,
+            .layout = new_layout,
+            .loc = array_set.loc,
+        } },
+        .ArrayMake => |array_make| .{ .ArrayMake = .{
+            .elem_ty = array_make.elem_ty,
+            .size = array_make.size,
+            .init = array_make.init,
+            .ty = array_make.ty,
+            .layout = new_layout,
+            .loc = array_make.loc,
+        } },
+        .RefMake => |ref_make| .{ .RefMake = .{
+            .elem_ty = ref_make.elem_ty,
+            .init = ref_make.init,
+            .ty = ref_make.ty,
+            .layout = new_layout,
+            .loc = ref_make.loc,
+        } },
+        .RefGet => |ref_get| .{ .RefGet = .{
+            .target = ref_get.target,
+            .ty = ref_get.ty,
+            .layout = new_layout,
+            .loc = ref_get.loc,
+        } },
+        .RefSet => |ref_set| .{ .RefSet = .{
+            .target = ref_set.target,
+            .value = ref_set.value,
+            .ty = ref_set.ty,
+            .layout = new_layout,
+            .loc = ref_set.loc,
+        } },
     };
 }
 
@@ -1150,6 +1378,14 @@ fn exprLayout(expr: ir.Expr) layout.Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }
 
@@ -1172,6 +1408,14 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }
 

@@ -126,10 +126,8 @@ P1 实现：
 - `Interpreter` —— 直接执行 Core IR（**不**走 Lowered IR）。
   用于 `omlz run`、REPL、以及在测试中作为语义参考。
 
-只有 stub 的（签名存在，实现为空）：
-
-- `OCamlBackend` —— 仅作为 stdlib 的**非发布**正确性参考。不在主路径上。
-- `LlvmBackend` —— 占位；属于 P1-P8 之外未封存的可选后端工作。
+未来后端（OCaml、LLVM 等）暂未排期；详见 `08-roadmap.md`。原先仅编译的
+`OCamlBackend` / `LlvmBackend` 占位文件因无实际消费者，已被删除。
 
 ## 4. 架构图
 

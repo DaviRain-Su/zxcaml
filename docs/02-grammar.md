@@ -71,6 +71,8 @@ Accepted expression classes:
 | tuples | construction, pattern destructuring, and `fst`/`snd` projection helpers |
 | records | type declarations, construction, field access (`r.x`), pattern destructuring, and functional update (`{ r with x = v }`) |
 | primitive ops | `+`, `-`, `*`, `/`, `mod`, `=`, `<>`, `<`, `<=`, `>`, `>=`, string concatenation `^`, and supported string/char helpers |
+| `int` arrays (ADR-015 R9.1/R9.2) | `[\| 1; 2; 3 \|]` literals, `Array.get` / `a.(i)`, `Array.length`, `Array.set` / `a.(i) <- v`, and `Array.make N init` when `N` is a non-negative `int` literal; element type must be `int` |
+| `ref` cells (ADR-015 R10) | `ref e`, `!r`, and `r := v` accepted when the element type is `int` or `bool`; single-cell only, no aliasing across function boundaries. Other element types (string, record, list, polymorphic) are rejected with `E0013` |
 
 Accepted patterns:
 
@@ -117,10 +119,12 @@ forms with location-aware diagnostics:
 ```text
 module  sig  struct  functor  open  include
 exception  try  raise
-mutable writes  ref  while  for  do  done
+mutable record-field writes (`r.x <- v` outside `AccountFieldSet`)
+instance-variable writes  override expressions
+`ref` of unsupported element types (string, record, list, polymorphic)
 class  object  method  inherit  initializer
 lazy
-arrays  labelled arguments  optional arguments  local opens
+labelled arguments  optional arguments  local opens
 ```
 
 ## 6. Standard library visible to programs

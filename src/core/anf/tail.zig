@@ -117,7 +117,7 @@ pub fn markTailPosition(arena: *std.heap.ArenaAllocator, expr: *const ir.Expr, s
             marked.* = .{ .Match = marked_match };
             break :blk marked;
         },
-        .Lambda, .Constant, .Prim, .Var, .Ctor, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet => expr,
+        .Lambda, .Constant, .Prim, .Var, .Ctor, .Tuple, .TupleProj, .Record, .RecordField, .RecordUpdate, .AccountFieldSet, .ArrayLit, .ArrayGet, .ArrayLength, .ArraySet, .ArrayMake, .RefMake, .RefGet, .RefSet => expr,
     };
 }
 

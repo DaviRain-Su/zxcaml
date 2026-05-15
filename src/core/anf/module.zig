@@ -233,6 +233,19 @@ pub fn lowerTypeExpr(arena: *std.heap.ArenaAllocator, expr: ttree.TypeExpr) Lowe
     };
 }
 
+/// Lowers a wire 1.3 lambda-parameter type expression into a Core IR `Ty`.
+/// Returns `null` when the wire said the type was unknown (`(any)` / no field),
+/// in which case the caller should fall back to its existing heuristics.
+pub fn lowerTypeExprOpt(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    expr_opt: ?ttree.TypeExpr,
+) LowerError!?ir.Ty {
+    const expr = expr_opt orelse return null;
+    const lowered = try lowerTypeExpr(arena, expr);
+    return try type_ops.typeExprToTyWithBindings(arena, ctx.record_type_decls, lowered, null);
+}
+
 pub fn dupeStringSlice(arena: *std.heap.ArenaAllocator, values: []const []const u8) LowerError![]const []const u8 {
     const out = try arena.allocator().alloc([]const u8, values.len);
     for (values, 0..) |value, index| {
@@ -282,6 +295,7 @@ pub fn lowerDecl(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, decl: ttre
 pub fn lowerLetRecGroupBinding(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, binding: ttree.LetRecBinding) LowerError!ir.LetGroupBinding {
     const lambda: ttree.Lambda = .{
         .params = binding.params,
+        .param_types = binding.param_types,
         .body = &binding.body,
     };
     var value = try lowerExprPtr(arena, ctx, .{ .Lambda = lambda });
@@ -301,8 +315,21 @@ pub fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: 
     var inserted_params = std.ArrayList(ScopedBinding).empty;
     defer inserted_params.deinit(arena.allocator());
 
-    for (lambda.params) |param_name| {
+    for (lambda.params, 0..) |param_name, param_index| {
         const owned_name = try arena.allocator().dupe(u8, param_name);
+        // Wire 1.3 may carry an explicit per-parameter type. The existing
+        // structural heuristics (account/record/list/function callback)
+        // retain priority because they encode programmer-intent inferences
+        // (e.g. treating a bare `authority` lambda param that reaches into
+        // `is_signer` as an `account` rather than the formally-inferred
+        // `account_meta`). The wire type wins over the historical `Ty.Int`
+        // fallback so string/option/result/etc. payloads now flow through
+        // for higher-order callbacks. Truly unconstrained params arrive as
+        // `null` here and collapse back to `Ty.Int`.
+        const wire_param_ty: ?ir.Ty = if (param_index < lambda.param_types.len)
+            try lowerTypeExprOpt(arena, ctx, lambda.param_types[param_index])
+        else
+            null;
         const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_"))
             .Unit
         else if (isInstructionDataParamName(param_name))
@@ -315,6 +342,8 @@ pub fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: 
             try listTy(arena, .Int)
         else if (lambdaParamIsFunction(lambda.body.*, param_name))
             try intToIntArrowTy(arena)
+        else if (wire_param_ty) |ty|
+            ty
         else
             .Int;
         const param_layout = layoutForTy(param_ty);
@@ -392,9 +421,148 @@ pub fn lowerExprExpected(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ex
         .RecordField => |field_access| try lowerRecordField(arena, ctx, field_access),
         .RecordUpdate => |record_update| try lowerRecordUpdate(arena, ctx, record_update),
         .FieldSet => |field_set| try lowerFieldSet(arena, ctx, field_set),
+        .ArrayLit => |array_lit| try lowerArrayLit(arena, ctx, array_lit),
+        .ArrayGet => |array_get| try lowerArrayGet(arena, ctx, array_get),
+        .ArrayLength => |array_length| try lowerArrayLength(arena, ctx, array_length),
+        .ArraySet => |array_set| try lowerArraySet(arena, ctx, array_set),
+        .ArrayMake => |array_make| try lowerArrayMake(arena, ctx, array_make),
+        .RefMake => |ref_make| try lowerRefMake(arena, ctx, ref_make),
+        .RefGet => |ref_get| try lowerRefGet(arena, ctx, ref_get),
+        .RefSet => |ref_set| try lowerRefSet(arena, ctx, ref_set),
     };
     try setCoreLoc(arena, &lowered, ttreeExprLoc(expr));
     return lowered;
+}
+
+/// ADR-015 R9.1 lower a typed-tree `array-lit` into a Core IR `ArrayLit`.
+/// Elements are coerced to `Int` (the only element type supported in R9.1).
+pub fn lowerArrayLit(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, array_lit: ttree.ArrayLit) LowerError!ir.Expr {
+    const elems = try arena.allocator().alloc(*const ir.Expr, array_lit.elems.len);
+    for (array_lit.elems, 0..) |elem, index| {
+        elems[index] = try lowerExprPtrExpected(arena, ctx, elem, .Int);
+    }
+    const elem_ty_ptr = try arena.allocator().create(ir.Ty);
+    elem_ty_ptr.* = .Int;
+    return .{ .ArrayLit = .{
+        .elem_ty = .Int,
+        .elems = elems,
+        .ty = .{ .Array = elem_ty_ptr },
+        .layout = layout.structPack(),
+    } };
+}
+
+/// ADR-015 R9.1 lower a typed-tree `array-get` into a Core IR `ArrayGet`.
+pub fn lowerArrayGet(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, array_get: ttree.ArrayGet) LowerError!ir.Expr {
+    const elem_ty_ptr = try arena.allocator().create(ir.Ty);
+    elem_ty_ptr.* = .Int;
+    const arr = try lowerExprPtrExpected(arena, ctx, array_get.arr.*, .{ .Array = elem_ty_ptr });
+    const idx = try lowerExprPtrExpected(arena, ctx, array_get.idx.*, .Int);
+    return .{ .ArrayGet = .{
+        .arr = arr,
+        .idx = idx,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } };
+}
+
+/// ADR-015 R9.1 lower a typed-tree `array-length` into a Core IR `ArrayLength`.
+pub fn lowerArrayLength(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, array_length: ttree.ArrayLength) LowerError!ir.Expr {
+    const elem_ty_ptr = try arena.allocator().create(ir.Ty);
+    elem_ty_ptr.* = .Int;
+    const arr = try lowerExprPtrExpected(arena, ctx, array_length.arr.*, .{ .Array = elem_ty_ptr });
+    return .{ .ArrayLength = .{
+        .arr = arr,
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } };
+}
+
+/// ADR-015 R9.2 lower a typed-tree `array-set` into a Core IR `ArraySet`.
+/// Returns `unit`; bounds violations are checked at runtime against the
+/// existing `array_oob` panic marker.
+pub fn lowerArraySet(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, array_set: ttree.ArraySet) LowerError!ir.Expr {
+    const elem_ty_ptr = try arena.allocator().create(ir.Ty);
+    elem_ty_ptr.* = .Int;
+    const arr = try lowerExprPtrExpected(arena, ctx, array_set.arr.*, .{ .Array = elem_ty_ptr });
+    const idx = try lowerExprPtrExpected(arena, ctx, array_set.idx.*, .Int);
+    const value = try lowerExprPtrExpected(arena, ctx, array_set.value.*, .Int);
+    return .{ .ArraySet = .{
+        .arr = arr,
+        .idx = idx,
+        .value = value,
+        .ty = .Unit,
+        .layout = layout.intConstant(),
+    } };
+}
+
+/// ADR-015 option C / R10 lower a typed-tree `ref-make` into a Core IR
+/// `RefMake`. The element type ttree-side carries the frontend's choice;
+/// here we re-resolve it through `typeExprToTy` so downstream layers see
+/// canonical Core IR `Ty.Int`/`Ty.Bool`/`Ty.Adt(option, ...)` etc.
+pub fn lowerRefMake(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ref_make: ttree.RefMake) LowerError!ir.Expr {
+    const lowered_type_expr = try lowerTypeExpr(arena, ref_make.elem_ty);
+    const elem_ty = try type_ops.typeExprToTy(arena, lowered_type_expr);
+    const elem_ty_ptr = try arena.allocator().create(ir.Ty);
+    elem_ty_ptr.* = elem_ty;
+    const init = try lowerExprPtrExpected(arena, ctx, ref_make.init.*, elem_ty);
+    return .{ .RefMake = .{
+        .elem_ty = elem_ty,
+        .init = init,
+        .ty = .{ .Ref = elem_ty_ptr },
+        .layout = layout.structPack(),
+    } };
+}
+
+/// ADR-015 option C / R10 lower a typed-tree `ref-get` into a Core IR
+/// `RefGet`. Element type is determined from the target's lowered type; we
+/// fall back to a fresh `Ty.Int` for the unannotated case.
+pub fn lowerRefGet(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ref_get: ttree.RefGet) LowerError!ir.Expr {
+    const target = try lowerExprPtr(arena, ctx, ref_get.target.*);
+    const elem_ty: ir.Ty = switch (exprTy(target.*)) {
+        .Ref => |inner| inner.*,
+        else => .Int,
+    };
+    return .{ .RefGet = .{
+        .target = target,
+        .ty = elem_ty,
+        .layout = layout.intConstant(),
+    } };
+}
+
+/// ADR-015 option C / R10 lower a typed-tree `ref-set` into a Core IR
+/// `RefSet`. The value's expected type is taken from the target's element
+/// type when present.
+pub fn lowerRefSet(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, ref_set: ttree.RefSet) LowerError!ir.Expr {
+    const target = try lowerExprPtr(arena, ctx, ref_set.target.*);
+    const elem_ty: ?ir.Ty = switch (exprTy(target.*)) {
+        .Ref => |inner| inner.*,
+        else => null,
+    };
+    const value = if (elem_ty) |elt|
+        try lowerExprPtrExpected(arena, ctx, ref_set.value.*, elt)
+    else
+        try lowerExprPtr(arena, ctx, ref_set.value.*);
+    return .{ .RefSet = .{
+        .target = target,
+        .value = value,
+        .ty = .Unit,
+        .layout = layout.intConstant(),
+    } };
+}
+
+/// ADR-015 R9.2 lower a typed-tree `array-make` into a Core IR `ArrayMake`.
+/// Size is constant; init expression must be `int`-typed.
+pub fn lowerArrayMake(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, array_make: ttree.ArrayMake) LowerError!ir.Expr {
+    const elem_ty_ptr = try arena.allocator().create(ir.Ty);
+    elem_ty_ptr.* = .Int;
+    const init = try lowerExprPtrExpected(arena, ctx, array_make.init.*, .Int);
+    return .{ .ArrayMake = .{
+        .elem_ty = .Int,
+        .size = array_make.size,
+        .init = init,
+        .ty = .{ .Array = elem_ty_ptr },
+        .layout = layout.structPack(),
+    } };
 }
 
 fn ttreeExprLoc(expr: ttree.Expr) ttree.Loc {
@@ -416,6 +584,14 @@ fn ttreeExprLoc(expr: ttree.Expr) ttree.Loc {
         .RecordField => |value| value.loc,
         .RecordUpdate => |value| value.loc,
         .FieldSet => |value| value.loc,
+        .ArrayLit => |value| value.loc,
+        .ArrayGet => |value| value.loc,
+        .ArrayLength => |value| value.loc,
+        .ArraySet => |value| value.loc,
+        .ArrayMake => |value| value.loc,
+        .RefMake => |value| value.loc,
+        .RefGet => |value| value.loc,
+        .RefSet => |value| value.loc,
     };
 }
 
@@ -450,6 +626,14 @@ fn setCoreLoc(arena: *std.heap.ArenaAllocator, expr: *ir.Expr, loc: ttree.Loc) L
         .RecordField => |*value| value.loc = lowered,
         .RecordUpdate => |*value| value.loc = lowered,
         .AccountFieldSet => |*value| value.loc = lowered,
+        .ArrayLit => |*value| value.loc = lowered,
+        .ArrayGet => |*value| value.loc = lowered,
+        .ArrayLength => |*value| value.loc = lowered,
+        .ArraySet => |*value| value.loc = lowered,
+        .ArrayMake => |*value| value.loc = lowered,
+        .RefMake => |*value| value.loc = lowered,
+        .RefGet => |*value| value.loc = lowered,
+        .RefSet => |*value| value.loc = lowered,
     }
 }
 
@@ -664,11 +848,32 @@ pub fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.
     if (isVarNamed(app.callee.*, "Array.of_list")) {
         return lowerArrayOfListApp(arena, ctx, app);
     }
+    if (isVarNamed(app.callee.*, "Option.map") and app.args.len == 2) {
+        return lowerOptionMapApp(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "Option.bind") and app.args.len == 2) {
+        return lowerOptionBindApp(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "Option.fold") and app.args.len == 3) {
+        return lowerOptionFoldApp(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "Result.map") and app.args.len == 2) {
+        return lowerResultMapApp(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "Result.bind") and app.args.len == 2) {
+        return lowerResultBindApp(arena, ctx, app);
+    }
+    if ((isVarNamed(app.callee.*, "Result.map_error") or isVarNamed(app.callee.*, "Result.map_err")) and app.args.len == 2) {
+        return lowerResultMapErrorApp(arena, ctx, app);
+    }
     if (isVarNamed(app.callee.*, "&&") and app.args.len == 2) {
         return lowerLogicalAnd(arena, ctx, app);
     }
     if (isVarNamed(app.callee.*, "||") and app.args.len == 2) {
         return lowerLogicalOr(arena, ctx, app);
+    }
+    if (isVarNamed(app.callee.*, "not") and app.args.len == 1) {
+        return lowerLogicalNot(arena, ctx, app);
     }
     if (builtinCallOp(app.callee.*, app.args.len)) |op| {
         return lowerBuiltinCallApp(arena, ctx, app, op);
@@ -696,6 +901,22 @@ pub fn lowerLogicalAnd(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app:
     const cond = try lowerExprPtrExpected(arena, ctx, app.args[0], .Bool);
     const then_branch = try lowerExprPtrExpected(arena, ctx, app.args[1], .Bool);
     const else_branch = try boolCoreExpr(arena, false);
+    return .{ .If = .{
+        .cond = cond,
+        .then_branch = then_branch,
+        .else_branch = else_branch,
+        .ty = .Bool,
+        .layout = layoutForTy(.Bool),
+    } };
+}
+
+pub fn lowerLogicalNot(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    // Desugar `not e` into `if e then false else true` so the existing Core IR
+    // boolean surface (`If` + constructor literals) handles it without
+    // introducing a dedicated `Not` primop.
+    const cond = try lowerExprPtrExpected(arena, ctx, app.args[0], .Bool);
+    const then_branch = try boolCoreExpr(arena, false);
+    const else_branch = try boolCoreExpr(arena, true);
     return .{ .If = .{
         .cond = cond,
         .then_branch = then_branch,
@@ -976,6 +1197,14 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
     if (std.mem.eql(u8, name, "Bytes.of_string") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.String}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "Bytes.equal") and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ bytes_ty, bytes_ty }), .return_ty = .Bool };
+    if (std.mem.eql(u8, name, "Bytes.compare") and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ bytes_ty, bytes_ty }), .return_ty = .Int };
+    if (std.mem.eql(u8, name, "Format.int_to_string") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Int}), .return_ty = .String };
+    if (std.mem.eql(u8, name, "Format.hex_of_int") and arg_count == 2)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int }), .return_ty = .String };
     if (std.mem.eql(u8, name, "invoke") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{instruction_ty}), .return_ty = .Int };
     if (std.mem.eql(u8, name, "invoke_signed") and arg_count == 2)
@@ -1205,6 +1434,550 @@ pub fn lowerListFoldLeftLiteralApp(arena: *std.heap.ArenaAllocator, ctx: *LowerC
     }
 
     return current.*;
+}
+
+/// Inline-expand `Option.map f o` into a Core IR Match expression.
+/// Mirrors the OCaml stdlib definition `Option.map f = function None -> None | Some x -> Some (f x)`.
+pub fn lowerOptionMapApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    return inlineOptionUnaryHof(arena, ctx, app.args[0], app.args[1], .OptionMap);
+}
+
+/// Inline-expand `Option.bind f o` into a Core IR Match expression.
+/// Mirrors the OCaml stdlib `Option.bind x f = match x with None -> None | Some v -> f v`.
+/// Note: the OCaml stdlib signature is `bind : 'a option -> ('a -> 'b option) -> 'b option`, so
+/// the first argument is the option scrutinee. R6b.3 follows that convention.
+pub fn lowerOptionBindApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    // Stdlib: Option.bind x f — first arg is the option scrutinee, second is the continuation.
+    return inlineOptionUnaryHof(arena, ctx, app.args[1], app.args[0], .OptionBind);
+}
+
+/// Inline-expand `Option.fold ~none:default ~some:g o` (already reordered to positional
+/// `(default, g, o)` by the frontend's labelled-argument reorder) into a Core IR Match.
+pub fn lowerOptionFoldApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 3) return error.UnsupportedNode;
+    return inlineOptionFold(arena, ctx, app.args[0], app.args[1], app.args[2]);
+}
+
+/// Inline-expand `Result.map f r` into a Core IR Match expression.
+pub fn lowerResultMapApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    return inlineResultUnaryHof(arena, ctx, app.args[0], app.args[1], .ResultMap);
+}
+
+/// Inline-expand `Result.bind f r` into a Core IR Match expression.
+/// Mirrors `Result.bind x f = match x with Ok v -> f v | Error e -> Error e`.
+pub fn lowerResultBindApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    // Stdlib: Result.bind x f — first arg is the result scrutinee, second is the continuation.
+    return inlineResultUnaryHof(arena, ctx, app.args[1], app.args[0], .ResultBind);
+}
+
+/// Inline-expand `Result.map_error f r` (and its alias `Result.map_err`) into a Core IR Match.
+pub fn lowerResultMapErrorApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.App) LowerError!ir.Expr {
+    if (app.args.len != 2) return error.UnsupportedNode;
+    return inlineResultUnaryHof(arena, ctx, app.args[0], app.args[1], .ResultMapError);
+}
+
+const OptionUnaryHof = enum { OptionMap, OptionBind };
+const ResultUnaryHof = enum { ResultMap, ResultBind, ResultMapError };
+
+fn inlineOptionUnaryHof(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    f_arg: ttree.Expr,
+    option_arg: ttree.Expr,
+    kind: OptionUnaryHof,
+) LowerError!ir.Expr {
+    // Lower the option scrutinee first so we can read its concrete element type.
+    const option_value = try lowerExprPtr(arena, ctx, option_arg);
+    const option_ty = exprTy(option_value.*);
+    const elem_ty: ir.Ty = optionElemTy(option_ty) orelse .Int;
+
+    // Lower the function arg `f` once, regardless of whether it is a Var, Lambda, or App.
+    const f_value = try lowerExprPtr(arena, ctx, f_arg);
+    const f_name = try freshSyntheticName(arena, ctx, "__zxc_hof_f");
+
+    // Determine the result type from f's arrow (if known); otherwise keep `Int`.
+    const f_ret_ty: ir.Ty = arrowReturnTy(exprTy(f_value.*)) orelse elem_ty;
+    const result_ty: ir.Ty = switch (kind) {
+        // Option.map : ('a -> 'b) -> 'a option -> 'b option  =>  return option<f_ret_ty>
+        .OptionMap => try optionTy(arena, f_ret_ty),
+        // Option.bind : ('a -> 'b option) -> 'a option -> 'b option  =>  result is f's return type (an option).
+        .OptionBind => f_ret_ty,
+    };
+
+    // Bind f under a fresh name so its scope is visible in the Some arm body.
+    const f_binding_ty = exprTy(f_value.*);
+    const f_binding_layout = exprLayout(f_value.*);
+    try ctx.scope.put(f_name, .{ .ty = f_binding_ty, .layout = f_binding_layout });
+    defer _ = ctx.scope.remove(f_name);
+
+    // Build a fresh name for the Some payload binding.
+    const x_name = try freshSyntheticName(arena, ctx, "__zxc_opt_x");
+
+    // Some arm body: depending on kind it is either `Some (f x)` or `f x`.
+    const f_ref = try arena.allocator().create(ir.Expr);
+    f_ref.* = .{ .Var = .{
+        .name = f_name,
+        .ty = f_binding_ty,
+        .layout = f_binding_layout,
+    } };
+    const x_ref = try arena.allocator().create(ir.Expr);
+    x_ref.* = .{ .Var = .{
+        .name = x_name,
+        .ty = elem_ty,
+        .layout = layoutForTy(elem_ty),
+    } };
+    const app_args = try arena.allocator().alloc(*const ir.Expr, 1);
+    app_args[0] = x_ref;
+    const fx_call = try arena.allocator().create(ir.Expr);
+    fx_call.* = .{ .App = .{
+        .callee = f_ref,
+        .args = app_args,
+        .ty = f_ret_ty,
+        .layout = layoutForTy(f_ret_ty),
+    } };
+
+    const some_body: *const ir.Expr = switch (kind) {
+        .OptionMap => blk: {
+            const wrapped_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            wrapped_args[0] = fx_call;
+            const some_ctor = try arena.allocator().create(ir.Expr);
+            some_ctor.* = .{ .Ctor = .{
+                .name = try arena.allocator().dupe(u8, "Some"),
+                .args = wrapped_args,
+                .ty = result_ty,
+                .layout = layout.ctor(1),
+                .tag = match_lower.builtinCtorTag("Some"),
+                .type_name = null,
+            } };
+            break :blk some_ctor;
+        },
+        .OptionBind => fx_call,
+    };
+
+    // None arm body: empty option.
+    const none_ctor = try arena.allocator().create(ir.Expr);
+    none_ctor.* = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "None"),
+        .args = &.{},
+        .ty = result_ty,
+        .layout = layout.ctor(0),
+        .tag = match_lower.builtinCtorTag("None"),
+        .type_name = null,
+    } };
+
+    // Build a scrutinee var bound to a let-name.
+    const scrutinee_name = try freshSyntheticName(arena, ctx, "__zxc_opt_scrut");
+    const scrutinee_var = try arena.allocator().create(ir.Expr);
+    scrutinee_var.* = .{ .Var = .{
+        .name = scrutinee_name,
+        .ty = option_ty,
+        .layout = exprLayout(option_value.*),
+    } };
+
+    // Pattern: Some <x>
+    const some_arg_patterns = try arena.allocator().alloc(ir.Pattern, 1);
+    some_arg_patterns[0] = .{ .Var = .{
+        .name = x_name,
+        .ty = elem_ty,
+        .layout = layoutForTy(elem_ty),
+    } };
+    const some_pattern: ir.Pattern = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "Some"),
+        .args = some_arg_patterns,
+        .tag = match_lower.builtinCtorTag("Some"),
+        .type_name = null,
+    } };
+    const none_pattern: ir.Pattern = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "None"),
+        .args = &.{},
+        .tag = match_lower.builtinCtorTag("None"),
+        .type_name = null,
+    } };
+
+    const arms = try arena.allocator().alloc(ir.Arm, 2);
+    arms[0] = .{ .pattern = some_pattern, .guard = null, .body = some_body };
+    arms[1] = .{ .pattern = none_pattern, .guard = null, .body = none_ctor };
+
+    const match_expr = try arena.allocator().create(ir.Expr);
+    match_expr.* = .{ .Match = .{
+        .scrutinee = scrutinee_var,
+        .arms = arms,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    // Wrap match with `let __zxc_opt_scrut = <option_value> in <match>`.
+    const scrut_let = try arena.allocator().create(ir.Expr);
+    scrut_let.* = .{ .Let = .{
+        .name = scrutinee_name,
+        .value = option_value,
+        .body = match_expr,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    return .{ .Let = .{
+        .name = f_name,
+        .value = f_value,
+        .body = scrut_let,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+}
+
+fn inlineOptionFold(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    default_arg: ttree.Expr,
+    some_arg: ttree.Expr,
+    option_arg: ttree.Expr,
+) LowerError!ir.Expr {
+    const option_value = try lowerExprPtr(arena, ctx, option_arg);
+    const option_ty = exprTy(option_value.*);
+    const elem_ty: ir.Ty = optionElemTy(option_ty) orelse .Int;
+
+    // Lower the some continuation `g : 'a -> 'b`.
+    const g_value = try lowerExprPtr(arena, ctx, some_arg);
+    const g_binding_ty = exprTy(g_value.*);
+    const g_binding_layout = exprLayout(g_value.*);
+    const g_ret_ty: ir.Ty = arrowReturnTy(g_binding_ty) orelse .Int;
+
+    // Lower the default value with the expected result type so its `Var` lookups inherit it.
+    const default_value = try lowerExprPtrExpected(arena, ctx, default_arg, g_ret_ty);
+    const result_ty = g_ret_ty;
+
+    const g_name = try freshSyntheticName(arena, ctx, "__zxc_hof_some");
+    try ctx.scope.put(g_name, .{ .ty = g_binding_ty, .layout = g_binding_layout });
+    defer _ = ctx.scope.remove(g_name);
+
+    const x_name = try freshSyntheticName(arena, ctx, "__zxc_opt_x");
+
+    const g_ref = try arena.allocator().create(ir.Expr);
+    g_ref.* = .{ .Var = .{
+        .name = g_name,
+        .ty = g_binding_ty,
+        .layout = g_binding_layout,
+    } };
+    const x_ref = try arena.allocator().create(ir.Expr);
+    x_ref.* = .{ .Var = .{
+        .name = x_name,
+        .ty = elem_ty,
+        .layout = layoutForTy(elem_ty),
+    } };
+    const some_call_args = try arena.allocator().alloc(*const ir.Expr, 1);
+    some_call_args[0] = x_ref;
+    const some_body = try arena.allocator().create(ir.Expr);
+    some_body.* = .{ .App = .{
+        .callee = g_ref,
+        .args = some_call_args,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    const some_arg_patterns = try arena.allocator().alloc(ir.Pattern, 1);
+    some_arg_patterns[0] = .{ .Var = .{
+        .name = x_name,
+        .ty = elem_ty,
+        .layout = layoutForTy(elem_ty),
+    } };
+    const some_pattern: ir.Pattern = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "Some"),
+        .args = some_arg_patterns,
+        .tag = match_lower.builtinCtorTag("Some"),
+        .type_name = null,
+    } };
+    const none_pattern: ir.Pattern = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "None"),
+        .args = &.{},
+        .tag = match_lower.builtinCtorTag("None"),
+        .type_name = null,
+    } };
+
+    const scrutinee_name = try freshSyntheticName(arena, ctx, "__zxc_opt_scrut");
+    const scrutinee_var = try arena.allocator().create(ir.Expr);
+    scrutinee_var.* = .{ .Var = .{
+        .name = scrutinee_name,
+        .ty = option_ty,
+        .layout = exprLayout(option_value.*),
+    } };
+
+    const arms = try arena.allocator().alloc(ir.Arm, 2);
+    arms[0] = .{ .pattern = none_pattern, .guard = null, .body = default_value };
+    arms[1] = .{ .pattern = some_pattern, .guard = null, .body = some_body };
+
+    const match_expr = try arena.allocator().create(ir.Expr);
+    match_expr.* = .{ .Match = .{
+        .scrutinee = scrutinee_var,
+        .arms = arms,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    const scrut_let = try arena.allocator().create(ir.Expr);
+    scrut_let.* = .{ .Let = .{
+        .name = scrutinee_name,
+        .value = option_value,
+        .body = match_expr,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    return .{ .Let = .{
+        .name = g_name,
+        .value = g_value,
+        .body = scrut_let,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+}
+
+fn inlineResultUnaryHof(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    f_arg: ttree.Expr,
+    result_arg: ttree.Expr,
+    kind: ResultUnaryHof,
+) LowerError!ir.Expr {
+    const result_value = try lowerExprPtr(arena, ctx, result_arg);
+    const scrutinee_ty = exprTy(result_value.*);
+    const ok_ty: ir.Ty = resultOkTy(scrutinee_ty) orelse .Int;
+    const err_ty: ir.Ty = resultErrTy(scrutinee_ty) orelse .Int;
+
+    const f_value = try lowerExprPtr(arena, ctx, f_arg);
+    const f_binding_ty = exprTy(f_value.*);
+    const f_binding_layout = exprLayout(f_value.*);
+    const f_ret_ty: ir.Ty = arrowReturnTy(f_binding_ty) orelse switch (kind) {
+        .ResultMap => ok_ty,
+        .ResultBind => scrutinee_ty,
+        .ResultMapError => err_ty,
+    };
+
+    const result_ty: ir.Ty = switch (kind) {
+        // Result.map : ('a -> 'b) -> ('a, 'e) result -> ('b, 'e) result
+        .ResultMap => try resultTy(arena, f_ret_ty, err_ty),
+        // Result.bind : ('a -> ('b, 'e) result) -> ('a, 'e) result -> ('b, 'e) result
+        // The first arg `f` returns a result so `f_ret_ty` should already be a result type.
+        .ResultBind => f_ret_ty,
+        // Result.map_error : ('e -> 'f) -> ('a, 'e) result -> ('a, 'f) result
+        .ResultMapError => try resultTy(arena, ok_ty, f_ret_ty),
+    };
+
+    const f_name = try freshSyntheticName(arena, ctx, "__zxc_hof_f");
+    try ctx.scope.put(f_name, .{ .ty = f_binding_ty, .layout = f_binding_layout });
+    defer _ = ctx.scope.remove(f_name);
+
+    const ok_name = try freshSyntheticName(arena, ctx, "__zxc_res_ok");
+    const err_name = try freshSyntheticName(arena, ctx, "__zxc_res_err");
+
+    const ok_var = try arena.allocator().create(ir.Expr);
+    ok_var.* = .{ .Var = .{
+        .name = ok_name,
+        .ty = ok_ty,
+        .layout = layoutForTy(ok_ty),
+    } };
+    const err_var = try arena.allocator().create(ir.Expr);
+    err_var.* = .{ .Var = .{
+        .name = err_name,
+        .ty = err_ty,
+        .layout = layoutForTy(err_ty),
+    } };
+
+    const f_ref = try arena.allocator().create(ir.Expr);
+    f_ref.* = .{ .Var = .{
+        .name = f_name,
+        .ty = f_binding_ty,
+        .layout = f_binding_layout,
+    } };
+
+    // Helper to build a Ctor expression with a single payload value.
+    const ok_body: *const ir.Expr = switch (kind) {
+        .ResultMap => blk: {
+            const call_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            call_args[0] = ok_var;
+            const f_call = try arena.allocator().create(ir.Expr);
+            f_call.* = .{ .App = .{
+                .callee = f_ref,
+                .args = call_args,
+                .ty = f_ret_ty,
+                .layout = layoutForTy(f_ret_ty),
+            } };
+            const ctor_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            ctor_args[0] = f_call;
+            const ok_ctor = try arena.allocator().create(ir.Expr);
+            ok_ctor.* = .{ .Ctor = .{
+                .name = try arena.allocator().dupe(u8, "Ok"),
+                .args = ctor_args,
+                .ty = result_ty,
+                .layout = layout.ctor(1),
+                .tag = match_lower.builtinCtorTag("Ok"),
+                .type_name = null,
+            } };
+            break :blk ok_ctor;
+        },
+        .ResultBind => blk: {
+            const call_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            call_args[0] = ok_var;
+            const f_call = try arena.allocator().create(ir.Expr);
+            f_call.* = .{ .App = .{
+                .callee = f_ref,
+                .args = call_args,
+                .ty = result_ty,
+                .layout = layoutForTy(result_ty),
+            } };
+            break :blk f_call;
+        },
+        .ResultMapError => blk: {
+            // Ok case: rewrap value unchanged.
+            const ctor_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            ctor_args[0] = ok_var;
+            const ok_ctor = try arena.allocator().create(ir.Expr);
+            ok_ctor.* = .{ .Ctor = .{
+                .name = try arena.allocator().dupe(u8, "Ok"),
+                .args = ctor_args,
+                .ty = result_ty,
+                .layout = layout.ctor(1),
+                .tag = match_lower.builtinCtorTag("Ok"),
+                .type_name = null,
+            } };
+            break :blk ok_ctor;
+        },
+    };
+
+    const err_body: *const ir.Expr = switch (kind) {
+        .ResultMap, .ResultBind => blk: {
+            // Just rewrap the error unchanged.
+            const ctor_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            ctor_args[0] = err_var;
+            const err_ctor = try arena.allocator().create(ir.Expr);
+            err_ctor.* = .{ .Ctor = .{
+                .name = try arena.allocator().dupe(u8, "Error"),
+                .args = ctor_args,
+                .ty = result_ty,
+                .layout = layout.ctor(1),
+                .tag = match_lower.builtinCtorTag("Error"),
+                .type_name = null,
+            } };
+            break :blk err_ctor;
+        },
+        .ResultMapError => blk: {
+            const call_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            call_args[0] = err_var;
+            const f_call = try arena.allocator().create(ir.Expr);
+            f_call.* = .{ .App = .{
+                .callee = f_ref,
+                .args = call_args,
+                .ty = f_ret_ty,
+                .layout = layoutForTy(f_ret_ty),
+            } };
+            const ctor_args = try arena.allocator().alloc(*const ir.Expr, 1);
+            ctor_args[0] = f_call;
+            const err_ctor = try arena.allocator().create(ir.Expr);
+            err_ctor.* = .{ .Ctor = .{
+                .name = try arena.allocator().dupe(u8, "Error"),
+                .args = ctor_args,
+                .ty = result_ty,
+                .layout = layout.ctor(1),
+                .tag = match_lower.builtinCtorTag("Error"),
+                .type_name = null,
+            } };
+            break :blk err_ctor;
+        },
+    };
+
+    const ok_arg_patterns = try arena.allocator().alloc(ir.Pattern, 1);
+    ok_arg_patterns[0] = .{ .Var = .{
+        .name = ok_name,
+        .ty = ok_ty,
+        .layout = layoutForTy(ok_ty),
+    } };
+    const err_arg_patterns = try arena.allocator().alloc(ir.Pattern, 1);
+    err_arg_patterns[0] = .{ .Var = .{
+        .name = err_name,
+        .ty = err_ty,
+        .layout = layoutForTy(err_ty),
+    } };
+
+    const ok_pattern: ir.Pattern = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "Ok"),
+        .args = ok_arg_patterns,
+        .tag = match_lower.builtinCtorTag("Ok"),
+        .type_name = null,
+    } };
+    const err_pattern: ir.Pattern = .{ .Ctor = .{
+        .name = try arena.allocator().dupe(u8, "Error"),
+        .args = err_arg_patterns,
+        .tag = match_lower.builtinCtorTag("Error"),
+        .type_name = null,
+    } };
+
+    const scrutinee_name = try freshSyntheticName(arena, ctx, "__zxc_res_scrut");
+    const scrutinee_var = try arena.allocator().create(ir.Expr);
+    scrutinee_var.* = .{ .Var = .{
+        .name = scrutinee_name,
+        .ty = scrutinee_ty,
+        .layout = exprLayout(result_value.*),
+    } };
+
+    const arms = try arena.allocator().alloc(ir.Arm, 2);
+    arms[0] = .{ .pattern = ok_pattern, .guard = null, .body = ok_body };
+    arms[1] = .{ .pattern = err_pattern, .guard = null, .body = err_body };
+
+    const match_expr = try arena.allocator().create(ir.Expr);
+    match_expr.* = .{ .Match = .{
+        .scrutinee = scrutinee_var,
+        .arms = arms,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    const scrut_let = try arena.allocator().create(ir.Expr);
+    scrut_let.* = .{ .Let = .{
+        .name = scrutinee_name,
+        .value = result_value,
+        .body = match_expr,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+
+    return .{ .Let = .{
+        .name = f_name,
+        .value = f_value,
+        .body = scrut_let,
+        .ty = result_ty,
+        .layout = layoutForTy(result_ty),
+    } };
+}
+
+fn optionElemTy(ty: ir.Ty) ?ir.Ty {
+    return switch (ty) {
+        .Adt => |adt| if (std.mem.eql(u8, adt.name, "option") and adt.params.len == 1) adt.params[0] else null,
+        else => null,
+    };
+}
+
+fn resultOkTy(ty: ir.Ty) ?ir.Ty {
+    return switch (ty) {
+        .Adt => |adt| if (std.mem.eql(u8, adt.name, "result") and adt.params.len == 2) adt.params[0] else null,
+        else => null,
+    };
+}
+
+fn resultErrTy(ty: ir.Ty) ?ir.Ty {
+    return switch (ty) {
+        .Adt => |adt| if (std.mem.eql(u8, adt.name, "result") and adt.params.len == 2) adt.params[1] else null,
+        else => null,
+    };
+}
+
+fn arrowReturnTy(ty: ir.Ty) ?ir.Ty {
+    return switch (ty) {
+        .Arrow => |arrow| arrow.ret.*,
+        else => null,
+    };
 }
 
 pub fn collectListLiteralItems(allocator: std.mem.Allocator, expr: ttree.Expr, items: *std.ArrayList(ttree.Expr)) LowerError!void {

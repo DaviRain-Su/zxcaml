@@ -1,0 +1,6 @@
+error[E0013]: this `ref` element type is not part of the ZxCaml subset (R10)
+ --> tests/ui/ref_string.ml:2:10
+  |
+2 |   let r = ref "hello" in
+  |          ^^^^^^^^^^^
+  = help: R10 accepts `let r = ref 0 in r := !r + 1; !r` when the element type is `int` or `bool`. For other element types, thread state explicitly or use a recursive `let rec` over an accumulator.

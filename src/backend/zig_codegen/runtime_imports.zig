@@ -93,8 +93,14 @@ pub fn emitExternalAppExpr(
         return;
     }
     if (std.mem.eql(u8, external.symbol, "array.get") and app.args.len == 2) {
-        const source_app = switch (app.args[0].*) { .App => |value| value, else => return error.UnsupportedExpr };
-        const source_callee = switch (source_app.callee.*) { .Var => |value| value, else => return error.UnsupportedExpr };
+        const source_app = switch (app.args[0].*) {
+            .App => |value| value,
+            else => return error.UnsupportedExpr,
+        };
+        const source_callee = switch (source_app.callee.*) {
+            .Var => |value| value,
+            else => return error.UnsupportedExpr,
+        };
         const source_external = findExternalDecl(ctx.externals, source_callee.name) orelse return error.UnsupportedExpr;
         if (!std.mem.eql(u8, source_external.symbol, "sysvar.readStakeHistory") or source_app.args.len != 2) return error.UnsupportedExpr;
         const entry_ty = try userTypeName(allocator, "stake_history_entry");
@@ -500,8 +506,6 @@ pub fn emitCounterAppExpr(
         ctx.next_block_id += 1;
         try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
         try emitIndent(out, allocator, indent_level + 1);
-        try append(out, allocator, "_ = omlz_runtime_accounts;\n");
-        try emitIndent(out, allocator, indent_level + 1);
         try appendPrint(out, allocator, "break :blk{d} transfer_sol.zxcaml_transfer_sol_process(arena, omlz_runtime_input, ", .{block_id});
         try emitExpr(out, allocator, app.args[3].*, indent_level, ctx);
         try append(out, allocator, ");\n");
@@ -587,79 +591,55 @@ pub fn emitCounterAppExpr(
     if (std.mem.eql(u8, name, "hackathon_greet_process")) {
         if (app.args.len != 3) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        const block_id = ctx.next_block_id;
-        ctx.next_block_id += 1;
-        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} hackathon_greet.zxcaml_hackathon_greet_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
-        try emitIndent(out, allocator, indent_level);
-        try append(out, allocator, "}");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "hackathon_greet", "zxcaml_hackathon_greet_process");
         return true;
     }
     if (std.mem.eql(u8, name, "token_vault_process")) {
         if (app.args.len != 7) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "token_vault.zxcaml_token_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "token_vault", "zxcaml_token_vault_process");
         return true;
     }
     if (std.mem.eql(u8, name, "escrow_full_process")) {
         if (app.args.len != 2) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        const block_id = ctx.next_block_id;
-        ctx.next_block_id += 1;
-        try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "const omlz_escrow_account_witness_{d} = ", .{block_id});
-        try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
-        try append(out, allocator, ";\n");
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "_ = omlz_escrow_account_witness_{d};\n", .{block_id});
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "const omlz_escrow_instruction_data_witness_{d} = ", .{block_id});
-        try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
-        try append(out, allocator, ";\n");
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "_ = omlz_escrow_instruction_data_witness_{d};\n", .{block_id});
-        try emitIndent(out, allocator, indent_level + 1);
-        try appendPrint(out, allocator, "break :blk{d} escrow_full.zxcaml_escrow_full_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n", .{block_id});
-        try emitIndent(out, allocator, indent_level);
-        try append(out, allocator, "}");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "escrow_full", "zxcaml_escrow_full_process");
         return true;
     }
     if (std.mem.eql(u8, name, "dao_voting_process")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "dao_voting.zxcaml_dao_voting_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "dao_voting", "zxcaml_dao_voting_process");
         return true;
     }
     if (std.mem.eql(u8, name, "ata_transfer_process")) {
         if (app.args.len != 7) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "ata_transfer.zxcaml_ata_transfer_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "ata_transfer", "zxcaml_ata_transfer_process");
         return true;
     }
     if (std.mem.eql(u8, name, "spl_burn_process")) {
         if (app.args.len != 5) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "spl_burn.zxcaml_spl_burn_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "spl_burn", "zxcaml_spl_burn_process");
         return true;
     }
     if (std.mem.eql(u8, name, "spl_close_account_process")) {
         if (app.args.len != 5) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "spl_close_account.zxcaml_spl_close_account_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "spl_close_account", "zxcaml_spl_close_account_process");
         return true;
     }
     if (std.mem.eql(u8, name, "spl_revoke_process")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "spl_revoke.zxcaml_spl_revoke_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "spl_revoke", "zxcaml_spl_revoke_process");
         return true;
     }
     if (std.mem.eql(u8, name, "order_book_process")) {
         if (app.args.len != 8) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "order_book.zxcaml_order_book_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "order_book", "zxcaml_order_book_process");
         return true;
     }
     return false;
@@ -1591,6 +1571,33 @@ pub fn emitSysvarEpochScheduleFromAccountExpr(
     try appendPrint(out, allocator, "const omlz_epoch_schedule_{d} = sysvar.readEpochSchedule(omlz_epoch_schedule_data_{d});\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "break :blk{d} {s}{{ .slots_per_epoch = @intCast(omlz_epoch_schedule_{d}.slots_per_epoch), .leader_schedule_slot_offset = @intCast(omlz_epoch_schedule_{d}.leader_schedule_slot_offset), .warmup = prelude.Bool.fromNative(omlz_epoch_schedule_{d}.warmup), .first_normal_epoch = @intCast(omlz_epoch_schedule_{d}.first_normal_epoch), .first_normal_slot = @intCast(omlz_epoch_schedule_{d}.first_normal_slot) }};\n", .{ block_id, schedule_ty, block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+fn emitRuntimeProgramEntrypointCall(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    args: []const *const lir.LExpr,
+    indent_level: usize,
+    ctx: *EmitContext,
+    module_alias: []const u8,
+    function_name: []const u8,
+) EmitError!void {
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    // The explicit IR args are swallowed by the runtime-derived call below.
+    // Entrypoint account binding skips params that are only used by those
+    // swallowed args, so no discard markers are needed here.
+    _ = args;
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(
+        out,
+        allocator,
+        "break :blk{d} {s}.{s}(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n",
+        .{ block_id, module_alias, function_name },
+    );
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
 }

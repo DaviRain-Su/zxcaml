@@ -1,7 +1,7 @@
 //! Typed Zig mirror for the M1 P3 ZxCaml frontend S-expression format.
 //!
 //! RESPONSIBILITIES:
-//! - Validate the `(zxcaml-cir 1.2 ...)` wire-format header.
+//! - Validate the `(zxcaml-cir 1.5 ...)` wire-format header.
 //! - Decode the generic S-expression tree into `Module -> Decl -> Expr`.
 //! - Keep all compiler-internal allocation explicit through a caller arena.
 
@@ -12,7 +12,7 @@ const Sexp = sexp_parser.Sexp;
 
 pub const expected_wire_version = sexp_parser.expected_wire_version;
 
-/// Source location carried by wire 1.2 expression nodes.
+/// Source location carried by wire 1.2+ expression nodes.
 pub const Loc = struct {
     file: []const u8,
     line: u32,
@@ -60,6 +60,8 @@ pub const LetDecl = struct {
 pub const LetRecBinding = struct {
     name: []const u8,
     params: []const []const u8,
+    /// Lockstep with `params`. See `Lambda.param_types`.
+    param_types: []const ?TypeExpr = &.{},
     body: Expr,
 };
 
@@ -172,11 +174,84 @@ pub const Expr = union(enum) {
     RecordField: RecordField,
     RecordUpdate: RecordUpdate,
     FieldSet: FieldSet,
+    ArrayLit: ArrayLit,
+    ArrayGet: ArrayGet,
+    ArrayLength: ArrayLength,
+    ArraySet: ArraySet,
+    ArrayMake: ArrayMake,
+    RefMake: RefMake,
+    RefGet: RefGet,
+    RefSet: RefSet,
+};
+
+/// ADR-015 option C / R10: arena-allocated single-slot ref cell.
+pub const RefMake = struct {
+    elem_ty: TypeExpr,
+    init: *const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option C / R10: ref cell dereference (`!r`).
+pub const RefGet = struct {
+    target: *const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option C / R10: ref cell assignment (`r := v`).
+pub const RefSet = struct {
+    target: *const Expr,
+    value: *const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option B / R9.1: read-only int array literal.
+pub const ArrayLit = struct {
+    /// Element type as carried by the wire 1.4 envelope. R9.1 only emits
+    /// `(type-ref int)`; non-int element types are rejected upstream
+    /// (frontend E0040).
+    elem_ty: TypeExpr,
+    elems: []const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option B / R9.1: read-only array indexed access (`a.(i)`).
+pub const ArrayGet = struct {
+    arr: *const Expr,
+    idx: *const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option B / R9.1: array length (`Array.length a`).
+pub const ArrayLength = struct {
+    arr: *const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option B / R9.2: in-place int array write
+/// (`Array.set a i v` or `a.(i) <- v`).
+pub const ArraySet = struct {
+    arr: *const Expr,
+    idx: *const Expr,
+    value: *const Expr,
+    loc: Loc = Loc.unknown,
+};
+
+/// ADR-015 option B / R9.2: `Array.make N init` where `N` is a positive
+/// int literal known at parse time and the element type is `Int`.
+pub const ArrayMake = struct {
+    elem_ty: TypeExpr,
+    size: u32,
+    init: *const Expr,
+    loc: Loc = Loc.unknown,
 };
 
 /// Single lambda form.
 pub const Lambda = struct {
     params: []const []const u8,
+    /// One entry per `params`, in lockstep. Wire 1.3 emits an explicit type per
+    /// parameter; wire <=1.2 emits the bare-name form and the bridge fills
+    /// these with `null` so downstream consumers fall back to heuristics.
+    param_types: []const ?TypeExpr = &.{},
     body: *const Expr,
     loc: Loc = Loc.unknown,
 };
@@ -382,6 +457,9 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
 
     const file_version = try expectAtom(header[1]);
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "1.4") and
+        !std.mem.eql(u8, file_version, "1.3") and
+        !std.mem.eql(u8, file_version, "1.2") and
         !std.mem.eql(u8, file_version, "1.1") and
         !std.mem.eql(u8, file_version, "1.0") and
         !std.mem.eql(u8, file_version, "0.9") and
@@ -403,7 +481,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=1.2\n");
+            try writeStderr(io, " expected=1.5\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
@@ -418,7 +496,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits location-aware sexp 1.2.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits ref-capable sexp 1.5.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -427,7 +505,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.UnmatchedParen => try writeStderr(io, "error: malformed frontend sexp: unmatched paren\n"),
         error.UnexpectedRightParen => try writeStderr(io, "error: malformed frontend sexp: unexpected right paren\n"),
         error.BadAtom => try writeStderr(io, "error: malformed frontend sexp: bad atom\n"),
-        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 1.2 ...)\n"),
+        error.InvalidHeader => try writeStderr(io, "error: malformed frontend sexp: expected (zxcaml-cir 1.5 ...)\n"),
         error.UnexpectedAtom => try writeStderr(io, "error: malformed frontend sexp: unexpected atom in typed tree\n"),
         else => try writeStderr(io, "error: malformed frontend sexp: could not decode typed tree\n"),
     }
@@ -770,6 +848,15 @@ fn parseTypeExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError
     if (items.len == 0) return error.MalformedTypeExpr;
     const tag = try expectAtom(items[0]);
 
+    if (std.mem.eql(u8, tag, "any")) {
+        // Wire 1.3 emits `(any)` for unconstrained type slots, including
+        // inside applied type constructors like `(type-ref list (any))`
+        // when the element type is not pinned down. Treat as a fresh
+        // unbound type variable; downstream lowering reuses the same
+        // fallback path as wire 1.2 (which omitted param_types entirely).
+        if (items.len != 1) return error.MalformedTypeExpr;
+        return .{ .TypeVar = try arena.allocator().dupe(u8, "_") };
+    }
     if (std.mem.eql(u8, tag, "type-var")) {
         if (items.len != 2) return error.MalformedTypeExpr;
         return .{ .TypeVar = try dupeAtom(arena, items[1]) };
@@ -897,7 +984,134 @@ fn parseExpr(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!Exp
         value.loc = located.loc;
         return .{ .FieldSet = value };
     }
+    if (std.mem.eql(u8, expr_tag, "array-lit")) {
+        var value = try parseArrayLit(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .ArrayLit = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "array-get")) {
+        var value = try parseArrayGet(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .ArrayGet = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "array-length")) {
+        var value = try parseArrayLength(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .ArrayLength = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "array-set")) {
+        var value = try parseArraySet(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .ArraySet = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "array-make")) {
+        var value = try parseArrayMake(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .ArrayMake = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "ref-make")) {
+        var value = try parseRefMake(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .RefMake = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "ref-get")) {
+        var value = try parseRefGet(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .RefGet = value };
+    }
+    if (std.mem.eql(u8, expr_tag, "ref-set")) {
+        var value = try parseRefSet(arena, expr_items);
+        value.loc = located.loc;
+        return .{ .RefSet = value };
+    }
     return error.UnsupportedNode;
+}
+
+fn parseRefMake(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RefMake {
+    // (ref-make (ty <type-expr>) <init-expr>)
+    if (items.len != 3) return error.UnsupportedNode;
+    const ty_items = try expectList(items[1]);
+    if (ty_items.len != 2) return error.MalformedTypeExpr;
+    try expectAtomValue(ty_items[0], "ty");
+    const elem_ty = try parseTypeExpr(arena, ty_items[1]);
+    const init = try arena.allocator().create(Expr);
+    init.* = try parseExpr(arena, items[2]);
+    return .{ .elem_ty = elem_ty, .init = init };
+}
+
+fn parseRefGet(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RefGet {
+    if (items.len != 2) return error.UnsupportedNode;
+    const target = try arena.allocator().create(Expr);
+    target.* = try parseExpr(arena, items[1]);
+    return .{ .target = target };
+}
+
+fn parseRefSet(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!RefSet {
+    if (items.len != 3) return error.UnsupportedNode;
+    const target = try arena.allocator().create(Expr);
+    target.* = try parseExpr(arena, items[1]);
+    const value = try arena.allocator().create(Expr);
+    value.* = try parseExpr(arena, items[2]);
+    return .{ .target = target, .value = value };
+}
+
+fn parseArrayLit(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!ArrayLit {
+    if (items.len < 2) return error.UnsupportedNode;
+    // items[0] = "array-lit"; items[1] = (ty <type-expr>); items[2..] = elements
+    const ty_items = try expectList(items[1]);
+    if (ty_items.len != 2) return error.MalformedTypeExpr;
+    try expectAtomValue(ty_items[0], "ty");
+    const elem_ty = try parseTypeExpr(arena, ty_items[1]);
+
+    var elems = std.ArrayList(Expr).empty;
+    errdefer elems.deinit(arena.allocator());
+    for (items[2..]) |elem_node| {
+        try elems.append(arena.allocator(), try parseExpr(arena, elem_node));
+    }
+    return .{
+        .elem_ty = elem_ty,
+        .elems = try elems.toOwnedSlice(arena.allocator()),
+    };
+}
+
+fn parseArrayGet(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!ArrayGet {
+    if (items.len != 3) return error.UnsupportedNode;
+    const arr = try arena.allocator().create(Expr);
+    arr.* = try parseExpr(arena, items[1]);
+    const idx = try arena.allocator().create(Expr);
+    idx.* = try parseExpr(arena, items[2]);
+    return .{ .arr = arr, .idx = idx };
+}
+
+fn parseArrayLength(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!ArrayLength {
+    if (items.len != 2) return error.UnsupportedNode;
+    const arr = try arena.allocator().create(Expr);
+    arr.* = try parseExpr(arena, items[1]);
+    return .{ .arr = arr };
+}
+
+fn parseArraySet(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!ArraySet {
+    if (items.len != 4) return error.UnsupportedNode;
+    const arr = try arena.allocator().create(Expr);
+    arr.* = try parseExpr(arena, items[1]);
+    const idx = try arena.allocator().create(Expr);
+    idx.* = try parseExpr(arena, items[2]);
+    const value = try arena.allocator().create(Expr);
+    value.* = try parseExpr(arena, items[3]);
+    return .{ .arr = arr, .idx = idx, .value = value };
+}
+
+fn parseArrayMake(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) BridgeError!ArrayMake {
+    // (array-make <size-int-literal> <init-expr> (ty <type-expr>))
+    if (items.len != 4) return error.UnsupportedNode;
+    const size = try expectU32(items[1]);
+    const init = try arena.allocator().create(Expr);
+    init.* = try parseExpr(arena, items[2]);
+    const ty_items = try expectList(items[3]);
+    if (ty_items.len != 2) return error.MalformedTypeExpr;
+    try expectAtomValue(ty_items[0], "ty");
+    const elem_ty = try parseTypeExpr(arena, ty_items[1]);
+    return .{ .elem_ty = elem_ty, .size = size, .init = init };
 }
 
 const LocatedItems = struct {
@@ -1023,6 +1237,46 @@ fn applyLoc(expr: Expr, loc: Loc) Expr {
             copy.loc = loc;
             break :blk .{ .FieldSet = copy };
         },
+        .ArrayLit => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .ArrayLit = copy };
+        },
+        .ArrayGet => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .ArrayGet = copy };
+        },
+        .ArrayLength => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .ArrayLength = copy };
+        },
+        .ArraySet => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .ArraySet = copy };
+        },
+        .ArrayMake => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .ArrayMake = copy };
+        },
+        .RefMake => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .RefMake = copy };
+        },
+        .RefGet => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .RefGet = copy };
+        },
+        .RefSet => |value| blk: {
+            var copy = value;
+            copy.loc = loc;
+            break :blk .{ .RefSet = copy };
+        },
     };
 }
 
@@ -1068,10 +1322,37 @@ fn parseLetRecBinding(arena: *std.heap.ArenaAllocator, node: *const Sexp) Bridge
     if (body_items.len != 2) return error.MalformedLet;
     try expectAtomValue(body_items[0], "body");
 
+    const params_with_types = try parseLetRecParams(arena, items[2]);
+
     return .{
         .name = try dupeAtom(arena, name_items[1]),
-        .params = try parseParams(arena, items[2]),
+        .params = params_with_types.names,
+        .param_types = params_with_types.types,
         .body = try parseExpr(arena, body_items[1]),
+    };
+}
+
+const LetRecParams = struct {
+    names: []const []const u8,
+    types: []const ?TypeExpr,
+};
+
+fn parseLetRecParams(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!LetRecParams {
+    const params_items = try expectList(node);
+    if (params_items.len == 0) return error.MalformedLet;
+    try expectAtomValue(params_items[0], "params");
+    var names = std.ArrayList([]const u8).empty;
+    errdefer names.deinit(arena.allocator());
+    var types = std.ArrayList(?TypeExpr).empty;
+    errdefer types.deinit(arena.allocator());
+    for (params_items[1..]) |param_node| {
+        const parsed = try parseLambdaParam(arena, param_node);
+        try names.append(arena.allocator(), parsed.name);
+        try types.append(arena.allocator(), parsed.ty);
+    }
+    return .{
+        .names = try names.toOwnedSlice(arena.allocator()),
+        .types = try types.toOwnedSlice(arena.allocator()),
     };
 }
 
@@ -1162,8 +1443,12 @@ fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Brid
     const param_nodes = try expectList(items[1]);
     var params = std.ArrayList([]const u8).empty;
     errdefer params.deinit(arena.allocator());
+    var param_types = std.ArrayList(?TypeExpr).empty;
+    errdefer param_types.deinit(arena.allocator());
     for (param_nodes) |param_node| {
-        try params.append(arena.allocator(), try dupeAtom(arena, param_node));
+        const parsed = try parseLambdaParam(arena, param_node);
+        try params.append(arena.allocator(), parsed.name);
+        try param_types.append(arena.allocator(), parsed.ty);
     }
 
     const body = try arena.allocator().create(Expr);
@@ -1171,7 +1456,48 @@ fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Brid
 
     return .{
         .params = try params.toOwnedSlice(arena.allocator()),
+        .param_types = try param_types.toOwnedSlice(arena.allocator()),
         .body = body,
+    };
+}
+
+const LambdaParam = struct {
+    name: []const u8,
+    ty: ?TypeExpr,
+};
+
+/// Parses one lambda/binding parameter as either:
+///   - wire <= 1.2 legacy: a bare atom (`s` or `_`)
+///   - wire 1.3: a list `(name (ty <type-expr>))` where `<type-expr>` may be
+///     `(any)` to mean "type unknown, fall back to the lowerer heuristics".
+fn parseLambdaParam(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!LambdaParam {
+    if (node.atomLike()) |atom| {
+        return .{
+            .name = try arena.allocator().dupe(u8, atom),
+            .ty = null,
+        };
+    }
+    const items = try expectList(node);
+    if (items.len != 2) return error.MalformedLambda;
+    const name = try dupeAtom(arena, items[0]);
+    const ty_items = try expectList(items[1]);
+    if (ty_items.len != 2) return error.MalformedLambda;
+    try expectAtomValue(ty_items[0], "ty");
+    // `(any)` is a sentinel for "no type information"; record it as null so
+    // the Core IR lowerer falls back to its existing heuristics.
+    const ty_payload = ty_items[1];
+    if (ty_payload.atomLike() == null) {
+        const payload_items = try expectList(ty_payload);
+        if (payload_items.len == 1) {
+            const tag = try expectAtom(payload_items[0]);
+            if (std.mem.eql(u8, tag, "any")) {
+                return .{ .name = name, .ty = null };
+            }
+        }
+    }
+    return .{
+        .name = name,
+        .ty = try parseTypeExpr(arena, ty_payload),
     };
 }
 

@@ -3,3 +3,4 @@ error[E0016]: exceptions are not supported
   |
 1 | let f x = try x with _ -> 0
   |          ^^^^^^^^^^^^^^^^^
+  = help: Return `result` (`Ok x` / `Error msg`) instead of `raise`; pattern-match at call sites.

@@ -1,0 +1,21 @@
+== Compute units (static estimate) ==
+estimated cu budget: 14
+breakdown:
+  - syscalls:
+      (none)
+  - arithmetic ops: 3  (≈ 3 cu, free in BPF but counted for completeness)
+  - control flow: 1
+  - function calls: 2 non-syscall
+notes:
+  - This is a STATIC estimate based on the post-optimization Core IR. Real BPF compute units are determined at runtime by the SVM and may differ.
+  - See https://docs.solana.com/developing/programming-model/runtime for the canonical cost table.
+
+== Max function stack depth (static estimate) ==
+deepest function: fact ≈ 8 bytes
+all functions:
+  entrypoint: 0 bytes
+  fact: 8 bytes
+notes:
+  - BPF stack frame limit is 4096 bytes per call (SBPFv2 spec, subject to validator).
+  - This counts named locals + params at their Lowered IR layout; closure captures stored in arena are NOT counted here.
+  - Closures captured into the heap are not stack-relevant; this estimate covers true stack frames only.

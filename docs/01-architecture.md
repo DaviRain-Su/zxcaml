@@ -140,11 +140,9 @@ P1 implementations:
   Lowered IR). Used for `omlz run` and as a semantic oracle in
   tests.
 
-Stub-only (signatures present, implementations empty):
-
-- `OCamlBackend` — kept only as a **non-shipping** sanity oracle for
-  the stdlib. Not on the main path.
-- `LlvmBackend` — placeholder for unsealed optional backend work outside P1-P8.
+Future backends (OCaml, LLVM, etc.) are not currently scheduled; see
+`08-roadmap.md`. The previous compile-only `OCamlBackend` / `LlvmBackend`
+stubs were removed because they had no real consumer.
 
 ## 4. Architectural diagram
 

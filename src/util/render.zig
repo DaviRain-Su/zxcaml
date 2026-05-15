@@ -7,6 +7,7 @@
 //! file-reading helper for the CLI plumbing that lands in later DX1 features.
 
 const std = @import("std");
+const diag_explain = @import("diag_explain.zig");
 
 const red = "\x1b[31m";
 const yellow = "\x1b[33m";
@@ -119,6 +120,17 @@ pub fn renderSource(
     try writeRepeatedByte(writer, '^', caretWidth(diagnostic.span, line.len));
     if (use_color) try writer.writeAll(reset);
     try writer.writeAll("\n");
+
+    if (diagnostic.code) |code| {
+        if (diag_explain.lookup(code)) |entry| {
+            if (entry.hint) |hint_text| {
+                if (use_color) try writer.writeAll(dim);
+                try writer.writeAll("  = help: ");
+                if (use_color) try writer.writeAll(reset);
+                try writer.print("{s}\n", .{hint_text});
+            }
+        }
+    }
 }
 
 fn shouldUseColor(options: Options) bool {

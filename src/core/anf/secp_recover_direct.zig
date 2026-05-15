@@ -180,6 +180,62 @@ const Rewriter = struct {
                 .layout = field_set.layout,
                 .loc = field_set.loc,
             } }),
+            .ArrayLit => |array_lit| self.exprPtr(.{ .ArrayLit = .{
+                .elem_ty = array_lit.elem_ty,
+                .elems = try self.rewriteExprSlice(array_lit.elems),
+                .ty = array_lit.ty,
+                .layout = array_lit.layout,
+                .loc = array_lit.loc,
+            } }),
+            .ArrayGet => |array_get| self.exprPtr(.{ .ArrayGet = .{
+                .arr = try self.rewriteExpr(array_get.arr.*),
+                .idx = try self.rewriteExpr(array_get.idx.*),
+                .ty = array_get.ty,
+                .layout = array_get.layout,
+                .loc = array_get.loc,
+            } }),
+            .ArrayLength => |array_length| self.exprPtr(.{ .ArrayLength = .{
+                .arr = try self.rewriteExpr(array_length.arr.*),
+                .ty = array_length.ty,
+                .layout = array_length.layout,
+                .loc = array_length.loc,
+            } }),
+            .ArraySet => |array_set| self.exprPtr(.{ .ArraySet = .{
+                .arr = try self.rewriteExpr(array_set.arr.*),
+                .idx = try self.rewriteExpr(array_set.idx.*),
+                .value = try self.rewriteExpr(array_set.value.*),
+                .ty = array_set.ty,
+                .layout = array_set.layout,
+                .loc = array_set.loc,
+            } }),
+            .ArrayMake => |array_make| self.exprPtr(.{ .ArrayMake = .{
+                .elem_ty = array_make.elem_ty,
+                .size = array_make.size,
+                .init = try self.rewriteExpr(array_make.init.*),
+                .ty = array_make.ty,
+                .layout = array_make.layout,
+                .loc = array_make.loc,
+            } }),
+            .RefMake => |ref_make| self.exprPtr(.{ .RefMake = .{
+                .elem_ty = ref_make.elem_ty,
+                .init = try self.rewriteExpr(ref_make.init.*),
+                .ty = ref_make.ty,
+                .layout = ref_make.layout,
+                .loc = ref_make.loc,
+            } }),
+            .RefGet => |ref_get| self.exprPtr(.{ .RefGet = .{
+                .target = try self.rewriteExpr(ref_get.target.*),
+                .ty = ref_get.ty,
+                .layout = ref_get.layout,
+                .loc = ref_get.loc,
+            } }),
+            .RefSet => |ref_set| self.exprPtr(.{ .RefSet = .{
+                .target = try self.rewriteExpr(ref_set.target.*),
+                .value = try self.rewriteExpr(ref_set.value.*),
+                .ty = ref_set.ty,
+                .layout = ref_set.layout,
+                .loc = ref_set.loc,
+            } }),
         };
     }
 
@@ -489,6 +545,8 @@ const Rewriter = struct {
                 }
                 break :blk null;
             },
+            .ArrayLit, .ArrayGet, .ArrayLength, .ArraySet, .ArrayMake => null,
+            .RefMake, .RefGet, .RefSet => null,
         };
     }
 
@@ -710,6 +768,14 @@ fn countUses(expr: ir.Expr, name: []const u8) usize {
             countUsesInRecordFields(record_update.fields, name),
         .AccountFieldSet => |field_set| countUses(field_set.account_expr.*, name) +
             countUses(field_set.value.*, name),
+        .ArrayLit => |array_lit| countUsesInExprSlice(array_lit.elems, name),
+        .ArrayGet => |array_get| countUses(array_get.arr.*, name) + countUses(array_get.idx.*, name),
+        .ArrayLength => |array_length| countUses(array_length.arr.*, name),
+        .ArraySet => |array_set| countUses(array_set.arr.*, name) + countUses(array_set.idx.*, name) + countUses(array_set.value.*, name),
+        .ArrayMake => |array_make| countUses(array_make.init.*, name),
+        .RefMake => |ref_make| countUses(ref_make.init.*, name),
+        .RefGet => |ref_get| countUses(ref_get.target.*, name),
+        .RefSet => |ref_set| countUses(ref_set.target.*, name) + countUses(ref_set.value.*, name),
     };
 }
 
@@ -791,5 +857,13 @@ fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }

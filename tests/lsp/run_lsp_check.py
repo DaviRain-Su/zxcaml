@@ -378,6 +378,306 @@ def executecommand_failure():
         stop(proc)
 
 
+def request_hover(proc, uri, line, character, request_id):
+    send(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "textDocument/hover",
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+        },
+    })
+    return recv_response(proc, request_id)
+
+
+def hover_function_type():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # `factorial` identifier on its `let rec` line (line 3, char 8..16).
+        response = request_hover(proc, uri, 3, 10, 60)
+        result = response["result"]
+        assert result is not None, response
+        contents = result["contents"]
+        assert contents["kind"] == "markdown", contents
+        assert "int -> int" in contents["value"], contents
+        rng = result["range"]
+        assert rng["start"]["line"] == 3, rng
+        assert rng["start"]["character"] <= 10 <= rng["end"]["character"], rng
+    finally:
+        stop(proc)
+
+
+def hover_polymorphic_type():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # `length_demo` is defined with `List.length`. The frontend bridge
+        # monomorphises generic types based on use sites; the hovered binding
+        # still surfaces the resolved arrow type for the LSP client.
+        response = request_hover(proc, uri, 6, 6, 61)
+        result = response["result"]
+        assert result is not None, response
+        value = result["contents"]["value"]
+        assert "->" in value, value
+        assert value.startswith("```ocaml"), value
+        assert value.endswith("```"), value
+    finally:
+        stop(proc)
+
+
+def hover_inside_comment():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # Line 0 is the OCaml comment header.
+        response = request_hover(proc, uri, 0, 10, 62)
+        assert response["result"] is None, response
+    finally:
+        stop(proc)
+
+
+def hover_initialize_capability():
+    proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": None, "rootUri": None, "capabilities": {}}})
+        response = recv(proc)
+        capabilities = response["result"]["capabilities"]
+        assert capabilities.get("hoverProvider") is True, capabilities
+    finally:
+        stop(proc)
+
+
+def request_definition(proc, uri, line, character, request_id):
+    send(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "textDocument/definition",
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+        },
+    })
+    return recv_response(proc, request_id)
+
+
+def definition_initialize_capability():
+    proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": None, "rootUri": None, "capabilities": {}}})
+        response = recv(proc)
+        capabilities = response["result"]["capabilities"]
+        assert capabilities.get("definitionProvider") is True, capabilities
+    finally:
+        stop(proc)
+
+
+def definition_function_use_site():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # Line 4 holds `  if n <= 1 then 1 else n * factorial (n - 1)`.
+        # Resolve the recursive `factorial` use site (cursor anywhere inside
+        # the identifier, character 30 lands mid-word).
+        response = request_definition(proc, uri, 4, 30, 80)
+        result = response["result"]
+        assert result is not None, response
+        assert result["uri"] == uri, result
+        rng = result["range"]
+        # `let rec factorial n = ...` is on line 3 (0-based) with `factorial`
+        # starting after `let rec ` (8 characters).
+        assert rng["start"]["line"] == 3, rng
+        assert rng["start"]["character"] == 8, rng
+        assert rng["end"]["line"] == 3, rng
+        assert rng["end"]["character"] == 8 + len("factorial"), rng
+    finally:
+        stop(proc)
+
+
+def definition_inside_comment():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # Line 0 is the OCaml comment header.
+        response = request_definition(proc, uri, 0, 10, 81)
+        assert response["result"] is None, response
+    finally:
+        stop(proc)
+
+
+def request_completion(proc, uri, line, character, request_id):
+    send(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "textDocument/completion",
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+            "context": {"triggerKind": 1},
+        },
+    })
+    return recv_response(proc, request_id)
+
+
+def completion_initialize_capability():
+    proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": None, "rootUri": None, "capabilities": {}}})
+        response = recv(proc)
+        capabilities = response["result"]["capabilities"]
+        provider = capabilities.get("completionProvider")
+        assert isinstance(provider, dict), capabilities
+        assert provider.get("triggerCharacters") == ["."], provider
+    finally:
+        stop(proc)
+
+
+def completion_returns_user_bindings():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        response = request_completion(proc, uri, 8, 0, 70)
+        result = response["result"]
+        assert result["isIncomplete"] is False, result
+        items = result["items"]
+        assert isinstance(items, list) and items, result
+        labels = [item["label"] for item in items]
+        assert "factorial" in labels, labels
+        factorial = next(item for item in items if item["label"] == "factorial")
+        # `factorial : int -> int` should be flagged as a Function (kind 3).
+        assert factorial["kind"] == 3, factorial
+        assert "->" in factorial["detail"], factorial
+    finally:
+        stop(proc)
+
+
+def completion_returns_stdlib():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        response = request_completion(proc, uri, 8, 0, 71)
+        items = response["result"]["items"]
+        labels = [item["label"] for item in items]
+        assert "List.length" in labels, labels
+        assert "Option.is_some" in labels, labels
+    finally:
+        stop(proc)
+
+
+def request_references(proc, uri, line, character, request_id, *, include_declaration=True):
+    send(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "textDocument/references",
+        "params": {
+            "textDocument": {"uri": uri},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": include_declaration},
+        },
+    })
+    return recv_response(proc, request_id)
+
+
+def request_document_symbol(proc, uri, request_id):
+    send(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "textDocument/documentSymbol",
+        "params": {"textDocument": {"uri": uri}},
+    })
+    return recv_response(proc, request_id)
+
+
+def references_initialize_capability():
+    proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": None, "rootUri": None, "capabilities": {}}})
+        response = recv(proc)
+        capabilities = response["result"]["capabilities"]
+        assert capabilities.get("referencesProvider") is True, capabilities
+    finally:
+        stop(proc)
+
+
+def references_function_use_sites():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # Cursor on the `factorial` binding name (line 3, after `let rec `).
+        response = request_references(proc, uri, 3, 10, 90)
+        result = response["result"]
+        assert isinstance(result, list), response
+        assert len(result) >= 2, result
+        for location in result:
+            assert location["uri"] == uri, location
+            rng = location["range"]
+            assert rng["start"]["line"] == rng["end"]["line"], rng
+        lines = sorted({loc["range"]["start"]["line"] for loc in result})
+        # Expect both the declaration (line 3) and the recursive call (line 4).
+        assert 3 in lines and 4 in lines, lines
+    finally:
+        stop(proc)
+
+
+def references_inside_comment():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        # Line 0 is the OCaml comment header.
+        response = request_references(proc, uri, 0, 10, 91)
+        assert response["result"] == [], response
+    finally:
+        stop(proc)
+
+
+def references_excludes_declaration_when_requested():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        with_decl = request_references(proc, uri, 3, 10, 92, include_declaration=True)["result"]
+        without_decl = request_references(proc, uri, 3, 10, 93, include_declaration=False)["result"]
+        assert len(with_decl) >= 2, with_decl
+        assert len(without_decl) == len(with_decl) - 1, (with_decl, without_decl)
+        # The declaration itself (line 3) must be absent when excluded.
+        decl_present = any(loc["range"]["start"]["line"] == 3 and loc["range"]["start"]["character"] == 8 for loc in without_decl)
+        assert not decl_present, without_decl
+    finally:
+        stop(proc)
+
+
+def document_symbol_initialize_capability():
+    proc = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": None, "rootUri": None, "capabilities": {}}})
+        response = recv(proc)
+        capabilities = response["result"]["capabilities"]
+        assert capabilities.get("documentSymbolProvider") is True, capabilities
+    finally:
+        stop(proc)
+
+
+def document_symbol_lists_top_level_bindings():
+    proc = start_and_initialize()
+    try:
+        uri = open_document(proc, "hover_fixture.ml")
+        response = request_document_symbol(proc, uri, 94)
+        result = response["result"]
+        assert isinstance(result, list) and result, response
+        names = [sym["name"] for sym in result]
+        assert names == ["identity", "factorial", "length_demo", "entrypoint"], names
+        for sym in result:
+            assert "selectionRange" in sym, sym
+            assert "range" in sym, sym
+            assert sym.get("children") == [], sym
+            # Function-typed bindings should be SymbolKind.Function (12);
+            # value bindings should be Variable (13). All four entries here
+            # are arrow types, so we just assert it's one of the two.
+            assert sym["kind"] in (12, 13), sym
+    finally:
+        stop(proc)
+
+
 def codelens_latency():
     uri = fixture_uri("codelens_tests.ml")
     text = read_fixture("codelens_tests.ml")
@@ -441,6 +741,22 @@ def all_checks():
         "executecommand",
         "executecommand_failure",
         "codelens_latency",
+        "hover_initialize_capability",
+        "hover_function_type",
+        "hover_polymorphic_type",
+        "hover_inside_comment",
+        "definition_initialize_capability",
+        "definition_function_use_site",
+        "definition_inside_comment",
+        "completion_initialize_capability",
+        "completion_returns_user_bindings",
+        "completion_returns_stdlib",
+        "references_initialize_capability",
+        "references_function_use_sites",
+        "references_inside_comment",
+        "references_excludes_declaration_when_requested",
+        "document_symbol_initialize_capability",
+        "document_symbol_lists_top_level_bindings",
     ]:
         try:
             commands[name]()
@@ -468,6 +784,22 @@ if __name__ == "__main__":
         "executecommand": executecommand,
         "executecommand_failure": executecommand_failure,
         "codelens_latency": codelens_latency,
+        "hover_initialize_capability": hover_initialize_capability,
+        "hover_function_type": hover_function_type,
+        "hover_polymorphic_type": hover_polymorphic_type,
+        "hover_inside_comment": hover_inside_comment,
+        "definition_initialize_capability": definition_initialize_capability,
+        "definition_function_use_site": definition_function_use_site,
+        "definition_inside_comment": definition_inside_comment,
+        "completion_initialize_capability": completion_initialize_capability,
+        "completion_returns_user_bindings": completion_returns_user_bindings,
+        "completion_returns_stdlib": completion_returns_stdlib,
+        "references_initialize_capability": references_initialize_capability,
+        "references_function_use_sites": references_function_use_sites,
+        "references_inside_comment": references_inside_comment,
+        "references_excludes_declaration_when_requested": references_excludes_declaration_when_requested,
+        "document_symbol_initialize_capability": document_symbol_initialize_capability,
+        "document_symbol_lists_top_level_bindings": document_symbol_lists_top_level_bindings,
         "all": all_checks,
     }
     assert len(sys.argv) == 2 and sys.argv[1] in commands, "usage: run_lsp_check.py " + "|".join(commands)

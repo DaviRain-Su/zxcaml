@@ -118,6 +118,14 @@ Native 仅供开发便利（**不是** P1 交付物）：
 zig build-exe -O Debug out/program.zig
 ```
 
+### 历史 ELF 后处理（已移除）
+
+早期工具链组合曾让 `tests/bpf_test_support.rs` 对集成测试产物做后处理
+（补 `BPF_CALL_IMM` 源寄存器位、把 `e_flags` 改成 SBPF v1）。当前
+`omlz` + `solana-zig 0.16.0 / solana-v1.53.0` 工具链的 codegen 已经直接
+输出正确的字节，所以该后处理及对应的环境变量开关均已删除；详见
+`mission-internal/elf-patch-investigation.md`。
+
 ## 7. BPF 正确性检查
 
 当前管线产出的 BPF `.so` 必须满足：

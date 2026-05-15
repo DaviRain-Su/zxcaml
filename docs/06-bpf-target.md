@@ -127,11 +127,15 @@ For native convenience only (not a P1 deliverable), use `zig build-exe`.
 zig build-exe -O Debug out/program.zig
 ```
 
-For native (developer convenience only, **not** a P1 deliverable):
+### Historical ELF post-pass (removed)
 
-```sh
-zig build-exe -O Debug out/program.zig
-```
+Earlier toolchain combinations required `tests/bpf_test_support.rs` to
+post-process integration-test artifacts (set `BPF_CALL_IMM` source-register
+bits and rewrite `e_flags` to SBPF v1). With the current `omlz` +
+`solana-zig 0.16.0 / solana-v1.53.0` toolchain, codegen already emits both
+correctly, so the post-pass and its environment-variable toggles were
+removed; see `mission-internal/elf-patch-investigation.md` for the full
+investigation.
 
 ## 7. BPF sanity checks
 
@@ -157,6 +161,97 @@ Items 1–4 are the canonical hello acceptance checks. Closure-focused
 BPF acceptance is covered separately by `tests/solana/closures/` when the
 Solana harness is enabled.
 
+
+## 7.5. Static profiling reports
+
+`omlz check --report=<kinds>` runs a static analysis over the
+post-optimization, post-region-inference Core IR and prints a deterministic
+report to stdout. The report is **opt-in**: without `--report`, `omlz check`
+behavior is unchanged.
+
+```sh
+omlz check --report=cu examples/factorial.ml
+omlz check --report=stack examples/factorial.ml
+omlz check --report=all examples/factorial.ml
+omlz check --report=cu,stack examples/hello.ml
+```
+
+The report never executes the BPF VM. It is intended as a fast early
+warning for risky shapes (large stack frames, unbounded loops, large CU
+budgets) before deploying.
+
+### Kinds
+
+- `cu` — Compute units. Estimates total cost as
+  `prim_count * 1 + branch_count * 1 + non_syscall_calls * 5 +
+  Σ syscall_cost + Σ loop_body_cost · (iterations − 1)`. Syscall costs
+  come from a small static table: `sol_log_=100`, `sol_log_64=100`,
+  `sol_sha256=85+10·bytes`, `sol_keccak256=85+10·bytes`,
+  `sol_blake3=85+10·bytes`, `sol_secp256k1_recover=25000`,
+  `sol_invoke_signed_c=1000`, default `100`. Byte arguments are
+  inferred from string literals when available; otherwise per-byte
+  cost is treated as zero. Loops desugared by ADR-015 option D appear
+  as `__zxc_loop_*` self-recursive helpers; when both `lo` and `hi`
+  bind to integer literals the analyzer multiplies the loop's body
+  cost by `|hi − lo| + 1` iterations (the back-edge tail call is
+  excluded from the non-syscall call counter to avoid double-counting).
+  When the resolved iteration count exceeds `256` the loop is treated
+  as **unbounded** and the multiplier is skipped; when bounds are
+  not literal (or the body is a `while` loop) the loop is treated as
+  **unknown dynamic** and the multiplier is likewise skipped.
+  Risky loops are listed in a `risks:` subsection of the `cu` report,
+  e.g.
+
+  ```text
+  risks:
+    - has unbounded loop (bound > 256): __zxc_loop_2 in entrypoint
+    - has unknown dynamic loop: __zxc_loop_5 (while) in entrypoint
+  ```
+
+  The `risks:` subsection is omitted entirely when every loop in the
+  program has a known, bounded literal range, so tiny programs without
+  loops keep their pre-existing report shape.
+- `stack` — Max function stack depth. Counts parameter sizes and the
+  size of named lets the region pass marked `Stack`. Closure captures
+  stored in arena are not counted. The deepest function is listed, plus
+  the sorted per-function table. Any function over 1024 bytes is flagged
+  `WARN: large stack frame`.
+
+### Output shape
+
+Output is markdown-ish and deterministic across runs of the same input:
+syscall names and function names are sorted alphabetically. Sections
+emit in this fixed order: `cu` first, then `stack`. The report is
+written to stdout. Diagnostics still go to stderr. The exit code is the
+unchanged `omlz check` exit code; the report is diagnostic-independent.
+
+### Error code
+
+`omlz check --report=<bogus>` exits non-zero with `error[E0200]: unknown
+--report kind; expected csv of cu,stack or all`. The CU/stack analysis
+itself never blocks the check; if it fails internally, a one-line
+`report failed: <reason>` is written to stderr and the original
+`omlz check` exit code still bubbles up.
+
+### Caveats
+
+- Compute-unit estimates are conservative bounds, not Solana's runtime
+  cost. The canonical cost table lives at
+  https://docs.solana.com/developing/programming-model/runtime.
+- Syscall byte-length is exact only for static string literals; dynamic
+  buffer lengths are approximated as zero per-byte cost.
+- Loops desugared from `for`/`while` (ADR-015 option D) are multiplied
+  by their literal iteration count when both `lo` and `hi` bind to
+  integer literals and the resolved iteration count is `≤ 256`. Loops
+  that exceed `256` iterations are reported as `unbounded` and not
+  multiplied; loops whose bounds are non-literal (or `while` loops,
+  whose condition is opaque to the static pass) are reported as
+  `unknown (dynamic)` and likewise not multiplied. `for downto`
+  variants whose desugared step is something other than the canonical
+  `i - 1` are treated as dynamic.
+- Stack-frame sizes use a coarse type-to-bytes table (`int=8`, `bool=1`,
+  `unit=0`, pointer/closure/record=`8`/`16`); this is not the layout
+  produced by the Zig backend.
 
 ## 8. What can go wrong (and how we respond)
 

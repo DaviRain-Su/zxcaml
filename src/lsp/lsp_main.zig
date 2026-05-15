@@ -11,6 +11,8 @@ const frontend_fmt = @import("frontend_fmt");
 
 pub const jsonrpc = @import("jsonrpc.zig");
 pub const protocol = @import("protocol.zig");
+pub const hover = @import("hover.zig");
+pub const completion_stdlib = @import("completion_stdlib.zig");
 
 const JsonDiagnostic = struct {
     file: []const u8,
@@ -81,6 +83,9 @@ const ServerState = struct {
     shutdown_received: bool = false,
     documents: std.StringHashMap([]u8),
     test_statuses: std.StringHashMap(TestRunStatus),
+    /// Cached `(line, character) -> type` lookup tables per document URI.
+    /// Invalidated whenever the document text changes via `putDocument`.
+    hover_caches: std.StringHashMap(hover.Cache),
     writer_mutex: std.atomic.Mutex = .unlocked,
     next_doc_id: u64 = 0,
     temp_dir_created: bool = false,
@@ -90,6 +95,7 @@ const ServerState = struct {
             .allocator = allocator,
             .documents = std.StringHashMap([]u8).init(allocator),
             .test_statuses = std.StringHashMap(TestRunStatus).init(allocator),
+            .hover_caches = std.StringHashMap(hover.Cache).init(allocator),
         };
     }
 
@@ -105,6 +111,12 @@ const ServerState = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.test_statuses.deinit();
+        var hover_iter = self.hover_caches.iterator();
+        while (hover_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        self.hover_caches.deinit();
     }
 
     fn putDocument(self: *ServerState, uri: []const u8, text: []const u8) !void {
@@ -112,12 +124,28 @@ const ServerState = struct {
             self.allocator.free(entry.key);
             self.allocator.free(entry.value);
         }
+        if (self.hover_caches.fetchRemove(uri)) |entry| {
+            self.allocator.free(entry.key);
+            var cache = entry.value;
+            cache.deinit();
+        }
 
         const owned_uri = try self.allocator.dupe(u8, uri);
         errdefer self.allocator.free(owned_uri);
         const owned_text = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(owned_text);
         try self.documents.put(owned_uri, owned_text);
+    }
+
+    fn putHoverCache(self: *ServerState, uri: []const u8, cache: hover.Cache) !void {
+        if (self.hover_caches.fetchRemove(uri)) |entry| {
+            self.allocator.free(entry.key);
+            var old = entry.value;
+            old.deinit();
+        }
+        const owned_uri = try self.allocator.dupe(u8, uri);
+        errdefer self.allocator.free(owned_uri);
+        try self.hover_caches.put(owned_uri, cache);
     }
 
     fn updateTestStatus(self: *ServerState, uri: []const u8, name: []const u8, status: TestRunStatus) !void {
@@ -244,6 +272,31 @@ fn handleMessage(
 
     if (std.mem.eql(u8, method, "textDocument/codeLens")) {
         if (id) |request_id| try handleCodeLens(allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "textDocument/hover")) {
+        if (id) |request_id| try handleHover(io, allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "textDocument/definition")) {
+        if (id) |request_id| try handleDefinition(io, allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "textDocument/completion")) {
+        if (id) |request_id| try handleCompletion(io, allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "textDocument/references")) {
+        if (id) |request_id| try handleReferences(io, allocator, writer, object.get("params") orelse .null, state, request_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
+        if (id) |request_id| try handleDocumentSymbol(io, allocator, writer, object.get("params") orelse .null, state, request_id);
         return;
     }
 
@@ -402,6 +455,624 @@ fn handleCodeLens(
     const text = state.documents.get(uri) orelse "";
     const bindings = try collectTestBindings(allocator, text);
     try writeCodeLensResponse(allocator, writer, state, id, uri, bindings);
+}
+
+fn handleHover(
+    io: Io,
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    const position_value = try objectField(params_value, "position");
+    const position = parsePosition(position_value) catch {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    const text = state.documents.get(uri) orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    // Comments and whitespace yield `null` per the LSP spec / task contract.
+    if (hover.isInsideComment(text, position.line, position.character)) {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    }
+    const word = hover.wordAtPosition(text, position.line, position.character) orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    // Reuse the cached hover lookup when the document text has not changed
+    // since the cache was built. Otherwise run a one-shot Core IR parse.
+    var cached_symbol: ?hover.Symbol = null;
+    if (state.hover_caches.getPtr(uri)) |cache_ptr| {
+        if (std.mem.eql(u8, cache_ptr.text, text)) {
+            cached_symbol = cache_ptr.symbols.get(word.text);
+        }
+    }
+
+    if (cached_symbol == null) {
+        const new_cache = ensureHoverCache(io, allocator, state, uri, text) catch {
+            try writeNullResultResponse(allocator, writer, id);
+            return;
+        } orelse {
+            try writeNullResultResponse(allocator, writer, id);
+            return;
+        };
+        cached_symbol = new_cache.symbols.get(word.text);
+    }
+
+    const symbol = cached_symbol orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    try writeHoverResponse(allocator, writer, id, word, symbol.rendered_ty);
+}
+
+fn handleCompletion(
+    io: Io,
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    // `position` and `context` are accepted but ignored: this first cut
+    // returns the union of user-defined top-level bindings and the static
+    // stdlib whitelist, without prefix or type filtering.
+
+    const text = state.documents.get(uri) orelse "";
+
+    var cache_ptr: ?*hover.Cache = null;
+    if (state.hover_caches.getPtr(uri)) |cache| {
+        if (std.mem.eql(u8, cache.text, text)) {
+            cache_ptr = cache;
+        }
+    }
+    if (cache_ptr == null and text.len > 0) {
+        // Build a hover cache on demand. Failure (parse error, missing
+        // `omlz`) is non-fatal: we still emit the stdlib whitelist.
+        cache_ptr = ensureHoverCache(io, allocator, state, uri, text) catch null;
+    }
+
+    try writeCompletionResponse(allocator, writer, id, cache_ptr);
+}
+
+fn writeCompletionResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+    cache_ptr: ?*hover.Cache,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":{\"isIncomplete\":false,\"items\":[");
+
+    var first = true;
+    if (cache_ptr) |cache| {
+        var iter = cache.symbols.iterator();
+        while (iter.next()) |entry| {
+            if (!first) try body.writer.writeByte(',');
+            first = false;
+            const symbol = entry.value_ptr.*;
+            const kind: u8 = if (hover.isFunctionType(symbol.rendered_ty)) 3 else 12;
+            try body.writer.writeAll("{\"label\":");
+            try std.json.Stringify.value(symbol.name, .{}, &body.writer);
+            try body.writer.print(",\"kind\":{d},\"detail\":", .{kind});
+            try std.json.Stringify.value(symbol.rendered_ty, .{}, &body.writer);
+            try body.writer.writeByte('}');
+        }
+    }
+
+    const completion_stdlib_items = completion_stdlib.items;
+    for (completion_stdlib_items) |item| {
+        if (!first) try body.writer.writeByte(',');
+        first = false;
+        try body.writer.writeAll("{\"label\":");
+        try std.json.Stringify.value(item.label, .{}, &body.writer);
+        try body.writer.print(",\"kind\":{d},\"detail\":", .{@intFromEnum(item.kind)});
+        try std.json.Stringify.value(item.detail, .{}, &body.writer);
+        try body.writer.writeByte('}');
+    }
+
+    try body.writer.writeAll("]}}");
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn ensureHoverCache(
+    io: Io,
+    allocator: std.mem.Allocator,
+    state: *ServerState,
+    uri: []const u8,
+    text: []const u8,
+) !?*hover.Cache {
+    // Build a one-shot Core IR sexp from the document text and feed it into
+    // the hover symbol table. Returns `null` if the build fails or the sexp
+    // is unparseable.
+    try ensureTempDir(io, allocator, state);
+    const tmp_path = try tempPath(allocator, state);
+    defer allocator.free(tmp_path);
+    defer std.Io.Dir.cwd().deleteFile(io, tmp_path) catch {};
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = tmp_path,
+        .data = text,
+        .flags = .{ .truncate = true },
+    });
+
+    const argv = [_][]const u8{ "zig-out/bin/omlz", "check", "--emit=core-ir-with-loc", tmp_path };
+    const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return null;
+    defer allocator.free(completed.stdout);
+    defer allocator.free(completed.stderr);
+
+    const trimmed = std.mem.trim(u8, completed.stdout, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    const built = hover.buildSymbolsFromCoreIr(state.allocator, text, trimmed) catch return null;
+    var cache = built orelse return null;
+    state.putHoverCache(uri, cache) catch {
+        cache.deinit();
+        return null;
+    };
+    return state.hover_caches.getPtr(uri);
+}
+
+fn writeHoverResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+    word: hover.WordSpan,
+    rendered_ty: []const u8,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":{\"contents\":{\"kind\":\"markdown\",\"value\":");
+
+    const markdown = try std.fmt.allocPrint(allocator, "```ocaml\n{s}\n```", .{rendered_ty});
+    defer allocator.free(markdown);
+    try std.json.Stringify.value(markdown, .{}, &body.writer);
+
+    try body.writer.print(
+        "}},\"range\":{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}}}}}",
+        .{ word.start_line, word.start_character, word.end_line, word.end_character },
+    );
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn handleDefinition(
+    io: Io,
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    const position_value = try objectField(params_value, "position");
+    const position = parsePosition(position_value) catch {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    const text = state.documents.get(uri) orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    // Comments and whitespace yield `null` per the LSP spec / task contract.
+    if (hover.isInsideComment(text, position.line, position.character)) {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    }
+    const word = hover.wordAtPosition(text, position.line, position.character) orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    // Reuse the same Core IR hover cache used by `textDocument/hover`. The
+    // cache stores the binding name's source range alongside the rendered
+    // type, so goto-definition is a pure lookup once the cache is warm.
+    var cached_symbol: ?hover.Symbol = null;
+    if (state.hover_caches.getPtr(uri)) |cache_ptr| {
+        if (std.mem.eql(u8, cache_ptr.text, text)) {
+            cached_symbol = hover.findSymbol(cache_ptr, word.text);
+        }
+    }
+    if (cached_symbol == null) {
+        const new_cache = ensureHoverCache(io, allocator, state, uri, text) catch {
+            try writeNullResultResponse(allocator, writer, id);
+            return;
+        } orelse {
+            try writeNullResultResponse(allocator, writer, id);
+            return;
+        };
+        cached_symbol = hover.findSymbol(new_cache, word.text);
+    }
+
+    const symbol = cached_symbol orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+    const range = symbol.def_range orelse {
+        try writeNullResultResponse(allocator, writer, id);
+        return;
+    };
+
+    try writeDefinitionResponse(allocator, writer, id, uri, range);
+}
+
+fn writeDefinitionResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+    uri: []const u8,
+    range: hover.DefRange,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":{\"uri\":");
+    try std.json.Stringify.value(uri, .{}, &body.writer);
+    try body.writer.print(
+        ",\"range\":{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}}}}}",
+        .{ range.line, range.start_character, range.line, range.end_character },
+    );
+
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn handleReferences(
+    io: Io,
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+    const position_value = try objectField(params_value, "position");
+    const position = parsePosition(position_value) catch {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    };
+
+    // `context.includeDeclaration` defaults to `true` when the field or the
+    // entire `context` object is absent, matching common editor behavior.
+    var include_declaration: bool = true;
+    if (params_value == .object) {
+        if (params_value.object.get("context")) |ctx| {
+            if (ctx == .object) {
+                if (ctx.object.get("includeDeclaration")) |flag| {
+                    if (flag == .bool) include_declaration = flag.bool;
+                }
+            }
+        }
+    }
+
+    const text = state.documents.get(uri) orelse {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    };
+
+    if (hover.isInsideComment(text, position.line, position.character)) {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    }
+    const word = hover.wordAtPosition(text, position.line, position.character) orelse {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    };
+
+    var cached_symbol: ?hover.Symbol = null;
+    if (state.hover_caches.getPtr(uri)) |cache_ptr| {
+        if (std.mem.eql(u8, cache_ptr.text, text)) {
+            cached_symbol = hover.findSymbol(cache_ptr, word.text);
+        }
+    }
+    if (cached_symbol == null) {
+        const new_cache = ensureHoverCache(io, allocator, state, uri, text) catch {
+            try writeEmptyArrayResponse(allocator, writer, id);
+            return;
+        } orelse {
+            try writeEmptyArrayResponse(allocator, writer, id);
+            return;
+        };
+        cached_symbol = hover.findSymbol(new_cache, word.text);
+    }
+
+    const symbol = cached_symbol orelse {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    };
+
+    const occurrences = hover.collectOccurrences(allocator, text, word.text) catch {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    };
+    defer allocator.free(occurrences);
+
+    try writeReferencesResponse(allocator, writer, id, uri, occurrences, symbol.def_range, include_declaration);
+}
+
+fn writeReferencesResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+    uri: []const u8,
+    occurrences: []const hover.Occurrence,
+    def_range: ?hover.DefRange,
+    include_declaration: bool,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":[");
+
+    var first = true;
+    for (occurrences) |occ| {
+        if (!include_declaration) {
+            if (def_range) |dr| {
+                if (dr.line == occ.line and dr.start_character == occ.start_character and dr.end_character == occ.end_character) {
+                    continue;
+                }
+            }
+        }
+        if (!first) try body.writer.writeByte(',');
+        first = false;
+        try body.writer.writeAll("{\"uri\":");
+        try std.json.Stringify.value(uri, .{}, &body.writer);
+        try body.writer.print(
+            ",\"range\":{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}}}",
+            .{ occ.line, occ.start_character, occ.line, occ.end_character },
+        );
+    }
+
+    try body.writer.writeAll("]}");
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn handleDocumentSymbol(
+    io: Io,
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    params_value: std.json.Value,
+    state: *ServerState,
+    id: std.json.Value,
+) !void {
+    const text_document = try objectField(params_value, "textDocument");
+    const uri = try stringField(text_document, "uri");
+
+    const text = state.documents.get(uri) orelse {
+        try writeEmptyArrayResponse(allocator, writer, id);
+        return;
+    };
+
+    var cache_ptr: ?*hover.Cache = null;
+    if (state.hover_caches.getPtr(uri)) |cache| {
+        if (std.mem.eql(u8, cache.text, text)) {
+            cache_ptr = cache;
+        }
+    }
+    if (cache_ptr == null and text.len > 0) {
+        cache_ptr = ensureHoverCache(io, allocator, state, uri, text) catch null;
+    }
+
+    try writeDocumentSymbolResponse(allocator, writer, id, text, cache_ptr);
+}
+
+const OrderedSymbol = struct {
+    name: []const u8,
+    rendered_ty: []const u8,
+    range: hover.DefRange,
+};
+
+fn writeDocumentSymbolResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+    text: []const u8,
+    cache_ptr: ?*hover.Cache,
+) !void {
+    // Walk the source-order list of top-level binding sites and emit one
+    // DocumentSymbol per name we have a typed entry for. This guarantees
+    // outline order matches file order, which matches what editors expect.
+    var entries = std.ArrayList(OrderedSymbol).empty;
+    defer entries.deinit(allocator);
+
+    if (cache_ptr) |cache| {
+        var iter = cache.symbols.iterator();
+        while (iter.next()) |entry| {
+            const sym = entry.value_ptr.*;
+            const range = sym.def_range orelse continue;
+            try entries.append(allocator, .{
+                .name = sym.name,
+                .rendered_ty = sym.rendered_ty,
+                .range = range,
+            });
+        }
+    }
+
+    std.mem.sort(OrderedSymbol, entries.items, {}, orderedSymbolLessThan);
+
+    var body = Io.Writer.Allocating.init(allocator);
+
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":[");
+
+    for (entries.items, 0..) |entry, i| {
+        if (i != 0) try body.writer.writeByte(',');
+        // SymbolKind: Function = 12, Variable = 13.
+        const kind: u8 = if (hover.isFunctionType(entry.rendered_ty)) 12 else 13;
+        const full_range = bindingFullRange(text, entry.range);
+        try body.writer.writeAll("{\"name\":");
+        try std.json.Stringify.value(entry.name, .{}, &body.writer);
+        try body.writer.writeAll(",\"detail\":");
+        try std.json.Stringify.value(entry.rendered_ty, .{}, &body.writer);
+        try body.writer.print(",\"kind\":{d},\"range\":", .{kind});
+        try body.writer.print(
+            "{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}",
+            .{ full_range.start.line, full_range.start.character, full_range.end.line, full_range.end.character },
+        );
+        try body.writer.print(
+            ",\"selectionRange\":{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}",
+            .{ entry.range.line, entry.range.start_character, entry.range.line, entry.range.end_character },
+        );
+        try body.writer.writeAll(",\"children\":[]}");
+    }
+
+    try body.writer.writeAll("]}");
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
+}
+
+fn orderedSymbolLessThan(_: void, a: OrderedSymbol, b: OrderedSymbol) bool {
+    if (a.range.line != b.range.line) return a.range.line < b.range.line;
+    return a.range.start_character < b.range.start_character;
+}
+
+/// Best-effort extent of `let X = body`: starts at the binding name and ends
+/// at the byte just before the next top-level binding head (or EOF). This
+/// avoids parsing the body while still giving editors a reasonable folding
+/// region for each top-level definition.
+fn bindingFullRange(text: []const u8, name_range: hover.DefRange) LspRange {
+    const start: LspPosition = .{ .line = name_range.line, .character = name_range.start_character };
+    const start_offset = byteOffsetForPosition(text, start) catch {
+        return .{
+            .start = start,
+            .end = .{ .line = name_range.line, .character = name_range.end_character },
+        };
+    };
+
+    // Scan forward, tracking comments/strings, until we hit the next
+    // top-level `let`/`and` keyword (preceded by start-of-line or only
+    // whitespace on its line).
+    var i: usize = start_offset + 1;
+    var line: u32 = name_range.line;
+    var character: u32 = name_range.start_character + 1;
+    var last_line: u32 = line;
+    var last_character: u32 = name_range.end_character;
+    var comment_depth: usize = 0;
+    var in_string = false;
+    var in_char = false;
+    var escaped = false;
+    var at_line_start = false;
+
+    while (i < text.len) {
+        const byte = text[i];
+
+        if (in_string or in_char) {
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\') {
+                escaped = true;
+            } else if (in_string and byte == '"') {
+                in_string = false;
+            } else if (in_char and byte == '\'') {
+                in_char = false;
+            }
+        } else if (comment_depth > 0) {
+            if (i + 1 < text.len and byte == '(' and text[i + 1] == '*') {
+                comment_depth += 1;
+                advance(text[i], &i, &line, &character);
+                advance(text[i], &i, &line, &character);
+                continue;
+            }
+            if (i + 1 < text.len and byte == '*' and text[i + 1] == ')') {
+                comment_depth -= 1;
+                advance(text[i], &i, &line, &character);
+                last_line = line;
+                last_character = character;
+                advance(text[i], &i, &line, &character);
+                continue;
+            }
+        } else {
+            if (i + 1 < text.len and byte == '(' and text[i + 1] == '*') {
+                comment_depth += 1;
+                advance(text[i], &i, &line, &character);
+                advance(text[i], &i, &line, &character);
+                continue;
+            }
+            if (byte == '"') {
+                in_string = true;
+            } else if (at_line_start and (isTopLevelKeyword(text, i, "let") or isTopLevelKeyword(text, i, "and"))) {
+                return .{
+                    .start = start,
+                    .end = .{ .line = last_line, .character = last_character },
+                };
+            }
+        }
+
+        if (byte == '\n') {
+            at_line_start = true;
+        } else if (byte != ' ' and byte != '\t' and byte != '\r') {
+            at_line_start = false;
+        }
+
+        last_line = line;
+        last_character = character + 1;
+        advance(byte, &i, &line, &character);
+    }
+
+    return .{
+        .start = start,
+        .end = .{ .line = line, .character = character },
+    };
+}
+
+fn isTopLevelKeyword(text: []const u8, pos: usize, keyword: []const u8) bool {
+    if (pos + keyword.len > text.len) return false;
+    if (!std.mem.eql(u8, text[pos .. pos + keyword.len], keyword)) return false;
+    if (pos > 0) {
+        const prev = text[pos - 1];
+        if (prev != '\n' and prev != ' ' and prev != '\t' and prev != '\r') return false;
+    }
+    const after = pos + keyword.len;
+    if (after < text.len) {
+        const next = text[after];
+        if (std.ascii.isAlphanumeric(next) or next == '_' or next == '\'') return false;
+    }
+    return true;
+}
+
+fn advance(byte: u8, i: *usize, line: *u32, character: *u32) void {
+    if (byte == '\n') {
+        line.* += 1;
+        character.* = 0;
+    } else {
+        character.* += 1;
+    }
+    i.* += 1;
+}
+
+fn writeEmptyArrayResponse(
+    allocator: std.mem.Allocator,
+    writer: *Io.Writer,
+    id: std.json.Value,
+) !void {
+    var body = Io.Writer.Allocating.init(allocator);
+    try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
+    try std.json.Stringify.value(id, .{}, &body.writer);
+    try body.writer.writeAll(",\"result\":[]}");
+    try jsonrpc.writeFrame(writer, body.writer.buffered());
 }
 
 fn handleExecuteCommand(
@@ -1045,7 +1716,7 @@ fn writeInitializeResponse(
 
     try body.writer.writeAll("{\"jsonrpc\":\"2.0\",\"id\":");
     try std.json.Stringify.value(id, .{}, &body.writer);
-    try body.writer.writeAll(",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"diagnosticProvider\":null,\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":true,\"codeLensProvider\":{},\"executeCommandProvider\":{\"commands\":[\"omlz.runTest\"]}},\"serverInfo\":{\"name\":");
+    try body.writer.writeAll(",\"result\":{\"capabilities\":{\"textDocumentSync\":1,\"diagnosticProvider\":null,\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":true,\"codeLensProvider\":{},\"hoverProvider\":true,\"definitionProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"referencesProvider\":true,\"documentSymbolProvider\":true,\"executeCommandProvider\":{\"commands\":[\"omlz.runTest\"]}},\"serverInfo\":{\"name\":");
     try std.json.Stringify.value(protocol.server_name, .{}, &body.writer);
     try body.writer.writeAll(",\"version\":");
     try std.json.Stringify.value(build_options.version, .{}, &body.writer);

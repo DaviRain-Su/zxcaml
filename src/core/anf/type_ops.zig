@@ -71,6 +71,7 @@ pub fn externalTypeRefToTy(
     ref: ttree.ExternalTypeRef,
 ) LowerError!ir.Ty {
     if (std.mem.eql(u8, ref.name, "int")) return .Int;
+    if (std.mem.eql(u8, ref.name, "char")) return .Int;
     if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
     if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
     if (std.mem.eql(u8, ref.name, "string")) return .String;
@@ -118,6 +119,7 @@ pub fn typeRefToTyWithBindings(
     bindings: ?*TypeBindings,
 ) LowerError!ir.Ty {
     if (std.mem.eql(u8, ref.name, "int")) return .Int;
+    if (std.mem.eql(u8, ref.name, "char")) return .Int;
     if (std.mem.eql(u8, ref.name, "bool")) return .Bool;
     if (std.mem.eql(u8, ref.name, "unit")) return .Unit;
     if (std.mem.eql(u8, ref.name, "string")) return .String;
@@ -313,6 +315,12 @@ pub fn layoutForTy(ty: ir.Ty) layout.Layout {
         .Adt => layout.ctor(1),
         .Tuple, .Record => layout.structPack(),
         .Arrow => layout.closure(),
+        // R9.1 read-only int arrays are lowered as slice references; treat
+        // their value layout like other slice-shaped runtime values.
+        .Array => layout.structPack(),
+        // ADR-015 option C / R10 ref cells are a single arena pointer; the
+        // runtime representation is a struct-packed pointer slot.
+        .Ref => layout.structPack(),
     };
 }
 
@@ -383,6 +391,19 @@ pub fn recBindingEscapes(name: []const u8, expr: ttree.Expr) bool {
             break :blk false;
         },
         .FieldSet => |field_set| recBindingEscapes(name, field_set.record_expr.*) or recBindingEscapes(name, field_set.value.*),
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (recBindingEscapes(name, elem)) break :blk true;
+            }
+            break :blk false;
+        },
+        .ArrayGet => |array_get| recBindingEscapes(name, array_get.arr.*) or recBindingEscapes(name, array_get.idx.*),
+        .ArrayLength => |array_length| recBindingEscapes(name, array_length.arr.*),
+        .ArraySet => |array_set| recBindingEscapes(name, array_set.arr.*) or recBindingEscapes(name, array_set.idx.*) or recBindingEscapes(name, array_set.value.*),
+        .ArrayMake => |array_make| recBindingEscapes(name, array_make.init.*),
+        .RefMake => |ref_make| recBindingEscapes(name, ref_make.init.*),
+        .RefGet => |ref_get| recBindingEscapes(name, ref_get.target.*),
+        .RefSet => |ref_set| recBindingEscapes(name, ref_set.target.*) or recBindingEscapes(name, ref_set.value.*),
         .Match => |match_expr| blk: {
             if (recBindingEscapes(name, match_expr.scrutinee.*)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -498,6 +519,19 @@ pub fn lambdaParamIsFunction(expr: ttree.Expr, param_name: []const u8) bool {
             break :blk false;
         },
         .FieldSet => |field_set| lambdaParamIsFunction(field_set.record_expr.*, param_name) or lambdaParamIsFunction(field_set.value.*, param_name),
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (lambdaParamIsFunction(elem, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .ArrayGet => |array_get| lambdaParamIsFunction(array_get.arr.*, param_name) or lambdaParamIsFunction(array_get.idx.*, param_name),
+        .ArrayLength => |array_length| lambdaParamIsFunction(array_length.arr.*, param_name),
+        .ArraySet => |array_set| lambdaParamIsFunction(array_set.arr.*, param_name) or lambdaParamIsFunction(array_set.idx.*, param_name) or lambdaParamIsFunction(array_set.value.*, param_name),
+        .ArrayMake => |array_make| lambdaParamIsFunction(array_make.init.*, param_name),
+        .RefMake => |ref_make| lambdaParamIsFunction(ref_make.init.*, param_name),
+        .RefGet => |ref_get| lambdaParamIsFunction(ref_get.target.*, param_name),
+        .RefSet => |ref_set| lambdaParamIsFunction(ref_set.target.*, param_name) or lambdaParamIsFunction(ref_set.value.*, param_name),
         .Match => |match_expr| blk: {
             if (lambdaParamIsFunction(match_expr.scrutinee.*, param_name)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -580,6 +614,23 @@ pub fn lambdaParamRecordTy(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, 
         },
         .FieldSet => |field_set| lambdaParamRecordTy(arena, ctx, field_set.record_expr.*, param_name) orelse
             lambdaParamRecordTy(arena, ctx, field_set.value.*, param_name),
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (lambdaParamRecordTy(arena, ctx, elem, param_name)) |ty| break :blk ty;
+            }
+            break :blk null;
+        },
+        .ArrayGet => |array_get| lambdaParamRecordTy(arena, ctx, array_get.arr.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, array_get.idx.*, param_name),
+        .ArrayLength => |array_length| lambdaParamRecordTy(arena, ctx, array_length.arr.*, param_name),
+        .ArraySet => |array_set| lambdaParamRecordTy(arena, ctx, array_set.arr.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, array_set.idx.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, array_set.value.*, param_name),
+        .ArrayMake => |array_make| lambdaParamRecordTy(arena, ctx, array_make.init.*, param_name),
+        .RefMake => |ref_make| lambdaParamRecordTy(arena, ctx, ref_make.init.*, param_name),
+        .RefGet => |ref_get| lambdaParamRecordTy(arena, ctx, ref_get.target.*, param_name),
+        .RefSet => |ref_set| lambdaParamRecordTy(arena, ctx, ref_set.target.*, param_name) orelse
+            lambdaParamRecordTy(arena, ctx, ref_set.value.*, param_name),
         .Match => |match_expr| blk: {
             if (lambdaParamRecordTy(arena, ctx, match_expr.scrutinee.*, param_name)) |ty| break :blk ty;
             for (match_expr.arms) |arm| {
@@ -669,6 +720,19 @@ pub fn lambdaParamIsAccount(expr: ttree.Expr, param_name: []const u8) bool {
             }
             break :blk false;
         },
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (lambdaParamIsAccount(elem, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .ArrayGet => |array_get| lambdaParamIsAccount(array_get.arr.*, param_name) or lambdaParamIsAccount(array_get.idx.*, param_name),
+        .ArrayLength => |array_length| lambdaParamIsAccount(array_length.arr.*, param_name),
+        .ArraySet => |array_set| lambdaParamIsAccount(array_set.arr.*, param_name) or lambdaParamIsAccount(array_set.idx.*, param_name) or lambdaParamIsAccount(array_set.value.*, param_name),
+        .ArrayMake => |array_make| lambdaParamIsAccount(array_make.init.*, param_name),
+        .RefMake => |ref_make| lambdaParamIsAccount(ref_make.init.*, param_name),
+        .RefGet => |ref_get| lambdaParamIsAccount(ref_get.target.*, param_name),
+        .RefSet => |ref_set| lambdaParamIsAccount(ref_set.target.*, param_name) or lambdaParamIsAccount(ref_set.value.*, param_name),
         .Match => |match_expr| blk: {
             if (lambdaParamIsAccount(match_expr.scrutinee.*, param_name)) break :blk true;
             for (match_expr.arms) |arm| {
@@ -786,6 +850,23 @@ pub fn lambdaParamIsList(arena: *std.heap.ArenaAllocator, expr: ttree.Expr, para
         },
         .FieldSet => |field_set| (try lambdaParamIsList(arena, field_set.record_expr.*, param_name)) or
             (try lambdaParamIsList(arena, field_set.value.*, param_name)),
+        .ArrayLit => |array_lit| blk: {
+            for (array_lit.elems) |elem| {
+                if (try lambdaParamIsList(arena, elem, param_name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .ArrayGet => |array_get| (try lambdaParamIsList(arena, array_get.arr.*, param_name)) or
+            (try lambdaParamIsList(arena, array_get.idx.*, param_name)),
+        .ArrayLength => |array_length| try lambdaParamIsList(arena, array_length.arr.*, param_name),
+        .ArraySet => |array_set| (try lambdaParamIsList(arena, array_set.arr.*, param_name)) or
+            (try lambdaParamIsList(arena, array_set.idx.*, param_name)) or
+            (try lambdaParamIsList(arena, array_set.value.*, param_name)),
+        .ArrayMake => |array_make| try lambdaParamIsList(arena, array_make.init.*, param_name),
+        .RefMake => |ref_make| try lambdaParamIsList(arena, ref_make.init.*, param_name),
+        .RefGet => |ref_get| try lambdaParamIsList(arena, ref_get.target.*, param_name),
+        .RefSet => |ref_set| (try lambdaParamIsList(arena, ref_set.target.*, param_name)) or
+            (try lambdaParamIsList(arena, ref_set.value.*, param_name)),
         .Constant, .Var => false,
     };
 }
@@ -868,6 +949,14 @@ pub fn exprTy(expr: ir.Expr) ir.Ty {
         .RecordField => |record_field| record_field.ty,
         .RecordUpdate => |record_update| record_update.ty,
         .AccountFieldSet => |field_set| field_set.ty,
+        .ArrayLit => |array_lit| array_lit.ty,
+        .ArrayGet => |array_get| array_get.ty,
+        .ArrayLength => |array_length| array_length.ty,
+        .ArraySet => |array_set| array_set.ty,
+        .ArrayMake => |array_make| array_make.ty,
+        .RefMake => |ref_make| ref_make.ty,
+        .RefGet => |ref_get| ref_get.ty,
+        .RefSet => |ref_set| ref_set.ty,
     };
 }
 
@@ -906,6 +995,14 @@ pub fn tyEql(lhs: ir.Ty, rhs: ir.Ty) bool {
             else => false,
         },
         .Arrow => false,
+        .Array => |lhs_elem| switch (rhs) {
+            .Array => |rhs_elem| tyEql(lhs_elem.*, rhs_elem.*),
+            else => false,
+        },
+        .Ref => |lhs_elem| switch (rhs) {
+            .Ref => |rhs_elem| tyEql(lhs_elem.*, rhs_elem.*),
+            else => false,
+        },
     };
 }
 
@@ -928,5 +1025,13 @@ pub fn exprLayout(expr: ir.Expr) layout.Layout {
         .RecordField => |record_field| record_field.layout,
         .RecordUpdate => |record_update| record_update.layout,
         .AccountFieldSet => |field_set| field_set.layout,
+        .ArrayLit => |array_lit| array_lit.layout,
+        .ArrayGet => |array_get| array_get.layout,
+        .ArrayLength => |array_length| array_length.layout,
+        .ArraySet => |array_set| array_set.layout,
+        .ArrayMake => |array_make| array_make.layout,
+        .RefMake => |ref_make| ref_make.layout,
+        .RefGet => |ref_get| ref_get.layout,
+        .RefSet => |ref_set| ref_set.layout,
     };
 }

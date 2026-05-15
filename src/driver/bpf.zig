@@ -97,7 +97,11 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         const source_map = try buildSourceMapSchema(allocator, input);
         defer allocator.free(source_map.schema.entries);
         try hook.emit(hook.context, source_map);
-        try embedSourceMapSection(allocator, io, options.output_path, source_map.schema);
+        // Track per-build whether we already warned about missing
+        // `llvm-objcopy` so the non-fatal degradation message is emitted at
+        // most once per BPF compile invocation.
+        var warned_missing_objcopy: bool = false;
+        try embedSourceMapSection(allocator, io, options.output_path, source_map.schema, &warned_missing_objcopy);
     }
 }
 
@@ -109,7 +113,12 @@ pub fn buildBpfDirect(allocator: Allocator, io: Io, options: BpfBuildOptions) !v
     try buildBpfDirectWith(allocator, io, solana_zig, options);
 }
 
-fn parseSolanaZigEnv(raw: []const u8) ![]const u8 {
+/// Parses the SOLANA_ZIG environment value into a command/path that the BPF
+/// builder (and `omlz doctor`) should invoke. Empty/missing/`"1"` map to the
+/// default `solana-zig` PATH lookup; `"0"` is rejected to preserve the
+/// CHANGELOG contract that legacy fallbacks are no longer supported; any other
+/// value is returned verbatim as a direct command or absolute path.
+pub fn parseSolanaZigEnv(raw: []const u8) ![]const u8 {
     const env_val = std.mem.trim(u8, raw, " \t\r\n");
     if (env_val.len == 0) {
         return "solana-zig";
@@ -151,6 +160,7 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
         "-fPIC",
         "-fstrip",
         "-dynamic",
+        "-fentry=entrypoint",
         "-T",
         "out/runtime/bpf.ld",
         "-z",
@@ -300,6 +310,26 @@ const SourceMapCollector = struct {
                 try self.collectExpr(value.account_expr);
                 try self.collectExpr(value.value);
             },
+            .ArrayLit => |value| {
+                for (value.elems) |elem| try self.collectExpr(elem);
+            },
+            .ArrayGet => |value| {
+                try self.collectExpr(value.arr);
+                try self.collectExpr(value.idx);
+            },
+            .ArrayLength => |value| try self.collectExpr(value.arr),
+            .ArraySet => |value| {
+                try self.collectExpr(value.arr);
+                try self.collectExpr(value.idx);
+                try self.collectExpr(value.value);
+            },
+            .ArrayMake => |value| try self.collectExpr(value.init),
+            .RefMake => |value| try self.collectExpr(value.init),
+            .RefGet => |value| try self.collectExpr(value.target),
+            .RefSet => |value| {
+                try self.collectExpr(value.target);
+                try self.collectExpr(value.value);
+            },
         }
     }
 
@@ -432,7 +462,33 @@ fn commandAvailable(allocator: Allocator, io: Io, path: []const u8) bool {
 }
 
 
-fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, schema: srcmap.Schema) !void {
+/// Stable warning emitted at most once per `buildBpf` invocation when
+/// `llvm-objcopy` cannot be located on PATH. Exposed for tests that assert
+/// the exact byte sequence appears on stderr.
+pub const llvm_objcopy_missing_warning =
+    "warning: llvm-objcopy not found on PATH; .zxcaml.srcmap section will not be embedded in the .so. The .map sidecar is still written. omlz unmap --map can still resolve PCs.\n";
+
+/// Pure helper that decides whether to emit the missing-`llvm-objcopy`
+/// warning and writes it to the given writer if so. Returns `true` when the
+/// warning was just emitted (and updates the flag so subsequent calls in the
+/// same build stay silent), `false` when the flag had already been set.
+fn maybeEmitObjcopyMissingWarning(
+    warned_missing_objcopy: *bool,
+    writer: *std.Io.Writer,
+) !bool {
+    if (warned_missing_objcopy.*) return false;
+    warned_missing_objcopy.* = true;
+    try writer.writeAll(llvm_objcopy_missing_warning);
+    return true;
+}
+
+fn embedSourceMapSection(
+    allocator: Allocator,
+    io: Io,
+    output_path: []const u8,
+    schema: srcmap.Schema,
+    warned_missing_objcopy: *bool,
+) !void {
     // F-SRCMAP-4 follows investigation §4 / Appendix B: add a post-link
     // SHT_PROGBITS section containing the same deterministic, minified JSON as
     // the sidecar, gzip-compressed. `llvm-objcopy --add-section` does not set
@@ -457,7 +513,11 @@ fn embedSourceMapSection(allocator: Allocator, io: Io, output_path: []const u8, 
     defer allocator.free(section_arg);
 
     const objcopy = findLlvmObjcopy(allocator, io) catch {
-        // llvm-objcopy not available (e.g. Ubuntu CI); skip source map embedding
+        // llvm-objcopy not available (e.g. Ubuntu CI); skip source map
+        // embedding after emitting a single, non-fatal warning so users know
+        // the .so has no embedded `.zxcaml.srcmap` section and must rely on
+        // the `.map` sidecar via `omlz unmap --map`.
+        emitObjcopyMissingWarningToStderr(io, warned_missing_objcopy) catch {};
         return;
     };
     defer allocator.free(objcopy);
@@ -508,6 +568,14 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
     try writer.flush();
 }
 
+fn emitObjcopyMissingWarningToStderr(io: Io, warned_missing_objcopy: *bool) !void {
+    var buffer: [1024]u8 = undefined;
+    var file_writer: Io.File.Writer = .init(.stderr(), io, &buffer);
+    const writer = &file_writer.interface;
+    _ = try maybeEmitObjcopyMissingWarning(warned_missing_objcopy, writer);
+    try writer.flush();
+}
+
 fn writeToolStderr(io: Io, bytes: []const u8) !void {
     // External tooling may emit noisy `dlopen` warnings about static LLVM archives
     // on macOS. Static archives cannot be loaded with dlopen, so suppress only
@@ -547,6 +615,30 @@ fn countDlopenMentionsIgnoreCase(bytes: []const u8) usize {
     }
 
     return count;
+}
+
+test "llvm-objcopy missing warning emits exactly once per build" {
+    const allocator = std.testing.allocator;
+    var output = std.Io.Writer.Allocating.init(allocator);
+    defer output.deinit();
+
+    var warned: bool = false;
+
+    const first_emitted = try maybeEmitObjcopyMissingWarning(&warned, &output.writer);
+    try std.testing.expect(first_emitted);
+    try std.testing.expect(warned);
+    try std.testing.expectEqualStrings(llvm_objcopy_missing_warning, output.written());
+
+    const second_emitted = try maybeEmitObjcopyMissingWarning(&warned, &output.writer);
+    try std.testing.expect(!second_emitted);
+    // Buffer length must not have grown on the second call.
+    try std.testing.expectEqualStrings(llvm_objcopy_missing_warning, output.written());
+
+    // The warning must contain the user-facing guidance that the sidecar is
+    // still usable via `omlz unmap --map` so callers know the fallback path.
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "llvm-objcopy not found on PATH") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), ".zxcaml.srcmap section will not be embedded") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "omlz unmap --map") != null);
 }
 
 test "static archive LLVM dlopen warnings are filtered narrowly" {

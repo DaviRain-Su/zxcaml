@@ -223,6 +223,64 @@ frontend once F25 lands: new `zxc-frontend` binaries emit `0.5`. Downstream cons
 should reject older versions with an upgrade hint rather than silently treating
 them as equivalent, because `0.5` adds user-authored ADT type declarations.
 
+The wire major has since advanced through `1.0`, `1.1`, `1.2`, `1.3`, `1.4`,
+and (as of R10) `1.5`. See `docs/wire-compat.md` for the binding
+cross-version compatibility matrix. In summary:
+
+- `1.5` (current default): adds `ref` cell sexps (`ref-make`, `ref-get`,
+  `ref-set`) for ADR-015 option C. See the "Wire 1.5 — ref cells" section
+  below.
+- `1.4`: prior wire major; `1.5` is a strict additive extension.
+- `1.3`: lambda and `let rec` parameters carry an inferred per-parameter
+  OCaml type as `(name (ty <type-expr>))`. Unresolved types use the
+  `(any)` sentinel.
+- `1.2`: optional `(loc ...)` location metadata on expression nodes; lambda
+  params stay as bare-atom names. The `1.3` reader still accepts `1.2` sexps.
+- `1.1` and earlier: legacy compatibility window kept alive via
+  `omlz check --wire=1.1` / `--wire=1.2` for one mission's deprecation
+  cycle.
+
+## Wire 1.5 — ref cells
+
+ADR-015 option C (R10) introduces three sexp shapes for OCaml `ref`
+cells. Element type metadata is carried as an inline `(ty <type-expr>)`
+annotation on the `ref-make` form so consumers can reject unsupported
+element types at sexp parse time.
+
+```text
+ref_make_expr ::= "(" "ref-make" "(" "ty" type_expr ")" expr ")"
+ref_get_expr  ::= "(" "ref-get" expr ")"
+ref_set_expr  ::= "(" "ref-set" expr expr ")"
+```
+
+The accepted element types are `(type-ref int)` and `(type-ref bool)`;
+other `type_expr` shapes are rejected by the subset walker with
+`E0013` ("this `ref` element type is not part of the ZxCaml subset
+(R10)").
+
+Examples:
+
+```ocaml
+let entrypoint _ =
+  let r = ref 10 in
+  let _ = r := 25 in
+  !r
+```
+
+emits (with locations elided for brevity):
+
+```text
+(zxcaml-cir 1.5 (module (let entrypoint
+  (lambda ((_ (ty (type-ref unit))))
+    (let r (ref-make (ty (type-ref int)) (const-int 10))
+      (let _ (ref-set (var r) (const-int 25))
+        (ref-get (var r))))))))
+```
+
+`ref-make` is the single allocation site (one slot per call); `no_alloc`
+flags it as `DX2-NOALLOC`. `ref-get` and `ref-set` are allocation-free
+load/store operations.
+
 ## Diagnostic schema
 
 Unsupported programs exit non-zero and write one JSON object per line on
