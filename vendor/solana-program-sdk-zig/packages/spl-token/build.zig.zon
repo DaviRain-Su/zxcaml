@@ -1,0 +1,18 @@
+.{
+    .fingerprint = 0xabacb0bbd36e7fc6,
+    .name = .spl_token,
+    .version = "0.3.0",
+    .minimum_zig_version = "0.16.0",
+
+    .dependencies = .{
+        .solana_program_sdk = .{ .path = "../.." },
+        .solana_codec = .{ .path = "../solana-codec" },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

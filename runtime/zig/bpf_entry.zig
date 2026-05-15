@@ -8,7 +8,17 @@
 const Arena = @import("runtime/arena.zig").Arena;
 const AccountRuntime = @import("runtime/account.zig");
 const syscalls = @import("runtime/syscalls.zig");
+const vendored_sdk = @import("vendored_sdk");
 const program = @import("program.zig");
+
+comptime {
+    _ = vendored_sdk.solana_program_sdk.Pubkey;
+    _ = vendored_sdk.solana_codec.Error;
+    _ = vendored_sdk.spl_token.PROGRAM_ID;
+    _ = vendored_sdk.spl_ata.PROGRAM_ID;
+    _ = vendored_sdk.solana_system.PROGRAM_ID;
+    _ = vendored_sdk.spl_memo.PROGRAM_ID;
+}
 
 // SBF stack frames are limited to 4096 bytes. Keep the entry arena below that
 // ceiling so allocation-heavy array/ref programs do not overflow `entrypoint`.

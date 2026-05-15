@@ -225,6 +225,69 @@ pub fn build(b: *std.Build) void {
     });
     const run_runtime_ata_tests = b.addRunArtifact(runtime_ata_tests);
 
+    const vendored_solana_program_sdk_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const vendored_solana_codec_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_solana_codec_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    const vendored_spl_token_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_spl_token_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    vendored_spl_token_module.addImport("solana_codec", vendored_solana_codec_module);
+    const vendored_spl_ata_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_spl_ata_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    const vendored_solana_system_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/solana-system/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_solana_system_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    const vendored_spl_memo_module = b.createModule(.{
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-memo/src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_spl_memo_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+
+    const vendored_sdk_module = b.createModule(.{
+        .root_source_file = b.path("runtime/zig/sdk/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_sdk_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    vendored_sdk_module.addImport("solana_codec", vendored_solana_codec_module);
+    vendored_sdk_module.addImport("spl_token", vendored_spl_token_module);
+    vendored_sdk_module.addImport("spl_ata", vendored_spl_ata_module);
+    vendored_sdk_module.addImport("solana_system", vendored_solana_system_module);
+    vendored_sdk_module.addImport("spl_memo", vendored_spl_memo_module);
+
+    const vendored_sdk_import_smoke_module = b.createModule(.{
+        .root_source_file = b.path("runtime/zig/sdk/import_smoke.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vendored_sdk_import_smoke_module.addImport("vendored_sdk", vendored_sdk_module);
+    const vendored_sdk_import_smoke_tests = b.addTest(.{
+        .name = "vendored-sdk-import-smoke",
+        .root_module = vendored_sdk_import_smoke_module,
+    });
+    const run_vendored_sdk_import_smoke_tests = b.addRunArtifact(vendored_sdk_import_smoke_tests);
+    const vendored_sdk_import_smoke_step = b.step("vendored-sdk-import-smoke", "Run vendored SDK import smoke tests");
+    vendored_sdk_import_smoke_step.dependOn(&run_vendored_sdk_import_smoke_tests.step);
+
     const runtime_programs_test_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/programs_tests.zig"),
         .target = target,
@@ -958,6 +1021,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_runtime_cpi_tests.step);
     test_step.dependOn(&run_runtime_spl_token_tests.step);
     test_step.dependOn(&run_runtime_ata_tests.step);
+    test_step.dependOn(&run_vendored_sdk_import_smoke_tests.step);
     test_step.dependOn(&run_runtime_programs_tests.step);
     test_step.dependOn(&run_runtime_bs58_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);

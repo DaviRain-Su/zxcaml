@@ -56,11 +56,20 @@ const RuntimeFile = struct {
 };
 
 const srcmap_section_name = ".zxcaml.srcmap";
+const vendored_sdk_runtime_root = "out/runtime/sdk/root.zig";
+const vendored_solana_program_sdk_root = "vendor/solana-program-sdk-zig/src/root.zig";
+const vendored_solana_codec_root = "vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig";
+const vendored_spl_token_root = "vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig";
+const vendored_spl_ata_root = "vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig";
+const vendored_solana_system_root = "vendor/solana-program-sdk-zig/packages/solana-system/src/root.zig";
+const vendored_spl_memo_root = "vendor/solana-program-sdk-zig/packages/spl-memo/src/root.zig";
 
 const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
     .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
     .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
+    .{ .src_path = "runtime/zig/sdk/root.zig", .out_path = "out/runtime/sdk/root.zig" },
+    .{ .src_path = "runtime/zig/sdk/import_smoke.zig", .out_path = "out/runtime/sdk/import_smoke.zig" },
     .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
     .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
     .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
@@ -143,6 +152,52 @@ fn activeDirectSolanaZig(allocator: Allocator, environ: std.process.Environ) ![]
     return try allocator.dupe(u8, resolved);
 }
 
+fn appendVendoredSdkModuleArgs(
+    allocator: Allocator,
+    args: *std.ArrayList([]const u8),
+    root_module_path: []const u8,
+) !void {
+    const root_module_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{root_module_path});
+    try args.appendSlice(allocator, &.{
+        "--dep",
+        "vendored_sdk",
+    });
+    try args.append(allocator, root_module_arg);
+    try args.appendSlice(allocator, &.{
+        "--dep",
+        "solana_program_sdk",
+        "--dep",
+        "solana_codec",
+        "--dep",
+        "spl_token",
+        "--dep",
+        "spl_ata",
+        "--dep",
+        "solana_system",
+        "--dep",
+        "spl_memo",
+        "-Mvendored_sdk=" ++ vendored_sdk_runtime_root,
+        "-Msolana_program_sdk=" ++ vendored_solana_program_sdk_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Msolana_codec=" ++ vendored_solana_codec_root,
+        "--dep",
+        "solana_program_sdk",
+        "--dep",
+        "solana_codec",
+        "-Mspl_token=" ++ vendored_spl_token_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Mspl_ata=" ++ vendored_spl_ata_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Msolana_system=" ++ vendored_solana_system_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Mspl_memo=" ++ vendored_spl_memo_root,
+    });
+}
+
 fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, options: BpfBuildOptions) !void {
     // Materialize the BPF linker script
     try materializeLinkerScript(allocator, io);
@@ -150,7 +205,15 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
     const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{options.output_path});
     defer allocator.free(emit_arg);
 
-    const zig_argv = [_][]const u8{
+    var zig_argv = std.ArrayList([]const u8).empty;
+    defer {
+        for (zig_argv.items) |arg| {
+            if (std.mem.startsWith(u8, arg, "-Mroot=")) allocator.free(arg);
+        }
+        zig_argv.deinit(allocator);
+    }
+
+    try zig_argv.appendSlice(allocator, &.{
         solana_zig,
         "build-lib",
         "-target",
@@ -165,11 +228,11 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
         "out/runtime/bpf.ld",
         "-z",
         "notext",
-        emit_arg,
-        options.bpf_entry_path,
-    };
+    });
+    try appendVendoredSdkModuleArgs(allocator, &zig_argv, options.bpf_entry_path);
+    try zig_argv.append(allocator, emit_arg);
 
-    try runAndForward(allocator, io, &zig_argv, null, error.BpfDirectBuildFailed, !options.quiet);
+    try runAndForward(allocator, io, zig_argv.items, null, error.BpfDirectBuildFailed, !options.quiet);
 }
 
 /// Materialize the BPF linker script used by solana-zig direct compilation.
@@ -350,6 +413,7 @@ const SourceMapCollector = struct {
 fn materializeRuntime(allocator: Allocator, io: Io) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, "out/runtime");
+    try cwd.createDirPath(io, "out/runtime/sdk");
     try cwd.createDirPath(io, "out/runtime/programs");
 
     inline for (runtime_files) |file| {

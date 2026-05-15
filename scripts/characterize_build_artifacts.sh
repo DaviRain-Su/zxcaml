@@ -182,14 +182,19 @@ if [[ "$default_program_sha" == "$custom_program_sha" ]]; then
 fi
 
 assert_contains "argv[0]=build-lib" "$WRAPPER_LOG"
-assert_contains "argv[1]=-target" "$WRAPPER_LOG"
-assert_contains "argv[2]=sbf-solana" "$WRAPPER_LOG"
-assert_contains "argv[5]=-fPIC" "$WRAPPER_LOG"
-assert_contains "argv[6]=-fstrip" "$WRAPPER_LOG"
-assert_contains "argv[7]=-dynamic" "$WRAPPER_LOG"
-assert_contains "argv[8]=-fentry=entrypoint" "$WRAPPER_LOG"
-assert_contains "argv[13]=-femit-bin=$CUSTOM_SO" "$WRAPPER_LOG"
-assert_contains "argv[14]=out/bpf_entry.zig" "$WRAPPER_LOG"
+assert_contains "-target" "$WRAPPER_LOG"
+assert_contains "sbf-solana" "$WRAPPER_LOG"
+assert_contains "-fPIC" "$WRAPPER_LOG"
+assert_contains "-fstrip" "$WRAPPER_LOG"
+assert_contains "-dynamic" "$WRAPPER_LOG"
+assert_contains "-fentry=entrypoint" "$WRAPPER_LOG"
+assert_contains "-Mroot=out/bpf_entry.zig" "$WRAPPER_LOG"
+assert_contains "-Mvendored_sdk=out/runtime/sdk/root.zig" "$WRAPPER_LOG"
+assert_contains "-Msolana_program_sdk=vendor/solana-program-sdk-zig/src/root.zig" "$WRAPPER_LOG"
+assert_contains "-Msolana_codec=vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig" "$WRAPPER_LOG"
+assert_contains "-Mspl_token=vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig" "$WRAPPER_LOG"
+assert_contains "-Mspl_ata=vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig" "$WRAPPER_LOG"
+assert_contains "-femit-bin=$CUSTOM_SO" "$WRAPPER_LOG"
 
 set +e
 env "SOLANA_ZIG=0" "$OMLZ_BIN" build --target=bpf examples/solana_hello.ml -o "$REPORT_DIR/solana_zig_zero.so" >"$ZERO_STDOUT" 2>"$ZERO_STDERR"

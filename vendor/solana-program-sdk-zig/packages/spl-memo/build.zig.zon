@@ -1,0 +1,21 @@
+.{
+    .fingerprint = 0xe4ee413cfa7348bd,
+    .name = .spl_memo,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+
+    .dependencies = .{
+        // Local path dependency on the monorepo's root SDK. External
+        // consumers replace this with a git URL pointing at the
+        // root of solana-sdk-mono (no `?path=` needed for the root
+        // package).
+        .solana_program_sdk = .{ .path = "../.." },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

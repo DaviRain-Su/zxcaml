@@ -8,7 +8,17 @@
 const std = @import("std");
 const Arena = @import("runtime/arena.zig").Arena;
 const AccountRuntime = @import("runtime/account.zig");
+const vendored_sdk = @import("vendored_sdk");
 const program = @import("program.zig");
+
+comptime {
+    _ = vendored_sdk.solana_program_sdk.Pubkey;
+    _ = vendored_sdk.solana_codec.Error;
+    _ = vendored_sdk.spl_token.PROGRAM_ID;
+    _ = vendored_sdk.spl_ata.PROGRAM_ID;
+    _ = vendored_sdk.solana_system.PROGRAM_ID;
+    _ = vendored_sdk.spl_memo.PROGRAM_ID;
+}
 
 const arena_bytes = 32 * 1024;
 

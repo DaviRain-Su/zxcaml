@@ -21,10 +21,20 @@ const RuntimeFile = struct {
     out_path: []const u8,
 };
 
+const vendored_sdk_runtime_root = "out/runtime/sdk/root.zig";
+const vendored_solana_program_sdk_root = "vendor/solana-program-sdk-zig/src/root.zig";
+const vendored_solana_codec_root = "vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig";
+const vendored_spl_token_root = "vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig";
+const vendored_spl_ata_root = "vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig";
+const vendored_solana_system_root = "vendor/solana-program-sdk-zig/packages/solana-system/src/root.zig";
+const vendored_spl_memo_root = "vendor/solana-program-sdk-zig/packages/spl-memo/src/root.zig";
+
 const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
     .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
     .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
+    .{ .src_path = "runtime/zig/sdk/root.zig", .out_path = "out/runtime/sdk/root.zig" },
+    .{ .src_path = "runtime/zig/sdk/import_smoke.zig", .out_path = "out/runtime/sdk/import_smoke.zig" },
     .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
     .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
     .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
@@ -48,6 +58,52 @@ const runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/native_entry.zig", .out_path = "out/native_entry.zig" },
 };
 
+fn appendVendoredSdkModuleArgs(
+    allocator: Allocator,
+    args: *std.ArrayList([]const u8),
+    root_module_path: []const u8,
+) !void {
+    const root_module_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{root_module_path});
+    try args.appendSlice(allocator, &.{
+        "--dep",
+        "vendored_sdk",
+    });
+    try args.append(allocator, root_module_arg);
+    try args.appendSlice(allocator, &.{
+        "--dep",
+        "solana_program_sdk",
+        "--dep",
+        "solana_codec",
+        "--dep",
+        "spl_token",
+        "--dep",
+        "spl_ata",
+        "--dep",
+        "solana_system",
+        "--dep",
+        "spl_memo",
+        "-Mvendored_sdk=" ++ vendored_sdk_runtime_root,
+        "-Msolana_program_sdk=" ++ vendored_solana_program_sdk_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Msolana_codec=" ++ vendored_solana_codec_root,
+        "--dep",
+        "solana_program_sdk",
+        "--dep",
+        "solana_codec",
+        "-Mspl_token=" ++ vendored_spl_token_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Mspl_ata=" ++ vendored_spl_ata_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Msolana_system=" ++ vendored_solana_system_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Mspl_memo=" ++ vendored_spl_memo_root,
+    });
+}
+
 /// Builds a hosted native executable from generated Zig source.
 pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !void {
     try materializeRuntime(allocator, io);
@@ -55,16 +111,24 @@ pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !v
     const emit_bin_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{options.output_path});
     defer allocator.free(emit_bin_arg);
 
-    const argv = [_][]const u8{
+    var argv = std.ArrayList([]const u8).empty;
+    defer {
+        for (argv.items) |arg| {
+            if (std.mem.startsWith(u8, arg, "-Mroot=")) allocator.free(arg);
+        }
+        argv.deinit(allocator);
+    }
+
+    try argv.appendSlice(allocator, &.{
         "zig",
         "build-exe",
         "-O",
         "ReleaseSmall",
-        emit_bin_arg,
-        options.native_entry_path,
-    };
+    });
+    try appendVendoredSdkModuleArgs(allocator, &argv, options.native_entry_path);
+    try argv.append(allocator, emit_bin_arg);
 
-    const completed = try std.process.run(allocator, io, .{ .argv = &argv });
+    const completed = try std.process.run(allocator, io, .{ .argv = argv.items });
     defer allocator.free(completed.stdout);
     defer allocator.free(completed.stderr);
 
@@ -83,6 +147,7 @@ pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !v
 fn materializeRuntime(allocator: Allocator, io: Io) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, "out/runtime");
+    try cwd.createDirPath(io, "out/runtime/sdk");
     try cwd.createDirPath(io, "out/runtime/programs");
 
     inline for (runtime_files) |file| {
@@ -113,25 +178,35 @@ fn writeStderr(io: Io, bytes: []const u8) !void {
     try writer.flush();
 }
 
-test "native build argv uses zig build-exe and never references sbpf-linker" {
-    const emit_bin_arg = try std.fmt.allocPrint(std.testing.allocator, "-femit-bin={s}", .{"/tmp/m0_zero"});
-    defer std.testing.allocator.free(emit_bin_arg);
+test "native build wiring references vendored SDK modules and never references sbpf-linker" {
+    const allocator = std.testing.allocator;
+    var argv = std.ArrayList([]const u8).empty;
+    defer {
+        for (argv.items) |arg| {
+            if (std.mem.startsWith(u8, arg, "-Mroot=")) allocator.free(arg);
+        }
+        argv.deinit(allocator);
+    }
 
-    const argv = [_][]const u8{
+    try argv.appendSlice(allocator, &.{
         "zig",
         "build-exe",
         "-O",
         "ReleaseSmall",
-        emit_bin_arg,
-        "out/native_entry.zig",
-    };
+    });
+    try appendVendoredSdkModuleArgs(allocator, &argv, "out/native_entry.zig");
+    try argv.append(allocator, "-femit-bin=/tmp/m0_zero");
 
-    try std.testing.expectEqualStrings("zig", argv[0]);
-    try std.testing.expectEqualStrings("build-exe", argv[1]);
-    try std.testing.expectEqualStrings("-O", argv[2]);
-    try std.testing.expectEqualStrings("ReleaseSmall", argv[3]);
-    try std.testing.expect(std.mem.indexOf(u8, emit_bin_arg, "/tmp/m0_zero") != null);
-    for (argv) |arg| {
+    try std.testing.expectEqualStrings("zig", argv.items[0]);
+    try std.testing.expectEqualStrings("build-exe", argv.items[1]);
+    try std.testing.expectEqualStrings("-O", argv.items[2]);
+    try std.testing.expectEqualStrings("ReleaseSmall", argv.items[3]);
+    const joined = try std.mem.join(allocator, " ", argv.items);
+    defer allocator.free(joined);
+    try std.testing.expect(std.mem.indexOf(u8, joined, "vendored_sdk") != null);
+    try std.testing.expect(std.mem.indexOf(u8, joined, "out/native_entry.zig") != null);
+    try std.testing.expect(std.mem.indexOf(u8, argv.items[argv.items.len - 1], "/tmp/m0_zero") != null);
+    for (argv.items) |arg| {
         try std.testing.expect(std.mem.indexOf(u8, arg, "sbpf-linker") == null);
     }
 }

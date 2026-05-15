@@ -1,0 +1,45 @@
+{
+  "source_commit": "2144dd55a5de574544103cb9e994446f75c6bf1f",
+  "source_selection_sha256": "3d9209c3cba817a3ed231c5ac7636676ba8f2c43016f1d9f9b4611b10368b646",
+  "vendored_selection_sha256": "3d9209c3cba817a3ed231c5ac7636676ba8f2c43016f1d9f9b4611b10368b646",
+  "packages": [
+    {
+      "name": "solana_program_sdk",
+      "source_sha256": "399506edd7d223bf6dd954421ec2b3e9ab031ea2c57ed387a4299f4c14ac3d9a"
+    },
+    {
+      "name": "solana_codec",
+      "source_sha256": "8a518805aeecabb96841a64e05b47de450beb16efe1fb2f7f7ddb713ac113140"
+    },
+    {
+      "name": "spl_token",
+      "source_sha256": "dc8524ebadda5e1aabe750a7685e5dd79d94bd6e8d46af98d7b9080befaca131"
+    },
+    {
+      "name": "spl_ata",
+      "source_sha256": "ca2fbc3b238cf6774967d8f1b3341e9c9764c5a62d214655dd445bfc51c23817"
+    },
+    {
+      "name": "solana_system",
+      "source_sha256": "3aa50be555adc7b76e80d5b77735e61e75a5ec5ec769b885f11bd22f173f9263"
+    },
+    {
+      "name": "spl_memo",
+      "source_sha256": "5b9755d15987f4ddfdc1e4707a5bff2037bb36e7c0e83bd6b6276ea51960a999"
+    }
+  ],
+  "copied_paths": [
+    "build.zig",
+    "build.zig.zon",
+    "LICENSE",
+    "README.md",
+    "ROADMAP.md",
+    "src/**",
+    "packages/README.md",
+    "packages/solana-codec/**",
+    "packages/spl-token/**",
+    "packages/spl-ata/**",
+    "packages/solana-system/**",
+    "packages/spl-memo/**"
+  ]
+}
