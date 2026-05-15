@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-05-15  
-**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, MTF-3 portable contract core API architecture, and MTF-4 EVM/Yul MVP architecture
+**Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, MTF-3 portable contract core API architecture, MTF-4 EVM/Yul MVP architecture, and MTF-5 verified extraction profile architecture
 
 ## Context
 
@@ -676,6 +676,102 @@ them only by defining explicit semantics, validation gates, and target-owned
 adapter surfaces rather than treating them as automatic consequences of Yul
 code generation.
 
+### 26. MTF-5 verified extraction is a constrained hosting profile, not automatic compiler verification
+
+MTF-5 extends the ADR with a **verified extraction profile architecture**. This
+is still architecture-only. It does **not** claim that ZxCaml, its backends, or
+its adapters are formally verified today, and it does **not** claim that every
+accepted OCaml program carries proof-backed guarantees.
+
+The MTF-5 goal is narrower: ZxCaml may eventually **host verified or extracted
+portable contract logic** when the upstream proof/extraction toolchain produces
+ordinary `.ml` that fits an explicit profile named
+`zxcaml-verified-subset`.
+
+That profile is bounded as follows:
+
+| Area | In scope for `zxcaml-verified-subset` | Out of scope for MTF-5 |
+|---|---|---|
+| Source shape | Extracted or hand-reviewed `.ml` accepted by upstream OCaml `compiler-libs` and then accepted by the ZxCaml subset gate | Extraction output that requires patching the OCaml frontend, custom compiler forks, or unsupported syntax/runtime features |
+| Logic surface | Deterministic portable business logic: pure functions, algebraic data, pattern matching, bounded recursion/control flow, and arithmetic that stays within the active portable numeric contract | Host-driven workflows whose proof story depends on target storage layout, caller identity, cross-contract calls, promises, events, or chain-specific side effects |
+| Dependency surface | Self-contained extracted code plus only the ZxCaml-supported subset/bundled helpers needed by that logic | Arbitrary opam libraries, GC-dependent code, exceptions-as-control-flow, threads, objects, effect handlers, or hidden runtime services |
+| IR boundary | Claims may cover logic that survives the OCaml frontend boundary and lowers through the existing Core IR / Lowered IR contracts | Claims that skip over lowering details or treat unverified backend/runtime rewrites as proof-preserving by default |
+| Runtime assumptions | Portable logic runs under the same determinism, arena/resource limits, and target capability gates as ordinary ZxCaml portable code | Any claim that extraction removes the need to reason about memory/resource bounds, adapter ABI contracts, or target VM behavior |
+| Target reach | Hosted verified logic may later be deployed behind explicit target adapters that already satisfy their own ADR gates | Automatic inheritance of proof claims by every target family, adapter, or generated artifact |
+
+The architectural rule is therefore: **verified extraction applies to the
+hosted portable logic slice only, unless a later milestone proves more.**
+
+### 27. MTF-5 proof claims require runnable evidence and narrow artifact-scoped language
+
+Future MTF-5 acceptance must distinguish proof-backed claims by artifact and by
+boundary. The required language is:
+
+- allowed: **"ZxCaml can host formally verified contract logic within the
+  `zxcaml-verified-subset` profile."**
+- disallowed: **"ZxCaml automatically verifies every contract."**
+- disallowed: **"The entire compiler/backend/adapter stack is formally
+  verified."**
+
+Any accepted verification claim must name:
+
+1. the upstream proof system and proof artifact;
+2. the extraction tool and extracted OCaml artifact;
+3. the exact subset/profile boundary being relied on;
+4. the target/backend/adapter path that was exercised; and
+5. the runnable checks that compared expected behavior against the extracted
+   program.
+
+Prose proof intent is not enough. Future MTF-5 acceptance must include
+**executable equivalence/regression evidence** for representative extracted
+programs. The minimum architecture contract is:
+
+1. choose a representative proof-backed program and its upstream reference
+   property or executable model;
+2. retain the extracted OCaml artifact that enters ZxCaml;
+3. run the extracted program through the canonical ZxCaml execution surfaces
+   relevant to the target claim (at minimum interpreter/native, and any claimed
+   target adapter path);
+4. compare the observed outputs/failures against the upstream reference,
+   extracted baseline, or approved golden corpus;
+5. keep those checks runnable as regression tests for later compiler changes.
+
+This means MTF-5 is gated on **runnable equivalence checks**, not on
+"we extracted code once and the proof system said it was fine."
+
+### 28. MTF-5 verification artifacts must be reproducible and the trust chain must stay visible
+
+Any future accepted MTF-5 proof claim must ship with reproducible verification
+artifacts. At minimum, the evidence bundle must either store or reference:
+
+- proof sources and theorem/checker inputs;
+- checker outputs or certificates;
+- extraction logs and extracted OCaml files;
+- the exact ZxCaml command lines used for subset checking/build/execution;
+- target-runner commands for any claimed adapter/backend path; and
+- stable version identifiers or hashes for the proof toolchain, extraction
+  toolchain, ZxCaml revision, and target runner.
+
+Each artifact set must be paired with reproduction commands so another worker
+can regenerate or re-check the same claim without guesswork.
+
+The proof/trust chain for MTF-5 is:
+
+| Link | Required status language |
+|---|---|
+| Upstream proof system theorem/proof artifact | **Proven/checker-validated** by the upstream tool, not by ZxCaml |
+| Extraction semantics from proof system to OCaml | **Assumed or checker-backed only to the degree the upstream extractor guarantees** |
+| `zxcaml-verified-subset` acceptance | **Checked** by upstream OCaml parsing/typechecking plus ZxCaml subset/profile admission |
+| Core IR / lowering preservation | **Tested and architecture-constrained**, not formally verified in this ADR |
+| Backend code generation correctness | **Tested/assumed** per backend acceptance gates, not proven here |
+| Runtime / host adapter correctness | **Tested/assumed** per adapter acceptance gates, not proven here |
+| Target VM / external toolchain behavior | **Assumed except where exercised by canonical runtime/toolchain tests** |
+
+This table is binding documentation hygiene: every future verification claim
+must say which links are **proven**, **checked**, **tested**, **assumed**, or
+still **out of scope** instead of collapsing the entire chain into a single
+"verified" label.
+
 ## Non-goals and anti-overclaim guardrails
 
 The following claims are explicitly disallowed:
@@ -691,8 +787,8 @@ The following claims are explicitly disallowed:
 ## Consequences
 
 - Later milestones may extend this document, but they must preserve the MTF-0,
-  MTF-1, MTF-2, MTF-3, and MTF-4 statements above unless superseded by a later
-  ADR.
+  MTF-1, MTF-2, MTF-3, MTF-4, and MTF-5 statements above unless superseded by
+  a later ADR.
 - Multichain work is now blocked on explicit target contracts rather than
   roadmap optimism.
 - The current native/Solana baseline remains authoritative and unchanged.
@@ -700,6 +796,8 @@ The following claims are explicitly disallowed:
   failures explicitly instead of pretending every adapter has equivalent host
   semantics.
 - EVM planning remains blocked on the numeric-model ADR.
+- Verification-marketing language is now constrained to artifact-scoped hosted
+  logic claims plus reproducible runnable evidence.
 - Future WASM-family work must prove each adapter independently; generic WASM
   success will not imply NEAR, CosmWasm, Substrate, Stylus, or Internet
   Computer readiness.
@@ -707,8 +805,8 @@ The following claims are explicitly disallowed:
 ## Relationship to `docs/19-functional-multichain-roadmap.md`
 
 `docs/19-functional-multichain-roadmap.md` remains the exploratory product and
-milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 + MTF-3 + MTF-4
-contract that constrains how later milestones may be implemented.
+milestone thesis. This ADR is the MTF-0 + MTF-1 + MTF-2 + MTF-3 + MTF-4 +
+MTF-5 contract that constrains how later milestones may be implemented.
 
 In short:
 
