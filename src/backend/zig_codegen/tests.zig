@@ -111,7 +111,7 @@ test "ZigBackend skips account bindings used only by swallowed runtime program a
     try expectNotContains(source, "_ = instruction_data;");
     try expectNotContains(source, "_ = &instruction_data;");
     try expectNotContains(source, "_ = &account0;");
-    try expectContains(source, "break :blk0 spl_revoke.zxcaml_spl_revoke_process_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data);");
+    try expectContains(source, "break :blk0 @as(i64, @intCast(spl_revoke.zxcaml_spl_revoke_process_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data)));");
 }
 
 test "ZigBackend binds entrypoint instruction_data parameter from runtime bytes" {

@@ -326,6 +326,7 @@ pub fn isRuntimeDerivedProcessName(name: []const u8) bool {
         std.mem.eql(u8, name, "vault_v2_deposit") or
         std.mem.eql(u8, name, "vault_v2_withdraw") or
         std.mem.eql(u8, name, "hackathon_greet_process") or
+        std.mem.eql(u8, name, "combined_process") or
         std.mem.eql(u8, name, "token_vault_process") or
         std.mem.eql(u8, name, "escrow_full_process") or
         std.mem.eql(u8, name, "dao_voting_process") or
@@ -349,6 +350,7 @@ pub fn exprUsesCpiInvoke(expr: lir.LExpr) bool {
                         std.mem.eql(u8, callee.name, "vault_v2_deposit") or
                         std.mem.eql(u8, callee.name, "vault_v2_withdraw") or
                         std.mem.eql(u8, callee.name, "hackathon_greet_process") or
+                        std.mem.eql(u8, callee.name, "combined_process") or
                         std.mem.eql(u8, callee.name, "token_vault_process") or
                         std.mem.eql(u8, callee.name, "escrow_full_process") or
                         std.mem.eql(u8, callee.name, "dao_voting_process") or

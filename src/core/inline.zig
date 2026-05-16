@@ -1342,6 +1342,7 @@ fn isBackendIntrinsicFunction(name: []const u8) bool {
         std.mem.eql(u8, name, "vault_v2_withdraw") or
         std.mem.eql(u8, name, "pda_storage_process") or
         std.mem.eql(u8, name, "hackathon_greet_process") or
+        std.mem.eql(u8, name, "combined_process") or
         std.mem.eql(u8, name, "token_vault_process") or
         std.mem.eql(u8, name, "escrow_full_process") or
         std.mem.eql(u8, name, "spl_burn_process") or

@@ -28,7 +28,7 @@ const vote_record_state_len: usize = 1;
 /// tests choose a proposal id and voter whose PDAs have bump 255, and this
 /// helper verifies the bumped address directly instead of relying on
 /// `sol_try_find_program_address` inside BPF.
-pub fn zxcaml_dao_voting_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_dao_voting_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     return zxcaml_dao_voting_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
 }
 

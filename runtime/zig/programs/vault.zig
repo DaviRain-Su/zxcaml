@@ -20,7 +20,7 @@ const readU64LeSlice = common.readU64LeSlice;
 const writeSystemTransferData = common.writeSystemTransferData;
 
 /// Processes the vault example's deposit/withdraw instruction against parsed account views.
-pub fn zxcaml_vault_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_vault_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = input;
     const ignored_program_id: Pubkey = [_]u8{0} ** 32;
     return zxcaml_vault_process_with_program_id(arena, &ignored_program_id, views, instruction_data);

@@ -13,7 +13,7 @@ const readU64LeSlice = common.readU64LeSlice;
 const writeU64Le = common.writeU64Le;
 
 /// Processes the zignocchio-compatible token-vault initialize/deposit/withdraw dispatch.
-pub fn zxcaml_token_vault_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_token_vault_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = input;
     const ignored_program_id: Pubkey = [_]u8{0} ** 32;
     return zxcaml_token_vault_process_with_program_id(arena, &ignored_program_id, views, instruction_data);

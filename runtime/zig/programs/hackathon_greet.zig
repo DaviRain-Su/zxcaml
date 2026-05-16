@@ -22,7 +22,7 @@ const success: u64 = 0;
 /// tests choose a maker key whose `["greet", maker]` PDA has bump 255, and
 /// this helper verifies that bumped address directly instead of relying on
 /// `sol_try_find_program_address` in BPF.
-pub fn zxcaml_hackathon_greet_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_hackathon_greet_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     if (instruction_data.len != 1) return 1;
     return zxcaml_hackathon_greet_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
 }

@@ -22,7 +22,7 @@ const readU64LeSlice = common.readU64LeSlice;
 const writeSystemTransferData = common.writeSystemTransferData;
 
 /// Processes the zignocchio-compatible vault_v2 example's deposit/withdraw dispatch.
-pub fn zxcaml_vault_v2_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_vault_v2_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     if (views.len < 3) return 1;
     if (instruction_data.len == 0) return 1;
     if (!views[0].is_signer) return 1;

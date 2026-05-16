@@ -38,7 +38,7 @@ const token_account_state_offset: usize = 108;
 ///   `ata.createIdempotent` and initializes the destination token bytes.
 /// - `0x01` Transfer: accounts are source ATA, destination ATA, authority,
 ///   mint, System Program, SPL Token program. Amount is a little-endian u64.
-pub fn zxcaml_ata_transfer_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_ata_transfer_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     return zxcaml_ata_transfer_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
 }
 

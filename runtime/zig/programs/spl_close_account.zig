@@ -23,7 +23,7 @@ const token_account_amount_offset: usize = 64;
 const token_account_state_offset: usize = 108;
 
 /// Processes the ZxCaml mocked SPL Token CloseAccount example.
-pub fn zxcaml_spl_close_account_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_spl_close_account_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     return zxcaml_spl_close_account_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
 }
 

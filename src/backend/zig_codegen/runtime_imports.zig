@@ -614,6 +614,12 @@ pub fn emitCounterAppExpr(
         try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "hackathon_greet", "zxcaml_hackathon_greet_process");
         return true;
     }
+    if (std.mem.eql(u8, name, "combined_process")) {
+        if (app.args.len != 7) return error.UnsupportedExpr;
+        if (!ctx.is_entrypoint) return error.UnsupportedExpr;
+        try emitRuntimeProgramEntrypointCall(out, allocator, app.args, indent_level, ctx, "combined_runtime", "zxcaml_combined_process");
+        return true;
+    }
     if (std.mem.eql(u8, name, "token_vault_process")) {
         if (app.args.len != 7) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
@@ -1608,7 +1614,7 @@ fn emitRuntimeProgramEntrypointCall(
     try appendPrint(
         out,
         allocator,
-        "break :blk{d} {s}.{s}_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data);\n",
+        "break :blk{d} @as(i64, @intCast({s}.{s}_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data)));\n",
         .{ block_id, module_alias, function_name },
     );
     try emitIndent(out, allocator, indent_level);

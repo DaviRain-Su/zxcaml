@@ -31,7 +31,7 @@ const success: u64 = 0;
 /// program-owned account so this helper can mutate lamports and the state bytes
 /// directly, matching the established mocked-account pattern used by the
 /// token_vault tests.
-pub fn zxcaml_escrow_full_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_escrow_full_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     return zxcaml_escrow_full_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
 }
 

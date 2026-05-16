@@ -29,7 +29,7 @@ const mint_len: usize = spl_token.mint_len;
 const mint_supply_offset: usize = 36;
 
 /// Processes the ZxCaml mocked SPL Token Burn example.
-pub fn zxcaml_spl_burn_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+fn zxcaml_spl_burn_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     return zxcaml_spl_burn_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
 }
 
