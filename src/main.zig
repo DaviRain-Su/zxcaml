@@ -268,6 +268,7 @@ pub fn main(init: std.process.Init) !void {
             try writeUnsupportedBuildTarget(init.io, init.gpa);
             std.process.exit(1);
         };
+        try validateBuildArgsForTargetOrExit(init.io, resolved_target, build_args);
         if (resolved_target.requires_output_path and build_args.output_path == null) {
             try writeStderr(init.io, "error: native builds require -o <out>.\n");
             std.process.exit(1);
@@ -1197,6 +1198,19 @@ fn ensureTargetCapabilitiesOrExit(
             try writeStderr(init.io, rendered);
             std.process.exit(1);
         },
+    }
+}
+
+fn validateBuildArgsForTargetOrExit(
+    io: Io,
+    target: *const target_registry.TargetContract,
+    build_args: BuildArgs,
+) !void {
+    if (!build_args.srcmap and !target.supports_no_srcmap) {
+        try writeStderr(io, "error: `--no-srcmap` is only supported for BPF/source-map-capable targets; target `");
+        try writeStderr(io, target.cli_name);
+        try writeStderr(io, "` does not emit source maps. Use --target=bpf or omit `--no-srcmap`.\n");
+        std.process.exit(1);
     }
 }
 

@@ -109,6 +109,9 @@ let rec pp_expr ~wire ppf = function
   | Field_access field_access ->
       fprintf ppf "(field_access %a %a)" (pp_expr ~wire) field_access.record_expr pp_atom
         field_access.field_name
+  | Field_set field_set ->
+      fprintf ppf "(field_set %a %a %a)" (pp_expr ~wire) field_set.record_expr pp_atom
+        field_set.field_name (pp_expr ~wire) field_set.value
   | Record_update record_update ->
       fprintf ppf "(record_update %a (fields (" (pp_expr ~wire) record_update.base_expr;
       pp_record_expr_fields ~wire ppf record_update.fields;

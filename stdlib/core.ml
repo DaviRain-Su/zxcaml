@@ -11,8 +11,8 @@ type ('a, 'b) result = Ok of 'a | Error of 'b
 
 type account = {
   key : bytes;
-  lamports : int;
-  data : bytes;
+  mutable lamports : int;
+  mutable data : bytes;
   owner : bytes;
   is_signer : bool;
   is_writable : bool;

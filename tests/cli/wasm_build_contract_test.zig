@@ -49,15 +49,79 @@ fn runWasmBuild(
     source_path: []const u8,
     output_path: []const u8,
 ) !CommandResult {
-    const argv = [_][]const u8{
-        cli_options.omlz_bin,
-        "build",
-        "--target=wasm",
-        source_path,
-        "-o",
+    return runWasmBuildWithArgs(allocator, io, &.{}, source_path, output_path);
+}
+
+fn runWasmBuildWithArgs(
+    allocator: Allocator,
+    io: Io,
+    extra_args: []const []const u8,
+    source_path: []const u8,
+    output_path: []const u8,
+) !CommandResult {
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+
+    try argv.append(allocator, cli_options.omlz_bin);
+    try argv.append(allocator, "build");
+    try argv.append(allocator, "--target=wasm");
+    try argv.appendSlice(allocator, extra_args);
+    try argv.append(allocator, source_path);
+    try argv.append(allocator, "-o");
+    try argv.append(allocator, output_path);
+
+    return runCommand(allocator, io, argv.items);
+}
+
+test "cli: wasm rejects --no-srcmap before artifact creation" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const output_path = "/tmp/zxcaml_mtf1_reject_no_srcmap.wasm";
+
+    cwd.deleteFile(io, output_path) catch {};
+
+    const result = try runWasmBuildWithArgs(
+        allocator,
+        io,
+        &.{"--no-srcmap"},
+        "examples/mtf1_pure_numeric.ml",
         output_path,
-    };
-    return runCommand(allocator, io, &argv);
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "--no-srcmap"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "source-map-capable"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "--target=bpf"));
+    try std.testing.expect(!fileExists(io, output_path));
+}
+
+test "cli: wasm rejects Solana account mutation before artifact creation" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const output_path = "/tmp/zxcaml_mtf1_reject_account_mutation.wasm";
+
+    cwd.deleteFile(io, output_path) catch {};
+
+    const result = try runWasmBuild(
+        allocator,
+        io,
+        "examples/mtf1_account_lamports_mutation.ml",
+        output_path,
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "target `wasm`"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "Solana account mutation"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "Account.lamports <-"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "pure logic only"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "record field lamports is not mutable"));
+    try std.testing.expect(!fileExists(io, output_path));
 }
 
 fn runNodeAcceptance(

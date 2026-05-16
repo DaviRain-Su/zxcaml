@@ -44,6 +44,7 @@ type expr =
   | Tuple_project of tuple_project
   | Record of record_expr
   | Field_access of field_access
+  | Field_set of field_set
   | Record_update of record_update
   | Assert of expr
   | Match of match_expr
@@ -122,6 +123,12 @@ and record_expr_field = {
 and field_access = {
   record_expr : expr;
   field_name : string;
+}
+
+and field_set = {
+  record_expr : expr;
+  field_name : string;
+  value : expr;
 }
 
 and record_update = {
@@ -1044,6 +1051,11 @@ let ref_elem_of_ocaml_type (ty : Types.type_expr) : type_expr option =
       Some (type_of_ocaml_type_expr arg)
   | _ -> None
 
+let is_account_ocaml_type (ty : Types.type_expr) =
+  match type_of_ocaml_type_expr ty with
+  | Type_constr { type_name = "account"; args = []; _ } -> true
+  | _ -> false
+
 let parse_param (param : function_param) =
   match (param.fp_arg_label, param.fp_kind) with
   | Nolabel, Tparam_pat pat ->
@@ -1356,6 +1368,17 @@ and parse_expr env (expr : expression) =
   | Texp_field (record_expr, _lid, label) ->
       Field_access
         { record_expr = parse_expr env record_expr; field_name = label.Types.lbl_name }
+  | Texp_setfield (record_expr, _lid, label, value_expr) ->
+      if is_account_ocaml_type record_expr.exp_type then
+        Field_set
+          {
+            record_expr = parse_expr env record_expr;
+            field_name = label.Types.lbl_name;
+            value = parse_expr env value_expr;
+          }
+      else
+        unsupported_mutation ~feature:label.Types.lbl_name ~node_kind:"Texp_setfield"
+          ~loc:expr.exp_loc
   | Texp_apply ({ exp_desc = Texp_ident (_, lid, _) }, args)
     when String.equal (longident_name lid) "Pubkey.of_hex" ->
       parse_pubkey_of_hex_args args ~loc:expr.exp_loc
@@ -2080,6 +2103,10 @@ let rec expr_uses_record_fields field_names = function
   | Field_access field_access ->
       StringSet.mem field_access.field_name field_names
       || expr_uses_record_fields field_names field_access.record_expr
+  | Field_set field_set ->
+      StringSet.mem field_set.field_name field_names
+      || expr_uses_record_fields field_names field_set.record_expr
+      || expr_uses_record_fields field_names field_set.value
   | Record_update record_update ->
       expr_uses_record_fields field_names record_update.base_expr
       || List.exists
@@ -2161,6 +2188,9 @@ let rec expr_uses_var var_name = function
         (fun field -> expr_uses_var var_name field.field_value)
         record.fields
   | Field_access field_access -> expr_uses_var var_name field_access.record_expr
+  | Field_set field_set ->
+      expr_uses_var var_name field_set.record_expr
+      || expr_uses_var var_name field_set.value
   | Record_update record_update ->
       expr_uses_var var_name record_update.base_expr
       || List.exists
