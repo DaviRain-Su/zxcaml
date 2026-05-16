@@ -21,8 +21,14 @@ const writeSystemTransferData = common.writeSystemTransferData;
 
 /// Processes the vault example's deposit/withdraw instruction against parsed account views.
 pub fn zxcaml_vault_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
-    _ = arena;
     _ = input;
+    const ignored_program_id: Pubkey = [_]u8{0} ** 32;
+    return zxcaml_vault_process_with_program_id(arena, &ignored_program_id, views, instruction_data);
+}
+
+pub fn zxcaml_vault_process_with_program_id(arena: *Arena, program_id: *const Pubkey, views: []account.AccountView, instruction_data: []const u8) u64 {
+    _ = arena;
+    _ = program_id;
     if (views.len < 3) return 1;
     if (instruction_data.len == 0) return 1;
     if (!views[0].is_signer) return 1;

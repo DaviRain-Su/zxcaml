@@ -39,10 +39,13 @@ const token_account_state_offset: usize = 108;
 /// that bumped address directly instead of relying on
 /// `sol_try_find_program_address` inside BPF.
 pub fn zxcaml_order_book_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+    return zxcaml_order_book_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
+}
+
+pub fn zxcaml_order_book_process_with_program_id(arena: *Arena, program_id: *const Pubkey, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = arena;
     if (instruction_data.len == 0) return 1;
 
-    const program_id = programIdFromInput(input);
     return switch (instruction_data[0]) {
         0x01 => postOrder(program_id, views, instruction_data),
         0x02 => fill(program_id, views, instruction_data),

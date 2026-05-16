@@ -32,10 +32,13 @@ const success: u64 = 0;
 /// directly, matching the established mocked-account pattern used by the
 /// token_vault tests.
 pub fn zxcaml_escrow_full_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+    return zxcaml_escrow_full_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
+}
+
+pub fn zxcaml_escrow_full_process_with_program_id(arena: *Arena, program_id: *const Pubkey, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = arena;
     if (instruction_data.len == 0) return 1;
 
-    const program_id = programIdFromInput(input);
     return switch (instruction_data[0]) {
         0 => zxcamlEscrowMake(program_id, views, instruction_data),
         1 => zxcamlEscrowAccept(program_id, views),

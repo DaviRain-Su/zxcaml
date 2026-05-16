@@ -23,10 +23,14 @@ const success: u64 = 0;
 /// this helper verifies that bumped address directly instead of relying on
 /// `sol_try_find_program_address` in BPF.
 pub fn zxcaml_hackathon_greet_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+    if (instruction_data.len != 1) return 1;
+    return zxcaml_hackathon_greet_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
+}
+
+pub fn zxcaml_hackathon_greet_process_with_program_id(arena: *Arena, program_id: *const Pubkey, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = arena;
     if (instruction_data.len != 1) return 1;
 
-    const program_id = programIdFromInput(input);
     return switch (instruction_data[0]) {
         0 => zxcamlHackathonGreetInitialize(program_id, views),
         1 => zxcamlHackathonGreet(program_id, views),

@@ -185,7 +185,7 @@ pub fn emitFunction(
     try append(out, allocator, function_name);
     try append(out, allocator, "(arena: *Arena");
     if (is_entrypoint) {
-        try append(out, allocator, ", omlz_runtime_input: [*]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64 {\n");
+        try append(out, allocator, ", omlz_runtime_input: [*]u8, omlz_runtime_program_id: *const [32]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64 {\n");
     } else {
         if (func.calling_convention == .Closure) {
             try append(out, allocator, ", closure: *const prelude.Closure");
@@ -233,11 +233,14 @@ pub fn emitFunction(
         const bindings = try emitEntrypointRuntimeBindings(out, allocator, func.params, func.body);
         const body_uses_runtime_input = sourceUsesIdentifier(body_out.items, "omlz_runtime_input") or
             sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_input");
+        const body_uses_runtime_program_id = sourceUsesIdentifier(body_out.items, "omlz_runtime_program_id") or
+            sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_program_id");
         const body_uses_runtime_accounts = sourceUsesIdentifier(body_out.items, "omlz_runtime_accounts") or
             sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_accounts");
         const body_uses_runtime_instruction_data = sourceUsesIdentifier(body_out.items, "omlz_runtime_instruction_data") or
             sourceUsesIdentifier(hoisted_decls.items, "omlz_runtime_instruction_data");
         if (!body_uses_runtime_input) try append(out, allocator, "    _ = omlz_runtime_input;\n");
+        if (!body_uses_runtime_program_id) try append(out, allocator, "    _ = omlz_runtime_program_id;\n");
         if (!bindings.accounts_used and !body_uses_runtime_accounts) try append(out, allocator, "    _ = omlz_runtime_accounts;\n");
         if (!bindings.instruction_data_used and !body_uses_runtime_instruction_data) try append(out, allocator, "    _ = omlz_runtime_instruction_data;\n");
     }

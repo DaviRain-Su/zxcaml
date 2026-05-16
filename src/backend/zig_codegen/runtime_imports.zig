@@ -536,13 +536,13 @@ pub fn emitCounterAppExpr(
     if (std.mem.eql(u8, name, "vault_deposit") or std.mem.eql(u8, name, "vault_withdraw")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "vault.zxcaml_vault_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try append(out, allocator, "vault.zxcaml_vault_process_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
     if (std.mem.eql(u8, name, "vault_v2_deposit") or std.mem.eql(u8, name, "vault_v2_withdraw")) {
         if (app.args.len != 4) return error.UnsupportedExpr;
         if (!ctx.is_entrypoint) return error.UnsupportedExpr;
-        try append(out, allocator, "vault_v2.zxcaml_vault_v2_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data)");
+        try append(out, allocator, "vault_v2.zxcaml_vault_v2_process_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data)");
         return true;
     }
     if (std.mem.eql(u8, name, "pda_storage_process")) {
@@ -1608,7 +1608,7 @@ fn emitRuntimeProgramEntrypointCall(
     try appendPrint(
         out,
         allocator,
-        "break :blk{d} {s}.{s}(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);\n",
+        "break :blk{d} {s}.{s}_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data);\n",
         .{ block_id, module_alias, function_name },
     );
     try emitIndent(out, allocator, indent_level);

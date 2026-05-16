@@ -8,6 +8,7 @@
 const std = @import("std");
 const Arena = @import("runtime/arena.zig").Arena;
 const AccountRuntime = @import("runtime/account.zig");
+const entry_context = @import("runtime/entry_context.zig");
 const syscalls = @import("runtime/syscalls.zig");
 const vendored_sdk = @import("vendored_sdk");
 const program = @import("program.zig");
@@ -37,15 +38,17 @@ fn shouldEmitLoaderLog(instruction_data: []const u8) bool {
 export fn entrypoint(input: [*]u8) callconv(.c) u64 {
     var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
+    var ctx = entry_context.InstructionContext.init(input);
     var accounts: []AccountRuntime.AccountView = undefined;
-    const account_count = AccountRuntime.accountCountFromPtr(input) catch return 1;
+    const account_count: usize = @intCast(ctx.remainingAccounts());
     if (account_count > max_entrypoint_accounts) return 1;
-    AccountRuntime.parseAccountsFromPtrInto(&arena, input, &accounts) catch return 1;
-    const instruction_data = AccountRuntime.parseInstructionDataFromPtr(input) catch return 1;
+    entry_context.parseAccountViews(&arena, &ctx, &accounts) catch return 1;
+    const instruction_data = ctx.instructionDataUnchecked();
+    const program_id = ctx.programIdUnchecked();
     if (shouldEmitLoaderLog(instruction_data)) {
         syscalls.sol_log_(loader_log_message_bytes);
     }
-    const status = program.omlz_user_entrypoint(&arena, input, accounts, instruction_data);
+    const status = program.omlz_user_entrypoint(&arena, input, program_id, accounts, instruction_data);
     arena.reset();
     return status;
 }

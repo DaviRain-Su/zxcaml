@@ -15,7 +15,7 @@ fn expectNotContains(haystack: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, haystack, needle) == null);
 }
 
-test "ZigBackend emits the M0 ABI entrypoint signature" {
+test "ZigBackend emits the M7 ABI entrypoint signature" {
     const module: lir.LModule = .{ .entrypoint = .{
         .name = "entrypoint",
         .body = .{ .Constant = .{ .Int = 0 } },
@@ -28,7 +28,7 @@ test "ZigBackend emits the M0 ABI entrypoint signature" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         source,
-        "omlz_user_entrypoint(arena: *Arena, omlz_runtime_input: [*]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64",
+        "omlz_user_entrypoint(arena: *Arena, omlz_runtime_input: [*]u8, omlz_runtime_program_id: *const [32]u8, omlz_runtime_accounts: []AccountRuntime.AccountView, omlz_runtime_instruction_data: []const u8) u64",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "    return @intCast(@as(i64, 0));") != null);
 }
@@ -111,7 +111,7 @@ test "ZigBackend skips account bindings used only by swallowed runtime program a
     try expectNotContains(source, "_ = instruction_data;");
     try expectNotContains(source, "_ = &instruction_data;");
     try expectNotContains(source, "_ = &account0;");
-    try expectContains(source, "break :blk0 spl_revoke.zxcaml_spl_revoke_process(arena, omlz_runtime_input, omlz_runtime_accounts, omlz_runtime_instruction_data);");
+    try expectContains(source, "break :blk0 spl_revoke.zxcaml_spl_revoke_process_with_program_id(arena, omlz_runtime_program_id, omlz_runtime_accounts, omlz_runtime_instruction_data);");
 }
 
 test "ZigBackend binds entrypoint instruction_data parameter from runtime bytes" {

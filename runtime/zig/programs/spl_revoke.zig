@@ -28,11 +28,14 @@ const delegated_amount_end: usize = delegated_amount_offset + @sizeOf(u64);
 
 /// Processes the ZxCaml mocked SPL Token Revoke example.
 pub fn zxcaml_spl_revoke_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
+    return zxcaml_spl_revoke_process_with_program_id(arena, programIdFromInput(input), views, instruction_data);
+}
+
+pub fn zxcaml_spl_revoke_process_with_program_id(arena: *Arena, program_id: *const Pubkey, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = arena;
     if (instruction_data.len != spl_token.revoke_instruction_data_len) return 1;
     if (views.len < 3) return 1;
 
-    const program_id = programIdFromInput(input);
     const source = views[0];
     const authority = views[1];
     const token_program = views[2];

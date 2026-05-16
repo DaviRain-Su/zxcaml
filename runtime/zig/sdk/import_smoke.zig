@@ -11,6 +11,13 @@ test "vendored SDK adapter shell resolves committed packages" {
     try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), sol.compute_budget.remaining());
     try std.testing.expectEqual(@as(usize, 56), @sizeOf(sol.account.CpiAccountInfo));
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(sol.cpi.AccountMeta));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(sol.entrypoint.InstructionContext));
     try std.testing.expectEqual(@as(usize, 16), sol.pda.MAX_SEEDS);
     try std.testing.expectEqual(@as(u64, 2) << 32, sol.program_error.INVALID_ARGUMENT);
+
+    var empty_input: [48]u8 = [_]u8{0} ** 48;
+    var ctx = sol.entrypoint.InstructionContext.init(empty_input[0..].ptr);
+    try std.testing.expectEqual(@as(u64, 0), ctx.remainingAccounts());
+    try std.testing.expectEqual(@as(usize, 0), ctx.instructionDataUnchecked().len);
+    try std.testing.expectEqualSlices(u8, &[_]u8{0} ** 32, ctx.programIdUnchecked()[0..]);
 }

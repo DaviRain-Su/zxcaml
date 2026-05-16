@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Arena = @import("arena.zig").Arena;
 const account = @import("account.zig");
+const entry_context = @import("entry_context.zig");
 const syscalls = @import("syscalls.zig");
 const vendored_sdk = @import("vendored_sdk").solana_program_sdk;
 
@@ -580,6 +581,99 @@ pub fn parseAccountInfosFromPtrInto(arena: *Arena, input: [*]const u8, out: *[]S
     }
 
     out.* = infos;
+}
+
+test "entry context bridge preserves duplicate aliasing and trailing instruction state" {
+    var input = [_]u8{0} ** 24_000;
+    var cursor: usize = 0;
+    writeEntryContextU64(&input, &cursor, 3);
+
+    writeEntryContextAccount(&input, &cursor, true, true, false, 41, &.{ 1, 2, 3, 4 }, 0x44, 0x88, 777);
+    writeEntryContextDuplicate(&input, &cursor, 0);
+    writeEntryContextAccount(&input, &cursor, false, false, true, 99, &.{}, 0x11, 0x22, 888);
+
+    writeEntryContextU64(&input, &cursor, 3);
+    input[cursor] = 0xaa;
+    input[cursor + 1] = 0xbb;
+    input[cursor + 2] = 0xcc;
+    cursor += 3;
+    writeEntryContextPubkey(&input, &cursor, 0x55);
+
+    var arena_buf: [768]u8 align(8) = undefined;
+    var arena = Arena.fromStaticBuffer(&arena_buf);
+    var ctx = entry_context.InstructionContext.init(@ptrCast(&input));
+    var accounts: []account.AccountView = undefined;
+    try entry_context.parseAccountViews(&arena, &ctx, &accounts);
+
+    try std.testing.expectEqual(@as(usize, 3), accounts.len);
+    try std.testing.expectEqual(@intFromPtr(accounts[0].lamports), @intFromPtr(accounts[1].lamports));
+    try std.testing.expectEqual(@intFromPtr(accounts[0].data.ptr), @intFromPtr(accounts[1].data.ptr));
+    accounts[0].lamports.* = 71;
+    accounts[0].data[2] = 5;
+    try std.testing.expectEqual(@as(u64, 71), accounts[1].lamportsValue());
+    try std.testing.expectEqual(@as(u8, 5), accounts[1].data[2]);
+    try std.testing.expectEqual(@as(u64, 777), accounts[1].rentEpochValue());
+    try std.testing.expectEqual(@as(u64, 99), accounts[2].lamportsValue());
+    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xbb, 0xcc }, ctx.instructionDataUnchecked());
+    var expected_program_id: [32]u8 = undefined;
+    for (&expected_program_id, 0..) |*byte, index| {
+        byte.* = 0x55 + @as(u8, @intCast(index));
+    }
+    try std.testing.expectEqualSlices(u8, expected_program_id[0..], ctx.programIdUnchecked()[0..]);
+}
+
+fn writeEntryContextU64(buf: []u8, cursor: *usize, value: u64) void {
+    std.mem.writeInt(u64, buf[cursor.*..][0..8], value, .little);
+    cursor.* += 8;
+}
+
+fn writeEntryContextZeroes(buf: []u8, cursor: *usize, count: usize) void {
+    @memset(buf[cursor.*..][0..count], 0);
+    cursor.* += count;
+}
+
+fn writeEntryContextPubkey(buf: []u8, cursor: *usize, start: u8) void {
+    for (buf[cursor.*..][0..32], 0..) |*byte, index| {
+        byte.* = start + @as(u8, @intCast(index));
+    }
+    cursor.* += 32;
+}
+
+fn writeEntryContextDuplicate(buf: []u8, cursor: *usize, dup_index: u8) void {
+    buf[cursor.*] = dup_index;
+    cursor.* += 1;
+    writeEntryContextZeroes(buf, cursor, 7);
+}
+
+fn writeEntryContextAccount(
+    buf: []u8,
+    cursor: *usize,
+    is_signer: bool,
+    is_writable: bool,
+    executable: bool,
+    lamports_value: u64,
+    data: []const u8,
+    key_seed: u8,
+    owner_seed: u8,
+    rent_epoch: u64,
+) void {
+    buf[cursor.*] = 0xff;
+    buf[cursor.* + 1] = @intFromBool(is_signer);
+    buf[cursor.* + 2] = @intFromBool(is_writable);
+    buf[cursor.* + 3] = @intFromBool(executable);
+    cursor.* += 4;
+    writeEntryContextZeroes(buf, cursor, 4);
+    writeEntryContextPubkey(buf, cursor, key_seed);
+    writeEntryContextPubkey(buf, cursor, owner_seed);
+    writeEntryContextU64(buf, cursor, lamports_value);
+    writeEntryContextU64(buf, cursor, data.len);
+    @memcpy(buf[cursor.*..][0..data.len], data);
+    cursor.* += data.len;
+    writeEntryContextZeroes(buf, cursor, 10 * 1024);
+    const aligned = std.mem.alignForward(usize, cursor.*, 8);
+    const padding = aligned - cursor.*;
+    writeEntryContextZeroes(buf, cursor, padding);
+    writeEntryContextU64(buf, cursor, rent_epoch);
 }
 
 fn createProgramAddressHosted(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
