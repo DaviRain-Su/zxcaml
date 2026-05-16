@@ -25,7 +25,9 @@ const driver_bpf = @import("driver/bpf.zig");
 const driver_doctor = @import("driver/doctor.zig");
 const driver_idl = @import("driver/idl.zig");
 const driver_srcmap = @import("driver/srcmap.zig");
+const driver_wasm = @import("driver/wasm.zig");
 const target_capability = @import("target/capability.zig");
+const target_manifest = @import("target/manifest.zig");
 const target_registry = @import("target/registry.zig");
 const diag = @import("util/diag.zig");
 const diag_explain = @import("util/diag_explain.zig");
@@ -1406,12 +1408,87 @@ fn buildWasm(
     module: @import("frontend_bridge/ttree.zig").Module,
     build_args: BuildArgs,
 ) !void {
-    _ = target;
-    _ = module;
-    _ = build_args;
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
 
-    try writeStderr(init.io, "error: experimental generic freestanding WASM build dispatch is not implemented yet.\n");
-    std.process.exit(1);
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    try ensureTargetCapabilitiesOrExit(init, target, optimized_core_module);
+    const inferred_core_module = try inferRegionsOrExit(init, &core_arena, optimized_core_module, build_args.diagnostics);
+
+    var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer lowered_arena.deinit();
+
+    var impl: arena_lower.ArenaStrategy = .{ .allocator = lowered_arena.allocator() };
+    const lowered_module = impl.loweringStrategy().lowerModule(inferred_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower with ArenaStrategy: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    const source = zig_codegen.emitModule(init.gpa, lowered_module) catch |err| {
+        try writeStderr(init.io, "error: failed to emit Zig source: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(source);
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(init.io, "out");
+    try cwd.writeFile(init.io, .{
+        .sub_path = "out/program.zig",
+        .data = source,
+        .flags = .{ .truncate = true },
+    });
+
+    const program_name = try sourceMapProgramName(init.gpa, build_args.input_file);
+    defer init.gpa.free(program_name);
+
+    const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, program_name, ".wasm");
+    defer if (build_args.output_path == null) init.gpa.free(output_path);
+
+    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .wasm);
+
+    driver_wasm.buildWasm(init.gpa, init.io, .{
+        .wasm_entry_path = "out/wasm_entry.zig",
+        .output_path = output_path,
+        .quiet = build_args.quiet,
+    }) catch |err| {
+        try writeStderr(init.io, "error: WASM build failed: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 }
 
 fn sourceMapProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]const u8 {

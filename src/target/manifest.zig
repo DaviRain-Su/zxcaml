@@ -62,9 +62,21 @@ const bpf_entry_runtime_file: RuntimeFile = .{
     .out_path = "out/bpf_entry.zig",
 };
 
+const wasm_entry_runtime_file: RuntimeFile = .{
+    .src_path = "runtime/wasm/entry.zig",
+    .out_path = "out/wasm_entry.zig",
+};
+
 const shared_runtime_files = expected_shared_runtime_files;
 const native_runtime_files = shared_runtime_files ++ [_]RuntimeFile{native_entry_runtime_file};
 const bpf_runtime_files = shared_runtime_files ++ [_]RuntimeFile{bpf_entry_runtime_file};
+const wasm_runtime_files = [_]RuntimeFile{
+    .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
+    .{ .src_path = "runtime/wasm/account.zig", .out_path = "out/runtime/account.zig" },
+    .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
+    .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
+    wasm_entry_runtime_file,
+};
 
 const manifests = [_]RuntimeManifest{
     .{
@@ -80,6 +92,13 @@ const manifests = [_]RuntimeManifest{
         .files = bpf_runtime_files[0..],
         .entry_src_path = bpf_entry_runtime_file.src_path,
         .entry_out_path = bpf_entry_runtime_file.out_path,
+    },
+    .{
+        .cli_name = "wasm",
+        .build_dispatch = .wasm,
+        .files = wasm_runtime_files[0..],
+        .entry_src_path = wasm_entry_runtime_file.src_path,
+        .entry_out_path = wasm_entry_runtime_file.out_path,
     },
 };
 
@@ -137,15 +156,18 @@ const expected_bpf_runtime_files = expected_shared_runtime_files ++ [_]RuntimeFi
     .{ .src_path = "runtime/zig/bpf_entry.zig", .out_path = "out/bpf_entry.zig" },
 };
 
-test "runtime manifest: implemented targets stay limited to native and bpf" {
+const expected_wasm_runtime_files = wasm_runtime_files;
+
+test "runtime manifest: implemented targets include native, bpf, and wasm" {
     const supported = try target_registry.supportedTargets(std.testing.allocator);
     defer std.testing.allocator.free(supported);
 
     const implemented = implementedTargets();
-    try std.testing.expectEqual(@as(usize, 2), implemented.len);
-    try std.testing.expectEqual(supported.len, implemented.len);
+    try std.testing.expectEqual(@as(usize, 3), implemented.len);
+    try std.testing.expectEqual(@as(usize, 2), supported.len);
     try std.testing.expectEqualStrings("native", implemented[0].cli_name);
     try std.testing.expectEqualStrings("bpf", implemented[1].cli_name);
+    try std.testing.expectEqualStrings("wasm", implemented[2].cli_name);
 }
 
 test "runtime manifest: native runtime files mirror the current materialization" {
@@ -158,6 +180,11 @@ test "runtime manifest: bpf runtime files mirror the current materialization" {
     try expectRuntimeFiles(expected_bpf_runtime_files[0..], manifest.files);
 }
 
+test "runtime manifest: wasm runtime files stay target-specific and minimal" {
+    const manifest = runtimeManifestForDispatch(.wasm);
+    try expectRuntimeFiles(expected_wasm_runtime_files[0..], manifest.files);
+}
+
 test "runtime manifest: entry shims remain target specific" {
     const native = runtimeManifestForDispatch(.native);
     try std.testing.expectEqualStrings("runtime/zig/native_entry.zig", native.entry_src_path);
@@ -166,10 +193,15 @@ test "runtime manifest: entry shims remain target specific" {
     const bpf = runtimeManifestForDispatch(.bpf);
     try std.testing.expectEqualStrings("runtime/zig/bpf_entry.zig", bpf.entry_src_path);
     try std.testing.expectEqualStrings("out/bpf_entry.zig", bpf.entry_out_path);
+
+    const wasm = runtimeManifestForDispatch(.wasm);
+    try std.testing.expectEqualStrings("runtime/wasm/entry.zig", wasm.entry_src_path);
+    try std.testing.expectEqualStrings("out/wasm_entry.zig", wasm.entry_out_path);
 }
 
 test "runtime manifest: vendored SDK adapter root materializes for entry builds" {
     for (implementedTargets()) |manifest| {
+        if (manifest.build_dispatch == .wasm) continue;
         for (manifest.files) |file| {
             if (std.mem.eql(u8, file.src_path, "runtime/zig/sdk/root.zig")) {
                 try std.testing.expectEqualStrings("out/runtime/sdk/root.zig", file.out_path);
@@ -184,5 +216,21 @@ test "runtime manifest: vendored SDK adapter root materializes for entry builds"
 test "runtime manifest: shared and target specific files stay duplicate free" {
     for (implementedTargets()) |manifest| {
         try validateRuntimeFileList(manifest.files);
+    }
+}
+
+test "runtime manifest: wasm excludes solana, bpf, sdk, and source-map files" {
+    const manifest = runtimeManifestForDispatch(.wasm);
+
+    for (manifest.files) |file| {
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "bpf_entry") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "native_entry") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "sdk/root.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "syscalls.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "sysvar.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "spl_token.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "programs/") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.out_path, ".so") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.out_path, ".map") == null);
     }
 }
