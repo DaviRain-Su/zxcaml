@@ -5,33 +5,32 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OMLZ_BIN="${OMLZ_BIN:-./zig-out/bin/omlz}"
+LAYOUT_CHECK="${ROOT}/scripts/check_examples_layout.py"
 
-exclude_reason() {
-  case "$1" in
-    examples/m0_unsupported.ml)
-      echo "intentional diagnostic fixture; expected to fail"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
+python3 "$LAYOUT_CHECK"
 
 ALL_EXAMPLES=()
 while IFS= read -r example; do
+  [[ -n "$example" ]] || continue
   ALL_EXAMPLES+=("$example")
-done < <(find examples -maxdepth 1 -type f -name '*.ml' | LC_ALL=C sort)
+done < <(
+  {
+    python3 "$LAYOUT_CHECK" --print-category user_example
+    python3 "$LAYOUT_CHECK" --print-category excluded_historical
+  } | LC_ALL=C sort
+)
 
 included=()
-excluded=()
+while IFS= read -r example; do
+  [[ -n "$example" ]] || continue
+  included+=("$example")
+done < <(python3 "$LAYOUT_CHECK" --print-category user_example)
 
-for example in "${ALL_EXAMPLES[@]}"; do
-  if reason="$(exclude_reason "$example" 2>/dev/null)"; then
-    excluded+=("$example")
-  else
-    included+=("$example")
-  fi
-done
+excluded=()
+while IFS= read -r example; do
+  [[ -n "$example" ]] || continue
+  excluded+=("$example")
+done < <(python3 "$LAYOUT_CHECK" --print-category excluded_historical)
 
 echo "Examples corpus candidates (${#ALL_EXAMPLES[@]} files):"
 for example in "${ALL_EXAMPLES[@]}"; do
@@ -41,7 +40,7 @@ done
 echo
 echo "Excluded examples (${#excluded[@]} files):"
 for example in "${excluded[@]}"; do
-  echo "  - $example :: $(exclude_reason "$example")"
+  echo "  - $example :: manifest category excluded_historical"
 done
 
 echo

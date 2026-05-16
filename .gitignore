@@ -27,6 +27,7 @@ _opam/
 out/
 out/slides/
 build/*.bc
+build/*.map
 build/*.so
 !build/.gitkeep
 build/characterization/
