@@ -517,10 +517,13 @@ test "synthetic unsupported capability diagnostic is target-aware and actionable
     }
 }
 
-test "experimental wasm is dispatchable while future targets remain rejected" {
+test "experimental wasm and near are dispatchable while future targets remain rejected" {
     const wasm = try target_registry.resolveBuildTarget("wasm");
     try std.testing.expectEqualStrings("wasm", wasm.cli_name);
-    try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("near"));
+
+    const near = try target_registry.resolveBuildTarget("near");
+    try std.testing.expectEqualStrings("near", near.cli_name);
+
     try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("evm"));
 }
 

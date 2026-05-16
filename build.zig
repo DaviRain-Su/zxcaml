@@ -749,6 +749,25 @@ pub fn build(b: *std.Build) void {
     run_wasm_build_contract_tests.step.dependOn(&run_bpf_build_contract_tests.step);
     run_wasm_build_contract_tests.setCwd(b.path(""));
 
+    // Experimental NEAR CLI contract tests (MTF-2 / MTF2-CLI-1): verify exact
+    // target grammar, duplicate-target rejection, and pre-build diagnostics
+    // without claiming broad NEAR adapter readiness.
+    const near_build_contract_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/near_build_contract_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const near_build_contract_options = b.addOptions();
+    near_build_contract_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    near_build_contract_test_module.addOptions("cli_options", near_build_contract_options);
+    const near_build_contract_tests = b.addTest(.{
+        .root_module = near_build_contract_test_module,
+    });
+    const run_near_build_contract_tests = b.addRunArtifact(near_build_contract_tests);
+    run_near_build_contract_tests.step.dependOn(b.getInstallStep());
+    run_near_build_contract_tests.step.dependOn(&run_wasm_build_contract_tests.step);
+    run_near_build_contract_tests.setCwd(b.path(""));
+
     // Source-map determinism property test (P9 / F-SRCMAP-6): verify repeated
     // BPF builds of the same source produce byte-identical `.map` JSON.
     const srcmap_determinism_test_module = b.createModule(.{
@@ -766,7 +785,7 @@ pub fn build(b: *std.Build) void {
     run_srcmap_determinism_tests.step.dependOn(b.getInstallStep());
     // The property build writes out/program.zig and out/hackathon_greet.map,
     // so keep it serialized with the other source-map CLI integration tests.
-    run_srcmap_determinism_tests.step.dependOn(&run_wasm_build_contract_tests.step);
+    run_srcmap_determinism_tests.step.dependOn(&run_near_build_contract_tests.step);
     run_srcmap_determinism_tests.setCwd(b.path(""));
 
     // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.

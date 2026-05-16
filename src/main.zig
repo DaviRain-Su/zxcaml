@@ -12,6 +12,8 @@
 //!   values are treated as command/path overrides except `0`).
 //! - Reserve an experimental generic freestanding `omlz build --target=wasm`
 //!   dispatch seam without implying adapter readiness.
+//! - Reserve an experimental NEAR no-storage `omlz build --target=near`
+//!   dispatch seam without implying broad NEAR adapter readiness.
 //! - Dispatch `omlz bench` through a fixed local BPF fixture set and print compile metrics.
 //! - Dispatch `omlz doctor` through local toolchain probes and print health status.
 //! - Reject all unimplemented commands with a non-zero exit status.
@@ -258,9 +260,15 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (args.len >= 3 and std.mem.eql(u8, args[1], "build")) {
-        const build_args = parseBuildArgs(args) catch {
-            try writeStderr(init.io, "error: unsupported build option; run `omlz --help` for usage.\n");
-            std.process.exit(1);
+        const build_args = parseBuildArgs(args) catch |err| switch (err) {
+            error.DuplicateTargetFlag => {
+                try writeStderr(init.io, "error: duplicate `--target=<value>` flag; pass exactly one build target.\n");
+                std.process.exit(1);
+            },
+            else => {
+                try writeStderr(init.io, "error: unsupported build option; run `omlz --help` for usage.\n");
+                std.process.exit(1);
+            },
         };
         const frontend_options = try frontendOptions(init, build_args.diagnostics, null);
 
@@ -288,6 +296,7 @@ pub fn main(init: std.process.Init) !void {
                     .bpf => try buildBpf(init, resolved_target, parsed.module, build_args),
                     .native => try buildNative(init, resolved_target, parsed.module, build_args),
                     .wasm => try buildWasm(init, resolved_target, parsed.module, build_args),
+                    .near => try buildNear(init, resolved_target, parsed.module, build_args),
                 }
             },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
@@ -318,6 +327,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\  omlz build --target=wasm [--keep-zig] <file.ml> [-o <out.wasm>]
+        \\  omlz build --target=near [--keep-zig] <file.ml> [-o <out.wasm>]
         \\  omlz run <file.ml>
         \\  omlz test [--filter SUBSTR] [--format=cargo|json] [FILE...]
         \\  omlz fmt [--check|--write|--stdin] [--format=text|json] [FILE_OR_DIR...]
@@ -387,11 +397,13 @@ fn writeBuildHelp(io: Io) !void {
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
         \\  omlz build --target=wasm [--keep-zig] <file.ml> [-o <out.wasm>]
+        \\  omlz build --target=near [--keep-zig] <file.ml> [-o <out.wasm>]
         \\
         \\Flags:
         \\  --target=native  Build a native executable for local testing.
         \\  --target=bpf     Build a Solana BPF shared object.
         \\  --target=wasm    Build experimental generic freestanding WASM.
+        \\  --target=near    Build an experimental NEAR no-storage adapter .wasm.
         \\  --keep-zig       Keep the generated Zig source under out/program.zig.
         \\  --no-srcmap      Skip the default out/<name>.map BPF source-map sidecar.
         \\  -o <path>        Write the compiled artifact to the given path.
@@ -573,6 +585,7 @@ fn parseBuildArgs(args: []const []const u8) !BuildArgs {
         if (parseDiagnosticFlag(arg, &diagnostics) catch return error.UnsupportedBuildArgs) {
             continue;
         } else if (std.mem.startsWith(u8, arg, "--target=")) {
+            if (target != null) return error.DuplicateTargetFlag;
             target = arg["--target=".len..];
         } else if (std.mem.eql(u8, arg, "--keep-zig")) {
             keep_zig = true;
@@ -1212,6 +1225,31 @@ fn validateBuildArgsForTargetOrExit(
         try writeStderr(io, "` does not emit source maps. Use --target=bpf or omit `--no-srcmap`.\n");
         std.process.exit(1);
     }
+
+    if (std.mem.eql(u8, target.cli_name, "near")) {
+        if (build_args.output_path) |output_path| {
+            if (!std.mem.endsWith(u8, output_path, ".wasm")) {
+                try writeStderr(io, "error: target `near` is an experimental NEAR no-storage adapter and requires -o <path.wasm>; got `");
+                try writeStderr(io, output_path);
+                try writeStderr(io, "`.\n");
+                std.process.exit(1);
+            }
+        }
+    }
+}
+
+fn buildNear(
+    init: std.process.Init,
+    target: *const target_registry.TargetContract,
+    module: @import("frontend_bridge/ttree.zig").Module,
+    build_args: BuildArgs,
+) !void {
+    _ = target;
+    _ = module;
+    _ = build_args;
+
+    try writeStderr(init.io, "error: target `near` currently exposes only the experimental NEAR no-storage CLI contract; runtime materialization is not implemented yet.\n");
+    std.process.exit(1);
 }
 
 fn buildNative(
@@ -1930,6 +1968,25 @@ test "parse build arguments accepts exact wasm target spelling" {
     try std.testing.expect(parsed.srcmap);
 }
 
+test "parse build arguments accepts exact near target spelling" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "--target=near",
+        "--keep-zig",
+        "examples/m0_zero.ml",
+        "-o",
+        "/tmp/m0_zero_near.wasm",
+    };
+
+    const parsed = try parseBuildArgs(&args);
+    try std.testing.expectEqualStrings("near", parsed.target);
+    try std.testing.expect(parsed.keep_zig);
+    try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
+    try std.testing.expectEqualStrings("/tmp/m0_zero_near.wasm", parsed.output_path.?);
+    try std.testing.expect(parsed.srcmap);
+}
+
 test "parse build arguments preserves existing bpf forms" {
     const args = [_][]const u8{
         "omlz",
@@ -1947,6 +2004,45 @@ test "parse build arguments preserves existing bpf forms" {
     try std.testing.expectEqualStrings("examples/hackathon_greet.ml", parsed.input_file);
     try std.testing.expectEqualStrings("/tmp/hackathon_greet.so", parsed.output_path.?);
     try std.testing.expect(!parsed.srcmap);
+}
+
+test "parse build arguments preserves target flag ordering for existing and near targets" {
+    const cases = [_]struct {
+        argv: []const []const u8,
+        target: []const u8,
+        output_path: []const u8,
+    }{
+        .{
+            .argv = &.{
+                "omlz",
+                "build",
+                "examples/hackathon_greet.ml",
+                "--target=bpf",
+                "-o",
+                "/tmp/hackathon_greet.so",
+            },
+            .target = "bpf",
+            .output_path = "/tmp/hackathon_greet.so",
+        },
+        .{
+            .argv = &.{
+                "omlz",
+                "build",
+                "examples/m0_zero.ml",
+                "--target=near",
+                "-o",
+                "/tmp/m0_zero_near.wasm",
+            },
+            .target = "near",
+            .output_path = "/tmp/m0_zero_near.wasm",
+        },
+    };
+
+    for (cases) |case| {
+        const parsed = try parseBuildArgs(case.argv);
+        try std.testing.expectEqualStrings(case.target, parsed.target);
+        try std.testing.expectEqualStrings(case.output_path, parsed.output_path.?);
+    }
 }
 
 test "parse build arguments rejects omitted target" {
@@ -1973,6 +2069,20 @@ test "parse build arguments rejects split target flag spelling" {
     };
 
     try std.testing.expectError(error.UnsupportedBuildArgs, parseBuildArgs(&args));
+}
+
+test "parse build arguments rejects duplicate target flags" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "--target=wasm",
+        "--target=near",
+        "examples/m0_zero.ml",
+        "-o",
+        "/tmp/duplicate_target.wasm",
+    };
+
+    try std.testing.expectError(error.DuplicateTargetFlag, parseBuildArgs(&args));
 }
 
 test {

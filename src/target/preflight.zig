@@ -133,6 +133,7 @@ pub fn toolRequirementsForTarget(target: *const target_registry.TargetContract) 
     return switch (target.build_dispatch) {
         .native => native_requirements[0..],
         .wasm => wasm_requirements[0..],
+        .near => wasm_requirements[0..],
         .bpf => bpf_requirements[0..],
     };
 }
@@ -184,6 +185,7 @@ fn toolSpecsForTarget(target: *const target_registry.TargetContract) []const Too
     return switch (target.build_dispatch) {
         .native => native_tool_specs[0..],
         .wasm => native_tool_specs[0..],
+        .near => native_tool_specs[0..],
         .bpf => bpf_tool_specs[0..],
     };
 }
@@ -416,6 +418,14 @@ fn findProbe(probes: []const ToolProbe, label: []const u8) ?ToolProbe {
 test "preflight: native tool contract stays isolated from Solana-only tools" {
     const native = target_registry.lookupByCliName("native") orelse return error.TestUnexpectedResult;
     const requirements = toolRequirementsForTarget(native);
+
+    try std.testing.expectEqual(@as(usize, 1), requirements.len);
+    try expectRequirement(requirements[0], "zig", .required);
+}
+
+test "preflight: near tool contract stays isolated from Solana-only tools" {
+    const near = target_registry.lookupByCliName("near") orelse return error.TestUnexpectedResult;
+    const requirements = toolRequirementsForTarget(near);
 
     try std.testing.expectEqual(@as(usize, 1), requirements.len);
     try expectRequirement(requirements[0], "zig", .required);

@@ -4,6 +4,7 @@ pub const Family = enum {
     native,
     solana_sbf,
     generic_wasm,
+    near_no_storage,
 };
 
 pub const SupportStatus = enum {
@@ -23,6 +24,7 @@ pub const BuildDispatch = enum {
     native,
     bpf,
     wasm,
+    near,
 };
 
 pub const TargetContract = struct {
@@ -175,6 +177,24 @@ const registry = [_]TargetContract{
         .requires_output_path = false,
         .supports_no_srcmap = false,
     },
+    .{
+        .cli_name = "near",
+        .family = .near_no_storage,
+        .support_status = .experimental,
+        .backend_facade = "zig_codegen",
+        .backend_output_language = "zig",
+        .artifact_type = .wasm_module,
+        .runtime_adapter = "experimental near no-storage adapter",
+        .host_adapter = "NEAR env input/register/value_return/log_utf8/panic_utf8",
+        .entrypoint_contract = "NEAR method export via env.value_return",
+        .calling_convention = "NEAR method ABI",
+        .memory_plan = "freestanding linear memory + arena",
+        .panic_error_strategy = "panic_utf8 aborts contract",
+        .build_dispatch = .near,
+        .keep_zig_supported = true,
+        .requires_output_path = false,
+        .supports_no_srcmap = false,
+    },
 };
 
 fn syntheticUnsupportedTarget(name: []const u8, support_status: SupportStatus) TargetContract {
@@ -204,7 +224,7 @@ fn syntheticUnsupportedFixture() [4]TargetContract {
         registry[0],
         syntheticUnsupportedTarget("wasm", .experimental),
         registry[1],
-        syntheticUnsupportedTarget("near", .reserved),
+        syntheticUnsupportedTarget("evm", .reserved),
     };
 }
 
@@ -277,6 +297,26 @@ test "registry: lookup exposes experimental generic wasm metadata" {
     try std.testing.expect(!target.supports_no_srcmap);
 }
 
+test "registry: lookup exposes experimental near no-storage metadata" {
+    const target = lookupByCliName("near") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("near", target.cli_name);
+    try std.testing.expectEqualStrings("near_no_storage", @tagName(target.family));
+    try std.testing.expectEqual(SupportStatus.experimental, target.support_status);
+    try std.testing.expectEqualStrings("zig_codegen", target.backend_facade);
+    try std.testing.expectEqualStrings("zig", target.backend_output_language);
+    try std.testing.expectEqualStrings("wasm_module", @tagName(target.artifact_type));
+    try std.testing.expectEqualStrings("experimental near no-storage adapter", target.runtime_adapter);
+    try std.testing.expectEqualStrings("NEAR env input/register/value_return/log_utf8/panic_utf8", target.host_adapter);
+    try std.testing.expectEqualStrings("NEAR method export via env.value_return", target.entrypoint_contract);
+    try std.testing.expectEqualStrings("NEAR method ABI", target.calling_convention);
+    try std.testing.expectEqualStrings("freestanding linear memory + arena", target.memory_plan);
+    try std.testing.expectEqualStrings("panic_utf8 aborts contract", target.panic_error_strategy);
+    try std.testing.expectEqualStrings("near", @tagName(target.build_dispatch));
+    try std.testing.expect(target.keep_zig_supported);
+    try std.testing.expect(!target.requires_output_path);
+    try std.testing.expect(!target.supports_no_srcmap);
+}
+
 test "registry: support status semantics only expose current supported targets" {
     const supported = try supportedTargets(std.testing.allocator);
     defer std.testing.allocator.free(supported);
@@ -286,27 +326,33 @@ test "registry: support status semantics only expose current supported targets" 
     }
 }
 
-test "registry: exact lowercase wasm is dispatchable while future targets stay rejected" {
+test "registry: exact lowercase wasm and near are dispatchable while future targets stay rejected" {
     const wasm = try resolveBuildTarget("wasm");
     try std.testing.expectEqualStrings("wasm", wasm.cli_name);
     try std.testing.expectEqual(SupportStatus.experimental, wasm.support_status);
     try std.testing.expectEqualStrings("wasm", @tagName(wasm.build_dispatch));
 
-    try std.testing.expectEqual(@as(?*const TargetContract, null), lookupByCliName("near"));
+    const near = try resolveBuildTarget("near");
+    try std.testing.expectEqualStrings("near", near.cli_name);
+    try std.testing.expectEqual(SupportStatus.experimental, near.support_status);
+    try std.testing.expectEqualStrings("near", @tagName(near.build_dispatch));
+
     try std.testing.expectEqual(@as(?*const TargetContract, null), lookupByCliName("evm"));
-    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("near"));
     try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("evm"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("cosmwasm"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("substrate"));
     try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("wasm32"));
     try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("generic-wasm"));
     try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("webassembly"));
     try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("WASM"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("NEAR"));
 }
 
 test "registry: accepted target diagnostic is registry-derived" {
     const rendered = try acceptedTargetNamesText(std.testing.allocator);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("native, bpf or wasm", rendered);
+    try std.testing.expectEqualStrings("native, bpf, wasm or near", rendered);
 }
 
 test "registry: dispatch kind resolves from looked-up target" {
@@ -318,6 +364,9 @@ test "registry: dispatch kind resolves from looked-up target" {
 
     const wasm = try resolveBuildTarget("wasm");
     try std.testing.expectEqualStrings("wasm", @tagName(wasm.build_dispatch));
+
+    const near = try resolveBuildTarget("near");
+    try std.testing.expectEqualStrings("near", @tagName(near.build_dispatch));
 }
 
 test "registry: synthetic unsupported entries stay out of supported target names" {
@@ -352,5 +401,5 @@ test "registry: synthetic experimental entries are dispatchable while reserved o
     const bpf = try resolveBuildTargetInRegistry(fixture[0..], "bpf");
     try std.testing.expectEqual(BuildDispatch.bpf, bpf.build_dispatch);
 
-    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTargetInRegistry(fixture[0..], "near"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTargetInRegistry(fixture[0..], "evm"));
 }

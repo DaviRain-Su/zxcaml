@@ -148,7 +148,7 @@ test "cli: default error format matches explicit human" {
     try std.testing.expectEqualStrings(default_result.stderr, explicit_result.stderr);
 }
 
-test "cli: build help advertises wasm as experimental generic freestanding only" {
+test "cli: build help advertises wasm and near as experimental targets with accurate scope" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -160,13 +160,35 @@ test "cli: build help advertises wasm as experimental generic freestanding only"
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
     try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "--target=wasm"));
     try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "experimental generic freestanding WASM"));
-    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "NEAR"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "--target=near"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "experimental NEAR no-storage adapter"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "storage-enabled"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "promise-enabled"));
     try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "CosmWasm"));
     try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "Substrate"));
     try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "EVM"));
 }
 
-test "cli: invalid and alias build targets fail before artifact side effects" {
+test "cli: top-level help lists near build form without broad NEAR claims" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const argv = [_][]const u8{ cli_options.omlz_bin, "--help" };
+    const result = try runCommand(allocator, io, &argv);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "omlz build --target=native"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "omlz build --target=bpf"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "omlz build --target=wasm"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "omlz build --target=near"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "NEAR SDK"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "persistent storage"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "cross-contract"));
+}
+
+test "cli: invalid future and wasm alias build targets fail before artifact side effects" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
@@ -175,10 +197,12 @@ test "cli: invalid and alias build targets fail before artifact side effects" {
         target: []const u8,
         output_path: []const u8,
     }{
-        .{ .target = "near", .output_path = "out/invalid_target_near.wasm" },
         .{ .target = "evm", .output_path = "out/invalid_target_evm.wasm" },
         .{ .target = "cosmwasm", .output_path = "out/invalid_target_cosmwasm.wasm" },
         .{ .target = "substrate", .output_path = "out/invalid_target_substrate.wasm" },
+        .{ .target = "stylus", .output_path = "out/invalid_target_stylus.wasm" },
+        .{ .target = "ic", .output_path = "out/invalid_target_ic.wasm" },
+        .{ .target = "verified-extraction", .output_path = "out/invalid_target_verified_extraction.wasm" },
         .{ .target = "wasm32", .output_path = "out/invalid_target_wasm32.wasm" },
         .{ .target = "generic-wasm", .output_path = "out/invalid_target_generic_wasm.wasm" },
         .{ .target = "webassembly", .output_path = "out/invalid_target_webassembly.wasm" },
@@ -205,7 +229,7 @@ test "cli: invalid and alias build targets fail before artifact side effects" {
         defer allocator.free(result.stderr);
 
         try std.testing.expect(result.exit_code != 0);
-        try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "unsupported build target; expected native, bpf or wasm."));
+        try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "unsupported build target; expected native, bpf, wasm or near."));
         try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "failed to run zxc-frontend subprocess"));
         try std.testing.expect(!fileExists(io, case.output_path));
     }
