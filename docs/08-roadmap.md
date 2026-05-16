@@ -103,8 +103,9 @@ the fmt corpus expansion.
 - **Functional multichain roadmap:** [`docs/19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md)
   records the exploratory thesis that ZxCaml can unify smart-contract business
   logic through a contract-safe OCaml subset while keeping chain runtimes behind
-  explicit adapters. It is not scheduled yet; implementation still requires a
-  target-contract ADR and acceptance gates.
+  explicit adapters. MTF-0 + MTF-1 are now landed as the target contract plus an
+  experimental generic WASM smoke target; MTF-2 through MTF-6 remain future,
+  explicitly gated work.
 - **Codegen/runtime new directions:** only schedule concrete work with a named
   runtime, BPF, WASM-chain, EVM/Yul, or codegen acceptance target; speculative
   multi-target or allocator changes still require an ADR-sized proposal.
@@ -124,7 +125,8 @@ compiler scope and outside the post-P8 hackathon/demo work.
 
 ### FM — Functional multichain contract core (optional, exploratory)
 
-**Status:** Not scheduled. Captured in
+**Status:** Partially landed for MTF-0 + MTF-1. MTF-2 through MTF-6 are still
+not scheduled and remain gated. Captured in
 [`19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md).
 
 This direction reframes future target work around a portable contract core:
@@ -138,8 +140,9 @@ Candidate implementation sequence:
 
 1. **MTF-0 target ADR** — pin the portable subset, target terminology, and `int`
    / word-size policy.
-2. **MTF-1 generic WASM** — prove `Core IR → Zig source → wasm32` with a pure
-   acceptance fixture.
+2. **MTF-1 generic WASM** — landed as `omlz build --target=wasm`, an
+   experimental import-free pure-logic smoke target validated through Node
+   WebAssembly acceptance.
 3. **MTF-2 NEAR adapter** — add exported methods and minimal NEAR host imports
    before storage/promises.
 4. **MTF-3 portable contract API** — define chain-neutral capabilities and

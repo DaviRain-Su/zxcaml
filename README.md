@@ -133,6 +133,11 @@ scripts, comparison artifacts, and recording checklist.
 analysis → interpret, build native Zig, build Solana BPF `.so` artifacts,
 or emit Anchor-compatible IDL.
 
+MTF-1 also lands `omlz build --target=wasm` as an **experimental generic
+freestanding WASM smoke target** for import-free pure logic. It does **not**
+claim NEAR, CosmWasm, Substrate, EVM/Yul, or verified-extraction adapter
+support; those remain future roadmap gates.
+
 ### Recent baselines
 
 - `post-fmt3-baseline` sealed the expanded `omlz fmt` corpus at 20 fmt
@@ -149,13 +154,17 @@ or emit Anchor-compatible IDL.
 
 ### Current features
 
-- **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz idl <file>`, `omlz unmap --map <file.map> --pc <addr>`, and `omlz unmap --so <file.so> --pc <addr>`
+- **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz build --target=wasm [--keep-zig] <file> [-o <out.wasm>]`, `omlz idl <file>`, `omlz unmap --map <file.map> --pc <addr>`, and `omlz unmap --so <file.so> --pc <addr>`
 - **Formatter:** `omlz fmt` formats `.ml` sources with `--check`, `--write`, `--stdin`, JSON summaries, LSP `textDocument/formatting` / `rangeFormatting`, a 20-golden fmt corpus, and bytewise idempotency; see [`docs/16-omlz-fmt.md`](./docs/16-omlz-fmt.md)
 - **Wire format:** version 1.5 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4/P5 moved the wire through `1.0` for instruction data and external declarations; P8 moved to `1.1` for mutual-recursion groups; P9/DX2 moved to `1.2` for source-location plumbing; R8/R9 moved through typed-parameter/array surfaces; R10 moved to `1.5` for `ref-make` / `ref-get` / `ref-set` while older readers remain compatibility-only)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), `while` / counted `for` loops, string operations (`^`, length, get, sub), char operations (code, chr), mutable `int` arrays (`Array.make`, `Array.get`, `Array.set`, `Array.length`, `a.(i)`, `a.(i) <- v`), `ref`/`!`/`:=` for `int` and `bool`, and pattern matching over all of those forms
 - **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `map_error`, `map_err`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Bytes` (`length`, `get`, `sub`, `create`, `set`, `of_string`, `blit`, `fill`, `iter`, `iteri`, `fold_left`, `equal`, `compare`), `Char` (`code`, `chr`), `Account` guard/read helpers, `Fixed` / `Amount` deterministic six-decimal and bps helpers, `Format` (`int_to_string`, `hex_of_int`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; native entry arena is 32 KiB, and BPF entry arena is 3 KiB to keep the loader entrypoint below SBF's 4 KiB stack-frame limit
-- **Backends:** tree-walk interpreter, Zig native codegen, and one-step `SOLANA_ZIG` direct `solana-zig build-lib` BPF path
+- **Backends:** tree-walk interpreter, Zig native codegen, experimental generic freestanding WASM module output, and one-step `SOLANA_ZIG` direct `solana-zig build-lib` BPF path
+- **Experimental generic WASM:** `omlz build --target=wasm` emits `.wasm`
+  artifacts for import-free pure deterministic logic only; canonical acceptance
+  uses Node WebAssembly with empty imports, and future NEAR/CosmWasm/Substrate/EVM
+  targets remain explicitly gated in the multichain roadmap
 - **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
 - **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
 - **Solana sysvar readers:** `Sysvar.clock_from_account`, `rent_from_account`, `instructions_header_from_account`, `instruction_at`, `stake_history_latest_from_account`, and `epoch_schedule_from_account` decode Clock, Rent, Instructions, StakeHistory, and EpochSchedule account data; see [`docs/15-sysvars.md`](./docs/15-sysvars.md)

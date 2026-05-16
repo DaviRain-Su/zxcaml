@@ -112,8 +112,8 @@ and tests.
 
 Candidate adapter order:
 
-1. **Generic WASM MVP** — no chain host; prove `omlz build --target=wasm`
-   can emit deterministic `.wasm` for pure logic.
+1. **Generic WASM MVP** — now landed as `omlz build --target=wasm`, an
+   experimental import-free `.wasm` smoke target for pure logic only.
 2. **NEAR adapter** — exported methods, `input`, `value_return`, storage,
    logging, panic, JSON/Borsh profile, near-sandbox tests.
 3. **CosmWasm adapter** — `instantiate`/`execute`/`query`, JSON schema,
@@ -195,13 +195,15 @@ ZxCaml automatically verifies every contract.
 - Decide whether portable `int` remains ZxCaml `i64` everywhere or whether EVM
   introduces target-specific `u256`/`bytes32` types.
 
-### MTF-1 — Generic WASM smoke target
+### MTF-1 — Generic WASM smoke target ✅ landed (experimental only)
 
-- Add `omlz build --target=wasm` behind an experimental flag.
-- Reuse Zig source codegen where possible.
-- Add `runtime/wasm` entry/panic/memory shims.
-- Add one pure-function `.wasm` acceptance test under a deterministic WASM
-  runner.
+- `omlz build --target=wasm` now emits an experimental generic freestanding
+  `.wasm` artifact for import-free pure logic.
+- The implementation reuses Zig source codegen plus `runtime/wasm` shims.
+- Canonical acceptance is a pure-function `.wasm` checked under Node
+  WebAssembly with empty imports.
+- Scope gate: this is **not** a NEAR, CosmWasm, Substrate, Solana, or EVM
+  adapter claim.
 
 ### MTF-2 — NEAR adapter MVP
 
@@ -209,6 +211,8 @@ ZxCaml automatically verifies every contract.
 - Implement minimal NEAR host imports: input, return, log, panic.
 - Add one method-style entrypoint and near-sandbox acceptance.
 - Keep storage and promises out until the no-storage MVP is stable.
+- Gate: do not treat MTF-2 as landed until real NEAR CLI/Sandbox/near-workspaces
+  tooling is installed and used for acceptance.
 
 ### MTF-3 — Portable contract core API
 
@@ -216,6 +220,8 @@ ZxCaml automatically verifies every contract.
   and trap/revert as abstract operations.
 - Implement those capabilities for Solana/native/WASM adapters where meaningful.
 - Add diagnostics when a target uses unsupported capabilities.
+- Gate: keep this behind validated adapter contracts; MTF-1 does not introduce a
+  broad portable host API.
 
 ### MTF-4 — EVM Yul MVP
 
@@ -223,6 +229,7 @@ ZxCaml automatically verifies every contract.
 - Emit Yul for pure functions, conditionals, arithmetic, and simple ABI dispatch.
 - Validate with `solc --strict-assembly` plus revm/anvil/Foundry behavior tests.
 - Do not route EVM user code through generated Zig source.
+- Gate: broad EVM work remains blocked on the numeric-model ADR first.
 
 ### MTF-5 — Verified extraction profile
 
@@ -230,6 +237,8 @@ ZxCaml automatically verifies every contract.
 - Try one F* or Coq proof-to-OCaml-to-ZxCaml demo for a small invariant, such as
   non-negative balances or fee bounds.
 - Add a checker/golden corpus for generated extraction patterns.
+- Gate: this remains future work until real proof/extraction tooling (Coq, F*,
+  Why3, or equivalent) is selected and installed.
 
 ### MTF-6 — Additional chain adapters
 
@@ -237,6 +246,8 @@ ZxCaml automatically verifies every contract.
   concrete user story exists.
 - Each adapter must include metadata/schema strategy, host imports, storage
   semantics, and acceptance tests.
+- Gate: additional adapters require named use cases plus canonical toolchains;
+  generic WASM does not automatically graduate any WASM-chain family.
 
 ## 7. Acceptance gates
 
