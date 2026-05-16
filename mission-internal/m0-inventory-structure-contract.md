@@ -41,6 +41,7 @@ Each tracked top-level path from `git ls-files` is classified below. Any untrack
 | `examples` | 108 | source corpus | Example surface | CLI/test runner/docs | User examples plus `examples/tests` fixtures |
 | `init.sh` | 1 | automation | Environment bootstrap | CI / local setup | Stable bootstrap contract |
 | `inline_tests.zig` | 1 | test root | Compiler validation | Zig test graph | Behavior-preserving characterization only |
+| `mission-internal` | 3 | mission-history / planning artifacts | Mission history | Mission audit / docs sync follow-up | Tracked planning history stays out of public-doc cleanup unless a later docs milestone intentionally promotes it |
 | `out` | 1 | tracked generated seed | Artifact routing | CLI/build/docs demo | Only `out/hackathon_greet.json` is tracked |
 | `package.json` | 1 | automation | Site workflow surface | Cloudflare Pages deploy | Public npm script names must remain stable |
 | `runtime` | 35 | source + runtime test support | Runtime surface | CLI/build/Surfpool | Split between `runtime/lsp` and `runtime/zig` |
