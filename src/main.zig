@@ -29,6 +29,7 @@ const driver_idl = @import("driver/idl.zig");
 const driver_near = @import("driver/near.zig");
 const driver_srcmap = @import("driver/srcmap.zig");
 const driver_wasm = @import("driver/wasm.zig");
+const build_lock = @import("build_lock.zig");
 const target_capability = @import("target/capability.zig");
 const target_manifest = @import("target/manifest.zig");
 const target_registry = @import("target/registry.zig");
@@ -1300,32 +1301,39 @@ fn buildNear(
     };
     defer init.gpa.free(source);
 
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(init.io, "out");
-    try cwd.writeFile(init.io, .{
-        .sub_path = "out/program.zig",
-        .data = source,
-        .flags = .{ .truncate = true },
-    });
-
     const program_name = try sourceMapProgramName(init.gpa, build_args.input_file);
     defer init.gpa.free(program_name);
 
     const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, program_name, ".wasm");
     defer if (build_args.output_path == null) init.gpa.free(output_path);
 
-    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .near);
+    const cwd = std.Io.Dir.cwd();
+    const near_build_err: ?anyerror = blk: {
+        var shared_build_lock = build_lock.acquire(init.gpa, init.io, init.minimal.environ, .{}) catch |err| break :blk err;
+        defer shared_build_lock.deinit(init.gpa, init.io);
 
-    driver_near.buildNear(init.gpa, init.io, .{
-        .near_entry_path = "out/near_entry.zig",
-        .output_path = output_path,
-        .quiet = build_args.quiet,
-    }) catch |err| {
+        try cwd.createDirPath(init.io, "out");
+        try cwd.writeFile(init.io, .{
+            .sub_path = "out/program.zig",
+            .data = source,
+            .flags = .{ .truncate = true },
+        });
+
+        try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .near);
+
+        driver_near.buildNear(init.gpa, init.io, .{
+            .near_entry_path = "out/near_entry.zig",
+            .output_path = output_path,
+            .quiet = build_args.quiet,
+        }) catch |err| break :blk err;
+        break :blk null;
+    };
+    if (near_build_err) |err| {
         try writeStderr(init.io, "error: NEAR build failed: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
-    };
+    }
 }
 
 fn buildNative(
@@ -1390,25 +1398,32 @@ fn buildNative(
     defer init.gpa.free(source);
 
     const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(init.io, "out");
-    try cwd.writeFile(init.io, .{
-        .sub_path = "out/program.zig",
-        .data = source,
-        .flags = .{ .truncate = true },
-    });
+    const native_build_err: ?anyerror = blk: {
+        var shared_build_lock = build_lock.acquire(init.gpa, init.io, init.minimal.environ, .{}) catch |err| break :blk err;
+        defer shared_build_lock.deinit(init.gpa, init.io);
 
-    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .native);
+        try cwd.createDirPath(init.io, "out");
+        try cwd.writeFile(init.io, .{
+            .sub_path = "out/program.zig",
+            .data = source,
+            .flags = .{ .truncate = true },
+        });
 
-    driver_build.buildNative(init.gpa, init.io, .{
-        .generated_zig_path = "out/program.zig",
-        .native_entry_path = "out/native_entry.zig",
-        .output_path = build_args.output_path.?,
-    }) catch |err| {
+        try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .native);
+
+        driver_build.buildNative(init.gpa, init.io, .{
+            .generated_zig_path = "out/program.zig",
+            .native_entry_path = "out/native_entry.zig",
+            .output_path = build_args.output_path.?,
+        }) catch |err| break :blk err;
+        break :blk null;
+    };
+    if (native_build_err) |err| {
         try writeStderr(init.io, "error: native build failed: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
-    };
+    }
 }
 
 fn buildBpf(
@@ -1473,20 +1488,11 @@ fn buildBpf(
     defer init.gpa.free(source);
 
     const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(init.io, "out");
-    try cwd.writeFile(init.io, .{
-        .sub_path = "out/program.zig",
-        .data = source,
-        .flags = .{ .truncate = true },
-    });
-
     const source_map_program = try sourceMapProgramName(init.gpa, build_args.input_file);
     defer init.gpa.free(source_map_program);
 
     const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, source_map_program, ".so");
     defer if (build_args.output_path == null) init.gpa.free(output_path);
-
-    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .bpf);
 
     var source_map_input: ?driver_bpf.SourceMapInput = null;
     var source_map_hook: ?driver_bpf.SourceMapHook = null;
@@ -1513,13 +1519,29 @@ fn buildBpf(
         };
     }
 
-    driver_bpf.buildBpf(init.gpa, init.io, .{
-        .output_path = output_path,
-        .environ = init.minimal.environ,
-        .source_map = source_map_input,
-        .source_map_hook = source_map_hook,
-        .quiet = build_args.quiet,
-    }) catch |err| {
+    const bpf_build_err: ?anyerror = blk: {
+        var shared_build_lock = build_lock.acquire(init.gpa, init.io, init.minimal.environ, .{}) catch |err| break :blk err;
+        defer shared_build_lock.deinit(init.gpa, init.io);
+
+        try cwd.createDirPath(init.io, "out");
+        try cwd.writeFile(init.io, .{
+            .sub_path = "out/program.zig",
+            .data = source,
+            .flags = .{ .truncate = true },
+        });
+
+        try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .bpf);
+
+        driver_bpf.buildBpf(init.gpa, init.io, .{
+            .output_path = output_path,
+            .environ = init.minimal.environ,
+            .source_map = source_map_input,
+            .source_map_hook = source_map_hook,
+            .quiet = build_args.quiet,
+        }) catch |err| break :blk err;
+        break :blk null;
+    };
+    if (bpf_build_err) |err| {
         switch (err) {
             error.InvalidSolanaZigCommand => {
                 try writeStderr(init.io, "error: SOLANA_ZIG=0 is not supported; use unset/empty/1 for default or a direct command/path\n");
@@ -1531,7 +1553,7 @@ fn buildBpf(
             },
         }
         std.process.exit(1);
-    };
+    }
 }
 
 fn buildWasm(
@@ -1595,32 +1617,39 @@ fn buildWasm(
     };
     defer init.gpa.free(source);
 
-    const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(init.io, "out");
-    try cwd.writeFile(init.io, .{
-        .sub_path = "out/program.zig",
-        .data = source,
-        .flags = .{ .truncate = true },
-    });
-
     const program_name = try sourceMapProgramName(init.gpa, build_args.input_file);
     defer init.gpa.free(program_name);
 
     const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, program_name, ".wasm");
     defer if (build_args.output_path == null) init.gpa.free(output_path);
 
-    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .wasm);
+    const cwd = std.Io.Dir.cwd();
+    const wasm_build_err: ?anyerror = blk: {
+        var shared_build_lock = build_lock.acquire(init.gpa, init.io, init.minimal.environ, .{}) catch |err| break :blk err;
+        defer shared_build_lock.deinit(init.gpa, init.io);
 
-    driver_wasm.buildWasm(init.gpa, init.io, .{
-        .wasm_entry_path = "out/wasm_entry.zig",
-        .output_path = output_path,
-        .quiet = build_args.quiet,
-    }) catch |err| {
+        try cwd.createDirPath(init.io, "out");
+        try cwd.writeFile(init.io, .{
+            .sub_path = "out/program.zig",
+            .data = source,
+            .flags = .{ .truncate = true },
+        });
+
+        try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .wasm);
+
+        driver_wasm.buildWasm(init.gpa, init.io, .{
+            .wasm_entry_path = "out/wasm_entry.zig",
+            .output_path = output_path,
+            .quiet = build_args.quiet,
+        }) catch |err| break :blk err;
+        break :blk null;
+    };
+    if (wasm_build_err) |err| {
         try writeStderr(init.io, "error: WASM build failed: ");
         try writeStderr(init.io, @errorName(err));
         try writeStderr(init.io, "\n");
         std.process.exit(1);
-    };
+    }
 }
 
 fn sourceMapProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]const u8 {

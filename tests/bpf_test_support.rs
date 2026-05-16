@@ -126,6 +126,7 @@ fn compile_program_from_path_locked(root: &Path, source_path: &Path, output_path
             .to_str()
             .expect("output path must be UTF-8 to pass to omlz command"),
     ]);
+    command.env("ZXCAML_BUILD_LOCK_HELD", "1");
     apply_platform_env(&mut command);
 
     let result = command.output().unwrap_or_else(|error| {

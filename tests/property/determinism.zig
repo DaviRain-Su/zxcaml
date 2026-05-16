@@ -39,7 +39,7 @@ fn runInterpreter(allocator: Allocator, io: Io, ml_file: []const u8) !struct { s
 fn runNative(allocator: Allocator, io: Io, ml_file: []const u8) !u8 {
     const base = std.fs.path.basename(ml_file);
     const stem = if (std.mem.endsWith(u8, base, ".ml")) base[0 .. base.len - 3] else base;
-    const output = try std.fmt.allocPrint(allocator, "/tmp/det_{s}", .{stem});
+    const output = try std.fmt.allocPrint(allocator, "/tmp/det_{d}_{s}", .{ std.posix.system.getpid(), stem });
     defer allocator.free(output);
 
     // Build native binary
