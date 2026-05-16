@@ -65,6 +65,21 @@ assert_contains() {
   fi
 }
 
+assert_contains_any() {
+  local path="$1"
+  shift
+
+  local needle
+  for needle in "$@"; do
+    if grep -Fq -- "$needle" "$path"; then
+      return 0
+    fi
+  done
+
+  echo "Expected to find one of [$*] in $path" >&2
+  exit 1
+}
+
 copy_artifact_set() {
   local prefix="$1"
   cp out/program.zig "$REPORT_DIR/${prefix}.program.zig"
@@ -190,10 +205,16 @@ assert_contains "-dynamic" "$WRAPPER_LOG"
 assert_contains "-fentry=entrypoint" "$WRAPPER_LOG"
 assert_contains "-Mroot=out/bpf_entry.zig" "$WRAPPER_LOG"
 assert_contains "-Mvendored_sdk=out/runtime/sdk/root.zig" "$WRAPPER_LOG"
-assert_contains "-Msolana_program_sdk=vendor/solana-program-sdk-zig/src/root.zig" "$WRAPPER_LOG"
+assert_contains_any "$WRAPPER_LOG" \
+  "-Msolana_program_sdk=runtime/zig/sdk/solana_program_sdk_m4.zig" \
+  "-Msolana_program_sdk=vendor/solana-program-sdk-zig/src/root.zig"
 assert_contains "-Msolana_codec=vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig" "$WRAPPER_LOG"
-assert_contains "-Mspl_token=vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig" "$WRAPPER_LOG"
-assert_contains "-Mspl_ata=vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig" "$WRAPPER_LOG"
+assert_contains_any "$WRAPPER_LOG" \
+  "-Mspl_token_m4=vendor/solana-program-sdk-zig/packages/spl-token/src/zxcaml_m4_root.zig" \
+  "-Mspl_token=vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig"
+assert_contains_any "$WRAPPER_LOG" \
+  "-Mspl_ata_m4=vendor/solana-program-sdk-zig/packages/spl-ata/src/zxcaml_m4_root.zig" \
+  "-Mspl_ata=vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig"
 assert_contains "-femit-bin=$CUSTOM_SO" "$WRAPPER_LOG"
 
 set +e
