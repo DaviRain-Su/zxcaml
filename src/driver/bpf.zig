@@ -14,7 +14,7 @@ const core_dce = @import("../core/dce.zig");
 const core_inline = @import("../core/inline.zig");
 const core_ir = @import("../core/ir.zig");
 const ttree = @import("../frontend_bridge/ttree.zig");
-const target_manifest = @import("../target/manifest.zig");
+const runtime_bundle = @import("runtime_bundle.zig");
 const srcmap = @import("srcmap.zig");
 
 /// Options for the Solana BPF build path.
@@ -52,18 +52,12 @@ pub const SourceMapHook = struct {
 };
 
 const srcmap_section_name = ".zxcaml.srcmap";
-const vendored_sdk_runtime_root = "out/runtime/sdk/root.zig";
-const vendored_solana_sdk_m2_root = "vendor/solana-program-sdk-zig/src/zxcaml_m2_root.zig";
-const vendored_solana_program_sdk_root = "runtime/zig/sdk/solana_program_sdk_m4.zig";
-const vendored_solana_codec_root = "vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig";
-const vendored_spl_token_m4_root = "vendor/solana-program-sdk-zig/packages/spl-token/src/zxcaml_m4_root.zig";
-const vendored_spl_ata_m4_root = "vendor/solana-program-sdk-zig/packages/spl-ata/src/zxcaml_m4_root.zig";
 
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
 ///
 /// Uses the one-step direct `solana-zig build-lib` pipeline.
 pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
-    try target_manifest.materializeRuntimeForDispatch(allocator, io, .bpf);
+    try runtime_bundle.materializeRuntime(allocator, io, .bpf);
 
     try buildBpfDirect(allocator, io, options);
 
@@ -118,47 +112,6 @@ fn activeDirectSolanaZig(allocator: Allocator, environ: std.process.Environ) ![]
     return try allocator.dupe(u8, resolved);
 }
 
-fn appendVendoredSdkModuleArgs(
-    allocator: Allocator,
-    args: *std.ArrayList([]const u8),
-    root_module_path: []const u8,
-) !void {
-    const root_module_arg = try std.fmt.allocPrint(allocator, "-Mroot={s}", .{root_module_path});
-    try args.appendSlice(allocator, &.{
-        "--dep",
-        "vendored_sdk",
-        "--dep",
-        "solana_program_sdk",
-        "--dep",
-        "solana_codec",
-        "--dep",
-        "spl_token_m4",
-        "--dep",
-        "spl_ata_m4",
-    });
-    try args.append(allocator, root_module_arg);
-    try args.appendSlice(allocator, &.{
-        "--dep",
-        "solana_sdk_m2",
-        "-Mvendored_sdk=" ++ vendored_sdk_runtime_root,
-        "-Msolana_sdk_m2=" ++ vendored_solana_sdk_m2_root,
-        "--dep",
-        "solana_sdk_m2",
-        "-Msolana_program_sdk=" ++ vendored_solana_program_sdk_root,
-        "--dep",
-        "solana_program_sdk",
-        "-Msolana_codec=" ++ vendored_solana_codec_root,
-        "--dep",
-        "solana_program_sdk",
-        "--dep",
-        "solana_codec",
-        "-Mspl_token_m4=" ++ vendored_spl_token_m4_root,
-        "--dep",
-        "solana_program_sdk",
-        "-Mspl_ata_m4=" ++ vendored_spl_ata_m4_root,
-    });
-}
-
 fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, options: BpfBuildOptions) !void {
     // Materialize the BPF linker script
     try materializeLinkerScript(allocator, io);
@@ -190,7 +143,7 @@ fn buildBpfDirectWith(allocator: Allocator, io: Io, solana_zig: []const u8, opti
         "-z",
         "notext",
     });
-    try appendVendoredSdkModuleArgs(allocator, &zig_argv, options.bpf_entry_path);
+    try runtime_bundle.appendVendoredSdkModuleArgs(allocator, &zig_argv, options.bpf_entry_path);
     try zig_argv.append(allocator, emit_arg);
 
     try runAndForward(allocator, io, zig_argv.items, null, error.BpfDirectBuildFailed, !options.quiet);
