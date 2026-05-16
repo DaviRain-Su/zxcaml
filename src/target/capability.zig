@@ -45,6 +45,14 @@ const current_supported_capabilities = [_]Capability{
 };
 
 pub fn capabilityPolicyForTarget(target: *const target_registry.TargetContract) CapabilityPolicy {
+    if (target.build_dispatch == .wasm) {
+        return .{
+            .target = target,
+            .supported_capabilities = &.{},
+            .unsupported_guidance = "MTF-1 generic wasm is import-free pure logic only; remove the Solana-only API or use --target=bpf.",
+        };
+    }
+
     if (target.support_status != .supported) {
         return .{
             .target = target,
@@ -140,18 +148,7 @@ fn policySupportsCapability(policy: CapabilityPolicy, capability: Capability) bo
 }
 
 fn isSolanaHostExternal(external: core_ir.ExternalDecl) bool {
-    const name_prefixes = [_][]const u8{
-        "Syscall.",
-        "Sysvar.",
-        "Cpi.",
-        "Crypto.",
-        "SplToken.",
-        "Account.",
-        "Pubkey.",
-    };
-    for (name_prefixes) |prefix| {
-        if (std.mem.startsWith(u8, external.name, prefix)) return true;
-    }
+    if (isSolanaHostApiName(external.name)) return true;
 
     const symbol_prefixes = [_][]const u8{
         "sol_",
@@ -166,19 +163,29 @@ fn isSolanaHostExternal(external: core_ir.ExternalDecl) bool {
     return false;
 }
 
+fn isSolanaHostApiName(name: []const u8) bool {
+    const name_prefixes = [_][]const u8{
+        "Syscall.",
+        "Sysvar.",
+        "Cpi.",
+        "Crypto.",
+        "SplToken.",
+        "Account.",
+        "Pubkey.",
+    };
+    for (name_prefixes) |prefix| {
+        if (std.mem.startsWith(u8, name, prefix)) return true;
+    }
+    return false;
+}
+
 const UsageCollector = struct {
     allocator: std.mem.Allocator,
     usages: std.ArrayList(CapabilityUsage),
+    externals: []const core_ir.ExternalDecl = &.{},
 
     fn collectModule(self: *UsageCollector, module: core_ir.Module) !void {
-        for (module.externals) |external| {
-            if (!isSolanaHostExternal(external)) continue;
-            try self.appendUsage(.{
-                .capability = .solana_host_api,
-                .api_surface = external.name,
-                .loc = null,
-            });
-        }
+        self.externals = module.externals;
 
         for (module.decls) |decl| {
             switch (decl) {
@@ -190,14 +197,41 @@ const UsageCollector = struct {
                 },
             }
         }
+
+        for (module.externals) |external| {
+            if (!isSolanaHostExternal(external)) continue;
+            if (self.hasUsage(.solana_host_api, external.name)) continue;
+            try self.appendUsage(.{
+                .capability = .solana_host_api,
+                .api_surface = external.name,
+                .loc = null,
+            });
+        }
     }
 
     fn collectExpr(self: *UsageCollector, expr: *const core_ir.Expr) !void {
         switch (expr.*) {
             .Lambda => |value| try self.collectExpr(value.body),
-            .Constant, .Var => {},
+            .Constant => {},
+            .Var => |value| {
+                if (self.findHostExternal(value.name)) |external| {
+                    try self.appendUsage(.{
+                        .capability = .solana_host_api,
+                        .api_surface = external.name,
+                        .loc = value.loc,
+                    });
+                } else if (isSolanaHostApiName(value.name)) {
+                    try self.appendUsage(.{
+                        .capability = .solana_host_api,
+                        .api_surface = value.name,
+                        .loc = value.loc,
+                    });
+                }
+            },
             .App => |value| {
-                try self.collectExpr(value.callee);
+                if (!(try self.appendHostApiCall(value))) {
+                    try self.collectExpr(value.callee);
+                }
                 for (value.args) |arg| try self.collectExpr(arg);
             },
             .Let => |value| {
@@ -232,7 +266,16 @@ const UsageCollector = struct {
                     try self.collectExpr(field.value);
                 }
             },
-            .RecordField => |value| try self.collectExpr(value.record_expr),
+            .RecordField => |value| {
+                if (isAccountRecordType(exprTy(value.record_expr.*)) and isAccountFieldName(value.field_name)) {
+                    try self.appendUsage(.{
+                        .capability = .solana_host_api,
+                        .api_surface = value.field_name,
+                        .loc = value.loc,
+                    });
+                }
+                try self.collectExpr(value.record_expr);
+            },
             .RecordUpdate => |value| {
                 try self.collectExpr(value.base_expr);
                 for (value.fields) |field| {
@@ -277,6 +320,48 @@ const UsageCollector = struct {
         }
         try self.usages.append(self.allocator, usage);
     }
+
+    fn findHostExternal(self: *const UsageCollector, name: []const u8) ?core_ir.ExternalDecl {
+        for (self.externals) |external| {
+            if (!std.mem.eql(u8, external.name, name)) continue;
+            if (!isSolanaHostExternal(external)) continue;
+            return external;
+        }
+        return null;
+    }
+
+    fn hasUsage(self: *const UsageCollector, capability: Capability, api_surface: []const u8) bool {
+        for (self.usages.items) |existing| {
+            if (existing.capability != capability) continue;
+            if (std.mem.eql(u8, existing.api_surface, api_surface)) return true;
+        }
+        return false;
+    }
+
+    fn appendHostApiCall(self: *UsageCollector, app: core_ir.App) !bool {
+        const callee = switch (app.callee.*) {
+            .Var => |value| value,
+            else => return false,
+        };
+        const loc = app.loc orelse callee.loc;
+        if (self.findHostExternal(callee.name)) |external| {
+            try self.appendUsage(.{
+                .capability = .solana_host_api,
+                .api_surface = external.name,
+                .loc = loc,
+            });
+            return true;
+        }
+        if (isSolanaHostApiName(callee.name)) {
+            try self.appendUsage(.{
+                .capability = .solana_host_api,
+                .api_surface = callee.name,
+                .loc = loc,
+            });
+            return true;
+        }
+        return false;
+    }
 };
 
 fn locEql(lhs: ?core_ir.Loc, rhs: ?core_ir.Loc) bool {
@@ -294,8 +379,59 @@ fn locEql(lhs: ?core_ir.Loc, rhs: ?core_ir.Loc) bool {
 fn renderedApiSurface(allocator: std.mem.Allocator, diagnostic: UnsupportedCapabilityDiagnostic) ![]const u8 {
     return switch (diagnostic.capability) {
         .account_data_mutation => std.fmt.allocPrint(allocator, "Account.{s} <-", .{diagnostic.api_surface}),
-        else => diagnostic.api_surface,
+        .solana_host_api => if (isAccountFieldName(diagnostic.api_surface))
+            std.fmt.allocPrint(allocator, "Account.{s}", .{diagnostic.api_surface})
+        else
+            diagnostic.api_surface,
     };
+}
+
+fn exprTy(expr: core_ir.Expr) core_ir.Ty {
+    return switch (expr) {
+        .Lambda => |value| value.ty,
+        .Constant => |value| value.ty,
+        .App => |value| value.ty,
+        .Let => |value| value.ty,
+        .LetGroup => |value| value.ty,
+        .Assert => |value| value.ty,
+        .If => |value| value.ty,
+        .Prim => |value| value.ty,
+        .Var => |value| value.ty,
+        .Ctor => |value| value.ty,
+        .Match => |value| value.ty,
+        .Tuple => |value| value.ty,
+        .TupleProj => |value| value.ty,
+        .Record => |value| value.ty,
+        .RecordField => |value| value.ty,
+        .RecordUpdate => |value| value.ty,
+        .AccountFieldSet => |value| value.ty,
+        .ArrayLit => |value| value.ty,
+        .ArrayGet => |value| value.ty,
+        .ArrayLength => |value| value.ty,
+        .ArraySet => |value| value.ty,
+        .ArrayMake => |value| value.ty,
+        .RefMake => |value| value.ty,
+        .RefGet => |value| value.ty,
+        .RefSet => |value| value.ty,
+    };
+}
+
+fn isAccountRecordType(ty: core_ir.Ty) bool {
+    return switch (ty) {
+        .Record => |record| std.mem.eql(u8, record.name, "account"),
+        else => false,
+    };
+}
+
+fn isAccountFieldName(field_name: []const u8) bool {
+    return std.mem.eql(u8, field_name, "key") or
+        std.mem.eql(u8, field_name, "lamports") or
+        std.mem.eql(u8, field_name, "data") or
+        std.mem.eql(u8, field_name, "owner") or
+        std.mem.eql(u8, field_name, "is_signer") or
+        std.mem.eql(u8, field_name, "is_writable") or
+        std.mem.eql(u8, field_name, "executable") or
+        std.mem.eql(u8, field_name, "rent_epoch");
 }
 
 fn sampleLoc() core_ir.Loc {
@@ -386,4 +522,44 @@ test "experimental wasm is dispatchable while future targets remain rejected" {
     try std.testing.expectEqualStrings("wasm", wasm.cli_name);
     try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("near"));
     try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("evm"));
+}
+
+test "wasm capability policy gives pure-logic guidance for Solana host APIs" {
+    const wasm = target_registry.lookupByCliName("wasm") orelse return error.TestUnexpectedResult;
+    const usages = [_]CapabilityUsage{
+        .{ .capability = .solana_host_api, .api_surface = "Syscall.sol_log", .loc = sampleLoc() },
+    };
+
+    const result = try scanCapabilityUsages(capabilityPolicyForTarget(wasm), &usages);
+    switch (result) {
+        .ok => return error.TestExpectedUnsupportedCapability,
+        .unsupported => |diagnostic| {
+            try std.testing.expectEqualStrings("wasm", diagnostic.target_cli_name);
+            try std.testing.expectEqualStrings("Syscall.sol_log", diagnostic.api_surface);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "pure logic only") != null);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "--target=bpf") != null);
+        },
+    }
+}
+
+test "wasm capability rendering keeps account mutation context actionable" {
+    const wasm = target_registry.lookupByCliName("wasm") orelse return error.TestUnexpectedResult;
+    const usages = [_]CapabilityUsage{
+        .{ .capability = .account_data_mutation, .api_surface = "lamports", .loc = sampleLoc() },
+    };
+
+    const result = try scanCapabilityUsages(capabilityPolicyForTarget(wasm), &usages);
+    switch (result) {
+        .ok => return error.TestExpectedUnsupportedCapability,
+        .unsupported => |diagnostic| {
+            const rendered = try renderUnsupportedCapabilityDiagnostic(std.testing.allocator, diagnostic);
+            defer std.testing.allocator.free(rendered);
+
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "target `wasm`") != null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "Solana account mutation") != null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "Account.lamports <-") != null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "examples/future_capability.ml:7:3") != null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "pure logic only") != null);
+        },
+    }
 }

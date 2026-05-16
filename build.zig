@@ -730,6 +730,25 @@ pub fn build(b: *std.Build) void {
     run_bpf_build_contract_tests.step.dependOn(&run_unmap_cli_tests.step);
     run_bpf_build_contract_tests.setCwd(b.path(""));
 
+    // Generic WASM build characterization tests (MTF-1): verify a pure
+    // freestanding fixture builds to import-free WebAssembly and host-bound
+    // Solana APIs are rejected before artifact creation.
+    const wasm_build_contract_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/cli/wasm_build_contract_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const wasm_build_contract_options = b.addOptions();
+    wasm_build_contract_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    wasm_build_contract_test_module.addOptions("cli_options", wasm_build_contract_options);
+    const wasm_build_contract_tests = b.addTest(.{
+        .root_module = wasm_build_contract_test_module,
+    });
+    const run_wasm_build_contract_tests = b.addRunArtifact(wasm_build_contract_tests);
+    run_wasm_build_contract_tests.step.dependOn(b.getInstallStep());
+    run_wasm_build_contract_tests.step.dependOn(&run_bpf_build_contract_tests.step);
+    run_wasm_build_contract_tests.setCwd(b.path(""));
+
     // Source-map determinism property test (P9 / F-SRCMAP-6): verify repeated
     // BPF builds of the same source produce byte-identical `.map` JSON.
     const srcmap_determinism_test_module = b.createModule(.{
@@ -747,7 +766,7 @@ pub fn build(b: *std.Build) void {
     run_srcmap_determinism_tests.step.dependOn(b.getInstallStep());
     // The property build writes out/program.zig and out/hackathon_greet.map,
     // so keep it serialized with the other source-map CLI integration tests.
-    run_srcmap_determinism_tests.step.dependOn(&run_bpf_build_contract_tests.step);
+    run_srcmap_determinism_tests.step.dependOn(&run_wasm_build_contract_tests.step);
     run_srcmap_determinism_tests.setCwd(b.path(""));
 
     // LSP scaffold tests (P9 / F-LSP-1): verify omlz-lsp entrypoint and install.
@@ -1046,6 +1065,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_srcmap_cli_tests.step);
     test_step.dependOn(&run_unmap_cli_tests.step);
     test_step.dependOn(&run_bpf_build_contract_tests.step);
+    test_step.dependOn(&run_wasm_build_contract_tests.step);
     test_step.dependOn(&run_srcmap_determinism_tests.step);
     test_step.dependOn(&run_lsp_scaffold_tests.step);
     test_step.dependOn(&run_lsp_jsonrpc_tests.step);

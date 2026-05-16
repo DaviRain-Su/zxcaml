@@ -1269,6 +1269,8 @@ fn buildNative(
         .flags = .{ .truncate = true },
     });
 
+    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .native);
+
     driver_build.buildNative(init.gpa, init.io, .{
         .generated_zig_path = "out/program.zig",
         .native_entry_path = "out/native_entry.zig",
@@ -1355,6 +1357,8 @@ fn buildBpf(
 
     const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, source_map_program, ".so");
     defer if (build_args.output_path == null) init.gpa.free(output_path);
+
+    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .bpf);
 
     var source_map_input: ?driver_bpf.SourceMapInput = null;
     var source_map_hook: ?driver_bpf.SourceMapHook = null;
