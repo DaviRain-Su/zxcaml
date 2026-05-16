@@ -51,7 +51,9 @@ PY
 
 has_llvm_objcopy() {
   command -v llvm-objcopy >/dev/null 2>&1 \
+    || [[ -x /opt/homebrew/opt/llvm/bin/llvm-objcopy ]] \
     || [[ -x /opt/homebrew/bin/llvm-objcopy ]] \
+    || [[ -x /usr/local/opt/llvm/bin/llvm-objcopy ]] \
     || [[ -x /usr/local/bin/llvm-objcopy ]] \
     || [[ -x /usr/bin/llvm-objcopy ]]
 }
@@ -88,12 +90,14 @@ copy_artifact_set() {
 
 rm -f \
   "$REPORT_DIR"/solana_hello.default.so \
+  "$REPORT_DIR"/solana_hello.default.map \
   "$REPORT_DIR"/solana_hello.default.stdout \
   "$REPORT_DIR"/solana_hello.default.stderr \
   "$REPORT_DIR"/solana_hello.program.zig \
   "$REPORT_DIR"/solana_hello.bpf_entry.zig \
   "$REPORT_DIR"/solana_hello.map \
   "$REPORT_DIR"/hackathon_greet.custom.so \
+  "$REPORT_DIR"/hackathon_greet.custom.map \
   "$REPORT_DIR"/hackathon_greet.custom.stdout \
   "$REPORT_DIR"/hackathon_greet.custom.stderr \
   "$REPORT_DIR"/hackathon_greet.program.zig \
@@ -106,11 +110,13 @@ rm -f \
   "$REPORT_PATH"
 
 DEFAULT_SO="$REPORT_DIR/solana_hello.default.so"
+DEFAULT_SIDE_MAP="$REPORT_DIR/solana_hello.default.map"
 DEFAULT_STDOUT="$REPORT_DIR/solana_hello.default.stdout"
 DEFAULT_STDERR="$REPORT_DIR/solana_hello.default.stderr"
 DEFAULT_MAP="out/solana_hello.map"
 
 CUSTOM_SO="$REPORT_DIR/hackathon_greet.custom.so"
+CUSTOM_SIDE_MAP="$REPORT_DIR/hackathon_greet.custom.map"
 CUSTOM_STDOUT="$REPORT_DIR/hackathon_greet.custom.stdout"
 CUSTOM_STDERR="$REPORT_DIR/hackathon_greet.custom.stderr"
 CUSTOM_MAP="out/hackathon_greet.map"
@@ -127,6 +133,7 @@ env -u SOLANA_ZIG "$OMLZ_BIN" build --target=bpf --keep-zig examples/solana_hell
 [[ -f out/program.zig ]]
 [[ -f out/bpf_entry.zig ]]
 [[ -f "$DEFAULT_SO" ]]
+[[ -f "$DEFAULT_SIDE_MAP" ]]
 [[ -f "$DEFAULT_MAP" ]]
 assert_contains '@import("program.zig")' out/bpf_entry.zig
 copy_artifact_set "solana_hello"
@@ -180,6 +187,7 @@ env "SOLANA_ZIG=$WRAPPER_PATH" "$OMLZ_BIN" build --target=bpf --keep-zig example
 [[ -f out/program.zig ]]
 [[ -f out/bpf_entry.zig ]]
 [[ -f "$CUSTOM_SO" ]]
+[[ -f "$CUSTOM_SIDE_MAP" ]]
 [[ -f "$CUSTOM_MAP" ]]
 copy_artifact_set "hackathon_greet"
 cp "$CUSTOM_MAP" "$REPORT_DIR/hackathon_greet.map"

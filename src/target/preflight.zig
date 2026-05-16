@@ -200,14 +200,7 @@ fn probeToolSpec(
     return switch (spec.kind) {
         .zig => try probeVersionCommand(allocator, io, spec.requirement, runner, &.{ "zig", "version" }, "not found"),
         .solana_zig => try probeSolanaZig(allocator, io, spec.requirement, solana_zig_env, runner),
-        .llvm_objcopy => try probeOptionalFixedCommand(
-            allocator,
-            io,
-            spec.requirement,
-            runner,
-            &.{ "llvm-objcopy", "--version" },
-            "not found; BPF source-map embedding will degrade to sidecar-only",
-        ),
+        .llvm_objcopy => try probeLlvmObjcopy(allocator, io, spec.requirement, runner),
         .solana => try probeOptionalFixedCommand(allocator, io, spec.requirement, runner, &.{ "solana", "--version" }, "not found"),
         .cargo => try probeOptionalFixedCommand(allocator, io, spec.requirement, runner, &.{ "cargo", "--version" }, "not found"),
     };
@@ -267,6 +260,42 @@ fn probeOptionalFixedCommand(
         .severity = requirement.severity,
         .status = .warn,
         .detail = failure_detail,
+    };
+}
+
+fn probeLlvmObjcopy(
+    allocator: Allocator,
+    io: Io,
+    requirement: ToolRequirement,
+    runner: CommandRunner,
+) !ToolProbe {
+    const output = runner.run(allocator, io, &.{ "llvm-objcopy", "--version" });
+    defer output.deinit(allocator);
+
+    if (output.ok) {
+        const detail = firstLine(output.stdout);
+        return .{
+            .label = requirement.label,
+            .severity = requirement.severity,
+            .status = .ok,
+            .detail = try allocator.dupe(u8, if (detail.len == 0) requirement.label else detail),
+        };
+    }
+
+    if (try driver_bpf.findLlvmObjcopyFallback(allocator, io)) |path| {
+        return .{
+            .label = requirement.label,
+            .severity = requirement.severity,
+            .status = .ok,
+            .detail = path,
+        };
+    }
+
+    return .{
+        .label = requirement.label,
+        .severity = requirement.severity,
+        .status = .warn,
+        .detail = "not found; BPF source-map embedding will degrade to sidecar-only",
     };
 }
 

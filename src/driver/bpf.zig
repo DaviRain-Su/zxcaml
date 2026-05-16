@@ -353,7 +353,15 @@ fn runAndForward(
     return failure;
 }
 
-fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
+const llvm_objcopy_absolute_candidates = [_][]const u8{
+    "/opt/homebrew/opt/llvm/bin/llvm-objcopy",
+    "/opt/homebrew/bin/llvm-objcopy",
+    "/usr/local/opt/llvm/bin/llvm-objcopy",
+    "/usr/local/bin/llvm-objcopy",
+    "/usr/bin/llvm-objcopy",
+};
+
+pub fn findLlvmObjcopyFallback(allocator: Allocator, io: Io) !?[]const u8 {
     if (try detectHomebrewLlvmPrefix(allocator, io)) |prefix| {
         defer allocator.free(prefix);
         const candidate = try std.fs.path.join(allocator, &.{ prefix, "bin", "llvm-objcopy" });
@@ -362,16 +370,22 @@ fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
         allocator.free(candidate);
     }
 
-    const candidates = [_][]const u8{
-        "llvm-objcopy",
-        "/opt/homebrew/bin/llvm-objcopy",
-        "/usr/local/bin/llvm-objcopy",
-        "/usr/bin/llvm-objcopy",
-    };
-    for (candidates) |path| {
+    for (llvm_objcopy_absolute_candidates) |path| {
         if (commandAvailable(allocator, io, path)) {
-            return allocator.dupe(u8, path);
+            return try allocator.dupe(u8, path);
         }
+    }
+
+    return null;
+}
+
+pub fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
+    if (commandAvailable(allocator, io, "llvm-objcopy")) {
+        return try allocator.dupe(u8, "llvm-objcopy");
+    }
+
+    if (try findLlvmObjcopyFallback(allocator, io)) |path| {
+        return path;
     }
 
     return error.FileNotFound;
@@ -390,7 +404,6 @@ fn detectHomebrewLlvmPrefix(allocator: Allocator, io: Io) !?[]const u8 {
             const entry = iter.next(io) catch continue;
             if (entry == null) break;
             const next = entry.?;
-            if (next.kind != .directory) continue;
             if (!std.mem.startsWith(u8, next.name, "llvm")) continue;
 
             const prefix = try std.fs.path.join(allocator, &.{ root, next.name });

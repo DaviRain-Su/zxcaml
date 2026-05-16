@@ -60,7 +60,9 @@ fn commandExecutable(allocator: Allocator, io: Io, path: []const u8) bool {
 fn llvmObjcopyPath(allocator: Allocator, io: Io) ?[]const u8 {
     const candidates = [_][]const u8{
         "llvm-objcopy",
+        "/opt/homebrew/opt/llvm/bin/llvm-objcopy",
         "/opt/homebrew/bin/llvm-objcopy",
+        "/usr/local/opt/llvm/bin/llvm-objcopy",
         "/usr/local/bin/llvm-objcopy",
         "/usr/bin/llvm-objcopy",
     };
@@ -221,11 +223,13 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
+    const adjacent_map_path = characterization_dir_rel ++ "/solana_hello_default.map";
 
     try cwd.createDirPath(io, characterization_dir_rel);
 
     cwd.deleteFile(io, "out/solana_hello.map") catch {};
     cwd.deleteFile(io, "out/hackathon_greet.map") catch {};
+    cwd.deleteFile(io, adjacent_map_path) catch {};
 
     const hello_result = try runBpfBuild(
         allocator,
@@ -239,6 +243,7 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
     try expectCommandSuccess(hello_result, "env -u SOLANA_ZIG omlz build --target=bpf examples/solana_hello.ml");
 
     try std.testing.expect(fileExists(io, "out/solana_hello.map"));
+    try std.testing.expect(fileExists(io, adjacent_map_path));
     const first_program = try cwd.readFileAlloc(io, "out/program.zig", allocator, .limited(1024 * 1024));
     defer allocator.free(first_program);
 
@@ -254,6 +259,12 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
     defer allocator.free(unmap_result.stderr);
     try expectCommandSuccess(unmap_result, "omlz unmap --map out/solana_hello.map");
     try std.testing.expect(std.mem.indexOf(u8, unmap_result.stdout, "examples/solana_hello.ml:") != null);
+
+    const adjacent_unmap_result = try runUnmap(allocator, io, adjacent_map_path, first_entry.pc);
+    defer allocator.free(adjacent_unmap_result.stdout);
+    defer allocator.free(adjacent_unmap_result.stderr);
+    try expectCommandSuccess(adjacent_unmap_result, "omlz unmap --map .zig-cache/characterization-tests/solana_hello_default.map");
+    try std.testing.expectEqualStrings(unmap_result.stdout, adjacent_unmap_result.stdout);
 
     if (llvmObjcopyPath(allocator, io) == null) {
         try std.testing.expect(std.mem.indexOf(u8, hello_result.stderr, "llvm-objcopy not found on PATH") != null);

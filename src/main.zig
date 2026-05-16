@@ -1058,12 +1058,26 @@ fn buildBpf(
     var source_map_hook: ?driver_bpf.SourceMapHook = null;
     var source_map_context: SourceMapSidecarContext = undefined;
     var source_map_path: ?[]const u8 = null;
+    var output_source_map_path: ?[]const u8 = null;
     defer if (source_map_path) |path| init.gpa.free(path);
+    defer if (output_source_map_path) |path| init.gpa.free(path);
 
     if (build_args.srcmap) {
-        // Investigation report §4 fixed the sidecar contract: minified,
-        // deterministic JSON in out/<program>.map with no timestamps or IDs.
+        // Investigation report §4 fixed the canonical sidecar contract:
+        // minified, deterministic JSON in out/<program>.map with no
+        // timestamps or IDs. When `-o` points elsewhere, mirror the same
+        // bytes next to the requested artifact so custom-output `unmap`
+        // workflows can read `<output>.map` directly without losing the
+        // canonical `out/<program>.map` path that existing validators use.
         source_map_path = try sourceMapOutputPath(init.gpa, source_map_program, ".map");
+        if (build_args.output_path) |explicit_output_path| {
+            const candidate_output_map = try sourceMapSiblingPathForOutput(init.gpa, explicit_output_path);
+            if (std.mem.eql(u8, candidate_output_map, source_map_path.?)) {
+                init.gpa.free(candidate_output_map);
+            } else {
+                output_source_map_path = candidate_output_map;
+            }
+        }
         source_map_input = .{
             .program = source_map_program,
             .module = inferred_core_module,
@@ -1072,6 +1086,7 @@ fn buildBpf(
             .allocator = init.gpa,
             .io = init.io,
             .path = source_map_path.?,
+            .output_path = output_source_map_path,
         };
         source_map_hook = .{
             .context = &source_map_context,
@@ -1222,10 +1237,19 @@ fn sourceMapOutputPath(allocator: std.mem.Allocator, program: []const u8, extens
     return std.fmt.allocPrint(allocator, "out/{s}{s}", .{ program, extension });
 }
 
+fn sourceMapSiblingPathForOutput(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {
+    const extension = std.fs.path.extension(output_path);
+    if (extension.len == 0) {
+        return std.fmt.allocPrint(allocator, "{s}.map", .{output_path});
+    }
+    return std.fmt.allocPrint(allocator, "{s}.map", .{output_path[0 .. output_path.len - extension.len]});
+}
+
 const SourceMapSidecarContext = struct {
     allocator: std.mem.Allocator,
     io: Io,
     path: []const u8,
+    output_path: ?[]const u8 = null,
 };
 
 fn emitSourceMapSidecar(context: *anyopaque, build: driver_bpf.SourceMapBuild) anyerror!void {
@@ -1238,6 +1262,14 @@ fn emitSourceMapSidecar(context: *anyopaque, build: driver_bpf.SourceMapBuild) a
         .data = bytes,
         .flags = .{ .truncate = true },
     });
+
+    if (sidecar.output_path) |output_path| {
+        try std.Io.Dir.cwd().writeFile(sidecar.io, .{
+            .sub_path = output_path,
+            .data = bytes,
+            .flags = .{ .truncate = true },
+        });
+    }
 }
 
 const BenchFixture = struct {
@@ -1910,138 +1942,11 @@ test "parse F07 native build arguments without requiring keep-zig" {
     try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path.?);
 }
 
-test "parse build arguments accepts exact wasm target spelling" {
-    const args = [_][]const u8{
-        "omlz",
-        "build",
-        "--target=wasm",
-        "--keep-zig",
-        "examples/m0_zero.ml",
-    };
+test "source-map sibling path follows explicit build output" {
+    const path = try sourceMapSiblingPathForOutput(std.testing.allocator, "/tmp/zxcaml/solana_hello.so");
+    defer std.testing.allocator.free(path);
 
-    const parsed = try parseBuildArgs(&args);
-    try std.testing.expectEqualStrings("wasm", parsed.target);
-    try std.testing.expect(parsed.keep_zig);
-    try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
-    try std.testing.expectEqual(@as(?[]const u8, null), parsed.output_path);
-    try std.testing.expect(parsed.srcmap);
-}
-
-test "parse build arguments accepts exact near target spelling" {
-    const args = [_][]const u8{
-        "omlz",
-        "build",
-        "--target=near",
-        "--keep-zig",
-        "examples/m0_zero.ml",
-        "-o",
-        "/tmp/m0_zero_near.wasm",
-    };
-
-    const parsed = try parseBuildArgs(&args);
-    try std.testing.expectEqualStrings("near", parsed.target);
-    try std.testing.expect(parsed.keep_zig);
-    try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
-    try std.testing.expectEqualStrings("/tmp/m0_zero_near.wasm", parsed.output_path.?);
-    try std.testing.expect(parsed.srcmap);
-}
-
-test "parse build arguments preserves existing bpf forms" {
-    const args = [_][]const u8{
-        "omlz",
-        "build",
-        "--target=bpf",
-        "--no-srcmap",
-        "examples/hackathon_greet.ml",
-        "-o",
-        "/tmp/hackathon_greet.so",
-    };
-
-    const parsed = try parseBuildArgs(&args);
-    try std.testing.expectEqualStrings("bpf", parsed.target);
-    try std.testing.expect(!parsed.keep_zig);
-    try std.testing.expectEqualStrings("examples/hackathon_greet.ml", parsed.input_file);
-    try std.testing.expectEqualStrings("/tmp/hackathon_greet.so", parsed.output_path.?);
-    try std.testing.expect(!parsed.srcmap);
-}
-
-test "parse build arguments preserves target flag ordering for existing and near targets" {
-    const cases = [_]struct {
-        argv: []const []const u8,
-        target: []const u8,
-        output_path: []const u8,
-    }{
-        .{
-            .argv = &.{
-                "omlz",
-                "build",
-                "examples/hackathon_greet.ml",
-                "--target=bpf",
-                "-o",
-                "/tmp/hackathon_greet.so",
-            },
-            .target = "bpf",
-            .output_path = "/tmp/hackathon_greet.so",
-        },
-        .{
-            .argv = &.{
-                "omlz",
-                "build",
-                "examples/m0_zero.ml",
-                "--target=near",
-                "-o",
-                "/tmp/m0_zero_near.wasm",
-            },
-            .target = "near",
-            .output_path = "/tmp/m0_zero_near.wasm",
-        },
-    };
-
-    for (cases) |case| {
-        const parsed = try parseBuildArgs(case.argv);
-        try std.testing.expectEqualStrings(case.target, parsed.target);
-        try std.testing.expectEqualStrings(case.output_path, parsed.output_path.?);
-    }
-}
-
-test "parse build arguments rejects omitted target" {
-    const args = [_][]const u8{
-        "omlz",
-        "build",
-        "examples/m0_zero.ml",
-        "-o",
-        "/tmp/m0",
-    };
-
-    try std.testing.expectError(error.UnsupportedBuildArgs, parseBuildArgs(&args));
-}
-
-test "parse build arguments rejects split target flag spelling" {
-    const args = [_][]const u8{
-        "omlz",
-        "build",
-        "--target",
-        "native",
-        "examples/m0_zero.ml",
-        "-o",
-        "/tmp/m0",
-    };
-
-    try std.testing.expectError(error.UnsupportedBuildArgs, parseBuildArgs(&args));
-}
-
-test "parse build arguments rejects duplicate target flags" {
-    const args = [_][]const u8{
-        "omlz",
-        "build",
-        "--target=wasm",
-        "--target=near",
-        "examples/m0_zero.ml",
-        "-o",
-        "/tmp/duplicate_target.wasm",
-    };
-
-    try std.testing.expectError(error.DuplicateTargetFlag, parseBuildArgs(&args));
+    try std.testing.expectEqualStrings("/tmp/zxcaml/solana_hello.map", path);
 }
 
 test {

@@ -31,7 +31,10 @@ fn commandExecutable(allocator: Allocator, io: Io, path: []const u8) bool {
 fn llvmObjdumpPath(allocator: Allocator, io: Io) ?[]const u8 {
     const candidates = [_][]const u8{
         "llvm-objdump",
+        "/opt/homebrew/opt/llvm/bin/llvm-objdump",
         "/opt/homebrew/bin/llvm-objdump",
+        "/usr/local/opt/llvm/bin/llvm-objdump",
+        "/usr/local/bin/llvm-objdump",
         "/usr/bin/objdump",
     };
     for (candidates) |path| {
