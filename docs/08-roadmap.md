@@ -104,8 +104,9 @@ the fmt corpus expansion.
   records the exploratory thesis that ZxCaml can unify smart-contract business
   logic through a contract-safe OCaml subset while keeping chain runtimes behind
   explicit adapters. MTF-0 + MTF-1 are now landed as the target contract plus an
-  experimental generic WASM smoke target; MTF-2 through MTF-6 remain future,
-  explicitly gated work.
+  experimental generic WASM smoke target, and MTF-2 now lands an experimental
+  NEAR no-storage adapter MVP; MTF-3 through MTF-6 remain future, explicitly
+  gated work.
 - **Codegen/runtime new directions:** only schedule concrete work with a named
   runtime, BPF, WASM-chain, EVM/Yul, or codegen acceptance target; speculative
   multi-target or allocator changes still require an ADR-sized proposal.
@@ -125,8 +126,9 @@ compiler scope and outside the post-P8 hackathon/demo work.
 
 ### FM — Functional multichain contract core (optional, exploratory)
 
-**Status:** Partially landed for MTF-0 + MTF-1. MTF-2 through MTF-6 are still
-not scheduled and remain gated. Captured in
+**Status:** Partially landed for MTF-0 + MTF-1 plus the experimental MTF-2
+NEAR no-storage adapter MVP. MTF-3 through MTF-6 are still not scheduled and
+remain gated. Captured in
 [`19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md).
 
 This direction reframes future target work around a portable contract core:
@@ -143,8 +145,9 @@ Candidate implementation sequence:
 2. **MTF-1 generic WASM** — landed as `omlz build --target=wasm`, an
    experimental import-free pure-logic smoke target validated through Node
    WebAssembly acceptance.
-3. **MTF-2 NEAR adapter** — add exported methods and minimal NEAR host imports
-   before storage/promises.
+3. **MTF-2 NEAR adapter** — landed experimentally as a no-storage MVP with
+   exported methods, minimal NEAR host imports, and real near-sandbox
+   acceptance; storage/promises/caller/JSON/Borsh remain gated.
 4. **MTF-3 portable contract API** — define chain-neutral capabilities and
    diagnostics for unsupported targets.
 5. **MTF-4 EVM/Yul MVP** — add a sibling backend that emits Yul/bytecode rather

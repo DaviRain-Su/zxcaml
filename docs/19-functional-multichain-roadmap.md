@@ -114,8 +114,11 @@ Candidate adapter order:
 
 1. **Generic WASM MVP** — now landed as `omlz build --target=wasm`, an
    experimental import-free `.wasm` smoke target for pure logic only.
-2. **NEAR adapter** — exported methods, `input`, `value_return`, storage,
-   logging, panic, JSON/Borsh profile, near-sandbox tests.
+2. **NEAR no-storage adapter MVP** — now landed experimentally as
+   `omlz build --target=near` with exported methods, `input`,
+   `value_return`, logging, panic, and real near-sandbox tests; storage,
+   promises, caller identity, and broad JSON/Borsh profiles remain future
+   gates.
 3. **CosmWasm adapter** — `instantiate`/`execute`/`query`, JSON schema,
    `Response` messages/events/data, storage host functions, cw-multi-test or
    wasmd/simapp acceptance.
@@ -205,14 +208,16 @@ ZxCaml automatically verifies every contract.
 - Scope gate: this is **not** a NEAR, CosmWasm, Substrate, Solana, or EVM
   adapter claim.
 
-### MTF-2 — NEAR adapter MVP
+### MTF-2 — NEAR adapter MVP ✅ landed experimentally (no-storage only)
 
 - Add `--target=near` producing a NEAR-compatible `.wasm`.
 - Implement minimal NEAR host imports: input, return, log, panic.
 - Add one method-style entrypoint and near-sandbox acceptance.
 - Keep storage and promises out until the no-storage MVP is stable.
-- Gate: do not treat MTF-2 as landed until real NEAR CLI/Sandbox/near-workspaces
-  tooling is installed and used for acceptance.
+- Current landed scope is only the experimental no-storage adapter surface;
+  storage, promises, caller identity, and broad JSON/Borsh remain future-gated.
+- Gate satisfied: real `near-workspaces` / `near-sandbox` acceptance is now part
+  of the validator floor for this MVP.
 
 ### MTF-3 — Portable contract core API
 
