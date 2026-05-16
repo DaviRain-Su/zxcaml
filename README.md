@@ -243,7 +243,7 @@ Read in order:
 | 05 | [Backends](./docs/05-backends.md) | Zig codegen, tree-walk interpreter, backend trait |
 | 06 | [BPF target](./docs/06-bpf-target.md) | Toolchain chain to Solana `.so` via direct `SOLANA_ZIG` build |
 | 07 | [Repo layout](./docs/07-repo-layout.md) | Directory contract, who owns what |
-| 08 | [Roadmap](./docs/08-roadmap.md) | P1-P9 sealed; Phase 19+20+21 drift baselines; future work preview |
+| 08 | [Roadmap](./docs/08-roadmap.md) | P1-P9 sealed; Phase 19+20+21 drift baselines; next-priority Solana DX/API planning link |
 | 09 | [Decisions (ADRs)](./docs/09-decisions.md) | Locked decisions, with reasons |
 | 10 | [Frontend bridge](./docs/10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | 11 | [Solana P3 guide](./docs/11-solana-p3.md) | Account layout, syscalls, CPI, SPL-Token, no_alloc, IDL, and CI coverage |
@@ -254,6 +254,7 @@ Read in order:
 | P9+ | [Wire compatibility](./docs/wire-compat.md) | Current wire `1.5`, prior additive bumps, and deprecated compatibility windows |
 | 18 | [Fixed-point math](./docs/18-fixed-point.md) | `Fixed` / `Amount` six-decimal arithmetic and bps helpers for deterministic DeFi examples |
 | 19 | [Functional multichain roadmap](./docs/19-functional-multichain-roadmap.md) | Exploratory plan for portable contract logic, WASM-chain adapters, EVM/Yul, upper syntaxes, and verified extraction |
+| 20 | [Solana DX/API polish plan](./docs/20-solana-dx-api-polish-plan.md) | Planning-only next-priority scaffold with canonical links, acceptance gates, and anti-creep guardrails |
 | —  | [Hackathon assets](./docs/hackathon/README.md) | Surfpool demo, Anchor comparison, Slidev decks, recording checklist, and submission copy |
 | —  | [Live site](https://zxcaml.pages.dev/) | Current public project landing page |
 | —  | [Alternatives considered](./docs/alternatives-considered.md) | Why not self-write, why not fork OxCaml |

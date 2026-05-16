@@ -105,11 +105,13 @@ the fmt corpus expansion.
   `./scripts/check_docs_sync.sh` green, keep English/Chinese routing
   reciprocal, and treat Surfpool/local-path drift as a blocker rather than a
   follow-up chore.
-- **Next priority: Solana DX/API polish planning.** Before reopening broader
-  runtime or compiler scope, the repository's next deliberate product-planning
-  step is a planning-only Solana DX/API polish scaffold: entrypoint ergonomics,
-  account/meta helper naming, Surfpool UX, diagnostics examples, and acceptance
-  gates.
+- **Next priority: Solana DX/API polish planning.**
+  [`20-solana-dx-api-polish-plan.md`](./20-solana-dx-api-polish-plan.md) is the
+  planning-only scaffold for the next Solana-facing product pass: entrypoint
+  ergonomics, account/meta helper naming, syscall/CPI/PDA examples,
+  SDK-backed import discoverability, Surfpool UX, and diagnostics/docs
+  examples. It explicitly excludes new compiler phases, multichain scheduling,
+  and runtime rewrites.
 - **Functional multichain roadmap:** [`docs/19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md)
   records the exploratory thesis that ZxCaml can unify smart-contract business
   logic through a contract-safe OCaml subset while keeping chain runtimes behind

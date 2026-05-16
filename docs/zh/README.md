@@ -184,7 +184,7 @@ SDK-backed adapter 和 SDK-style entrypoint 接到本地 harness 与生成产物
 | 05 | [后端](./05-backends.md) | Zig codegen、tree-walk interpreter、backend trait |
 | 06 | [BPF 目标](./06-bpf-target.md) | 到 Solana `.so` 的工具链链路（默认 `SOLANA_ZIG` 直连） |
 | 07 | [仓库布局](./07-repo-layout.md) | 目录契约,谁拥有什么 |
-| 08 | [路线图](./08-roadmap.md) | P1-P9 已封版；Phase 19–21 文档/流程收束已记录，下一优先级是 Solana DX/API polish 规划 |
+| 08 | [路线图](./08-roadmap.md) | P1-P9 已封版；Phase 19–21 文档/流程收束已记录，并链接下一优先级 Solana DX/API 规划 |
 | 09 | [决策(ADR)](./09-decisions.md) | 锁定的决策,附带理由 |
 | 10 | [前端桥接](./10-frontend-bridge.md) | OCaml `compiler-libs` → sexp → Zig |
 | 11 | [Solana P3 指南](./11-solana-p3.md) | Account layout、syscalls、CPI、SPL-Token、no_alloc、IDL 和 CI coverage |
@@ -195,6 +195,7 @@ SDK-backed adapter 和 SDK-style entrypoint 接到本地 harness 与生成产物
 | P9+ | [Wire compatibility](./wire-compat.md) | 当前 wire `1.5`、历史 additive bump 和 deprecated 兼容窗口 |
 | 18 | [Fixed-point math](./18-fixed-point.md) | `Fixed` / `Amount` 六位小数 arithmetic 和 bps helper |
 | 19 | [函数式多链路线图](./19-functional-multichain-roadmap.md) | 探索性规划稿；不改变当前 Solana 优先级，也不重新打开已封版的编译器范围 |
+| 20 | [Solana DX/API polish 规划](./20-solana-dx-api-polish-plan.md) | 仅限规划的下一优先级脚手架，包含规范链接、验收门槛与防范围蔓延约束 |
 | -  | [Hackathon assets](../hackathon/README.md) | Surfpool demo、Anchor comparison、Slidev decks、录制清单和 submission copy |
 | -  | [Live site](https://zxcaml.pages.dev/) | 当前公开项目 landing page |
 | -  | [备选方案对比](./alternatives-considered.md) | 为什么不自写、为什么不 fork OxCaml |

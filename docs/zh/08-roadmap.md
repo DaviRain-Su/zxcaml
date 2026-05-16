@@ -81,9 +81,13 @@ fmt corpus 扩张暴露出的 lex-wart 债务。
 ### 下一优先级：Solana DX/API polish 规划
 
 - 在重新打开更大范围的 runtime/compiler 工作之前，下一步明确优先级是
+  [`20-solana-dx-api-polish-plan.md`](./20-solana-dx-api-polish-plan.md) 这份
   **planning-only 的 Solana DX/API polish scaffold**。
-- 规划应聚焦 entrypoint ergonomics、account/meta helper naming、Surfpool UX、
-  diagnostics 示例，以及 acceptance gates，而不是直接引入新的大功能。
+- 这份计划聚焦 entrypoint ergonomics、account/meta helper naming、
+  syscall/CPI/PDA 示例、SDK-backed import discoverability、Surfpool UX，
+  以及 diagnostics/docs 示例。
+- 它也明确排除了新的 compiler phase、多链排期和 runtime rewrite，避免范围
+  蔓延成不受控的大功能。
 
 ### BPF 工具链迁移（可选）
 

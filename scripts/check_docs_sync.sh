@@ -36,6 +36,7 @@ basic_pairs = [
     ("docs/15-sysvars.md", "docs/zh/15-sysvars.md"),
     ("docs/16-omlz-fmt.md", "docs/zh/16-omlz-fmt.md"),
     ("docs/17-lsp-latency.md", "docs/zh/17-lsp-latency.md"),
+    ("docs/20-solana-dx-api-polish-plan.md", "docs/zh/20-solana-dx-api-polish-plan.md"),
     ("docs/alternatives-considered.md", "docs/zh/alternatives-considered.md"),
     ("docs/oxcaml-relationship.md", "docs/zh/oxcaml-relationship.md"),
     ("docs/zignocchio-relationship.md", "docs/zh/zignocchio-relationship.md"),
@@ -69,6 +70,7 @@ active_stale_scan = {
     "docs/07-repo-layout.md",
     "docs/08-roadmap.md",
     "docs/11-solana-p3.md",
+    "docs/20-solana-dx-api-polish-plan.md",
     "docs/runtime-api.md",
     "docs/zh/README.md",
     "docs/zh/INSTALLING.md",
@@ -77,6 +79,7 @@ active_stale_scan = {
     "docs/zh/07-repo-layout.md",
     "docs/zh/08-roadmap.md",
     "docs/zh/11-solana-p3.md",
+    "docs/zh/20-solana-dx-api-polish-plan.md",
     "docs/zh/runtime-api.md",
 }
 
