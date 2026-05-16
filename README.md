@@ -107,19 +107,34 @@ From the repository root, build `omlz` and the canonical Solana BPF example:
 ./init.sh && zig build && zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 ```
 
-The command sequence uses the same `init.sh` setup script as CI.
+The command sequence uses the same `init.sh` setup script as CI. Expected
+tooling is Zig 0.16.0, OCaml 5.2.x via opam, Rust/Cargo, and
+`solana-zig` 0.16.0. For live Solana flows, also ensure Solana CLI,
+`surfpool`, and `spl-token` are on `PATH`; Surfpool validation uses
+`127.0.0.1:8899` for RPC and `127.0.0.1:8900` for WebSocket. `llvm-objcopy`
+is optional: BPF builds still work when source-map embedding is skipped.
+
+Useful validation commands:
+
+```sh
+zig build test --summary none
+cargo test --manifest-path tests/Cargo.toml
+SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
+SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/cross_flow/run.sh
+```
 
 ## Status
 
-**P9 Developer Experience is sealed.** P1-P9 now deliver the walking
-skeleton, subset expansion, Solana runtime integration, Mollusk test
-infrastructure, external declarations, Anchor IDL, functional persistent stdlib,
-region inference, OCaml subset expansion (desugars, patterns, strings, expanded
-stdlib), and source-level compiler optimizations: constant folding, dead code
-elimination, self-recursive tail call optimization, function inlining, and P9
-developer-experience surfaces for diagnostics, LSP, wire compatibility, and
-source maps. Phase 19+20+21 documentation drift is sealed through
-`post-fmt-deepnested-baseline`.
+**P9 Developer Experience is sealed**, and the Solana runtime now uses the
+vendored `solana-program-sdk-zig` adapters through the SDK-style entrypoint.
+P1-P9 deliver the walking skeleton, subset expansion, Solana runtime
+integration, Mollusk test infrastructure, external declarations, Anchor IDL,
+functional persistent stdlib, region inference, OCaml subset expansion
+(desugars, patterns, strings, expanded stdlib), and source-level compiler
+optimizations: constant folding, dead code elimination, self-recursive tail call
+optimization, function inlining, and P9 developer-experience surfaces for
+diagnostics, LSP, wire compatibility, and source maps. Phase 19+20+21
+documentation drift is sealed through `post-fmt-deepnested-baseline`.
 
 Recent hackathon work packages that compiler state into a recordable demo:
 a Surfpool localnet deploy/invoke flow, a fairness-oriented Anchor comparison,
@@ -152,10 +167,11 @@ explicit future roadmap gates.
   spacing.
 - `post-fmt-deepnested-baseline` sealed Phase 21's generic `) word` spacing
   rule with the corpus still at 20 fmt goldens.
-- Current no-regress floor: `zig build test --summary none` passes, and
-  `cargo test --manifest-path tests/Cargo.toml` passes across the 36
-  Rust/Mollusk integration-test files (47 Rust test cases). Future floor
-  updates should record both the command and the commit that established it.
+- Current no-regress floor: `zig build test --summary none` passes,
+  `cargo test --manifest-path tests/Cargo.toml` passes across the Rust/Mollusk
+  integration suite, and final Surfpool cross-flow validation passes. Future
+  floor updates should record both the command and the commit that established
+  it.
 
 ### Current features
 
@@ -176,8 +192,9 @@ explicit future roadmap gates.
   imports only; real acceptance runs through local `near-workspaces` +
   `near-sandbox`, while storage/promise/caller/JSON/Borsh expansion remains
   future-gated
-- **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed from the BPF input buffer as zero-copy views; the runtime parser also tracks rent epoch
-- **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak, Clock/Rent sysvars, and remaining compute units use `external` declarations to bind directly to Zig runtime symbols
+- **Solana runtime:** SDK-backed adapters over the vendored `solana-program-sdk-zig` subtree cover syscalls/crypto/sysvars, CPI/PDA/return-data, SPL/ATA/codecs, account parsing/views, public API imports, and the SDK-style entrypoint
+- **Solana accounts:** built-in `account` record values expose key, lamports, data, owner, and signer/writable/executable flags parsed as SDK-compatible zero-copy views; the runtime parser also tracks rent epoch and duplicate-account aliasing
+- **Solana syscalls:** bindings for logging, `sol_log_64`, pubkey logging, SHA-256/Keccak/BLAKE3, secp256k1 recovery, Clock/Rent sysvars, and remaining compute units use SDK-backed Zig runtime symbols
 - **Solana sysvar readers:** `Sysvar.clock_from_account`, `rent_from_account`, `instructions_header_from_account`, `instruction_at`, `stake_history_latest_from_account`, and `epoch_schedule_from_account` decode Clock, Rent, Instructions, StakeHistory, and EpochSchedule account data; see [`docs/15-sysvars.md`](./docs/15-sysvars.md)
 - **Runtime crypto syscalls:** Solana-backed SHA-256, Keccak-256, BLAKE3, and `secp256k1_recover` are exposed through `Crypto`, with digest-writer and signature-recovery examples (`keccak_demo`, `blake3_demo`, `secp_recover_demo`)
 - **External declarations:** `external name : type = "zig_symbol"` syntax enables direct FFI to Zig runtime functions with type safety enforced by the frontend
@@ -188,7 +205,7 @@ explicit future roadmap gates.
 - **OCaml-native tests:** `let%test_unit "name" = expr` and `let%test_prop "name" generator = fun x -> expr` bindings are discovered by `omlz test`, which runs `examples/tests/*.ml` by default, supports `--filter`, `--format=cargo|json`, `--num-cases`, and `--seed`, reports shrunk counterexamples for property failures, and powers LSP CodeLens one-test runs
 - **IDL:** `omlz idl <file>` emits Anchor 0.30+ compatible JSON with SHA-256 discriminators, instruction accounts/args, account types, events, errors, and constants; `Account.is_signer` / `Account.is_writable` guard helpers feed signer/writable metadata, and `error_` constants feed the IDL error table with derived `msg` text
 - **BPF closures:** hardened first-class closures — closures capturing ADT values, multi-environment captures, and nested closures are lowered without unsupported BPF code-pointer relocations and are covered by Solana closure acceptance tests
-- **Solana acceptance:** deploy + invoke against `solana-test-validator` works for the canonical hello harness, closure harness, account/syscall harness, simple CPI harness, and SPL-Token transfer harness
+- **Solana acceptance:** Surfpool deploy + invoke validation covers canonical hello, closures, account parser/view, CPI/PDA/return-data, SPL/ATA/token, vault/order-book, and combined cross-flow harnesses
 - **Region inference:** automatic escape analysis marks non-escaping local values for stack allocation, reducing arena pressure and improving BPF compute efficiency
 - **Constant folding:** compile-time evaluation of arithmetic, comparison, string concatenation, boolean conditions, and known-constructor matches in Core IR
 - **Dead code elimination:** removes unused let bindings (preserving side-effectful and potentially trapping operations) and unreachable if branches
