@@ -28,11 +28,11 @@ fn vault_pda_for_owner(owner: &Pubkey) -> (Pubkey, u8) {
     (pda, bump)
 }
 
-fn owner_with_vault_pda_bump_255() -> (Pubkey, Pubkey, u8) {
+fn owner_with_non_255_vault_pda() -> (Pubkey, Pubkey, u8) {
     loop {
         let owner = Pubkey::new_unique();
         let (vault, bump) = vault_pda_for_owner(&owner);
-        if bump == 255 {
+        if bump != 255 {
             return (owner, vault, bump);
         }
     }
@@ -80,7 +80,7 @@ fn system_account() -> Account {
 #[test]
 fn vault_v2_test_deposit_and_withdraw_canonical_pda() {
     let mollusk = setup_mollusk();
-    let (owner, vault, _bump) = owner_with_vault_pda_bump_255();
+    let (owner, vault, bump) = owner_with_non_255_vault_pda();
     let initial_owner_lamports = 1_000_000_000;
     let deposit_amount = 123_456u64;
 
@@ -118,6 +118,10 @@ fn vault_v2_test_deposit_and_withdraw_canonical_pda() {
         !deposit_result.program_result.is_err(),
         "vault_v2 deposit should succeed: {:?}",
         deposit_result.program_result
+    );
+    assert_ne!(
+        bump, 255,
+        "fixture must exercise canonical bump handling beyond the legacy bump-255 shortcut"
     );
     let owner_after_deposit = &deposit_result.resulting_accounts[0].1;
     let vault_after_deposit = &deposit_result.resulting_accounts[1].1;

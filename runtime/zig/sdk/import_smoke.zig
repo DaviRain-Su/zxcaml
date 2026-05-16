@@ -9,4 +9,8 @@ test "vendored SDK adapter shell resolves committed packages" {
     try std.testing.expectEqual(@as(usize, 40), @sizeOf(sol.clock.Clock));
     try std.testing.expectEqual(@as(u8, 50), sol.rent.Rent.default_burn_percent);
     try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), sol.compute_budget.remaining());
+    try std.testing.expectEqual(@as(usize, 56), @sizeOf(sol.account.CpiAccountInfo));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(sol.cpi.AccountMeta));
+    try std.testing.expectEqual(@as(usize, 16), sol.pda.MAX_SEEDS);
+    try std.testing.expectEqual(@as(u64, 2) << 32, sol.program_error.INVALID_ARGUMENT);
 }

@@ -962,7 +962,11 @@ pub fn emitCpiInvoke(
     if ((!signed and app.args.len != 1) or (signed and app.args.len != 2)) return error.UnsupportedExpr;
     switch (app.args[0].*) {
         .Record => |record| {
-            try emitCpiInvokeRecord(out, allocator, record, if (signed) app.args[1].* else null, indent_level, ctx);
+            if (!signed) {
+                try emitCpiInvokeRecord(out, allocator, record, null, indent_level, ctx);
+            } else {
+                try emitCpiInvokeRecordExpanded(out, allocator, record, app.args[1].*, indent_level, ctx);
+            }
             return;
         },
         else => {},
@@ -1008,15 +1012,9 @@ pub fn emitCpiInvoke(
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "const omlz_c_instruction_{d} = cpi.SolInstruction.fromSlices(&omlz_program_id_{d}, omlz_cpi_metas_{d}, omlz_ix_{d}.data);\n", .{ block_id, block_id, block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "var omlz_views_{d}: []AccountRuntime.AccountView = undefined;\n", .{block_id});
-    try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "AccountRuntime.parseAccountsFromPtrInto(arena, input, &omlz_views_{d}) catch break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
-    try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "var omlz_infos_{d}: []cpi.SolAccountInfo = undefined;\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolAccountInfo, omlz_views_{d}.len, &omlz_infos_{d});\n", .{ block_id, block_id });
-    try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "for (omlz_views_{d}, 0..) |omlz_view, omlz_info_index| omlz_infos_{d}[omlz_info_index] = .{{ .key = omlz_view.key, .lamports = omlz_view.lamports, .data_len = omlz_view.data.len, .data = omlz_view.data.ptr, .owner = omlz_view.owner, .rent_epoch = omlz_view.rentEpochValue(), .is_signer = @intFromBool(omlz_view.is_signer), .is_writable = @intFromBool(omlz_view.is_writable), .executable = @intFromBool(omlz_view.executable) }};\n", .{ block_id, block_id });
+    try appendPrint(out, allocator, "cpi.parseAccountInfosFromPtrInto(arena, omlz_runtime_input, &omlz_infos_{d});\n", .{block_id});
 
     if (signed) {
         try emitSignerSeeds(out, allocator, app.args[1].*, block_id, indent_level + 1, ctx);
@@ -1078,11 +1076,14 @@ pub fn emitCpiInvokeRecord(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
-    _ = signer_seeds_expr;
     _ = indent_level;
     _ = ctx;
     if (recordLooksLikeSplTokenTransfer(ix_record)) {
         try append(out, allocator, "spl_token.zxcaml_transfer_one(arena, omlz_runtime_input)");
+        return;
+    }
+    if (signer_seeds_expr == null) {
+        try append(out, allocator, "cpi.zxcaml_system_transfer_one_lamport_unsigned(arena, omlz_runtime_input)");
         return;
     }
     try append(out, allocator, "cpi.zxcaml_system_transfer_one_lamport(arena, omlz_runtime_input)");
@@ -1157,15 +1158,9 @@ pub fn emitCpiInvokeRecordExpanded(
     try appendPrint(out, allocator, "const omlz_c_instruction_{d}: cpi.SolInstruction = .{{ .program_id = &omlz_program_id_{d}, .accounts = omlz_cpi_metas_{d}[0..].ptr, .account_len = {d}, .data = omlz_ix_data_{d}.ptr, .data_len = omlz_ix_data_{d}.len }};\n", .{ block_id, block_id, block_id, account_items.len, block_id, block_id });
 
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "var omlz_views_{d}: []AccountRuntime.AccountView = undefined;\n", .{block_id});
-    try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "AccountRuntime.parseAccountsFromPtrInto(arena, input, &omlz_views_{d}) catch break :blk{d} @as(i64, 1);\n", .{ block_id, block_id });
-    try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "var omlz_infos_{d}: []cpi.SolAccountInfo = undefined;\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolAccountInfo, omlz_views_{d}.len, &omlz_infos_{d});\n", .{ block_id, block_id });
-    try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "for (omlz_views_{d}, 0..) |omlz_view, omlz_info_index| omlz_infos_{d}[omlz_info_index] = .{{ .key = omlz_view.key, .lamports = omlz_view.lamports, .data_len = omlz_view.data.len, .data = omlz_view.data.ptr, .owner = omlz_view.owner, .rent_epoch = omlz_view.rentEpochValue(), .is_signer = @intFromBool(omlz_view.is_signer), .is_writable = @intFromBool(omlz_view.is_writable), .executable = @intFromBool(omlz_view.executable) }};\n", .{ block_id, block_id });
+    try appendPrint(out, allocator, "cpi.parseAccountInfosFromPtrInto(arena, omlz_runtime_input, &omlz_infos_{d});\n", .{block_id});
 
     if (signer_seeds_expr) |seeds| {
         try emitSignerSeedsDirect(out, allocator, seeds, block_id, indent_level + 1, ctx);

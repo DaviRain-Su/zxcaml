@@ -12,4 +12,9 @@ pub const solana_program_sdk = struct {
     pub const clock = @import("solana_sdk_m2").clock;
     pub const rent = @import("solana_sdk_m2").rent;
     pub const compute_budget = @import("solana_sdk_m2").compute_budget;
+    pub const account = @import("solana_sdk_m2").account;
+    pub const cpi = @import("solana_sdk_m2").cpi;
+    pub const entrypoint = @import("solana_sdk_m2").entrypoint;
+    pub const pda = @import("solana_sdk_m2").pda;
+    pub const program_error = @import("solana_sdk_m2").program_error;
 };

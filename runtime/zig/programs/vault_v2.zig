@@ -15,14 +15,15 @@ const SolSignerSeedsC = cpi.SolSignerSeedsC;
 const accountInfoFromView = cpi.accountInfoFromView;
 const invoke = cpi.invoke;
 const sol_invoke_signed_c = cpi.sol_invoke_signed_c;
+const sol_try_find_program_address = cpi.sol_try_find_program_address;
 const pubkeyEq = common.pubkeyEq;
+const programIdFromInput = common.programIdFromInput;
 const readU64LeSlice = common.readU64LeSlice;
 const writeSystemTransferData = common.writeSystemTransferData;
 
 /// Processes the zignocchio-compatible vault_v2 example's deposit/withdraw dispatch.
 pub fn zxcaml_vault_v2_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
     _ = arena;
-    _ = input;
     if (views.len < 3) return 1;
     if (instruction_data.len == 0) return 1;
     if (!views[0].is_signer) return 1;
@@ -31,16 +32,31 @@ pub fn zxcaml_vault_v2_process(arena: *Arena, input: [*]const u8, views: []accou
     if (!pubkeyEq(views[1].owner, &system_program_id)) return 1;
     if (!pubkeyEq(views[2].key, &system_program_id)) return 1;
 
-    // Match the test fixture's canonical PDA bump. This mirrors the existing
-    // pda_storage fixture strategy while keeping withdraw signer seeds
-    // zignocchio-shaped: ["vault", owner.key, bump].
-    const bump: u8 = 255;
+    const derived = deriveVaultPda(views[0].key, programIdFromInput(input)) orelse return 1;
+    if (!pubkeyEq(views[1].key, &derived.address)) return 1;
 
     return switch (instruction_data[0]) {
         0 => zxcamlVaultV2Deposit(views, instruction_data),
-        1 => zxcamlVaultV2Withdraw(views, bump),
+        1 => zxcamlVaultV2Withdraw(views, derived.bump),
         else => 1,
     };
+}
+
+const DerivedVault = struct {
+    address: Pubkey,
+    bump: u8,
+};
+
+fn deriveVaultPda(owner_key: *const Pubkey, program_id: *const Pubkey) ?DerivedVault {
+    var vault_seed: [5]u8 = .{ 'v', 'a', 'u', 'l', 't' };
+    const seeds = [_]SolSignerSeed{
+        SolSignerSeed.fromSlice(vault_seed[0..]),
+        SolSignerSeed.fromSlice(owner_key[0..]),
+    };
+    var address: Pubkey = undefined;
+    var bump: u8 = 0;
+    if (sol_try_find_program_address(seeds[0..], program_id, &address, &bump) != 0) return null;
+    return .{ .address = address, .bump = bump };
 }
 
 fn zxcamlVaultV2Deposit(views: []account.AccountView, instruction_data: []const u8) u64 {
@@ -117,6 +133,7 @@ const VaultV2TestAccount = struct {
 };
 
 const VaultV2TestFixture = struct {
+    program_id: Pubkey = [_]u8{9} ** 32,
     owner: VaultV2TestAccount = .{ .key = [_]u8{1} ** 32, .lamports = 10_000 },
     vault: VaultV2TestAccount = .{ .key = [_]u8{2} ** 32 },
     system: VaultV2TestAccount = .{ .key = [_]u8{0} ** 32 },
@@ -129,6 +146,14 @@ const VaultV2TestFixture = struct {
         };
     }
 };
+
+fn writeVaultV2RuntimeInput(program_id: Pubkey) [48]u8 {
+    var input: [48]u8 = [_]u8{0} ** 48;
+    std.mem.writeInt(u64, input[0..8], 0, .little);
+    std.mem.writeInt(u64, input[8..16], 0, .little);
+    @memcpy(input[16..48], program_id[0..]);
+    return input;
+}
 
 fn writeVaultV2U64LeTest(out: []u8, value: u64) void {
     var remaining = value;
@@ -148,17 +173,19 @@ test "vault_v2 deposit rejects empty instruction data" {
     var arena: Arena = undefined;
     var fixture = VaultV2TestFixture{};
     var views = fixture.views(true);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], &.{}));
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], &.{}));
 }
 
 test "vault_v2 deposit rejects non-signer owner before CPI" {
     var arena: Arena = undefined;
     var fixture = VaultV2TestFixture{};
     var views = fixture.views(false);
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
     var data: [9]u8 = undefined;
     data[0] = 0;
     writeVaultV2U64LeTest(data[1..9], 1);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], data[0..]));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], data[0..]));
 }
 
 test "vault_v2 deposit rejects vault owner mismatch before CPI" {
@@ -166,10 +193,11 @@ test "vault_v2 deposit rejects vault owner mismatch before CPI" {
     var fixture = VaultV2TestFixture{};
     fixture.vault.owner = [_]u8{9} ** 32;
     var views = fixture.views(true);
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
     var data: [9]u8 = undefined;
     data[0] = 0;
     writeVaultV2U64LeTest(data[1..9], 1);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], data[0..]));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], data[0..]));
 }
 
 test "vault_v2 deposit rejects non-system program account before CPI" {
@@ -177,17 +205,19 @@ test "vault_v2 deposit rejects non-system program account before CPI" {
     var fixture = VaultV2TestFixture{};
     fixture.system.key = [_]u8{7} ** 32;
     var views = fixture.views(true);
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
     var data: [9]u8 = undefined;
     data[0] = 0;
     writeVaultV2U64LeTest(data[1..9], 1);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], data[0..]));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], data[0..]));
 }
 
 test "vault_v2 deposit rejects non-exact amount payload before CPI" {
     var arena: Arena = undefined;
     var fixture = VaultV2TestFixture{};
     var views = fixture.views(true);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], &.{ 0, 1, 2 }));
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], &.{ 0, 1, 2 }));
 }
 
 test "vault_v2 deposit rejects pre-funded vault before CPI" {
@@ -195,32 +225,36 @@ test "vault_v2 deposit rejects pre-funded vault before CPI" {
     var fixture = VaultV2TestFixture{};
     fixture.vault.lamports = 1;
     var views = fixture.views(true);
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
     var data: [9]u8 = undefined;
     data[0] = 0;
     writeVaultV2U64LeTest(data[1..9], 5);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], data[0..]));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], data[0..]));
 }
 
 test "vault_v2 deposit rejects zero amount before CPI" {
     var arena: Arena = undefined;
     var fixture = VaultV2TestFixture{};
     var views = fixture.views(true);
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
     var data: [9]u8 = undefined;
     data[0] = 0;
     writeVaultV2U64LeTest(data[1..9], 0);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], data[0..]));
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], data[0..]));
 }
 
 test "vault_v2 withdraw rejects empty vault before CPI" {
     var arena: Arena = undefined;
     var fixture = VaultV2TestFixture{};
     var views = fixture.views(true);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], &.{1}));
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], &.{1}));
 }
 
 test "vault_v2 dispatch rejects unknown discriminator" {
     var arena: Arena = undefined;
     var fixture = VaultV2TestFixture{};
     var views = fixture.views(true);
-    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, undefined, views[0..], &.{99}));
+    var input = writeVaultV2RuntimeInput(fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 1), zxcaml_vault_v2_process(&arena, input[0..].ptr, views[0..], &.{99}));
 }

@@ -54,8 +54,12 @@ fn test_simple_cpi_transfers_one_lamport() {
     transfer_data.extend_from_slice(&1u64.to_le_bytes());
 
     let ix = Instruction {
-        program_id: SYSTEM_PROGRAM_ID,
-        accounts: vec![AccountMeta::new(from, true), AccountMeta::new(to, false)],
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(from, true),
+            AccountMeta::new(to, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
         data: transfer_data,
     };
 
@@ -68,7 +72,16 @@ fn test_simple_cpi_transfers_one_lamport() {
         ..Account::default()
     };
 
-    let result = mollusk.process_instruction(&ix, &[(from, from_acc), (to, to_acc)]);
+    let system_acc = Account {
+        executable: true,
+        owner: solana_pubkey::pubkey!("NativeLoader1111111111111111111111111111111"),
+        ..Account::default()
+    };
+
+    let result = mollusk.process_instruction(
+        &ix,
+        &[(from, from_acc), (to, to_acc), (SYSTEM_PROGRAM_ID, system_acc)],
+    );
 
     assert!(
         !result.program_result.is_err(),

@@ -1,17 +1,17 @@
 (* Demonstrates P3 cross-program invocation (CPI).
    The instruction below is shaped like a System Program transfer: it names the
    callee program, marks source/destination account metas, supplies transfer
-   data, and invokes with signer seeds. *)
+   data, and invokes without PDA signer seeds because the outer instruction
+   already provides the source signer. *)
 
 external log_message : string -> unit = "sol_log_"
 
-let entrypoint accounts input =
+let entrypoint accounts _input =
   let _ = accounts in
-  let _ = input in
   let _ = log_message "simple CPI via external binding" in
-  (* CPI construction: invoke_signed receives the instruction record and the
-     signer seed arrays needed when a program signs on behalf of a PDA. *)
-  invoke_signed
+  (* CPI construction: invoke forwards signer/writable privileges from the
+     current instruction; no PDA signer seeds are needed for a plain transfer. *)
+  invoke
     {
       (* The native System Program has the all-zero 32-byte program id. *)
       program_id = Pubkey.zero;
@@ -37,6 +37,3 @@ let entrypoint accounts input =
         Bytes.of_string
           "\002\000\000\000\001\000\000\000\000\000\000\000";
     }
-    (* Signer seeds are nested arrays of byte slices; this smoke test includes
-       one seed group containing the literal "zxcaml". *)
-    (Array.of_list [ Array.of_list [ Bytes.of_string "zxcaml" ] ])

@@ -1,15 +1,15 @@
 (* Demonstrates a P3 SPL Token transfer built as a CPI.
-   The example uses the Tokenkeg program id, source/destination/authority
-   account metas, the Transfer instruction bytes, and invokes the token program. *)
+   The example uses the runtime-supplied token program and source/destination/
+   authority accounts, then invokes the token program without PDA signer seeds. *)
 
 let entrypoint _accounts _input =
   (* SPL Token transfer flow: amount is encoded below in the instruction data. *)
   let amount = 1 in
   (* Keep the amount binding visible to the example and to the compiler pipeline. *)
   let _ = amount in
-  (* CPI construction: invoke_signed forwards the token transfer instruction
-     with no PDA signer seeds for this harness path. *)
-  invoke_signed
+  (* CPI construction: invoke forwards the authority's outer transaction
+     signature to the token program; no PDA signer seeds are required. *)
+  invoke
     {
       (* Legacy SPL Token program id used by the acceptance harness. *)
       program_id = Pubkey.token_program;
@@ -27,5 +27,3 @@ let entrypoint _accounts _input =
          as little-endian u64 bytes. *)
       data = Bytes.of_string "\003\001\000\000\000\000\000\000\000";
     }
-    (* No PDA signer seeds are required for the basic authority-signed transfer. *)
-    (Array.of_list [])
