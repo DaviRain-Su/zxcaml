@@ -164,6 +164,10 @@ name = "account_guard_test"
 path = "account_guard_test.rs"
 
 [[test]]
+name = "artifact_routing_test"
+path = "artifact_routing_test.rs"
+
+[[test]]
 name = "dao_voting_test"
 path = "dao_voting_test.rs"
 

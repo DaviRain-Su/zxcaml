@@ -29,6 +29,8 @@ out/slides/
 build/*.bc
 build/*.so
 !build/.gitkeep
+build/characterization-tests/
+build/syscall_equivalence_host_runner
 
 # Slidev local dependencies
 slides/node_modules/

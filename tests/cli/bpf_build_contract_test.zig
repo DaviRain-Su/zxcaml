@@ -14,6 +14,8 @@ const Allocator = std.mem.Allocator;
 const cli_options = @import("cli_options");
 const srcmap = @import("srcmap");
 
+const characterization_dir_rel = ".zig-cache/characterization-tests";
+
 const CommandResult = struct {
     stdout: []u8,
     stderr: []u8,
@@ -120,12 +122,14 @@ test "cli: bpf build rejects SOLANA_ZIG=0" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
+    try std.testing.expect(std.mem.startsWith(u8, characterization_dir_rel, ".zig-cache/"));
+
     const result = try runBpfBuild(
         allocator,
         io,
         &.{"SOLANA_ZIG=0"},
         "examples/solana_hello.ml",
-        "build/characterization-tests/solana_zig_zero.so",
+        characterization_dir_rel ++ "/solana_zig_zero.so",
     );
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -139,13 +143,13 @@ test "cli: custom SOLANA_ZIG wrapper records direct solana-zig argv" {
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
 
-    try cwd.createDirPath(io, "build/characterization-tests");
+    try cwd.createDirPath(io, characterization_dir_rel);
 
     const root = try repoRoot(allocator, io);
     defer allocator.free(root);
 
-    const wrapper_rel = "build/characterization-tests/solana_zig_wrapper.sh";
-    const wrapper_log_rel = "build/characterization-tests/solana_zig_wrapper.log";
+    const wrapper_rel = characterization_dir_rel ++ "/solana_zig_wrapper.sh";
+    const wrapper_log_rel = characterization_dir_rel ++ "/solana_zig_wrapper.log";
     const wrapper_abs = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, wrapper_rel });
     defer allocator.free(wrapper_abs);
     const wrapper_log_abs = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root, wrapper_log_rel });
@@ -188,7 +192,7 @@ test "cli: custom SOLANA_ZIG wrapper records direct solana-zig argv" {
         io,
         &.{env_assignment},
         "examples/hackathon_greet.ml",
-        "build/characterization-tests/hackathon_greet_wrapper.so",
+        characterization_dir_rel ++ "/hackathon_greet_wrapper.so",
     );
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
@@ -218,7 +222,7 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
 
-    try cwd.createDirPath(io, "build/characterization-tests");
+    try cwd.createDirPath(io, characterization_dir_rel);
 
     cwd.deleteFile(io, "out/solana_hello.map") catch {};
     cwd.deleteFile(io, "out/hackathon_greet.map") catch {};
@@ -228,7 +232,7 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
         io,
         &.{ "-u", "SOLANA_ZIG" },
         "examples/solana_hello.ml",
-        "build/characterization-tests/solana_hello_default.so",
+        characterization_dir_rel ++ "/solana_hello_default.so",
     );
     defer allocator.free(hello_result.stdout);
     defer allocator.free(hello_result.stderr);
@@ -261,7 +265,7 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
         io,
         &.{ "-u", "SOLANA_ZIG" },
         "examples/hackathon_greet.ml",
-        "build/characterization-tests/hackathon_greet_default.so",
+        characterization_dir_rel ++ "/hackathon_greet_default.so",
     );
     defer allocator.free(greet_result.stdout);
     defer allocator.free(greet_result.stderr);

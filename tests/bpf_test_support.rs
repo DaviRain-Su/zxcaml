@@ -158,6 +158,10 @@ pub fn compile_program(example: &str) -> PathBuf {
     compile_program_from_path(&source_path, &output_path)
 }
 
+pub fn host_runner_output_path(host_bin_name: &str) -> PathBuf {
+    repo_root().join("tests").join("target").join(host_bin_name)
+}
+
 pub fn compile_program_and_host_runner(
     example: &str,
     host_runner_relative_path: &str,
@@ -171,7 +175,7 @@ pub fn compile_program_and_host_runner(
     let elf_path = compile_program_from_path_locked(&root, &source_path, &elf_path);
 
     let host_runner_path = root.join(host_runner_relative_path);
-    let host_bin_path = root.join("build").join(host_bin_name);
+    let host_bin_path = host_runner_output_path(host_bin_name);
     compile_host_runner_locked(&root, &host_runner_path, &host_bin_path);
 
     (elf_path, host_bin_path)
@@ -181,12 +185,24 @@ pub fn compile_host_runner(host_runner_relative_path: &str, host_bin_name: &str)
     let root = repo_root();
     let _lock = acquire_build_lock(&root);
     let host_runner_path = root.join(host_runner_relative_path);
-    let host_bin_path = root.join("build").join(host_bin_name);
+    let host_bin_path = host_runner_output_path(host_bin_name);
     compile_host_runner_locked(&root, &host_runner_path, &host_bin_path);
     host_bin_path
 }
 
 fn compile_host_runner_locked(root: &Path, runner_path: &Path, output_path: &Path) {
+    fs::create_dir_all(
+        output_path
+            .parent()
+            .expect("host runner output path must have a parent directory"),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "failed to create host runner output directory for {}: {error}",
+            output_path.display()
+        )
+    });
+
     let root_module_arg = format!("-Mroot={}", runner_path.display());
     let vendored_sdk_arg = format!("-Mvendored_sdk={}", root.join("runtime/zig/sdk/root.zig").display());
     let solana_sdk_m2_arg = format!(
