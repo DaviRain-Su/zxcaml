@@ -230,6 +230,31 @@ test "cli: near rejects Solana syscall capabilities before artifact creation" {
     try std.testing.expect(!fileExists(io, output_path));
 }
 
+test "cli: near rejects account-shaped Solana entrypoints before artifact creation" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const output_path = "/tmp/zxcaml_mtf2_near_reject_log_accounts.wasm";
+
+    cwd.deleteFile(io, output_path) catch {};
+
+    const result = try runNearBuild(
+        allocator,
+        io,
+        &.{},
+        "examples/log_accounts.ml",
+        output_path,
+    );
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "target `near`"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "Solana account API"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "account-shaped accounts parameter"));
+    try std.testing.expect(!fileExists(io, output_path));
+}
+
 test "cli: near rejects duplicate target flags before artifact creation" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

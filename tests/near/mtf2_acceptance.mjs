@@ -214,6 +214,15 @@ async function main() {
 
     const negativeCases = [
       {
+        sourcePath: "examples/log_accounts.ml",
+        outputPath: path.join(tempRoot, "near_reject_log_accounts.wasm"),
+        expectedParts: [
+          /target `near`/,
+          /Solana account API/,
+          /account-shaped accounts parameter/,
+        ],
+      },
+      {
         sourcePath: "examples/syscall_test.ml",
         outputPath: path.join(tempRoot, "near_reject_syscall.wasm"),
         expectedParts: [/target `near`/, /Solana host API/, /Syscall\.sol_sha256/],

@@ -1,9 +1,11 @@
 const std = @import("std");
 const core_ir = @import("../core/ir.zig");
+const layout = @import("../core/layout.zig");
 const target_registry = @import("registry.zig");
 
 pub const Capability = enum {
     solana_host_api,
+    solana_account_api,
     account_data_mutation,
     near_storage_api,
     near_caller_identity_api,
@@ -12,6 +14,7 @@ pub const Capability = enum {
     pub fn label(self: Capability) []const u8 {
         return switch (self) {
             .solana_host_api => "Solana host API",
+            .solana_account_api => "Solana account API",
             .account_data_mutation => "Solana account mutation",
             .near_storage_api => "NEAR storage API",
             .near_caller_identity_api => "NEAR caller identity API",
@@ -47,6 +50,7 @@ pub const ScanResult = union(enum) {
 
 const current_supported_capabilities = [_]Capability{
     .solana_host_api,
+    .solana_account_api,
     .account_data_mutation,
 };
 
@@ -95,6 +99,7 @@ pub fn collectCapabilityUsages(allocator: std.mem.Allocator, module: core_ir.Mod
 
 pub fn scanCapabilityUsages(policy: CapabilityPolicy, usages: []const CapabilityUsage) !ScanResult {
     for (usages) |usage| {
+        if (usage.capability == .solana_account_api and policy.target.build_dispatch != .near) continue;
         if (policySupportsCapability(policy, usage.capability)) continue;
         return .{
             .unsupported = .{
@@ -203,7 +208,7 @@ fn externalApiSurface(external: core_ir.ExternalDecl) []const u8 {
     const capability = classifyExternalCapability(external) orelse return external.name;
     return switch (capability) {
         .near_storage_api, .near_caller_identity_api, .near_promise_api => external.symbol,
-        .solana_host_api, .account_data_mutation => external.name,
+        .solana_host_api, .solana_account_api, .account_data_mutation => external.name,
     };
 }
 
@@ -233,9 +238,13 @@ const UsageCollector = struct {
 
         for (module.decls) |decl| {
             switch (decl) {
-                .Let => |let_decl| try self.collectExpr(let_decl.value),
+                .Let => |let_decl| {
+                    try self.collectTopLevelBinding(let_decl.name, let_decl.value);
+                    try self.collectExpr(let_decl.value);
+                },
                 .LetGroup => |group| {
                     for (group.bindings) |binding| {
+                        try self.collectTopLevelBinding(binding.name, binding.value);
                         try self.collectExpr(binding.value);
                     }
                 },
@@ -409,6 +418,20 @@ const UsageCollector = struct {
         }
         return false;
     }
+
+    fn collectTopLevelBinding(self: *UsageCollector, name: []const u8, value: *const core_ir.Expr) !void {
+        if (!std.mem.eql(u8, name, "entrypoint")) return;
+
+        const lambda = switch (value.*) {
+            .Lambda => |lambda| lambda,
+            else => return,
+        };
+
+        for (lambda.params) |param| {
+            const usage = entrypointParamCapabilityUsage(param, lambda.loc) orelse continue;
+            try self.appendUsage(usage);
+        }
+    }
 };
 
 fn locEql(lhs: ?core_ir.Loc, rhs: ?core_ir.Loc) bool {
@@ -426,6 +449,7 @@ fn locEql(lhs: ?core_ir.Loc, rhs: ?core_ir.Loc) bool {
 fn renderedApiSurface(allocator: std.mem.Allocator, diagnostic: UnsupportedCapabilityDiagnostic) ![]const u8 {
     return switch (diagnostic.capability) {
         .account_data_mutation => std.fmt.allocPrint(allocator, "Account.{s} <-", .{diagnostic.api_surface}),
+        .solana_account_api => diagnostic.api_surface,
         .solana_host_api => if (isAccountFieldName(diagnostic.api_surface))
             std.fmt.allocPrint(allocator, "Account.{s}", .{diagnostic.api_surface})
         else
@@ -469,6 +493,43 @@ fn isAccountRecordType(ty: core_ir.Ty) bool {
         .Record => |record| std.mem.eql(u8, record.name, "account"),
         else => false,
     };
+}
+
+fn isAccountTy(ty: core_ir.Ty) bool {
+    return switch (ty) {
+        .Record => |record| std.mem.eql(u8, record.name, "account") and record.params.len == 0,
+        .Adt => |adt| std.mem.eql(u8, adt.name, "account") and adt.params.len == 0,
+        else => false,
+    };
+}
+
+fn isAccountListTy(ty: core_ir.Ty) bool {
+    const adt = switch (ty) {
+        .Adt => |value| value,
+        else => return false,
+    };
+    if (!std.mem.eql(u8, adt.name, "list") or adt.params.len != 1) return false;
+    return isAccountTy(adt.params[0]);
+}
+
+fn entrypointParamCapabilityUsage(param: core_ir.Param, loc: ?core_ir.Loc) ?CapabilityUsage {
+    if (std.mem.eql(u8, param.name, "accounts") or isAccountListTy(param.ty)) {
+        return .{
+            .capability = .solana_account_api,
+            .api_surface = "account-shaped accounts parameter",
+            .loc = loc,
+        };
+    }
+
+    if (isAccountTy(param.ty)) {
+        return .{
+            .capability = .solana_account_api,
+            .api_surface = "runtime account parameter",
+            .loc = loc,
+        };
+    }
+
+    return null;
 }
 
 fn isAccountFieldName(field_name: []const u8) bool {
@@ -609,6 +670,109 @@ test "near capability policy gives no-storage guidance for Solana host APIs" {
             try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "--target=bpf") != null);
         },
     }
+}
+
+fn exprPtr(arena_allocator: std.mem.Allocator, expr: core_ir.Expr) !*const core_ir.Expr {
+    const owned = try arena_allocator.create(core_ir.Expr);
+    owned.* = expr;
+    return owned;
+}
+
+fn intBodyExpr(arena_allocator: std.mem.Allocator, value: i64) !*const core_ir.Expr {
+    return exprPtr(arena_allocator, .{ .Constant = .{
+        .value = .{ .Int = value },
+        .ty = .Int,
+        .layout = layout.intConstant(),
+    } });
+}
+
+fn moduleWithEntrypointLambda(arena_allocator: std.mem.Allocator, params: []const core_ir.Param) !core_ir.Module {
+    const body = try intBodyExpr(arena_allocator, 0);
+    const ret_ty = try arena_allocator.create(core_ir.Ty);
+    ret_ty.* = .Int;
+    const param_tys = try arena_allocator.alloc(core_ir.Ty, params.len);
+    for (params, 0..) |param, index| param_tys[index] = param.ty;
+    const lambda = try exprPtr(arena_allocator, .{ .Lambda = .{
+        .params = params,
+        .body = body,
+        .ty = .{ .Arrow = .{ .params = param_tys, .ret = ret_ty } },
+        .layout = layout.topLevelLambda(),
+        .loc = sampleLoc(),
+    } });
+    const decls = try arena_allocator.alloc(core_ir.Decl, 1);
+    decls[0] = .{ .Let = .{
+        .name = "entrypoint",
+        .value = lambda,
+        .ty = .{ .Arrow = .{ .params = param_tys, .ret = ret_ty } },
+        .layout = layout.topLevelLambda(),
+    } };
+    return .{ .decls = decls };
+}
+
+test "near capability scan rejects account-shaped entrypoint parameters before codegen" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const account_ty: core_ir.Ty = .{ .Record = .{ .name = "account", .params = &.{} } };
+    const list_params = try arena_allocator.alloc(core_ir.Ty, 1);
+    list_params[0] = account_ty;
+    const params = try arena_allocator.alloc(core_ir.Param, 2);
+    params[0] = .{
+        .name = "accounts",
+        .ty = .{ .Adt = .{ .name = "list", .params = list_params } },
+    };
+    params[1] = .{ .name = "input", .ty = .String };
+
+    const module = try moduleWithEntrypointLambda(arena_allocator, params);
+    const near = target_registry.lookupByCliName("near") orelse return error.TestUnexpectedResult;
+    const result = try scanTargetModuleCapabilities(std.testing.allocator, near, module);
+    switch (result) {
+        .ok => return error.TestExpectedUnsupportedCapability,
+        .unsupported => |diagnostic| {
+            try std.testing.expectEqual(Capability.solana_account_api, diagnostic.capability);
+            try std.testing.expectEqualStrings("account-shaped accounts parameter", diagnostic.api_surface);
+
+            const rendered = try renderUnsupportedCapabilityDiagnostic(std.testing.allocator, diagnostic);
+            defer std.testing.allocator.free(rendered);
+
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "target `near`") != null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "Solana account API") != null);
+            try std.testing.expect(std.mem.indexOf(u8, rendered, "account-shaped accounts parameter") != null);
+        },
+    }
+}
+
+test "non-entrypoint params named accounts do not trigger account capability rejection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const body = try intBodyExpr(arena_allocator, 0);
+    const ret_ty = try arena_allocator.create(core_ir.Ty);
+    ret_ty.* = .Int;
+    const helper_params = try arena_allocator.alloc(core_ir.Param, 1);
+    helper_params[0] = .{ .name = "accounts", .ty = .Int };
+    const helper_param_tys = try arena_allocator.alloc(core_ir.Ty, 1);
+    helper_param_tys[0] = .Int;
+    const helper_lambda = try exprPtr(arena_allocator, .{ .Lambda = .{
+        .params = helper_params,
+        .body = body,
+        .ty = .{ .Arrow = .{ .params = helper_param_tys, .ret = ret_ty } },
+        .layout = layout.topLevelLambda(),
+        .loc = sampleLoc(),
+    } });
+    const decls = try arena_allocator.alloc(core_ir.Decl, 1);
+    decls[0] = .{ .Let = .{
+        .name = "helper",
+        .value = helper_lambda,
+        .ty = .{ .Arrow = .{ .params = helper_param_tys, .ret = ret_ty } },
+        .layout = layout.topLevelLambda(),
+    } };
+    const module = core_ir.Module{ .decls = decls };
+
+    const near = target_registry.lookupByCliName("near") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ScanResult.ok, try scanTargetModuleCapabilities(std.testing.allocator, near, module));
 }
 
 test "wasm capability rendering keeps account mutation context actionable" {
