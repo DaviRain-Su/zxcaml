@@ -1,5 +1,7 @@
 # Wire Compatibility
 
+> **Languages / 语言**: **English** · [简体中文](./zh/wire-compat.md)
+
 DX2 bumps the frontend bridge wire from `1.1` to `1.2` so location-aware
 S-expressions can carry `(loc <file> <line> <col> <end_line> <end_col>)`
 annotations into the Zig bridge. See `docs/diagnostics.md` for the full

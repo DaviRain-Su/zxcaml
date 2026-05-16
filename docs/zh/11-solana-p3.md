@@ -13,10 +13,14 @@ SPL-Token transfer，请 `omlz` 证明某个源文件不分配，并通过 `omlz
 
 - account 数据在 Zig runtime 中被解析为 BPF 输入 buffer 上的零拷贝视图；
 - syscall 和 CPI 直接使用 Solana BPF ABI；
+- 当前 Solana runtime 已切到 **SDK-backed** 形态：通过 vendored
+  `solana-program-sdk-zig` 子树上的 adapter 和 SDK-style entrypoint 提供能力；
 - arena 模型仍对 OCaml 用户隐藏；native build 保留 **32 KiB** entry arena，
   BPF build 使用 **3 KiB** stack-bounded entry arena，以避开 SBF 4 KiB 栈帧上限；
 - `no_alloc` 是保守的 Core IR 分析，不是新的类型系统模式；
-- 当前 IDL 输出是 Anchor-compatible JSON：最初 P3 的 smoke schema 已在已封存 P5 工作中扩展。
+- 当前 IDL 输出是 Anchor-compatible JSON：最初 P3 的 smoke schema 已在已封存 P5 工作中扩展；
+- 本地 deploy/invoke 验证现在统一走 Surfpool harness，默认端口为
+  `127.0.0.1:8899` / `127.0.0.1:8900`，而不是手工管理的旧 validator 会话。
 
 ## 1. Account 处理
 

@@ -21,7 +21,7 @@ The last command should produce `sh.so`, a Solana BPF shared object.
 |---|---:|---|---|
 | Zig | `0.16.0` | Builds `omlz`, the Zig runtime helpers, and generated Zig code | Installs Zig `0.16.0` under `~/zig` if the active `zig` is not exactly `0.16.0` |
 | opam + OCaml | OCaml `5.2.x` | Builds the OCaml `zxc-frontend` glue with upstream `compiler-libs` | Installs `opam` via Homebrew on macOS if needed, creates switch `zxcaml-p1` with OCaml `5.2.1`, and installs `ocamlfind` |
-| solana-cli | stable | Runs the BPF acceptance harness and local validator checks | Installed only when `SOLANA_BPF=1` is set before running `init.sh` |
+| solana-cli | stable | Builds, deploys, and invokes local Solana harnesses | Installed only when `SOLANA_BPF=1` is set before running `init.sh` |
 
 ### P3 dependency state
 
@@ -29,11 +29,14 @@ P3 adds Solana runtime integration but introduces **no new compiler build
 prerequisites** beyond the P1/P2 toolchain listed above. The same `./init.sh`,
 `zig build`, and `zig build test` commands are used locally and in CI.
 
-For BPF acceptance runs, `SOLANA_BPF=1 ./init.sh` must make
-`solana-test-validator` available. The SPL-Token transfer harness additionally
-expects the `spl-token` CLI and the legacy SPL Token program
-`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` on the local validator. No extra
-tool is needed for `omlz check --no-alloc` or `omlz idl`.
+For BPF acceptance runs, `SOLANA_BPF=1 ./init.sh` must make `solana` and
+`solana-keygen` available. The current local Solana flow uses Surfpool, so
+`surfpool`, `curl`, `python3`, and `openssl` must also be on `PATH`; Surfpool
+serves RPC on `127.0.0.1:8899` and WebSocket on `127.0.0.1:8900`. The
+SPL-Token transfer harness additionally expects the `spl-token` CLI and the
+legacy SPL Token program `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` on the
+local harness. No extra tool is needed for `omlz check --no-alloc` or
+`omlz idl`.
 
 `init.sh` deliberately does not install Homebrew or Rust. On fresh macOS, install
 those first:
@@ -58,7 +61,17 @@ This is the same script CI uses. It verifies or installs:
 
 1. `zig 0.16.0`;
 2. `opam`, switch `zxcaml-p1`, OCaml `5.2.1`, `ocamlfind`, and `compiler-libs`;
-3. `solana`, `solana-keygen`, and `solana-test-validator` when `SOLANA_BPF=1`.
+3. `solana` and `solana-keygen` when `SOLANA_BPF=1`.
+
+If you intend to run the local Surfpool harnesses, also ensure these commands
+succeed in the same shell:
+
+```sh
+surfpool --version
+curl --version
+python3 --version
+openssl version
+```
 
 If you intend to run the SPL-Token acceptance harness, also ensure
 `spl-token --version` succeeds in the same shell.
@@ -81,19 +94,19 @@ file sh.so
 
 If you only need to build `omlz` and a BPF `.so`, `./init.sh` without
 `SOLANA_BPF=1` is enough. Use `SOLANA_BPF=1 ./init.sh` when you also want the
-local Solana validator tools.
+Solana CLI pieces needed by the local Surfpool-backed validation harnesses.
 
 ## Troubleshooting
 
 ### Solana CLI installation
 
-If you need local validator workflows (`SOLANA_BPF=1`), ensure these commands
+If you need local Surfpool-backed workflows (`SOLANA_BPF=1`), ensure these commands
 are available after running `init.sh`:
 
 ```sh
 solana --version
 solana-keygen --version
-solana-test-validator --version
+surfpool --version
 ```
 
 ### opam switch creation fails
@@ -133,4 +146,5 @@ zig build test
 zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml
 zig-out/bin/omlz idl tests/idl/entrypoint.ml
 zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
+SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
 ```

@@ -1,5 +1,7 @@
 # omlz-lsp
 
+> **Languages / 语言**: **English** · [简体中文](./zh/lsp.md)
+
 `omlz-lsp` is the P9 language-server entry point for editor diagnostics.
 It follows the Zig stdio JSON-RPC design selected in
 `mission-internal/p9-investigation/report.md` §3: editor clients speak LSP over

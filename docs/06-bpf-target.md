@@ -4,16 +4,18 @@
 
 ## 1. Goal
 
-The original Phase 1 BPF acceptance goal was this command sequence succeeding
-end-to-end on a developer's machine:
+The original Phase 1 BPF acceptance goal is preserved here as historical
+context. The **current** local acceptance path uses the Surfpool-backed harness
+from `tests/solana/**`, with Surfpool serving RPC on `127.0.0.1:8899` and
+WebSocket on `127.0.0.1:8900`:
 
 ```sh
 omlz build examples/solana_hello.ml --target=bpf -o solana_hello.so
-solana-test-validator &                          # in another shell
-solana program deploy ./solana_hello.so
+SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
 ```
 
-…and a subsequent transaction calling the program must return `0`.
+The older `solana-test-validator`-driven flow is now historical only; current
+docs, scripts, and validators assume Surfpool.
 
 > **Output is `.so`, not `.o`.** Solana's BPF loader expects an ELF
 > shared object. We name the artefact `program.so` throughout.
@@ -144,9 +146,9 @@ A BPF `.so` produced by the current pipeline must satisfy:
 1. `llvm-objdump -d solana_hello.so` shows a single exported
    `entrypoint` symbol with valid eBPF (SBPFv2 by default; v3
    opt-in) instructions.
-2. Loadable by `solana-test-validator`:
+2. Loadable by the current Surfpool harness:
    ```sh
-   solana program deploy ./solana_hello.so
+   SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
    ```
    succeeds.
 3. A no-op invocation returns `0`.
@@ -346,9 +348,9 @@ on a per-target basis, which is real design work.
 
 - `omlz build --target=native` is documented for **developer
   convenience only**: it lets you run the compiled program locally to
-  spot integration bugs faster than going through
-  `solana-test-validator`. It is not the primary deployment target;
-  Solana BPF remains the validated target.
+  spot integration bugs faster than going through the Surfpool-backed
+  Solana harness. It is not the primary deployment target; Solana BPF
+  remains the validated target.
 
 ### When a new target becomes a real goal
 

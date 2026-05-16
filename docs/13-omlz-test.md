@@ -1,6 +1,6 @@
 # 13 — `let%test_unit` and `omlz test`
 
-> **Languages / 语言**: **English**
+> **Languages / 语言**: **English** · [简体中文](./zh/13-omlz-test.md)
 >
 > **Scope:** OCaml-native unit tests in `.ml` files, the `omlz test` runner,
 > and LSP CodeLens one-test execution.

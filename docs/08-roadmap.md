@@ -4,9 +4,9 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 86
-`.ml` programs, the Mollusk SVM suite contains 36 Rust integration-test files
-(47 Rust test cases), and P1-P9
+frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 95
+`.ml` programs, the Mollusk SVM suite contains 44 Rust integration-test files
+(66 Rust test cases), and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 Real-world Examples Batch 2 is tracked in [`CHANGELOG.md`](../CHANGELOG.md#real-world-examples-batch-2---2026-05-05).
 Real-world Examples Batch 3 adds the SPL Token primitive examples
@@ -100,6 +100,16 @@ the fmt corpus expansion.
 
 ### Phase 22+ candidates
 
+- **Documentation/process hygiene:** the bilingual docs-sync and drift-prevention
+  pass is part of the sealed maintenance surface. Keep
+  `./scripts/check_docs_sync.sh` green, keep English/Chinese routing
+  reciprocal, and treat Surfpool/local-path drift as a blocker rather than a
+  follow-up chore.
+- **Next priority: Solana DX/API polish planning.** Before reopening broader
+  runtime or compiler scope, the repository's next deliberate product-planning
+  step is a planning-only Solana DX/API polish scaffold: entrypoint ergonomics,
+  account/meta helper naming, Surfpool UX, diagnostics examples, and acceptance
+  gates.
 - **Functional multichain roadmap:** [`docs/19-functional-multichain-roadmap.md`](./19-functional-multichain-roadmap.md)
   records the exploratory thesis that ZxCaml can unify smart-contract business
   logic through a contract-safe OCaml subset while keeping chain runtimes behind

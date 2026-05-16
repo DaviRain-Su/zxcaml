@@ -2,7 +2,7 @@
 
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
-这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.5`，examples 语料包含 86 个 `.ml` 程序，Mollusk SVM 套件包含 36 个 Rust 集成测试文件（47 个 Rust test case），并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
+这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.5`，examples 语料包含 95 个 `.ml` 程序，Mollusk SVM 套件包含 44 个 Rust 集成测试文件（66 个 Rust test case），并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
 Real-world Examples Batch 3 补齐了 `spl_burn`、`spl_close_account` 和 `spl_revoke` 这三个 SPL Token primitive 示例。R13 已作为 account-guard 产品打磨 slice 收束：`Account.*` helper、`account_guard`、IDL signer/writable/error metadata，以及 UI 误用诊断都已有测试和文档覆盖。
 Zig runtime 公契面见 [`docs/zh/runtime-api.md`](./runtime-api.md)。
 
@@ -37,6 +37,28 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 - 一键复现入口是从仓库根目录运行 `make demo`；同一个 hackathon 索引也指向 `make demo-clean` 以及 `scripts/demo/` 下的组件脚本。
 - 当前 demo 叙事的公开落地页是 [`https://zxcaml.pages.dev/`](https://zxcaml.pages.dev/)。它呈现 P1-P9 的编译器状态和 P8 之后的 hackathon 资产，但不会把 demo 包装成新的编译器阶段。
 
+## Phase 19–21 收尾 ledger
+
+Phase 19、Phase 20 与 Phase 21 的运营/文档收尾工作已经封存。它们没有重新打开
+P1-P9 的编译器范围；主要任务是加固 formatter 覆盖、刷新 Factory wiki，并关闭
+fmt corpus 扩张暴露出的 lex-wart 债务。
+
+| Milestone | 状态 | Seal marker / tag | 完成时间 | 说明 |
+|---|---|---|---|---|
+| M-WIKI-2 | ✅ sealed | `post-lspfix3-baseline` + Factory wiki run [`a114e5ee`](https://app.factory.ai/wiki/a114e5ee-acef-458a-bcb7-91c1f95c1c7a) | 2026-05-07 | 把云端 wiki 刷新到 Phase 18 / M-LSPFIX-3 baseline。 |
+| M-FMT-3 | ✅ sealed | `post-fmt3-baseline` | 2026-05-07 | 在保持 formatter 源码锁定的前提下，把 `omlz fmt` corpus 扩到 20 个 golden 轨道。 |
+| M-LSPFIX-3 | ✅ sealed | `post-lspfix3-baseline` | 2026-05-07 | 移除了旧的 Python latency assertion 路径，并恢复严格并行 no-regress 验证。 |
+| M-FMT-FIXES | ✅ sealed | `post-fmt-fixes-baseline` | 2026-05-08 | 修复 polymorphic type-variable、labelled/optional argument 和 PPX-local formatter lex wart。 |
+| M-WIKI-3 | ✅ sealed | `post-fmt-fixes-baseline` + Factory wiki run [`52ce54d4`](https://app.factory.ai/wiki/52ce54d4-145a-4bc1-b530-bd947c501564) | 2026-05-07 | 把云端 wiki 刷新到 Phase 19 + Phase 20 内容。 |
+| M-FMT-DEEPNESTED | ✅ sealed | `post-fmt-deepnested-baseline` | 2026-05-08 | 落地通用 `) word` spacing 规则，并重新捕获唯一 `deeply_nested` golden 变化。 |
+
+### 已关闭的技术债
+
+- **TD-FMT-LEX-WARTS — ✅ closed/resolved** 于 `post-fmt-fixes-baseline`
+  （2026-05-08）关闭。Phase 19 formatter scout 发现的四个 lex-level wart
+  已全部修复并体现在 fmt golden corpus 中；Phase 21 的
+  `post-fmt-deepnested-baseline` 又封存了最终的通用 `) word` spacing 跟进。
+
 ## R-series 产品打磨 ledger
 
 | Slice | 状态 | 完成时间 | 说明 |
@@ -49,6 +71,19 @@ P9 已作为一轮产品级开发者体验改进封存，包含四个 milestone�
 ## 未来 / 可选
 
 下面的内容保留给已封存 P1-P9 编译器范围之外、也不属于 P8 之后 hackathon/demo 工作的可选方向。
+
+### 文档 / 流程卫生（当前维护面）
+
+- 双语文档同步与 drift prevention 已纳入常规维护面。
+- `./scripts/check_docs_sync.sh` 是强制验证器；English/中文路由、Surfpool 术语和路径事实漂移都视为 blocker。
+- 这类工作属于流程卫生，不重新打开已封存的 P1-P9 编译器范围。
+
+### 下一优先级：Solana DX/API polish 规划
+
+- 在重新打开更大范围的 runtime/compiler 工作之前，下一步明确优先级是
+  **planning-only 的 Solana DX/API polish scaffold**。
+- 规划应聚焦 entrypoint ergonomics、account/meta helper naming、Surfpool UX、
+  diagnostics 示例，以及 acceptance gates，而不是直接引入新的大功能。
 
 ### BPF 工具链迁移（可选）
 

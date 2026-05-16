@@ -1,5 +1,7 @@
 # Runtime API
 
+> **Languages / 语言**: **English** · [简体中文](./zh/runtime-api.md)
+
 This document summarizes the post-RT Zig runtime surface that generated ZxCaml code may import.
 It is intentionally source-oriented: every section names the canonical file to inspect before changing behavior.
 The API is small, deterministic, and tuned for Solana BPF entrypoints plus hosted tests.

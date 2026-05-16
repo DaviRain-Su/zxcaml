@@ -14,12 +14,17 @@ The implementation remains runtime-light:
 - account data is parsed in the Zig runtime as zero-copy views over the BPF
   input buffer;
 - syscalls and CPI use the Solana BPF ABI directly;
+- the current Solana runtime is **SDK-backed** over the vendored
+  `solana-program-sdk-zig` subtree and uses the SDK-style entrypoint;
 - the arena model is still hidden from user OCaml; native builds keep a
   **32 KiB** entry arena, while BPF builds use a **3 KiB** stack-bounded entry
   arena to avoid SBF's 4 KiB stack-frame ceiling;
 - `no_alloc` is a conservative Core IR analysis, not a new type-system mode;
 - the current IDL output is Anchor-compatible JSON, expanded after the original
-  P3 smoke schema by sealed P5 work.
+  P3 smoke schema by sealed P5 work;
+- local deploy/invoke validation now goes through the Surfpool harness on
+  `127.0.0.1:8899` / `127.0.0.1:8900`, not a manually managed legacy validator
+  session.
 
 ## 1. Account handling
 

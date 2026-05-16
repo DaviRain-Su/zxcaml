@@ -1,5 +1,7 @@
 # ZxCaml Source Maps
 
+> **Languages / 语言**: **English** · [简体中文](./zh/source-map.md)
+
 ZxCaml source maps connect Solana BPF instruction offsets back to OCaml source
 locations. The design follows the P9 investigation in
 `mission-internal/p9-investigation/report.md` Section 4: emit a deterministic

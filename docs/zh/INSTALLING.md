@@ -21,17 +21,19 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
 |---|---:|---|---|
 | Zig | `0.16.0` | 构建 `omlz`、Zig runtime helper，以及生成出来的 Zig 代码 | 如果当前激活的 `zig` 不是精确的 `0.16.0`，就在 `~/zig` 下安装 Zig `0.16.0` |
 | opam + OCaml | OCaml `5.2.x` | 用上游 `compiler-libs` 构建 OCaml `zxc-frontend` 胶水 | 如有需要，在 macOS 上通过 Homebrew 安装 `opam`，创建带 OCaml `5.2.1` 的 `zxcaml-p1` switch，并安装 `ocamlfind` |
-| solana-cli | stable | 运行 BPF acceptance harness 和本地 validator 检查 | 只有在运行 `init.sh` 前设置了 `SOLANA_BPF=1` 时才安装 |
+| solana-cli | stable | 构建、部署并调用本地 Solana harness | 只有在运行 `init.sh` 前设置了 `SOLANA_BPF=1` 时才安装 |
 
 ### P3 依赖状态
 
 P3 增加 Solana runtime integration，但**没有引入新的编译器构建前置依赖**。
 本地和 CI 仍使用同一套 `./init.sh`、`zig build`、`zig build test` 命令。
 
-运行 BPF acceptance 时，`SOLANA_BPF=1 ./init.sh` 必须让
-`solana-test-validator` 可用。SPL-Token transfer harness 还需要 `spl-token`
-CLI，以及本地 validator 上的 legacy SPL Token program
-`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`。运行
+运行 BPF acceptance 时，`SOLANA_BPF=1 ./init.sh` 必须让 `solana` 与
+`solana-keygen` 可用。当前本地 Solana 路径使用 Surfpool，因此还需要确保
+`surfpool`、`curl`、`python3` 和 `openssl` 在 `PATH` 中；Surfpool 默认使用
+`127.0.0.1:8899`（RPC）与 `127.0.0.1:8900`（WebSocket）。SPL-Token transfer
+harness 还需要 `spl-token` CLI，以及本地 harness 使用的 legacy SPL Token
+program `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`。运行
 `omlz check --no-alloc` 或 `omlz idl` 不需要额外工具。
 
 `init.sh` 有意不安装 Homebrew 或 Rust。在全新的 macOS 上，请先安装它们：
@@ -56,7 +58,16 @@ SOLANA_BPF=1 ./init.sh
 
 1. `zig 0.16.0`；
 2. `opam`、`zxcaml-p1` switch、OCaml `5.2.1`、`ocamlfind` 和 `compiler-libs`；
-3. 当 `SOLANA_BPF=1` 时的 `solana`、`solana-keygen` 和 `solana-test-validator`。
+3. 当 `SOLANA_BPF=1` 时的 `solana` 与 `solana-keygen`。
+
+如果你要运行本地 Surfpool harness，还要确保同一个 shell 中下面这些命令可用：
+
+```sh
+surfpool --version
+curl --version
+python3 --version
+openssl version
+```
 
 如果你要运行 SPL-Token acceptance harness，还要确保同一个 shell 中
 `spl-token --version` 能成功。
@@ -78,20 +89,20 @@ file sh.so
 `file sh.so` 应报告一个 ELF eBPF/SBPF shared object。
 
 如果你只需要构建 `omlz` 和一个 BPF `.so`，不带 `SOLANA_BPF=1` 的
-`./init.sh` 就足够了。当你还需要本地 Solana validator 工具时，使用
-`SOLANA_BPF=1 ./init.sh`。
+`./init.sh` 就足够了。当你还需要本地 Surfpool-backed 验证所需的 Solana CLI
+组件时，使用 `SOLANA_BPF=1 ./init.sh`。
 
 ## 故障排查
 
 ### Solana CLI 安装
 
-如果需要本地 validator 工作流（`SOLANA_BPF=1`），请确保运行 `init.sh`
+如果需要本地 Surfpool 工作流（`SOLANA_BPF=1`），请确保运行 `init.sh`
 后以下命令可用：
 
 ```sh
 solana --version
 solana-keygen --version
-solana-test-validator --version
+surfpool --version
 ```
 
 ### opam switch 创建失败
@@ -132,4 +143,5 @@ zig build test
 zig-out/bin/omlz check --no-alloc examples/arith_wrap.ml
 zig-out/bin/omlz idl tests/idl/entrypoint.ml
 zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
+SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
 ```

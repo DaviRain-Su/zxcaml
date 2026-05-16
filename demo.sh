@@ -71,8 +71,8 @@ echo -e "${GREEN}✔ Compiled to BPF ELF${NC}"
 file /tmp/zxcaml_demo.so
 echo
 
-# ─── Step 4: Deploy to test-validator ────────────────────────────────────────
-echo -e "${YELLOW}${BOLD}[4/5] Deploying to Solana test-validator${NC}"
+# ─── Step 4: Deploy through Surfpool ────────────────────────────────────────
+echo -e "${YELLOW}${BOLD}[4/5] Deploying through Surfpool localnet${NC}"
 if SOLANA_BPF=1 ZXCAML_SOLANA_SRC="$ROOT/examples/demo.ml" ZXCAML_SOLANA_INVOKE_ACCOUNTS=1 "$ROOT/tests/solana/hello/invoke.sh"; then
   echo -e "${GREEN}✔ Deployed and invoked successfully${NC}"
 else

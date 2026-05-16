@@ -1,5 +1,7 @@
 # Diagnostics
 
+> **Languages / 语言**: **English** · [简体中文](./zh/diagnostics.md)
+
 ## Overview
 
 P9 replaces the pre-P9 one-line diagnostic surface with a rustc-style block by

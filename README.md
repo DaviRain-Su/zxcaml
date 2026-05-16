@@ -119,6 +119,7 @@ Useful validation commands:
 ```sh
 zig build test --summary none
 cargo test --manifest-path tests/Cargo.toml
+./scripts/check_docs_sync.sh
 SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
 SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/cross_flow/run.sh
 ```
@@ -213,13 +214,13 @@ explicit future roadmap gates.
 - **Function inlining:** small single-expression functions (≤3 Core IR nodes) are inlined at call sites with alpha-renaming, enabling further constant folding; supports all types including String, ADT, Tuple, and Record
 - **Determinism:** interpreter ≡ Zig native across the current supported examples corpus
 - **CI:** GitHub Actions workflow with `macos-latest` + `ubuntu-latest` matrix runs `./init.sh`, `zig build`, `zig build test`, `cargo test` (Mollusk SVM), P3 `no_alloc` and IDL smoke checks, Mollusk tests, and an examples `omlz check` corpus loop
-- **Mollusk SVM tests:** 36 Rust integration-test files (47 Rust test cases) in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, mutable_state_stress, account_guard, real-world zignocchio ports, and SPL Token primitive coverage). `tests/bpf_test_support.rs` centralizes build/load helpers for these artifacts; the historical ELF post-pass has been removed (see `mission-internal/elf-patch-investigation.md`).
+- **Mollusk SVM tests:** 44 Rust integration-test files (66 Rust test cases) in `tests/` using Mollusk SVM v0.12.1 (hello, demo, simple_cpi, counter, vault, external_demo, crypto_demo, hackathon_greet, mutable_state_stress, account_guard, real-world zignocchio ports, and SPL Token primitive coverage). `tests/bpf_test_support.rs` centralizes build/load helpers for these artifacts; the historical ELF post-pass has been removed (see `mission-internal/elf-patch-investigation.md`).
 - **Diagnostics:** rustc-style diagnostics are the default, with `--error-format=human|json|oneline` and caret spans over source snippets; UI coverage includes common `Account.*` helper misuse cases
 - **LSP:** `omlz-lsp` is installed by `zig build` and provides LSP push diagnostics over stdio JSON-RPC
 - **LSP latency observability:** `make lsp-bench` rebuilds and runs `omlz lsp-bench --warmup 3 --rounds 10`, reporting p50/p99 diagnostics latency against the default 350/800 ms thresholds; see [`docs/17-lsp-latency.md`](./docs/17-lsp-latency.md)
 - **Source maps:** BPF builds emit deterministic source maps, embed `.zxcaml.srcmap` when `llvm-objcopy` is available, and let `omlz unmap` resolve BPF PCs back to OCaml locations.
   Default is direct `solana-zig`; set `SOLANA_ZIG` to any custom command/path (except `0`) to override the binary.
-- **Examples:** 86 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closure, BPF smoke, account/syscall, CPI, SPL-Token, counter, vault, external demo, crypto demo, multi-instruction, region allocation, string demo, tail recursion (TCO), hackathon greeting, zignocchio-port programs, dao_voting, ata_transfer, order_book, spl_burn, spl_close_account, spl_revoke, fixed_amm_quote, mutable_state_stress, and account_guard
+- **Examples:** 95 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closures, BPF smoke, account/syscall, CPI, SPL-Token, account parsing/views, hash/sysvar demos, ATA/order-book/DAO/vault flows, mutable-state stress, and fixed-point quote math; the separate OCaml-native `omlz test` corpus lives under `examples/tests/`
 - **Golden/UI tests:** Core IR/sexp snapshot, UI, and fmt golden tests run
   through `zig build test`; the current committed floor is `zig build test --summary none`
   plus the full Cargo/Mollusk suite

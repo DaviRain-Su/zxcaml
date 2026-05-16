@@ -2,234 +2,176 @@
 
 > **Languages / 语言**: **English** · [简体中文](./zh/07-repo-layout.md)
 
+This document records the **current** repository contract after the CLI/build
+split, runtime-layout normalization, and examples/tests reorganization passes.
+Older path sketches are preserved in history, but the paths below are the ones
+that docs, validators, and generated-code shims should treat as canonical.
+
 ## 1. Top-level
 
 ```text
 ZxCaml/
-├── README.md
-├── docs/                       -- design docs (this directory)
-├── build.zig                   -- single build driver (ADR-011)
-├── build.zig.zon               -- pinned to Zig 0.16
-├── src/
-│   ├── frontend/               -- OCaml glue (zxc-frontend)
-│   │   ├── zxc_frontend.ml
-│   │   ├── zxc_subset.ml
-│   │   ├── zxc_sexp.ml
-│   │   └── zxc_sexp_format.md  -- the wire contract (current 1.5)
-│   ├── frontend_bridge/        -- Zig sexp consumer
-│   │   ├── sexp_lexer.zig
-│   │   ├── sexp_parser.zig
-│   │   └── ttree.zig           -- Zig mirror of accepted Typedtree subset
-│   ├── core/                   -- Core IR (ANF, Layout)
-│   ├── lower/                  -- ArenaStrategy (P1)
-│   ├── backend/                -- ZigBackend, Interpreter, stubs
-│   ├── driver/                 -- CLI pipeline, BPF wiring
-│   ├── util/                   -- arena, diagnostics, interner
-│   ├── main.zig                -- omlz entry point
-│   └── root.zig                -- library re-exports for tests
-├── runtime/
-│   └── zig/                    -- runtime helpers linked into user programs
-├── stdlib/
-│   └── core.ml                 -- option / result / list (real OCaml; subset)
-├── examples/                   -- acceptance corpus + smoke fixtures
-│   ├── hello.ml
-│   ├── option_chain.ml
-│   ├── result_basic.ml
-│   ├── list_sum.ml
-│   ├── enum_adt.ml / tree_adt.ml
-│   ├── nested_pattern.ml / guard_match.ml
-│   ├── tuple_basic.ml / record_person.ml
-│   ├── stdlib_list.ml / closure_adt.ml
-│   └── solana_hello.ml         -- BPF acceptance program
-├── tests/
-│   ├── ui/                     -- end-to-end .ml → expected output
-│   ├── golden/                 -- Core IR + sexp snapshot tests
-│   └── solana/                 -- solana-test-validator integration
-└── .github/workflows/          -- CI
+├── README.md / INSTALLING.md       -- user-facing entry docs
+├── build.zig / build.zig.zon       -- single Zig build driver + dependency pins
+├── src/                            -- compiler, CLI, LSP, frontend bridge
+├── runtime/zig/                    -- runtime core, Solana support, SDK adapters, program ports
+├── stdlib/                         -- bundled OCaml stdlib surface
+├── examples/                       -- user-facing `.ml` examples plus `examples/tests/` OCaml-native test corpus
+├── tests/                          -- Zig, Rust/Mollusk, LSP, UI, golden, and Surfpool harness coverage
+├── scripts/                        -- validators, artifact checks, demo automation
+├── docs/                           -- English docs
+├── docs/zh/                        -- Chinese docs and routed counterparts
+├── vendor/                         -- vendored dependencies (including `solana-program-sdk-zig`)
+├── out/                            -- generated Zig/runtime/source-map artifacts
+└── .github/workflows/              -- CI entrypoints
 ```
 
-### 1.1 Two-language boundary
+### 1.1 Single OCaml ↔ Zig seam
 
-The repo contains exactly one inter-language boundary, at
-`src/frontend/` (OCaml) ↔ `src/frontend_bridge/` (Zig). Both
-sides are small. There is no other OCaml in the repo and no
-other inter-language seam. Build orchestration is in
-`build.zig`, which invokes `ocamlfind` to compile the OCaml side
-(see `09-decisions.md` ADR-011).
+There is still exactly one inter-language boundary:
 
-## 2. `src/` (the compiler)
+- `src/frontend/` — OCaml `compiler-libs` glue (`zxc-frontend`)
+- `src/frontend_bridge/` — Zig wire parser / typedtree mirror
+
+Everything above that seam is upstream-OCaml-facing frontend work; everything
+below it is Zig-owned lowering, runtime, build orchestration, or developer
+tooling.
+
+## 2. `src/` — compiler, CLI, and LSP
 
 ```text
 src/
-├── main.zig                    -- CLI entry: omlz check/build/run
-├── root.zig                    -- library re-exports for tests
-│
-├── util/
-│   ├── arena.zig               -- compiler-internal arena (NOT user-facing)
-│   ├── diag.zig                -- diagnostics with spans
-│   └── intern.zig              -- string / symbol interner
-│
-├── frontend/                   -- OCaml-side glue (compiled to native binary)
-│   ├── zxc_frontend.ml         -- main; drives compiler-libs
-│   ├── zxc_subset.ml           -- Typedtree subset whitelist + walker
-│   ├── zxc_sexp.ml             -- S-expression serialiser
-│   └── zxc_sexp_format.md      -- the versioned wire contract (current 1.5)
-│
-├── frontend_bridge/            -- Zig consumer of the sexp
-│   ├── sexp_lexer.zig
-│   ├── sexp_parser.zig
-│   └── ttree.zig               -- Zig mirror of accepted Typedtree subset
-│
-├── core/
-│   ├── ir.zig                  -- Core IR data model (CONTRACT)
-│   ├── layout.zig              -- Region / Repr / Layout (EXTENSION POINT)
-│   ├── anf.zig                 -- ttree → Core IR
-│   └── pretty.zig              -- IR pretty-printer (golden tests)
-│
-├── lower/
-│   ├── strategy.zig            -- LoweringStrategy interface (EXTENSION POINT)
-│   ├── lir.zig                 -- Lowered IR
-│   └── arena.zig               -- ArenaStrategy (P1 only impl)
-│
-├── backend/
-│   ├── api.zig                 -- Backend interface (EXTENSION POINT)
-│   ├── zig_codegen.zig         -- ZigBackend facade (re-exports zig_codegen/)
-│   ├── zig_codegen/            -- ZigBackend implementation, split by concern
-│   └── interp.zig              -- tree-walk interpreter
-│
-└── driver/
-    ├── pipeline.zig            -- spawns zxc-frontend, drives the rest
-    ├── build.zig               -- invokes ZigBackend, then `zig build-lib` + `sbpf-linker`
-    └── bpf.zig                 -- BPF target wiring
+├── main.zig              -- top-level `omlz` entrypoint and command wiring
+├── build_lock.zig        -- build-output coordination / serialization helpers
+├── frontend/             -- OCaml bridge, formatter front-end, wire emitter
+├── frontend_bridge/      -- sexp lexer/parser + Typedtree mirror
+├── core/                 -- Core IR, ANF lowering, pretty-printers
+├── lower/                -- Lowered IR + lowering strategy
+├── backend/              -- interpreter + Zig codegen
+├── driver/               -- build/run/BPF/source-map orchestration
+├── omlz/                 -- CLI subcommand implementation family
+├── lsp/                  -- `omlz-lsp` implementation
+└── util/                 -- shared compiler utilities
 ```
 
-`src/syntax/` and `src/types/` from the previous draft are gone.
-Their responsibilities now live in `src/frontend/` (OCaml) and
-`src/frontend_bridge/` (Zig) respectively. This is the concrete
-realisation of ADR-010.
+Important ownership boundaries:
 
-### 2.1 Files marked **EXTENSION POINT**
+- `src/main.zig` is the stable CLI executable root.
+- `src/omlz/` owns subcommand behavior; keep public command names and help
+  surfaces stable.
+- `src/driver/` owns build/native/BPF/source-map orchestration.
+- `src/lsp/` owns the stdio JSON-RPC server and benchmark helpers.
 
-These are the only places that sealed region-inference work and optional
-future backend/memory-model work are expected to extend. Touching anything else
-to add a new backend or memory model is a smell.
-
-- `src/core/layout.zig`
-- `src/lower/strategy.zig`
-- `src/backend/api.zig`
-
-### 2.2 Files marked **CONTRACT**
-
-The Core IR data model is the project's stable contract. Changes
-here must update **all** consumers (anf, lower, interp, zig_codegen,
-pretty) in the same change.
-
-- `src/core/ir.zig`
-
-## 3. `runtime/zig/`
+## 3. `runtime/zig/` — runtime core, Solana support, adapters, and ports
 
 ```text
 runtime/zig/
-├── arena.zig                   -- bump allocator
-├── panic.zig                   -- BPF-safe panic
-├── prelude.zig                 -- list cons / tuple helpers / wrap arith
-└── bpf_entry.zig               -- entrypoint shim for Solana
+├── arena.zig / panic.zig / prelude.zig / core.zig
+├── account.zig / cpi.zig / syscalls.zig / sysvar.zig / spl_token.zig / bs58.zig
+├── bpf_entry.zig / native_entry.zig / entry_context.zig
+├── sdk/                  -- SDK-backed adapter roots and import-smoke surfaces
+├── programs/             -- program-port helpers for Solana fixtures/examples
+├── root.zig / shims.zig / solana.zig
+└── *_tests.zig / import_matrix.zig / host runners
 ```
 
-These files are **copied** (or `@embedFile`'d) into the generated
-output, not statically linked from the compiler. They are user-program
-artefacts.
+Current responsibilities are intentionally split:
+
+- **runtime core:** arena, panic, prelude, entry shims
+- **Solana support:** accounts, syscalls, sysvars, CPI, SPL Token, Bs58
+- **SDK adapters:** `runtime/zig/sdk/**` bridges generated/runtime imports onto
+  the vendored `solana-program-sdk-zig` surface
+- **program ports:** `runtime/zig/programs/**` contains example-specific helper
+  entrypoints used by generated code and test fixtures
+
+Generated artifacts copy or embed from this tree; public/generated import paths
+must remain stable or be updated atomically with all consumers.
 
 ## 4. `stdlib/`
 
-```text
-stdlib/
-└── core.ml                     -- option, result, list, basic combinators
-```
+`stdlib/core.ml` and `stdlib/generators.ml` remain the canonical bundled OCaml
+surface. They must stay valid for both:
 
-Rules for `stdlib/`:
+- the upstream OCaml toolchain used by `zxc-frontend`, and
+- the ZxCaml subset consumed by `omlz`.
 
-- Must parse with `omlz`.
-- Must also parse with the real `ocaml` compiler when present (CI gate).
-- May not import anything from `runtime/zig/`. The compiler injects
-  the runtime; stdlib is pure surface code.
-
+`stdlib/` is surface code only; it does not import runtime Zig files directly.
 
 ## 5. `examples/`
 
 ```text
 examples/
-├── hello.ml                    -- list head + Some/None demo
-├── option_chain.ml             -- Option.map / Option.bind acceptance
-├── result_basic.ml             -- Result construction and pattern matching
-├── list_sum.ml                 -- recursive sum over a list
-├── enum_adt.ml                 -- user-defined enum ADT
-├── option_adt.ml / tree_adt.ml -- parameterized and recursive ADTs
-├── nested_pattern.ml           -- nested constructor patterns
-├── guard_match.ml              -- guarded match arms + decision-tree dispatch
-├── tuple_basic.ml              -- tuple construction/destructuring and ADT payloads
-├── record_person.ml            -- records, field access, functional update
-├── stdlib_list.ml              -- expanded List functions with closures
-├── closure_adt.ml              -- closures capturing ADT values
-├── solana_hello.ml             -- canonical BPF acceptance program
-├── factorial.ml                -- recursion smoke test
-├── arith_wrap.ml               -- i64 wrap semantics smoke test
-├── div_zero.ml                 -- stable division-by-zero panic marker
-└── m0_unsupported.ml           -- intentional negative diagnostic fixture
+├── README.md             -- example catalog / taxonomy
+├── *.ml                  -- 95 user-facing example and fixture programs
+├── tests/                -- default `omlz test` discovery root
+└── ml-layout-manifest.tsv
 ```
 
-`examples/` is also a regression suite. Corpus loops must skip
-`m0_unsupported.ml`, which is expected to fail.
+Current example families include:
+
+- core subset / stdlib smoke examples
+- Solana account / syscall / sysvar / CPI / SPL / ATA / vault / DAO flows
+- diagnostics / formatting / mutable-state / fixed-point demos
+- hackathon and comparison fixtures
+
+`examples/tests/*.ml` is the default OCaml-native test corpus for `omlz test`.
+The intentionally failing diagnostic fixture remains `examples/m0_unsupported.ml`
+and should stay excluded from pass-only corpus loops.
 
 ## 6. `tests/`
 
 ```text
 tests/
-├── ui/                         -- end-to-end: .ml file + .expected stdout
-│   ├── hello.ml
-│   └── hello.expected
-├── golden/                     -- IR snapshot tests
-│   ├── hello.ml
-│   └── hello.core.snapshot
-└── solana/
-    ├── hello/                  -- canonical BPF acceptance harness
-    │   ├── solana_hello.ml
-    │   ├── invoke.sh           -- shells solana-test-validator + deploy
-    │   └── expected_output.txt -- stable final lines from invoke.sh
-    └── closures/               -- P2 BPF closure acceptance harness
-        └── invoke.sh
+├── Cargo.toml / *_test.rs         -- Rust/Mollusk integration suite
+├── bpf_test_support.rs            -- shared Rust BPF build/load helpers
+├── equivalence_test_support.rs    -- shared interpreter/native equivalence helpers
+├── cli/ / lsp/ / golden/ / ui/    -- Zig and tooling-focused validation assets
+├── idl/ / inline/ / property/     -- focused compiler/runtime suites
+└── solana/                        -- Surfpool-backed deploy/invoke harnesses
 ```
 
-The `tests/solana/` harness is opt-in (slow, requires the Solana
-toolchain) and not run on every commit. Run it only with
-`SOLANA_BPF=1 tests/solana/hello/invoke.sh`; without that environment
-variable the script prints a skip message and exits successfully. P1
-acceptance is gated on it.
+Key contracts:
 
+- `tests/Cargo.toml` is the stable Rust entrypoint.
+- `tests/solana/**` is the stable Surfpool/localnet harness surface.
+- `tests/ui/**`, `tests/golden/**`, and `tests/lsp/**` are baseline assets; do
+  not move them without same-change harness updates.
 
-## 7. `.github/workflows/`
+## 7. `scripts/`
 
-The CI surface remains `.github/workflows/ci.yml` on `push` to `main` and on pull
-requests. The workflow runs on `macos-latest` and `ubuntu-latest`, calls
-the same root `./init.sh` used locally, then runs:
+`scripts/` is a public automation surface, not just an implementation detail.
+Important entrypoints include:
 
-```text
-zig build
-zig build test
-zig-out/bin/omlz check examples/*.ml   # skipping m0_unsupported.ml
-tests/solana/hello/invoke.sh          # when SOLANA_BPF=1
-```
+- `check_examples_corpus.sh`
+- `check_examples_layout.py`
+- `check_docs_sync.sh`
+- `characterize_build_artifacts.sh`
+- `check_no_obsolete_runtime_surfaces.sh`
+- `check_vendored_sdk_paths.sh`
+- `check_vendored_sdk_secrets.sh`
+- `demo/**`
 
-The examples corpus loop is glob-based, so new `.ml` examples are checked
-without structural CI changes. The Solana BPF harness remains opt-in by
-environment variable; closure and account/CPI acceptance can be run locally
-with the documented `SOLANA_BPF=1` harnesses.
+These commands are referenced by `services.yaml`, CI, docs, and mission
+validators, so repo-root invocation behavior must remain stable.
 
-## 8. Conventions
+## 8. Docs, demos, and generated artifacts
 
-- **No git submodules.** Vendor or fetch via `build.zig.zon`.
-- **No code generation outside `out/`.** Generated `.zig` files
-  never land in `src/`.
-- **No mutable state in `src/util/`.** Everything is per-compilation.
-- **Tests live with the area they test**, except for end-to-end suites
-  under `tests/`.
+- `docs/` and `docs/zh/` are the current-state doc surfaces; bilingual routing
+  is mandatory for active guidance.
+- `scripts/demo/**` is the canonical hackathon/demo automation surface.
+- `demo.sh` is the lightweight repo-root demo wrapper.
+- `out/` is the canonical generated-artifact location for emitted Zig, runtime
+  copies, source maps, and related transient build outputs.
+
+## 9. Conventions
+
+- **Surfpool is the only active local Solana backend.** Current docs and
+  harnesses should not treat any legacy validator workflow as the live path.
+- **Vendor paths are inputs, not refactor targets.** Do not edit
+  `vendor/solana-program-sdk-zig/**` during normal repository cleanup work.
+- **Keep repo-root commands stable.** `zig build`, `cargo test --manifest-path
+  tests/Cargo.toml`, `./scripts/check_examples_corpus.sh`, and
+  `./scripts/check_docs_sync.sh` are compatibility surfaces.
+- **Keep generated code under `out/`.** No emitted artifacts should spill into
+  `src/`, `runtime/zig/`, or example/test fixture directories unless a
+  regeneration flow explicitly requires it.

@@ -4,15 +4,16 @@
 
 ## 1. 目标
 
-最初的 Phase 1 BPF 验收目标，是下面这条命令链能在开发者机器上端到端跑通：
+最初的 Phase 1 BPF 验收目标保留在这里作为历史背景。**当前** 本地验收路径
+使用 `tests/solana/**` 下的 Surfpool harness；Surfpool 默认提供
+`127.0.0.1:8899`（RPC）与 `127.0.0.1:8900`（WebSocket）：
 
 ```sh
 omlz build examples/solana_hello.ml --target=bpf -o solana_hello.so
-solana-test-validator &                          # 另一个 shell
-solana program deploy ./solana_hello.so
+SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
 ```
 
-…然后向这个程序发起的事务必须返回 `0`。
+旧的 `solana-test-validator` 驱动流程现在仅保留为历史说明；当前文档、脚本和验证器都以 Surfpool 为准。
 
 > **产物是 `.so`，不是 `.o`。** Solana 的 BPF loader 接受的是 ELF 共享对象。
 > 整篇文档里我们都把产物叫 `program.so`。
@@ -131,9 +132,9 @@ zig build-exe -O Debug out/program.zig
 
 1. `llvm-objdump -d solana_hello.so` 显示一个 export 出去的
    `entrypoint` 符号，带合法 eBPF（默认 SBPFv2，v3 可选）指令。
-2. 能被 `solana-test-validator` 加载：
+2. 能被当前 Surfpool harness 成功部署与调用：
    ```sh
-   solana program deploy ./solana_hello.so
+   SOLANA_BPF=1 SOLANA_RPC_PORT=8899 tests/solana/hello/invoke.sh
    ```
    成功。
 3. 一次 no-op 调用返回 `0`。
@@ -143,6 +144,21 @@ zig build-exe -O Debug out/program.zig
 5. section 布局检查应稳定，不出现低地址 (<0x100) 的可读数据段符号；Zig 0.16 的低地址怪癖见 §4 的注。
 
 1–3、5 是 canonical hello 验收检查。启用 Solana harness 时，closure 相关 BPF 验收由 `tests/solana/closures/` 单独覆盖。
+
+## 7.5 静态 profiling 报告
+
+`omlz check --report=<kinds>` 会对优化后、region-inference 之后的 Core IR 做静态分析，
+并把确定性的报告打印到 stdout。该报告是 **opt-in** 的；不传 `--report` 时，
+`omlz check` 的默认行为不变。
+
+```sh
+omlz check --report=cu examples/factorial.ml
+omlz check --report=stack examples/factorial.ml
+omlz check --report=all examples/factorial.ml
+omlz check --report=cu,stack examples/hello.ml
+```
+
+目前支持的 kind 仍是 `cu`、`stack` 与 `all`；非法取值继续报 `E0200`。
 
 
 ## 8. 可能出错的点（以及怎么应对）
@@ -234,8 +250,9 @@ Anchor-compatible IDL；upgrade-authority 和 multisig 流程仍在 compiler tar
 ### 我们 **顺带** 允许什么
 
 - `omlz build --target=native` 文档化为 **仅供开发便利**：
-  它让你能本地跑编译产物以更快发现集成 bug，比走 `solana-test-validator` 快。
-  这**不**是被支持的交付物；我们不承诺稳定性、性能、功能对等。
+  它让你能本地跑编译产物以更快发现集成 bug，比走 Surfpool-backed
+  Solana harness 更快。这**不**是被支持的交付物；我们不承诺稳定性、
+  性能、功能对等。
 
 ### 一个新目标在什么情况下会成为真实目标
 

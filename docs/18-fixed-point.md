@@ -1,6 +1,6 @@
 # 18 — Fixed-point math
 
-> **Languages / 语言**: **English**
+> **Languages / 语言**: **English** · [简体中文](./zh/18-fixed-point.md)
 
 ## 1. Scope
 

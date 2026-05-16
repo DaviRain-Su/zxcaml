@@ -1,5 +1,7 @@
 # 19 — Functional Multichain Roadmap
 
+> **Languages / 语言**: **English** · [简体中文](./zh/19-functional-multichain-roadmap.md)
+
 > **Status:** exploratory product/architecture direction. This document records a
 > planning thesis, not a committed phase. Any implementation slice must still
 > land through the activation gates in [`08-roadmap.md`](./08-roadmap.md) and an

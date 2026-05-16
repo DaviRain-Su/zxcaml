@@ -1,6 +1,6 @@
 # 12 — Real-world examples
 
-> **Languages / 语言**: **English**
+> **Languages / 语言**: **English** · [简体中文](./zh/12-real-world-examples.md)
 >
 > **Scope:** zignocchio-inspired Solana examples in `examples/*.ml`, with the
 > Milestone E ports called out explicitly.
