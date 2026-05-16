@@ -13,12 +13,13 @@ const arena_bytes = 32 * 1024;
 
 var wasm_arena_buffer: [arena_bytes]u8 align(8) = undefined;
 var wasm_empty_input: [48]u8 align(8) = [_]u8{0} ** 48;
+const wasm_program_id: [32]u8 = [_]u8{0} ** 32;
 
 export fn entrypoint() callconv(.c) u64 {
     var arena = Arena.fromStaticBuffer(&wasm_arena_buffer);
     const empty_accounts: []AccountRuntime.AccountView = &.{};
     const empty_instruction_data: []const u8 = &.{};
-    const status = program.omlz_user_entrypoint(&arena, wasm_empty_input[0..].ptr, empty_accounts, empty_instruction_data);
+    const status = program.omlz_user_entrypoint(&arena, wasm_empty_input[0..].ptr, &wasm_program_id, empty_accounts, empty_instruction_data);
     arena.reset();
     return status;
 }

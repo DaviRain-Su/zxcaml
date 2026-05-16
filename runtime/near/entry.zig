@@ -16,13 +16,14 @@ const success_log = "omlz near entrypoint";
 var near_arena_buffer: [arena_bytes]u8 align(8) = undefined;
 var near_input_buffer: [host.max_input_bytes]u8 align(8) = undefined;
 var near_status_buffer: [8]u8 align(8) = undefined;
+const near_program_id: [32]u8 = [_]u8{0} ** 32;
 
 export fn entrypoint() callconv(.c) void {
     const input = host.requireInput(near_input_buffer[0..]);
 
     var arena = Arena.fromStaticBuffer(&near_arena_buffer);
     const empty_accounts: []AccountRuntime.AccountView = &.{};
-    const status = program.omlz_user_entrypoint(&arena, near_input_buffer[0..].ptr, empty_accounts, input);
+    const status = program.omlz_user_entrypoint(&arena, near_input_buffer[0..].ptr, &near_program_id, empty_accounts, input);
     arena.reset();
 
     host.log(success_log);

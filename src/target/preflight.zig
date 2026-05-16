@@ -282,13 +282,15 @@ fn probeLlvmObjcopy(
         };
     }
 
-    if (try driver_bpf.findLlvmObjcopyFallback(allocator, io)) |path| {
-        return .{
-            .label = requirement.label,
-            .severity = requirement.severity,
-            .status = .ok,
-            .detail = path,
-        };
+    if (runner.context == @as(*anyopaque, @ptrCast(&system_runner_context))) {
+        if (try driver_bpf.findLlvmObjcopyFallback(allocator, io)) |path| {
+            return .{
+                .label = requirement.label,
+                .severity = requirement.severity,
+                .status = .ok,
+                .detail = path,
+            };
+        }
     }
 
     return .{
