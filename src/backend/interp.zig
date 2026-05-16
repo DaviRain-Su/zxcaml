@@ -756,6 +756,25 @@ fn evalFixedAmountApp(
     }
 
     if (args.len == 2) {
+        const matches_binary_fixed =
+            std.mem.eql(u8, name, "Fixed.add") or
+            std.mem.eql(u8, name, "Fixed.sub") or
+            std.mem.eql(u8, name, "Fixed.mul") or
+            std.mem.eql(u8, name, "Fixed.div") or
+            std.mem.eql(u8, name, "Fixed.mul_int") or
+            std.mem.eql(u8, name, "Fixed.div_int") or
+            std.mem.eql(u8, name, "Fixed.ratio") or
+            std.mem.eql(u8, name, "Fixed.apply") or
+            std.mem.eql(u8, name, "Fixed.compare") or
+            std.mem.eql(u8, name, "Fixed.equal") or
+            std.mem.eql(u8, name, "Fixed.min") or
+            std.mem.eql(u8, name, "Fixed.max") or
+            std.mem.eql(u8, name, "Amount.apply_rate") or
+            std.mem.eql(u8, name, "Amount.fee_bps") or
+            std.mem.eql(u8, name, "Amount.discount_bps") or
+            std.mem.eql(u8, name, "Amount.premium_bps");
+        if (!matches_binary_fixed) return null;
+
         const left = try intValue(try evalExpr(allocator, args[0].*, env));
         const right = try intValue(try evalExpr(allocator, args[1].*, env));
         if (std.mem.eql(u8, name, "Fixed.add")) return .{ .Int = wrappingAdd(left, right) };
@@ -870,8 +889,10 @@ fn evalPrim(allocator: std.mem.Allocator, prim: ir.Prim, env: *std.StringHashMap
         },
         else => {
             if (prim.args.len != 2) return error.ArityMismatch;
-            const lhs = try intValue(try evalExpr(allocator, prim.args[0].*, env));
-            const rhs = try intValue(try evalExpr(allocator, prim.args[1].*, env));
+            const lhs_value = try evalExpr(allocator, prim.args[0].*, env);
+            const rhs_value = try evalExpr(allocator, prim.args[1].*, env);
+            const lhs = try intValue(lhs_value);
+            const rhs = try intValue(rhs_value);
             return switch (prim.op) {
                 .Add => .{ .Int = wrappingAdd(lhs, rhs) },
                 .Sub => .{ .Int = wrappingSub(lhs, rhs) },
@@ -1329,6 +1350,13 @@ fn makeExpr(comptime expr: ir.Expr) *const ir.Expr {
     return &S.value;
 }
 
+fn makeTy(comptime ty: ir.Ty) *const ir.Ty {
+    const S = struct {
+        const value = ty;
+    };
+    return &S.value;
+}
+
 fn testLet(comptime name: []const u8, comptime value: i64) ir.Decl {
     return .{ .Let = .{
         .name = name,
@@ -1698,6 +1726,48 @@ test "interpreter evaluates a recursive top-level function" {
     };
 
     try std.testing.expectEqual(@as(u64, 7), try evalModule(.{ .decls = &decls }));
+}
+
+test "unknown two-arg names are not intercepted as fixed helpers for list args" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const list = try allocator.create(ListValue);
+    list.* = .nil;
+
+    var env = std.StringHashMap(Value).init(allocator);
+    defer env.deinit();
+    try env.put("xs", .{ .List = list });
+
+    const args = [_]*const ir.Expr{
+        makeExpr(.{ .Var = .{ .name = "xs", .ty = .{ .Adt = .{ .name = "list", .params = &.{.Int} } }, .layout = layout.structPack() } }),
+        makeExpr(.{ .Constant = .{ .value = .{ .Int = 7 }, .ty = .Int, .layout = layout.intConstant() } }),
+    };
+
+    try std.testing.expectEqual(@as(?Value, null), try evalStdlibApp(allocator, "pick_second", &args, &env));
+}
+
+test "unknown two-arg names are not intercepted as fixed helpers for closure args" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var env = std.StringHashMap(Value).init(allocator);
+    defer env.deinit();
+    try env.put("f", .{ .Lambda = .{
+        .params = &.{.{ .name = "x", .ty = .Int }},
+        .body = makeExpr(.{ .Var = .{ .name = "x", .ty = .Int, .layout = layout.intConstant() } }),
+        .ty = .{ .Arrow = .{ .params = &.{.Int}, .ret = makeTy(.Int) } },
+        .layout = layout.topLevelLambda(),
+    } });
+
+    const args = [_]*const ir.Expr{
+        makeExpr(.{ .Var = .{ .name = "f", .ty = .{ .Arrow = .{ .params = &.{.Int}, .ret = makeTy(.Int) } }, .layout = layout.topLevelLambda() } }),
+        makeExpr(.{ .Constant = .{ .value = .{ .Int = 7 }, .ty = .Int, .layout = layout.intConstant() } }),
+    };
+
+    try std.testing.expectEqual(@as(?Value, null), try evalStdlibApp(allocator, "make_generator", &args, &env));
 }
 
 test "interpreter backend trait exposes direct eval and rejects source emission" {
