@@ -35,6 +35,11 @@ fn runCommand(allocator: Allocator, io: Io, argv: []const []const u8) !CommandRe
     return .{ .stdout = result.stdout, .stderr = result.stderr, .exit_code = exit_code };
 }
 
+fn fileExists(io: Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
+}
+
 fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return true;
     if (haystack.len < needle.len) return false;
@@ -141,4 +146,91 @@ test "cli: default error format matches explicit human" {
     try std.testing.expectEqual(default_result.exit_code, explicit_result.exit_code);
     try std.testing.expectEqualStrings(default_result.stdout, explicit_result.stdout);
     try std.testing.expectEqualStrings(default_result.stderr, explicit_result.stderr);
+}
+
+test "cli: build help advertises wasm as experimental generic freestanding only" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const argv = [_][]const u8{ cli_options.omlz_bin, "build", "--help" };
+    const result = try runCommand(allocator, io, &argv);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "--target=wasm"));
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "experimental generic freestanding WASM"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "NEAR"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "CosmWasm"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "Substrate"));
+    try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "EVM"));
+}
+
+test "cli: invalid and alias build targets fail before artifact side effects" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+
+    const cases = [_]struct {
+        target: []const u8,
+        output_path: []const u8,
+    }{
+        .{ .target = "near", .output_path = "out/invalid_target_near.wasm" },
+        .{ .target = "evm", .output_path = "out/invalid_target_evm.wasm" },
+        .{ .target = "cosmwasm", .output_path = "out/invalid_target_cosmwasm.wasm" },
+        .{ .target = "substrate", .output_path = "out/invalid_target_substrate.wasm" },
+        .{ .target = "wasm32", .output_path = "out/invalid_target_wasm32.wasm" },
+        .{ .target = "generic-wasm", .output_path = "out/invalid_target_generic_wasm.wasm" },
+        .{ .target = "webassembly", .output_path = "out/invalid_target_webassembly.wasm" },
+        .{ .target = "WASM", .output_path = "out/invalid_target_uppercase_wasm.wasm" },
+        .{ .target = "solana", .output_path = "out/invalid_target_solana.wasm" },
+        .{ .target = "sbf", .output_path = "out/invalid_target_sbf.wasm" },
+    };
+
+    for (cases) |case| {
+        cwd.deleteFile(io, case.output_path) catch {};
+        const target_flag = try std.fmt.allocPrint(allocator, "--target={s}", .{case.target});
+        defer allocator.free(target_flag);
+
+        const argv = [_][]const u8{
+            cli_options.omlz_bin,
+            "build",
+            target_flag,
+            "tests/fixtures/does_not_exist.ml",
+            "-o",
+            case.output_path,
+        };
+        const result = try runCommand(allocator, io, &argv);
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+
+        try std.testing.expect(result.exit_code != 0);
+        try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "unsupported build target; expected native, bpf or wasm."));
+        try std.testing.expect(!outputContainsNeedle(result.stdout, result.stderr, "failed to run zxc-frontend subprocess"));
+        try std.testing.expect(!fileExists(io, case.output_path));
+    }
+}
+
+test "cli: omitted build target remains invalid" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const output_path = "out/invalid_target_omitted.wasm";
+
+    cwd.deleteFile(io, output_path) catch {};
+
+    const argv = [_][]const u8{
+        cli_options.omlz_bin,
+        "build",
+        "examples/m0_zero.ml",
+        "-o",
+        output_path,
+    };
+    const result = try runCommand(allocator, io, &argv);
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    try std.testing.expect(result.exit_code != 0);
+    try std.testing.expect(outputContainsNeedle(result.stdout, result.stderr, "unsupported build option"));
+    try std.testing.expect(!fileExists(io, output_path));
 }

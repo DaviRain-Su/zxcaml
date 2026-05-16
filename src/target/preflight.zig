@@ -115,6 +115,10 @@ const native_requirements = [_]ToolRequirement{
     native_tool_specs[0].requirement,
 };
 
+const wasm_requirements = [_]ToolRequirement{
+    native_tool_specs[0].requirement,
+};
+
 const bpf_requirements = [_]ToolRequirement{
     bpf_tool_specs[0].requirement,
     bpf_tool_specs[1].requirement,
@@ -128,6 +132,7 @@ var system_runner_context: u8 = 0;
 pub fn toolRequirementsForTarget(target: *const target_registry.TargetContract) []const ToolRequirement {
     return switch (target.build_dispatch) {
         .native => native_requirements[0..],
+        .wasm => wasm_requirements[0..],
         .bpf => bpf_requirements[0..],
     };
 }
@@ -178,6 +183,7 @@ pub fn hasBlockingFailure(probes: []const ToolProbe) bool {
 fn toolSpecsForTarget(target: *const target_registry.TargetContract) []const ToolSpec {
     return switch (target.build_dispatch) {
         .native => native_tool_specs[0..],
+        .wasm => native_tool_specs[0..],
         .bpf => bpf_tool_specs[0..],
     };
 }

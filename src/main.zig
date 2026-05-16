@@ -10,6 +10,8 @@
 //! - Dispatch `omlz build --target=bpf <file.ml> -o <out.so>` through the direct
 //!   `solana-zig build-lib` path (default when `SOLANA_ZIG` is unset/empty/`1`; custom
 //!   values are treated as command/path overrides except `0`).
+//! - Reserve an experimental generic freestanding `omlz build --target=wasm`
+//!   dispatch seam without implying adapter readiness.
 //! - Dispatch `omlz bench` through a fixed local BPF fixture set and print compile metrics.
 //! - Dispatch `omlz doctor` through local toolchain probes and print health status.
 //! - Reject all unimplemented commands with a non-zero exit status.
@@ -282,6 +284,7 @@ pub fn main(init: std.process.Init) !void {
                 switch (resolved_target.build_dispatch) {
                     .bpf => try buildBpf(init, resolved_target, parsed.module, build_args),
                     .native => try buildNative(init, resolved_target, parsed.module, build_args),
+                    .wasm => try buildWasm(init, resolved_target, parsed.module, build_args),
                 }
             },
             .failed => |code| std.process.exit(if (code == 0) 1 else code),
@@ -311,6 +314,7 @@ fn writeHelp(io: Io) !void {
         \\  omlz idl <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
+        \\  omlz build --target=wasm [--keep-zig] <file.ml> [-o <out.wasm>]
         \\  omlz run <file.ml>
         \\  omlz test [--filter SUBSTR] [--format=cargo|json] [FILE...]
         \\  omlz fmt [--check|--write|--stdin] [--format=text|json] [FILE_OR_DIR...]
@@ -379,10 +383,12 @@ fn writeBuildHelp(io: Io) !void {
         \\Usage:
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
         \\  omlz build --target=bpf [--keep-zig] [--no-srcmap] <file.ml> [-o <out.so>]
+        \\  omlz build --target=wasm [--keep-zig] <file.ml> [-o <out.wasm>]
         \\
         \\Flags:
         \\  --target=native  Build a native executable for local testing.
         \\  --target=bpf     Build a Solana BPF shared object.
+        \\  --target=wasm    Build experimental generic freestanding WASM.
         \\  --keep-zig       Keep the generated Zig source under out/program.zig.
         \\  --no-srcmap      Skip the default out/<name>.map BPF source-map sidecar.
         \\  -o <path>        Write the compiled artifact to the given path.
@@ -1394,6 +1400,20 @@ fn buildBpf(
     };
 }
 
+fn buildWasm(
+    init: std.process.Init,
+    target: *const target_registry.TargetContract,
+    module: @import("frontend_bridge/ttree.zig").Module,
+    build_args: BuildArgs,
+) !void {
+    _ = target;
+    _ = module;
+    _ = build_args;
+
+    try writeStderr(init.io, "error: experimental generic freestanding WASM build dispatch is not implemented yet.\n");
+    std.process.exit(1);
+}
+
 fn sourceMapProgramName(allocator: std.mem.Allocator, input_file: []const u8) ![]const u8 {
     const base = std.fs.path.basename(input_file);
     const stem = if (std.mem.endsWith(u8, base, ".ml")) base[0 .. base.len - ".ml".len] else base;
@@ -1796,6 +1816,42 @@ test "parse F07 native build arguments without requiring keep-zig" {
     try std.testing.expect(!parsed.keep_zig);
     try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
     try std.testing.expectEqualStrings("/tmp/m0", parsed.output_path.?);
+}
+
+test "parse build arguments accepts exact wasm target spelling" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "--target=wasm",
+        "--keep-zig",
+        "examples/m0_zero.ml",
+    };
+
+    const parsed = try parseBuildArgs(&args);
+    try std.testing.expectEqualStrings("wasm", parsed.target);
+    try std.testing.expect(parsed.keep_zig);
+    try std.testing.expectEqualStrings("examples/m0_zero.ml", parsed.input_file);
+    try std.testing.expectEqual(@as(?[]const u8, null), parsed.output_path);
+    try std.testing.expect(parsed.srcmap);
+}
+
+test "parse build arguments preserves existing bpf forms" {
+    const args = [_][]const u8{
+        "omlz",
+        "build",
+        "--target=bpf",
+        "--no-srcmap",
+        "examples/hackathon_greet.ml",
+        "-o",
+        "/tmp/hackathon_greet.so",
+    };
+
+    const parsed = try parseBuildArgs(&args);
+    try std.testing.expectEqualStrings("bpf", parsed.target);
+    try std.testing.expect(!parsed.keep_zig);
+    try std.testing.expectEqualStrings("examples/hackathon_greet.ml", parsed.input_file);
+    try std.testing.expectEqualStrings("/tmp/hackathon_greet.so", parsed.output_path.?);
+    try std.testing.expect(!parsed.srcmap);
 }
 
 test "parse build arguments rejects omitted target" {

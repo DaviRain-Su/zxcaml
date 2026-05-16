@@ -381,8 +381,9 @@ test "synthetic unsupported capability diagnostic is target-aware and actionable
     }
 }
 
-test "reserved future targets remain unable to bypass CLI registry dispatch" {
-    try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("wasm"));
+test "experimental wasm is dispatchable while future targets remain rejected" {
+    const wasm = try target_registry.resolveBuildTarget("wasm");
+    try std.testing.expectEqualStrings("wasm", wasm.cli_name);
     try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("near"));
     try std.testing.expectError(error.UnsupportedBuildTarget, target_registry.resolveBuildTarget("evm"));
 }

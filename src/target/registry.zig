@@ -3,6 +3,7 @@ const std = @import("std");
 pub const Family = enum {
     native,
     solana_sbf,
+    generic_wasm,
 };
 
 pub const SupportStatus = enum {
@@ -15,11 +16,13 @@ pub const SupportStatus = enum {
 pub const ArtifactType = enum {
     executable,
     solana_shared_object,
+    wasm_module,
 };
 
 pub const BuildDispatch = enum {
     native,
     bpf,
+    wasm,
 };
 
 pub const TargetContract = struct {
@@ -41,8 +44,15 @@ pub const TargetContract = struct {
     supports_no_srcmap: bool,
 };
 
-fn isBuildDispatchSupported(target: TargetContract) bool {
+fn isSupportedTarget(target: TargetContract) bool {
     return target.support_status == .supported;
+}
+
+fn isBuildDispatchable(target: TargetContract) bool {
+    return switch (target.support_status) {
+        .supported, .experimental => true,
+        .reserved, .accepted => false,
+    };
 }
 
 pub fn supportedTargets(allocator: std.mem.Allocator) ![]*const TargetContract {
@@ -54,7 +64,7 @@ fn supportedTargetsInRegistry(allocator: std.mem.Allocator, targets: []const Tar
     defer supported.deinit(allocator);
 
     for (targets) |*target| {
-        if (!isBuildDispatchSupported(target.*)) continue;
+        if (!isSupportedTarget(target.*)) continue;
         try supported.append(allocator, target);
     }
 
@@ -67,7 +77,6 @@ pub fn lookupByCliName(name: []const u8) ?*const TargetContract {
 
 fn lookupByCliNameInRegistry(targets: []const TargetContract, name: []const u8) ?*const TargetContract {
     for (targets) |*target| {
-        if (!isBuildDispatchSupported(target.*)) continue;
         if (std.mem.eql(u8, target.cli_name, name)) return target;
     }
     return null;
@@ -78,7 +87,9 @@ pub fn resolveBuildTarget(name: []const u8) !*const TargetContract {
 }
 
 fn resolveBuildTargetInRegistry(targets: []const TargetContract, name: []const u8) !*const TargetContract {
-    return lookupByCliNameInRegistry(targets, name) orelse error.UnsupportedBuildTarget;
+    const target = lookupByCliNameInRegistry(targets, name) orelse return error.UnsupportedBuildTarget;
+    if (!isBuildDispatchable(target.*)) return error.UnsupportedBuildTarget;
+    return target;
 }
 
 pub fn acceptedTargetNamesText(allocator: std.mem.Allocator) ![]u8 {
@@ -91,12 +102,12 @@ fn acceptedTargetNamesTextInRegistry(allocator: std.mem.Allocator, targets: []co
 
     var supported_count: usize = 0;
     for (targets) |target| {
-        if (isBuildDispatchSupported(target)) supported_count += 1;
+        if (isBuildDispatchable(target)) supported_count += 1;
     }
 
     var emitted_count: usize = 0;
     for (targets) |target| {
-        if (!isBuildDispatchSupported(target)) continue;
+        if (!isBuildDispatchable(target)) continue;
 
         if (emitted_count > 0) {
             const separator = if (emitted_count + 1 == supported_count) " or " else ", ";
@@ -146,23 +157,42 @@ const registry = [_]TargetContract{
         .requires_output_path = false,
         .supports_no_srcmap = true,
     },
+    .{
+        .cli_name = "wasm",
+        .family = .generic_wasm,
+        .support_status = .experimental,
+        .backend_facade = "zig_codegen",
+        .backend_output_language = "zig",
+        .artifact_type = .wasm_module,
+        .runtime_adapter = "experimental generic freestanding wasm runtime",
+        .host_adapter = "none (import-free)",
+        .entrypoint_contract = "exported pure functions",
+        .calling_convention = "WebAssembly export ABI",
+        .memory_plan = "freestanding linear memory + arena",
+        .panic_error_strategy = "trap aborts module",
+        .build_dispatch = .wasm,
+        .keep_zig_supported = true,
+        .requires_output_path = false,
+        .supports_no_srcmap = false,
+    },
 };
 
 fn syntheticUnsupportedTarget(name: []const u8, support_status: SupportStatus) TargetContract {
+    const is_wasm = std.mem.eql(u8, name, "wasm");
     return .{
         .cli_name = name,
-        .family = .native,
+        .family = if (is_wasm) .generic_wasm else .native,
         .support_status = support_status,
         .backend_facade = "zig_codegen",
         .backend_output_language = "zig",
-        .artifact_type = .executable,
-        .runtime_adapter = "runtime/zig/synthetic_entry.zig",
-        .host_adapter = "none",
-        .entrypoint_contract = "synthetic unsupported fixture",
-        .calling_convention = "fixture ABI",
-        .memory_plan = "fixture only",
-        .panic_error_strategy = "fixture only",
-        .build_dispatch = .native,
+        .artifact_type = if (is_wasm) .wasm_module else .executable,
+        .runtime_adapter = if (is_wasm) "experimental generic freestanding wasm runtime" else "runtime/zig/synthetic_entry.zig",
+        .host_adapter = if (is_wasm) "none (import-free)" else "none",
+        .entrypoint_contract = if (is_wasm) "exported pure functions" else "synthetic unsupported fixture",
+        .calling_convention = if (is_wasm) "WebAssembly export ABI" else "fixture ABI",
+        .memory_plan = if (is_wasm) "freestanding linear memory + arena" else "fixture only",
+        .panic_error_strategy = if (is_wasm) "trap aborts module" else "fixture only",
+        .build_dispatch = if (is_wasm) .wasm else .native,
         .keep_zig_supported = true,
         .requires_output_path = false,
         .supports_no_srcmap = false,
@@ -227,6 +257,26 @@ test "registry: lookup exposes bpf metadata" {
     try std.testing.expect(target.supports_no_srcmap);
 }
 
+test "registry: lookup exposes experimental generic wasm metadata" {
+    const target = lookupByCliName("wasm") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("wasm", target.cli_name);
+    try std.testing.expectEqualStrings("generic_wasm", @tagName(target.family));
+    try std.testing.expectEqual(SupportStatus.experimental, target.support_status);
+    try std.testing.expectEqualStrings("zig_codegen", target.backend_facade);
+    try std.testing.expectEqualStrings("zig", target.backend_output_language);
+    try std.testing.expectEqualStrings("wasm_module", @tagName(target.artifact_type));
+    try std.testing.expectEqualStrings("experimental generic freestanding wasm runtime", target.runtime_adapter);
+    try std.testing.expectEqualStrings("none (import-free)", target.host_adapter);
+    try std.testing.expectEqualStrings("exported pure functions", target.entrypoint_contract);
+    try std.testing.expectEqualStrings("WebAssembly export ABI", target.calling_convention);
+    try std.testing.expectEqualStrings("freestanding linear memory + arena", target.memory_plan);
+    try std.testing.expectEqualStrings("trap aborts module", target.panic_error_strategy);
+    try std.testing.expectEqualStrings("wasm", @tagName(target.build_dispatch));
+    try std.testing.expect(target.keep_zig_supported);
+    try std.testing.expect(!target.requires_output_path);
+    try std.testing.expect(!target.supports_no_srcmap);
+}
+
 test "registry: support status semantics only expose current supported targets" {
     const supported = try supportedTargets(std.testing.allocator);
     defer std.testing.allocator.free(supported);
@@ -236,18 +286,27 @@ test "registry: support status semantics only expose current supported targets" 
     }
 }
 
-test "registry: unsupported build targets stay rejected" {
-    try std.testing.expectEqual(@as(?*const TargetContract, null), lookupByCliName("wasm"));
+test "registry: exact lowercase wasm is dispatchable while future targets stay rejected" {
+    const wasm = try resolveBuildTarget("wasm");
+    try std.testing.expectEqualStrings("wasm", wasm.cli_name);
+    try std.testing.expectEqual(SupportStatus.experimental, wasm.support_status);
+    try std.testing.expectEqualStrings("wasm", @tagName(wasm.build_dispatch));
+
     try std.testing.expectEqual(@as(?*const TargetContract, null), lookupByCliName("near"));
     try std.testing.expectEqual(@as(?*const TargetContract, null), lookupByCliName("evm"));
-    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("wasm"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("near"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("evm"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("wasm32"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("generic-wasm"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("webassembly"));
+    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTarget("WASM"));
 }
 
 test "registry: accepted target diagnostic is registry-derived" {
     const rendered = try acceptedTargetNamesText(std.testing.allocator);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("native or bpf", rendered);
+    try std.testing.expectEqualStrings("native, bpf or wasm", rendered);
 }
 
 test "registry: dispatch kind resolves from looked-up target" {
@@ -256,6 +315,9 @@ test "registry: dispatch kind resolves from looked-up target" {
 
     const bpf = try resolveBuildTarget("bpf");
     try std.testing.expectEqual(BuildDispatch.bpf, bpf.build_dispatch);
+
+    const wasm = try resolveBuildTarget("wasm");
+    try std.testing.expectEqualStrings("wasm", @tagName(wasm.build_dispatch));
 }
 
 test "registry: synthetic unsupported entries stay out of supported target names" {
@@ -275,18 +337,20 @@ test "registry: synthetic unsupported entries stay out of accepted target diagno
     const rendered = try acceptedTargetNamesTextInRegistry(std.testing.allocator, fixture[0..]);
     defer std.testing.allocator.free(rendered);
 
-    try std.testing.expectEqualStrings("native or bpf", rendered);
+    try std.testing.expectEqualStrings("native, wasm or bpf", rendered);
 }
 
-test "registry: synthetic unsupported entries cannot become build dispatch targets" {
+test "registry: synthetic experimental entries are dispatchable while reserved ones are not" {
     const fixture = syntheticUnsupportedFixture();
 
     const native = try resolveBuildTargetInRegistry(fixture[0..], "native");
     try std.testing.expectEqual(BuildDispatch.native, native.build_dispatch);
 
+    const wasm = try resolveBuildTargetInRegistry(fixture[0..], "wasm");
+    try std.testing.expectEqualStrings("wasm", @tagName(wasm.build_dispatch));
+
     const bpf = try resolveBuildTargetInRegistry(fixture[0..], "bpf");
     try std.testing.expectEqual(BuildDispatch.bpf, bpf.build_dispatch);
 
-    try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTargetInRegistry(fixture[0..], "wasm"));
     try std.testing.expectError(error.UnsupportedBuildTarget, resolveBuildTargetInRegistry(fixture[0..], "near"));
 }
