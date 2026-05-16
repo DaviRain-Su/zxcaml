@@ -475,6 +475,7 @@ inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolAccou
 
 /// Derives a program address from seeds and a program id.
 pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
+    if (!validateSeeds(seeds)) return invalid_seeds;
     var seed_slices_buf: [max_seeds][]const u8 = undefined;
     for (seeds, 0..) |seed, index| {
         seed_slices_buf[index] = seedBytes(seed);
@@ -488,6 +489,7 @@ pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_i
 
 /// Finds a valid program address and bump seed for a seed prefix.
 pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
+    if (seeds.len >= max_seeds or !validateSeeds(seeds)) return invalid_seeds;
     var seed_slices_buf: [max_seeds][]const u8 = undefined;
     for (seeds, 0..) |seed, index| {
         seed_slices_buf[index] = seedBytes(seed);
@@ -663,6 +665,45 @@ fn buildDuplicateCpiInput(buf: *[32768]u8) void {
     std.mem.writeInt(u64, ptr[0..8], 0, .little);
 }
 
+fn filledSeedByte(byte: u8) [32]u8 {
+    return [_]u8{byte} ** 32;
+}
+
+fn compareFindWithVendoredSdk(seed_slices: []const []const u8, program_id: *const Pubkey) !void {
+    var c_seeds: [max_seeds]SolSignerSeed = undefined;
+    for (seed_slices, 0..) |seed, index| {
+        c_seeds[index] = SolSignerSeed.fromSlice(seed);
+    }
+
+    var observed: Pubkey = undefined;
+    var observed_bump: u8 = 0;
+    try std.testing.expectEqual(
+        success,
+        sol_try_find_program_address(c_seeds[0..seed_slices.len], program_id, &observed, &observed_bump),
+    );
+
+    const expected = try vendored_sdk.pda.findProgramAddress(seed_slices, program_id);
+    try std.testing.expectEqualSlices(u8, expected.address[0..], observed[0..]);
+    try std.testing.expectEqual(expected.bump_seed, observed_bump);
+
+    var with_bump_slices: [max_seeds][]const u8 = undefined;
+    for (seed_slices, 0..) |seed, index| with_bump_slices[index] = seed;
+    const bump_bytes = [_]u8{observed_bump};
+    with_bump_slices[seed_slices.len] = bump_bytes[0..];
+
+    var with_bump_c: [max_seeds]SolSignerSeed = undefined;
+    for (with_bump_slices[0 .. seed_slices.len + 1], 0..) |seed, index| {
+        with_bump_c[index] = SolSignerSeed.fromSlice(seed);
+    }
+
+    var recreated: Pubkey = undefined;
+    try std.testing.expectEqual(
+        success,
+        sol_create_program_address(with_bump_c[0 .. seed_slices.len + 1], program_id, &recreated),
+    );
+    try std.testing.expectEqualSlices(u8, expected.address[0..], recreated[0..]);
+}
+
 test "CPI syscall dispatch addresses match assigned MurmurHash3-32 values" {
     try std.testing.expectEqual(@as(usize, 0xa22b9c85), sol_invoke_signed_c_address);
     try std.testing.expectEqual(@as(usize, 0x9377323c), sol_create_program_address_address);
@@ -709,6 +750,73 @@ test "hosted PDA derivation is deterministic and finds a bump" {
     try std.testing.expectEqual(success, sol_create_program_address(bumped_seeds[0..], &program_id, &second));
     try std.testing.expectEqualSlices(u8, &first, &second);
     try std.testing.expectEqualSlices(u8, &found, &first);
+}
+
+test "PDA helper accepts boundary-length seeds matching SDK canonical bump" {
+    var program_id: Pubkey = filledSeedByte(0x7E);
+    var seed_storage: [15][32]u8 = undefined;
+    var seed_slices: [15][]const u8 = undefined;
+    for (0..15) |index| {
+        seed_storage[index] = filledSeedByte(@intCast(index + 1));
+        seed_slices[index] = seed_storage[index][0..];
+    }
+
+    try compareFindWithVendoredSdk(seed_slices[0..], &program_id);
+}
+
+test "PDA helper rejects overlong seeds like the SDK" {
+    var program_id: Pubkey = filledSeedByte(0x11);
+    var overlong = [_]u8{0xEE} ** 33;
+    var c_seeds = [_]SolSignerSeed{SolSignerSeed.fromSlice(overlong[0..])};
+
+    var observed: Pubkey = undefined;
+    try std.testing.expectEqual(
+        invalid_seeds,
+        sol_create_program_address(c_seeds[0..], &program_id, &observed),
+    );
+    try std.testing.expectError(
+        error.MaxSeedLengthExceeded,
+        vendored_sdk.pda.createProgramAddress(&.{overlong[0..]}, &program_id),
+    );
+}
+
+test "PDA find helper rejects seed lists that cannot fit a canonical bump without panicking" {
+    var program_id: Pubkey = filledSeedByte(0x22);
+    var seed_storage: [16][1]u8 = undefined;
+    var c_seeds: [16]SolSignerSeed = undefined;
+    for (0..16) |index| {
+        seed_storage[index][0] = @intCast(index);
+        c_seeds[index] = SolSignerSeed.fromSlice(seed_storage[index][0..]);
+    }
+
+    var observed: Pubkey = undefined;
+    var bump: u8 = 0;
+    try std.testing.expectEqual(
+        invalid_seeds,
+        sol_try_find_program_address(c_seeds[0..], &program_id, &observed, &bump),
+    );
+}
+
+test "PDA create helper rejects too many seeds like the SDK" {
+    var program_id: Pubkey = [_]u8{0x33} ** 32;
+    var seed_storage: [17][1]u8 = undefined;
+    var c_seeds: [17]SolSignerSeed = undefined;
+    var seed_slices: [17][]const u8 = undefined;
+    for (0..17) |index| {
+        seed_storage[index][0] = @intCast(index);
+        c_seeds[index] = SolSignerSeed.fromSlice(seed_storage[index][0..]);
+        seed_slices[index] = seed_storage[index][0..];
+    }
+
+    var observed: Pubkey = undefined;
+    try std.testing.expectEqual(
+        invalid_seeds,
+        sol_create_program_address(c_seeds[0..], &program_id, &observed),
+    );
+    try std.testing.expectError(
+        error.MaxSeedLengthExceeded,
+        vendored_sdk.pda.createProgramAddress(seed_slices[0..], &program_id),
+    );
 }
 
 test "CPI account info parser resolves duplicate accounts to shared backing state" {
