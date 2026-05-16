@@ -4,26 +4,61 @@ const std = @import("std");
 const bs58 = @import("../bs58.zig");
 const cpi = @import("../cpi.zig");
 const spl_token = @import("../spl_token.zig");
+const sol = @import("solana_program_sdk");
+const sdk_ata = @import("spl_ata_m4");
 
 /// Canonical Associated Token Account program id as base58.
 pub const program_id_base58 = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
-/// Canonical Associated Token Account program id decoded at comptime.
-pub const program_id: cpi.Pubkey = decodeProgramIdComptime();
+/// Canonical Associated Token Account program id.
+pub const program_id: cpi.Pubkey = sdk_ata.PROGRAM_ID;
 
 /// Canonical System Program id.
-pub const system_program_id: cpi.Pubkey = [_]u8{0} ** 32;
+pub const system_program_id: cpi.Pubkey = sol.system_program_id;
 
 /// Associated Token Account CreateIdempotent instruction discriminator.
-pub const create_idempotent_discriminator: u8 = 1;
+pub const create_idempotent_discriminator: u8 = @intFromEnum(sdk_ata.create_idempotent_spec.disc);
 /// CreateIdempotent instruction data length: one u8 discriminator.
-pub const create_idempotent_instruction_data_len: usize = 1;
+pub const create_idempotent_instruction_data_len: usize = sdk_ata.create_idempotent_spec.data_len;
 /// CreateIdempotent account count: funding, ATA, owner, mint, System Program, SPL Token program.
-pub const create_idempotent_account_count: usize = 6;
+pub const create_idempotent_account_count: usize = sdk_ata.create_idempotent_spec.accounts_len;
+
+pub const Error = error{
+    InvalidInstructionDiscriminant,
+    InvalidInstructionLength,
+};
+
+pub const InstructionKind = enum {
+    create_idempotent,
+};
+
+pub const AssociatedTokenAddress = struct {
+    address: cpi.Pubkey,
+    bump_seed: u8,
+};
 
 /// Encodes Associated Token Account CreateIdempotent instruction data.
 pub fn encodeCreateIdempotent() [create_idempotent_instruction_data_len]u8 {
     return .{create_idempotent_discriminator};
+}
+
+pub fn findAssociatedTokenAddress(
+    owner: *const cpi.Pubkey,
+    mint: *const cpi.Pubkey,
+    token_program: *const cpi.Pubkey,
+) AssociatedTokenAddress {
+    const derived = sdk_ata.findAddress(owner, mint, token_program);
+    return .{
+        .address = derived.address,
+        .bump_seed = derived.bump_seed,
+    };
+}
+
+pub fn findAssociatedTokenAddressClassic(
+    owner: *const cpi.Pubkey,
+    mint: *const cpi.Pubkey,
+) AssociatedTokenAddress {
+    return findAssociatedTokenAddress(owner, mint, &spl_token.program_id);
 }
 
 /// Builds account metas for CreateIdempotent.
@@ -77,24 +112,25 @@ pub fn createIdempotentWithPrograms(
     metas: *[create_idempotent_account_count]cpi.SolAccountMeta,
     data: *[create_idempotent_instruction_data_len]u8,
 ) cpi.SolInstruction {
-    metas.* = createIdempotentAccountMetas(funding, associated_token_account, owner, mint, system_program, token_program);
-    data.* = encodeCreateIdempotent();
+    var scratch: sdk_ata.Scratch(sdk_ata.create_idempotent_spec) = undefined;
+    _ = sdk_ata.createIdempotentForAddress(
+        funding,
+        associated_token_account,
+        owner,
+        mint,
+        system_program,
+        token_program,
+        &scratch,
+    );
+    metas.* = @bitCast(scratch.metas);
+    data.* = scratch.data;
     return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
-fn decodeProgramIdComptime() cpi.Pubkey {
-    @setEvalBranchQuota(20_000);
-    var scratch: [128]u8 = undefined;
-    var fixed = std.heap.FixedBufferAllocator.init(scratch[0..]);
-    const decoded = bs58.decode(fixed.allocator(), "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL") catch {
-        @compileError("invalid Associated Token Account program id base58 literal");
-    };
-    if (decoded.len != spl_token.pubkey_len) {
-        @compileError("Associated Token Account program id must decode to 32 bytes");
-    }
-    var out: cpi.Pubkey = undefined;
-    @memcpy(out[0..], decoded[0..spl_token.pubkey_len]);
-    return out;
+pub fn validateInstructionData(data: []const u8) Error!InstructionKind {
+    if (data.len != create_idempotent_instruction_data_len) return error.InvalidInstructionLength;
+    if (data[0] != create_idempotent_discriminator) return error.InvalidInstructionDiscriminant;
+    return .create_idempotent;
 }
 
 test "ATA program id matches canonical AToken address" {
@@ -144,6 +180,16 @@ test "ATA flow can reuse SPL Token InitializeAccount data" {
     try std.testing.expectEqual(spl_token.initialize_account_discriminator, initialize_account_data[0]);
 }
 
+test "ATA derivation matches classic associated token address seeds" {
+    const owner: cpi.Pubkey = .{0x44} ** spl_token.pubkey_len;
+    const mint: cpi.Pubkey = .{0x55} ** spl_token.pubkey_len;
+    const derived = findAssociatedTokenAddressClassic(&owner, &mint);
+    const vendored = sdk_ata.findAddressClassic(&owner, &mint);
+
+    try std.testing.expectEqual(vendored.bump_seed, derived.bump_seed);
+    try std.testing.expectEqualSlices(u8, &vendored.address, &derived.address);
+}
+
 test "ATA CreateIdempotent explicit program metas stay readonly nonsigner" {
     var funding: cpi.Pubkey = [_]u8{1} ** spl_token.pubkey_len;
     var associated_token_account: cpi.Pubkey = [_]u8{2} ** spl_token.pubkey_len;
@@ -172,4 +218,10 @@ test "ATA CreateIdempotent explicit program metas stay readonly nonsigner" {
     try std.testing.expect(metas[5].pubkey == &explicit_token_program);
     try std.testing.expectEqual(@as(u8, 0), metas[5].is_writable);
     try std.testing.expectEqual(@as(u8, 0), metas[5].is_signer);
+}
+
+test "ATA instruction validator rejects malformed input" {
+    try std.testing.expectEqual(.create_idempotent, try validateInstructionData(&.{1}));
+    try std.testing.expectError(error.InvalidInstructionLength, validateInstructionData(&.{}));
+    try std.testing.expectError(error.InvalidInstructionDiscriminant, validateInstructionData(&.{0}));
 }

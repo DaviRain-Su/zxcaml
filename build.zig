@@ -226,7 +226,7 @@ pub fn build(b: *std.Build) void {
     const run_runtime_ata_tests = b.addRunArtifact(runtime_ata_tests);
 
     const vendored_solana_program_sdk_module = b.createModule(.{
-        .root_source_file = b.path("vendor/solana-program-sdk-zig/src/root.zig"),
+        .root_source_file = b.path("runtime/zig/sdk/solana_program_sdk_m4.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -235,6 +235,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    vendored_solana_program_sdk_module.addImport("solana_sdk_m2", vendored_solana_sdk_m2_module);
     const vendored_solana_codec_module = b.createModule(.{
         .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig"),
         .target = target,
@@ -242,30 +243,18 @@ pub fn build(b: *std.Build) void {
     });
     vendored_solana_codec_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
     const vendored_spl_token_module = b.createModule(.{
-        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-token/src/root.zig"),
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-token/src/zxcaml_m4_root.zig"),
         .target = target,
         .optimize = optimize,
     });
     vendored_spl_token_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
     vendored_spl_token_module.addImport("solana_codec", vendored_solana_codec_module);
     const vendored_spl_ata_module = b.createModule(.{
-        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-ata/src/root.zig"),
+        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-ata/src/zxcaml_m4_root.zig"),
         .target = target,
         .optimize = optimize,
     });
     vendored_spl_ata_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
-    const vendored_solana_system_module = b.createModule(.{
-        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/solana-system/src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vendored_solana_system_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
-    const vendored_spl_memo_module = b.createModule(.{
-        .root_source_file = b.path("vendor/solana-program-sdk-zig/packages/spl-memo/src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    vendored_spl_memo_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
 
     const vendored_sdk_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/sdk/root.zig"),
@@ -278,6 +267,13 @@ pub fn build(b: *std.Build) void {
     runtime_cpi_test_module.addImport("vendored_sdk", vendored_sdk_module);
     runtime_spl_token_test_module.addImport("vendored_sdk", vendored_sdk_module);
     runtime_ata_test_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_spl_token_test_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    runtime_spl_token_test_module.addImport("solana_codec", vendored_solana_codec_module);
+    runtime_spl_token_test_module.addImport("spl_token_m4", vendored_spl_token_module);
+    runtime_ata_test_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    runtime_ata_test_module.addImport("solana_codec", vendored_solana_codec_module);
+    runtime_ata_test_module.addImport("spl_token_m4", vendored_spl_token_module);
+    runtime_ata_test_module.addImport("spl_ata_m4", vendored_spl_ata_module);
 
     const vendored_sdk_import_smoke_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/sdk/import_smoke.zig"),
@@ -299,6 +295,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     runtime_programs_test_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_programs_test_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    runtime_programs_test_module.addImport("solana_codec", vendored_solana_codec_module);
+    runtime_programs_test_module.addImport("spl_token_m4", vendored_spl_token_module);
+    runtime_programs_test_module.addImport("spl_ata_m4", vendored_spl_ata_module);
     const runtime_programs_tests = b.addTest(.{
         .name = "runtime-programs-test",
         .root_module = runtime_programs_test_module,

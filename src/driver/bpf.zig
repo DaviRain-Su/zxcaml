@@ -54,6 +54,10 @@ pub const SourceMapHook = struct {
 const srcmap_section_name = ".zxcaml.srcmap";
 const vendored_sdk_runtime_root = "out/runtime/sdk/root.zig";
 const vendored_solana_sdk_m2_root = "vendor/solana-program-sdk-zig/src/zxcaml_m2_root.zig";
+const vendored_solana_program_sdk_root = "runtime/zig/sdk/solana_program_sdk_m4.zig";
+const vendored_solana_codec_root = "vendor/solana-program-sdk-zig/packages/solana-codec/src/root.zig";
+const vendored_spl_token_m4_root = "vendor/solana-program-sdk-zig/packages/spl-token/src/zxcaml_m4_root.zig";
+const vendored_spl_ata_m4_root = "vendor/solana-program-sdk-zig/packages/spl-ata/src/zxcaml_m4_root.zig";
 
 /// Builds a Solana-loadable SBPF ELF shared object from generated Zig source.
 ///
@@ -123,6 +127,14 @@ fn appendVendoredSdkModuleArgs(
     try args.appendSlice(allocator, &.{
         "--dep",
         "vendored_sdk",
+        "--dep",
+        "solana_program_sdk",
+        "--dep",
+        "solana_codec",
+        "--dep",
+        "spl_token_m4",
+        "--dep",
+        "spl_ata_m4",
     });
     try args.append(allocator, root_module_arg);
     try args.appendSlice(allocator, &.{
@@ -130,6 +142,20 @@ fn appendVendoredSdkModuleArgs(
         "solana_sdk_m2",
         "-Mvendored_sdk=" ++ vendored_sdk_runtime_root,
         "-Msolana_sdk_m2=" ++ vendored_solana_sdk_m2_root,
+        "--dep",
+        "solana_sdk_m2",
+        "-Msolana_program_sdk=" ++ vendored_solana_program_sdk_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Msolana_codec=" ++ vendored_solana_codec_root,
+        "--dep",
+        "solana_program_sdk",
+        "--dep",
+        "solana_codec",
+        "-Mspl_token_m4=" ++ vendored_spl_token_m4_root,
+        "--dep",
+        "solana_program_sdk",
+        "-Mspl_ata_m4=" ++ vendored_spl_ata_m4_root,
     });
 }
 

@@ -9,58 +9,64 @@ const std = @import("std");
 const Arena = @import("arena.zig").Arena;
 const bs58 = @import("bs58.zig");
 const cpi = @import("cpi.zig");
+const sdk_spl_token = @import("spl_token_m4");
 
 /// 32-byte Solana public key.
 pub const Pubkey = cpi.Pubkey;
 
 /// Length of a Solana public key in bytes.
-pub const pubkey_len: usize = 32;
+pub const pubkey_len: usize = @sizeOf(Pubkey);
 /// SPL Token Transfer instruction discriminator.
-pub const transfer_discriminator: u8 = 3;
+pub const transfer_discriminator: u8 = @intFromEnum(sdk_spl_token.TokenInstruction.transfer);
 /// SPL Token Transfer instruction data length: one u8 discriminator plus u64 amount.
-pub const transfer_instruction_data_len: usize = 9;
+pub const transfer_instruction_data_len: usize = sdk_spl_token.transfer_spec.data_len;
 /// SPL Token InitializeAccount instruction discriminator.
-pub const initialize_account_discriminator: u8 = 1;
+pub const initialize_account_discriminator: u8 = @intFromEnum(sdk_spl_token.TokenInstruction.initialize_account);
 /// SPL Token InitializeAccount instruction data length: one u8 discriminator.
-pub const initialize_account_instruction_data_len: usize = 1;
+pub const initialize_account_instruction_data_len: usize = sdk_spl_token.initialize_account_spec.data_len;
 /// SPL Token InitializeAccount account count: account, mint, owner, rent sysvar.
-pub const initialize_account_account_count: usize = 4;
+pub const initialize_account_account_count: usize = sdk_spl_token.initialize_account_spec.accounts_len;
 /// SPL Token Burn instruction discriminator.
-pub const burn_discriminator: u8 = 8;
+pub const burn_discriminator: u8 = @intFromEnum(sdk_spl_token.TokenInstruction.burn);
 /// SPL Token Burn instruction data length: one u8 discriminator plus u64 amount.
-pub const burn_instruction_data_len: usize = 9;
+pub const burn_instruction_data_len: usize = sdk_spl_token.burn_spec.data_len;
 /// SPL Token Burn account count: account, mint, authority.
-pub const burn_account_count: usize = 3;
+pub const burn_account_count: usize = sdk_spl_token.burn_spec.accounts_len;
 /// SPL Token CloseAccount instruction discriminator.
-pub const close_account_discriminator: u8 = 9;
+pub const close_account_discriminator: u8 = @intFromEnum(sdk_spl_token.TokenInstruction.close_account);
 /// SPL Token CloseAccount instruction data length: one u8 discriminator.
-pub const close_account_instruction_data_len: usize = 1;
+pub const close_account_instruction_data_len: usize = sdk_spl_token.close_account_spec.data_len;
 /// SPL Token CloseAccount account count: account, destination, authority.
-pub const close_account_account_count: usize = 3;
+pub const close_account_account_count: usize = sdk_spl_token.close_account_spec.accounts_len;
 /// SPL Token Revoke instruction discriminator.
-pub const revoke_discriminator: u8 = 5;
+pub const revoke_discriminator: u8 = @intFromEnum(sdk_spl_token.TokenInstruction.revoke);
 /// SPL Token Revoke instruction data length: one u8 discriminator.
-pub const revoke_instruction_data_len: usize = 1;
+pub const revoke_instruction_data_len: usize = sdk_spl_token.revoke_spec.data_len;
 /// SPL Token Revoke account count: source, authority.
-pub const revoke_account_count: usize = 2;
+pub const revoke_account_count: usize = sdk_spl_token.revoke_spec.accounts_len;
 /// Canonical packed SPL Token account length.
-pub const token_account_len: usize = 165;
+pub const token_account_len: usize = sdk_spl_token.ACCOUNT_LEN;
+/// Canonical packed SPL Mint account length.
+pub const mint_len: usize = sdk_spl_token.MINT_LEN;
 const max_cpi_account_infos: usize = 4;
 const pre_original_data_len_padding: usize = 4;
 const max_permitted_data_increase: usize = 10 * 1024;
 const account_alignment: usize = 8;
+const transfer_account_count: usize = 3;
 
 /// Canonical SPL Token program id as base58 for diagnostics and tests.
 pub const program_id_base58 = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
-/// Canonical SPL Token program id decoded at comptime from `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`.
-pub const program_id: Pubkey = decodeProgramIdComptime();
+/// Canonical SPL Token program id.
+pub const program_id: Pubkey = sdk_spl_token.PROGRAM_ID;
 
 /// Errors returned by SPL Token runtime helpers.
 pub const Error = error{
     OutputTooShort,
     TruncatedInput,
     InvalidOptionTag,
+    InvalidInstructionDiscriminant,
+    InvalidInstructionLength,
 };
 
 /// Zero-copy view over the canonical SPL Token account state.
@@ -75,6 +81,23 @@ pub const TokenAccountView = struct {
     close_authority: ?*const Pubkey,
 };
 
+/// Zero-copy view over the canonical SPL Mint account state.
+pub const MintView = struct {
+    mint_authority: ?*const Pubkey,
+    supply: u64,
+    decimals: u8,
+    is_initialized: u8,
+    freeze_authority: ?*const Pubkey,
+};
+
+pub const InstructionKind = enum {
+    transfer,
+    initialize_account,
+    burn,
+    close_account,
+    revoke,
+};
+
 /// Writes the canonical SPL Token program id into a caller-owned stack or arena buffer.
 pub inline fn writeProgramId(out: *Pubkey) void {
     out.* = program_id;
@@ -82,30 +105,15 @@ pub inline fn writeProgramId(out: *Pubkey) void {
 
 /// Writes an SPL Token program id from either raw bytes or the canonical base58 text.
 pub fn writeProgramIdFromBytes(out: *Pubkey, bytes: []const u8) bool {
-    if (bytes.len == pubkey_len) {
-        @memcpy(out[0..], bytes[0..pubkey_len]);
+    if (bytes.len == pubkey_len and std.mem.eql(u8, bytes, &program_id)) {
+        writeProgramId(out);
         return true;
     }
-    if (bytes.len == program_id_base58.len) {
+    if (bytes.len == program_id_base58.len and std.mem.eql(u8, bytes, program_id_base58)) {
         writeProgramId(out);
         return true;
     }
     return false;
-}
-
-fn decodeProgramIdComptime() Pubkey {
-    @setEvalBranchQuota(20_000);
-    var scratch: [128]u8 = undefined;
-    var fixed = std.heap.FixedBufferAllocator.init(scratch[0..]);
-    const decoded = bs58.decode(fixed.allocator(), program_id_base58) catch {
-        @compileError("invalid SPL Token program id base58 literal");
-    };
-    if (decoded.len != pubkey_len) {
-        @compileError("SPL Token program id must decode to 32 bytes");
-    }
-    var out: Pubkey = undefined;
-    @memcpy(out[0..], decoded[0..pubkey_len]);
-    return out;
 }
 
 /// Encodes SPL Token Transfer instruction data into a fixed-size array.
@@ -163,8 +171,14 @@ pub fn initializeAccountInstruction(
     metas: *[initialize_account_account_count]cpi.SolAccountMeta,
     data: *[initialize_account_instruction_data_len]u8,
 ) cpi.SolInstruction {
-    metas.* = initializeAccountMetas(account_pubkey, mint, owner, rent_sysvar);
-    data.* = encodeInitializeAccount();
+    _ = rent_sysvar;
+    _ = sdk_spl_token.initializeAccount(
+        account_pubkey,
+        mint,
+        owner,
+        @ptrCast(metas),
+        data,
+    );
     return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
@@ -225,8 +239,14 @@ pub fn burnInstruction(
     metas: *[burn_account_count]cpi.SolAccountMeta,
     data: *[burn_instruction_data_len]u8,
 ) cpi.SolInstruction {
-    metas.* = burnAccountMetas(account_pubkey, mint, authority);
-    data.* = encodeBurn(amount);
+    _ = sdk_spl_token.burn(
+        account_pubkey,
+        mint,
+        authority,
+        amount,
+        @ptrCast(metas),
+        data,
+    );
     return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
@@ -247,8 +267,13 @@ pub fn closeAccountInstruction(
     metas: *[close_account_account_count]cpi.SolAccountMeta,
     data: *[close_account_instruction_data_len]u8,
 ) cpi.SolInstruction {
-    metas.* = closeAccountAccountMetas(account_pubkey, destination, authority);
-    data.* = encodeCloseAccount();
+    _ = sdk_spl_token.closeAccount(
+        account_pubkey,
+        destination,
+        authority,
+        @ptrCast(metas),
+        data,
+    );
     return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
@@ -267,8 +292,12 @@ pub fn revokeInstruction(
     metas: *[revoke_account_count]cpi.SolAccountMeta,
     data: *[revoke_instruction_data_len]u8,
 ) cpi.SolInstruction {
-    metas.* = revokeAccountMetas(source, authority);
-    data.* = encodeRevoke();
+    _ = sdk_spl_token.revoke(
+        source,
+        authority,
+        @ptrCast(metas),
+        data,
+    );
     return cpi.SolInstruction.fromSlices(&program_id, metas[0..], data[0..]);
 }
 
@@ -300,27 +329,51 @@ pub inline fn zxcaml_transfer_one(arena: *Arena, input: [*]const u8) u64 {
 /// Parses canonical packed SPL Token account data.
 pub fn parseTokenAccount(data: []const u8) Error!TokenAccountView {
     if (data.len < token_account_len) return error.TruncatedInput;
-    var cursor: usize = 0;
-
-    const mint = try readPubkeyPtr(data, &cursor);
-    const owner = try readPubkeyPtr(data, &cursor);
-    const amount = try readU64(data, &cursor);
-    const delegate = try readPubkeyOption(data, &cursor);
-    const state = data[cursor];
-    cursor += 1;
-    const is_native = try readU64Option(data, &cursor);
-    const delegated_amount = try readU64(data, &cursor);
-    const close_authority = try readPubkeyOption(data, &cursor);
+    const account_state = sdk_spl_token.Account.fromBytes(data[0..token_account_len]) catch {
+        return error.TruncatedInput;
+    };
+    _ = account_state.delegateKeyChecked() catch return error.InvalidOptionTag;
+    const is_native = account_state.nativeRentExemptReserveChecked() catch return error.InvalidOptionTag;
+    _ = account_state.closeAuthorityChecked() catch return error.InvalidOptionTag;
 
     return .{
-        .mint = mint,
-        .owner = owner,
-        .amount = amount,
-        .delegate = delegate,
-        .state = state,
+        .mint = &account_state.mint,
+        .owner = &account_state.owner,
+        .amount = account_state.amount,
+        .delegate = account_state.delegateKey(),
+        .state = account_state.state,
         .is_native = is_native,
-        .delegated_amount = delegated_amount,
-        .close_authority = close_authority,
+        .delegated_amount = account_state.delegated_amount,
+        .close_authority = account_state.closeAuthority(),
+    };
+}
+
+pub fn parseMint(data: []const u8) Error!MintView {
+    if (data.len < mint_len) return error.TruncatedInput;
+    const mint_state = sdk_spl_token.Mint.fromBytes(data[0..mint_len]) catch {
+        return error.TruncatedInput;
+    };
+    _ = mint_state.mintAuthorityChecked() catch return error.InvalidOptionTag;
+    _ = mint_state.freezeAuthorityChecked() catch return error.InvalidOptionTag;
+
+    return .{
+        .mint_authority = mint_state.mintAuthority(),
+        .supply = mint_state.supply,
+        .decimals = mint_state.decimals,
+        .is_initialized = mint_state.is_initialized,
+        .freeze_authority = mint_state.freezeAuthority(),
+    };
+}
+
+pub fn validateInstructionData(data: []const u8) Error!InstructionKind {
+    if (data.len == 0) return error.InvalidInstructionLength;
+    return switch (data[0]) {
+        transfer_discriminator => if (data.len == transfer_instruction_data_len) .transfer else error.InvalidInstructionLength,
+        initialize_account_discriminator => if (data.len == initialize_account_instruction_data_len) .initialize_account else error.InvalidInstructionLength,
+        burn_discriminator => if (data.len == burn_instruction_data_len) .burn else error.InvalidInstructionLength,
+        close_account_discriminator => if (data.len == close_account_instruction_data_len) .close_account else error.InvalidInstructionLength,
+        revoke_discriminator => if (data.len == revoke_instruction_data_len) .revoke else error.InvalidInstructionLength,
+        else => error.InvalidInstructionDiscriminant,
     };
 }
 
@@ -459,6 +512,8 @@ test "SPL Token program id matches Tokenkeg bytes" {
     try std.testing.expectEqualSlices(u8, &program_id, &from_base58);
     try std.testing.expect(writeProgramIdFromBytes(&from_base58, &program_id));
     try std.testing.expectEqualSlices(u8, &program_id, &from_base58);
+    const random_pubkey = [_]u8{0x55} ** pubkey_len;
+    try std.testing.expect(!writeProgramIdFromBytes(&from_base58, &random_pubkey));
     try std.testing.expect(!writeProgramIdFromBytes(&from_base58, "not-token"));
 }
 
@@ -527,7 +582,7 @@ test "SPL Token InitializeAccount builder uses canonical metas and data" {
     try std.testing.expect(metas[2].pubkey == &owner);
     try std.testing.expectEqual(@as(u8, 0), metas[2].is_writable);
     try std.testing.expectEqual(@as(u8, 0), metas[2].is_signer);
-    try std.testing.expect(metas[3].pubkey == &rent_sysvar);
+    try std.testing.expect(metas[3].pubkey == &@import("solana_program_sdk").rent_id);
     try std.testing.expectEqual(@as(u8, 0), metas[3].is_writable);
     try std.testing.expectEqual(@as(u8, 0), metas[3].is_signer);
 }
@@ -698,4 +753,44 @@ test "SPL Token account parser rejects malformed buffers" {
     const cursor: usize = pubkey_len + pubkey_len + @sizeOf(u64);
     writeU32Le(invalid_option[cursor..][0..@sizeOf(u32)], 2);
     try std.testing.expectError(error.InvalidOptionTag, parseTokenAccount(invalid_option[0..]));
+}
+
+test "SPL Mint parser extracts authorities supply decimals and init flag" {
+    var data = [_]u8{0} ** mint_len;
+    writeU32Le(data[0..4], 1);
+    @memset(data[4..36], 0x33);
+    writeU64Le(data[36..44], 999);
+    data[44] = 6;
+    data[45] = 1;
+    writeU32Le(data[46..50], 1);
+    @memset(data[50..82], 0x77);
+
+    const parsed = try parseMint(data[0..]);
+    try std.testing.expect(parsed.mint_authority != null);
+    try std.testing.expectEqual(@as(u8, 0x33), parsed.mint_authority.?[0]);
+    try std.testing.expectEqual(@as(u64, 999), parsed.supply);
+    try std.testing.expectEqual(@as(u8, 6), parsed.decimals);
+    try std.testing.expectEqual(@as(u8, 1), parsed.is_initialized);
+    try std.testing.expect(parsed.freeze_authority != null);
+    try std.testing.expectEqual(@as(u8, 0x77), parsed.freeze_authority.?[0]);
+}
+
+test "SPL Mint parser rejects malformed option tags" {
+    var short = [_]u8{0} ** (mint_len - 1);
+    try std.testing.expectError(error.TruncatedInput, parseMint(short[0..]));
+
+    var invalid_option = [_]u8{0} ** mint_len;
+    writeU32Le(invalid_option[0..4], 2);
+    try std.testing.expectError(error.InvalidOptionTag, parseMint(invalid_option[0..]));
+}
+
+test "SPL Token instruction validator rejects malformed lengths and discriminants" {
+    try std.testing.expectEqual(.transfer, try validateInstructionData(&.{ 3, 1, 0, 0, 0, 0, 0, 0, 0 }));
+    try std.testing.expectEqual(.initialize_account, try validateInstructionData(&.{1}));
+    try std.testing.expectEqual(.burn, try validateInstructionData(&.{ 8, 1, 0, 0, 0, 0, 0, 0, 0 }));
+    try std.testing.expectEqual(.close_account, try validateInstructionData(&.{9}));
+    try std.testing.expectEqual(.revoke, try validateInstructionData(&.{5}));
+    try std.testing.expectError(error.InvalidInstructionLength, validateInstructionData(&.{3}));
+    try std.testing.expectError(error.InvalidInstructionLength, validateInstructionData(&.{ 1, 0 }));
+    try std.testing.expectError(error.InvalidInstructionDiscriminant, validateInstructionData(&.{0xff}));
 }

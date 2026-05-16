@@ -338,16 +338,25 @@ if [[ "${ZXCAML_SOLANA_SPL_TOKEN:-}" == "1" ]]; then
   echo "==> creating temporary SPL Token mint and accounts"
   PAYER_PUBKEY="$(solana-keygen pubkey "$KEYPAIR")"
   solana-keygen new --no-bip39-passphrase --force --silent -o "$MINT_KEYPAIR" >/dev/null
-  solana-keygen new --no-bip39-passphrase --force --silent -o "$SOURCE_TOKEN_KEYPAIR" >/dev/null
-  solana-keygen new --no-bip39-passphrase --force --silent -o "$DEST_TOKEN_KEYPAIR" >/dev/null
   MINT_PUBKEY="$(solana-keygen pubkey "$MINT_KEYPAIR")"
   export ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT
   export ZXCAML_SPL_DEST_TOKEN_ACCOUNT
-  ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT="$(solana-keygen pubkey "$SOURCE_TOKEN_KEYPAIR")"
-  ZXCAML_SPL_DEST_TOKEN_ACCOUNT="$(solana-keygen pubkey "$DEST_TOKEN_KEYPAIR")"
   spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-token --decimals 0 --mint-authority "$PAYER_PUBKEY" "$MINT_KEYPAIR" >/dev/null
-  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" "$SOURCE_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
-  spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" "$DEST_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+  if [[ "${ZXCAML_SOLANA_SPL_ASSOCIATED_ACCOUNTS:-}" == "1" ]]; then
+    solana-keygen new --no-bip39-passphrase --force --silent -o "$RECIPIENT_KEYPAIR" >/dev/null
+    RECIPIENT_PUBKEY="$(solana-keygen pubkey "$RECIPIENT_KEYPAIR")"
+    ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT="$(spl-token --url "$RPC_URL" --program-id "$SPL_TOKEN_PROGRAM_ID" address --verbose --owner "$PAYER_PUBKEY" --token "$MINT_PUBKEY" | awk -F': ' '/Associated token address:/ { print $2 }')"
+    ZXCAML_SPL_DEST_TOKEN_ACCOUNT="$(spl-token --url "$RPC_URL" --program-id "$SPL_TOKEN_PROGRAM_ID" address --verbose --owner "$RECIPIENT_PUBKEY" --token "$MINT_PUBKEY" | awk -F': ' '/Associated token address:/ { print $2 }')"
+    spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" --owner "$PAYER_PUBKEY" >/dev/null
+    spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" --owner "$RECIPIENT_PUBKEY" >/dev/null
+  else
+    solana-keygen new --no-bip39-passphrase --force --silent -o "$SOURCE_TOKEN_KEYPAIR" >/dev/null
+    solana-keygen new --no-bip39-passphrase --force --silent -o "$DEST_TOKEN_KEYPAIR" >/dev/null
+    ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT="$(solana-keygen pubkey "$SOURCE_TOKEN_KEYPAIR")"
+    ZXCAML_SPL_DEST_TOKEN_ACCOUNT="$(solana-keygen pubkey "$DEST_TOKEN_KEYPAIR")"
+    spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" "$SOURCE_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+    spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" create-account "$MINT_PUBKEY" "$DEST_TOKEN_KEYPAIR" --owner "$PAYER_PUBKEY" >/dev/null
+  fi
   spl-token --url "$RPC_URL" --fee-payer "$KEYPAIR" --program-id "$SPL_TOKEN_PROGRAM_ID" mint "$MINT_PUBKEY" 10 "$ZXCAML_SPL_SOURCE_TOKEN_ACCOUNT" --mint-authority "$KEYPAIR" >/dev/null
 fi
 
