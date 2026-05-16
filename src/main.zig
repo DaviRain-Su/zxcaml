@@ -26,6 +26,7 @@ const driver_build = @import("driver/build.zig");
 const driver_bpf = @import("driver/bpf.zig");
 const driver_doctor = @import("driver/doctor.zig");
 const driver_idl = @import("driver/idl.zig");
+const driver_near = @import("driver/near.zig");
 const driver_srcmap = @import("driver/srcmap.zig");
 const driver_wasm = @import("driver/wasm.zig");
 const target_capability = @import("target/capability.zig");
@@ -1244,12 +1245,87 @@ fn buildNear(
     module: @import("frontend_bridge/ttree.zig").Module,
     build_args: BuildArgs,
 ) !void {
-    _ = target;
-    _ = module;
-    _ = build_args;
+    var core_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer core_arena.deinit();
 
-    try writeStderr(init.io, "error: target `near` currently exposes only the experimental NEAR no-storage CLI contract; runtime materialization is not implemented yet.\n");
-    std.process.exit(1);
+    const core_module = core_anf.lowerModule(&core_arena, module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const folded_core_module = core_const_fold.foldModule(&core_arena, core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const dce_core_module = core_dce.eliminateModule(&core_arena, folded_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to eliminate dead Core IR: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const inlined_core_module = core_inline.inlineModule(&core_arena, dce_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to inline Core IR functions: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    const optimized_core_module = core_const_fold.foldModule(&core_arena, inlined_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to fold Core IR constants after inlining: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    try ensureTargetCapabilitiesOrExit(init, target, optimized_core_module);
+    const inferred_core_module = try inferRegionsOrExit(init, &core_arena, optimized_core_module, build_args.diagnostics);
+
+    var lowered_arena = std.heap.ArenaAllocator.init(init.gpa);
+    defer lowered_arena.deinit();
+
+    var impl: arena_lower.ArenaStrategy = .{ .allocator = lowered_arena.allocator() };
+    const lowered_module = impl.loweringStrategy().lowerModule(inferred_core_module) catch |err| {
+        try writeStderr(init.io, "error: failed to lower with ArenaStrategy: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+
+    const source = zig_codegen.emitModule(init.gpa, lowered_module) catch |err| {
+        try writeStderr(init.io, "error: failed to emit Zig source: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
+    defer init.gpa.free(source);
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(init.io, "out");
+    try cwd.writeFile(init.io, .{
+        .sub_path = "out/program.zig",
+        .data = source,
+        .flags = .{ .truncate = true },
+    });
+
+    const program_name = try sourceMapProgramName(init.gpa, build_args.input_file);
+    defer init.gpa.free(program_name);
+
+    const output_path = build_args.output_path orelse try sourceMapOutputPath(init.gpa, program_name, ".wasm");
+    defer if (build_args.output_path == null) init.gpa.free(output_path);
+
+    try target_manifest.materializeRuntimeForDispatch(init.gpa, init.io, .near);
+
+    driver_near.buildNear(init.gpa, init.io, .{
+        .near_entry_path = "out/near_entry.zig",
+        .output_path = output_path,
+        .quiet = build_args.quiet,
+    }) catch |err| {
+        try writeStderr(init.io, "error: NEAR build failed: ");
+        try writeStderr(init.io, @errorName(err));
+        try writeStderr(init.io, "\n");
+        std.process.exit(1);
+    };
 }
 
 fn buildNative(

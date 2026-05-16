@@ -53,6 +53,14 @@ pub fn capabilityPolicyForTarget(target: *const target_registry.TargetContract) 
         };
     }
 
+    if (target.build_dispatch == .near) {
+        return .{
+            .target = target,
+            .supported_capabilities = &.{},
+            .unsupported_guidance = "MTF-2 near is an experimental no-storage adapter with raw input/output/log/panic only; remove the Solana-only API or use --target=bpf.",
+        };
+    }
+
     if (target.support_status != .supported) {
         return .{
             .target = target,
@@ -540,6 +548,24 @@ test "wasm capability policy gives pure-logic guidance for Solana host APIs" {
             try std.testing.expectEqualStrings("wasm", diagnostic.target_cli_name);
             try std.testing.expectEqualStrings("Syscall.sol_log", diagnostic.api_surface);
             try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "pure logic only") != null);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "--target=bpf") != null);
+        },
+    }
+}
+
+test "near capability policy gives no-storage guidance for Solana host APIs" {
+    const near = target_registry.lookupByCliName("near") orelse return error.TestUnexpectedResult;
+    const usages = [_]CapabilityUsage{
+        .{ .capability = .solana_host_api, .api_surface = "Syscall.sol_sha256", .loc = sampleLoc() },
+    };
+
+    const result = try scanCapabilityUsages(capabilityPolicyForTarget(near), &usages);
+    switch (result) {
+        .ok => return error.TestExpectedUnsupportedCapability,
+        .unsupported => |diagnostic| {
+            try std.testing.expectEqualStrings("near", diagnostic.target_cli_name);
+            try std.testing.expectEqualStrings("Syscall.sol_sha256", diagnostic.api_surface);
+            try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "no-storage adapter") != null);
             try std.testing.expect(std.mem.indexOf(u8, diagnostic.guidance, "--target=bpf") != null);
         },
     }

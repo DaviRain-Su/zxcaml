@@ -67,6 +67,11 @@ const wasm_entry_runtime_file: RuntimeFile = .{
     .out_path = "out/wasm_entry.zig",
 };
 
+const near_entry_runtime_file: RuntimeFile = .{
+    .src_path = "runtime/near/entry.zig",
+    .out_path = "out/near_entry.zig",
+};
+
 const shared_runtime_files = expected_shared_runtime_files;
 const native_runtime_files = shared_runtime_files ++ [_]RuntimeFile{native_entry_runtime_file};
 const bpf_runtime_files = shared_runtime_files ++ [_]RuntimeFile{bpf_entry_runtime_file};
@@ -76,6 +81,14 @@ const wasm_runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
     .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
     wasm_entry_runtime_file,
+};
+const near_runtime_files = [_]RuntimeFile{
+    .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
+    .{ .src_path = "runtime/near/account.zig", .out_path = "out/runtime/account.zig" },
+    .{ .src_path = "runtime/near/host.zig", .out_path = "out/runtime/near_host.zig" },
+    .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
+    .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
+    near_entry_runtime_file,
 };
 
 const manifests = [_]RuntimeManifest{
@@ -99,6 +112,13 @@ const manifests = [_]RuntimeManifest{
         .files = wasm_runtime_files[0..],
         .entry_src_path = wasm_entry_runtime_file.src_path,
         .entry_out_path = wasm_entry_runtime_file.out_path,
+    },
+    .{
+        .cli_name = "near",
+        .build_dispatch = .near,
+        .files = near_runtime_files[0..],
+        .entry_src_path = near_entry_runtime_file.src_path,
+        .entry_out_path = near_entry_runtime_file.out_path,
     },
 };
 
@@ -157,17 +177,19 @@ const expected_bpf_runtime_files = expected_shared_runtime_files ++ [_]RuntimeFi
 };
 
 const expected_wasm_runtime_files = wasm_runtime_files;
+const expected_near_runtime_files = near_runtime_files;
 
-test "runtime manifest: implemented targets include native, bpf, and wasm" {
+test "runtime manifest: implemented targets include native, bpf, wasm, and near" {
     const supported = try target_registry.supportedTargets(std.testing.allocator);
     defer std.testing.allocator.free(supported);
 
     const implemented = implementedTargets();
-    try std.testing.expectEqual(@as(usize, 3), implemented.len);
+    try std.testing.expectEqual(@as(usize, 4), implemented.len);
     try std.testing.expectEqual(@as(usize, 2), supported.len);
     try std.testing.expectEqualStrings("native", implemented[0].cli_name);
     try std.testing.expectEqualStrings("bpf", implemented[1].cli_name);
     try std.testing.expectEqualStrings("wasm", implemented[2].cli_name);
+    try std.testing.expectEqualStrings("near", implemented[3].cli_name);
 }
 
 test "runtime manifest: native runtime files mirror the current materialization" {
@@ -185,6 +207,11 @@ test "runtime manifest: wasm runtime files stay target-specific and minimal" {
     try expectRuntimeFiles(expected_wasm_runtime_files[0..], manifest.files);
 }
 
+test "runtime manifest: near runtime files stay target-specific and minimal" {
+    const manifest = runtimeManifestForDispatch(.near);
+    try expectRuntimeFiles(expected_near_runtime_files[0..], manifest.files);
+}
+
 test "runtime manifest: entry shims remain target specific" {
     const native = runtimeManifestForDispatch(.native);
     try std.testing.expectEqualStrings("runtime/zig/native_entry.zig", native.entry_src_path);
@@ -197,11 +224,15 @@ test "runtime manifest: entry shims remain target specific" {
     const wasm = runtimeManifestForDispatch(.wasm);
     try std.testing.expectEqualStrings("runtime/wasm/entry.zig", wasm.entry_src_path);
     try std.testing.expectEqualStrings("out/wasm_entry.zig", wasm.entry_out_path);
+
+    const near = runtimeManifestForDispatch(.near);
+    try std.testing.expectEqualStrings("runtime/near/entry.zig", near.entry_src_path);
+    try std.testing.expectEqualStrings("out/near_entry.zig", near.entry_out_path);
 }
 
-test "runtime manifest: vendored SDK adapter root materializes for entry builds" {
+test "runtime manifest: vendored SDK adapter root materializes for native and bpf entry builds" {
     for (implementedTargets()) |manifest| {
-        if (manifest.build_dispatch == .wasm) continue;
+        if (manifest.build_dispatch == .wasm or manifest.build_dispatch == .near) continue;
         for (manifest.files) |file| {
             if (std.mem.eql(u8, file.src_path, "runtime/zig/sdk/root.zig")) {
                 try std.testing.expectEqualStrings("out/runtime/sdk/root.zig", file.out_path);
@@ -230,6 +261,24 @@ test "runtime manifest: wasm excludes solana, bpf, sdk, and source-map files" {
         try std.testing.expect(std.mem.indexOf(u8, file.src_path, "sysvar.zig") == null);
         try std.testing.expect(std.mem.indexOf(u8, file.src_path, "spl_token.zig") == null);
         try std.testing.expect(std.mem.indexOf(u8, file.src_path, "programs/") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.out_path, ".so") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.out_path, ".map") == null);
+    }
+}
+
+test "runtime manifest: near excludes solana, native, generic-wasm-only, wasi, and source-map files" {
+    const manifest = runtimeManifestForDispatch(.near);
+
+    for (manifest.files) |file| {
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "bpf_entry") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "native_entry") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "wasm/") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "sdk/root.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "syscalls.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "sysvar.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "spl_token.zig") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "programs/") == null);
+        try std.testing.expect(std.mem.indexOf(u8, file.src_path, "wasi") == null);
         try std.testing.expect(std.mem.indexOf(u8, file.out_path, ".so") == null);
         try std.testing.expect(std.mem.indexOf(u8, file.out_path, ".map") == null);
     }
