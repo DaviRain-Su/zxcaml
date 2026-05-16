@@ -46,6 +46,7 @@ const expected_shared_runtime_files = [_]RuntimeFile{
     .{ .src_path = "runtime/zig/bs58.zig", .out_path = "out/runtime/bs58.zig" },
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
     .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
+    .{ .src_path = "runtime/zig/sdk/root.zig", .out_path = "out/runtime/sdk/root.zig" },
     .{ .src_path = "runtime/zig/spl_token.zig", .out_path = "out/runtime/spl_token.zig" },
     .{ .src_path = "runtime/zig/syscalls.zig", .out_path = "out/runtime/syscalls.zig" },
     .{ .src_path = "runtime/zig/sysvar.zig", .out_path = "out/runtime/sysvar.zig" },
@@ -165,6 +166,19 @@ test "runtime manifest: entry shims remain target specific" {
     const bpf = runtimeManifestForDispatch(.bpf);
     try std.testing.expectEqualStrings("runtime/zig/bpf_entry.zig", bpf.entry_src_path);
     try std.testing.expectEqualStrings("out/bpf_entry.zig", bpf.entry_out_path);
+}
+
+test "runtime manifest: vendored SDK adapter root materializes for entry builds" {
+    for (implementedTargets()) |manifest| {
+        for (manifest.files) |file| {
+            if (std.mem.eql(u8, file.src_path, "runtime/zig/sdk/root.zig")) {
+                try std.testing.expectEqualStrings("out/runtime/sdk/root.zig", file.out_path);
+                break;
+            }
+        } else {
+            return error.MissingVendoredSdkRuntimeRoot;
+        }
+    }
 }
 
 test "runtime manifest: shared and target specific files stay duplicate free" {
