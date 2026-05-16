@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cpi = @import("../cpi.zig");
+const sdk_spl_token = @import("spl_token_m4");
 
 const Pubkey = cpi.Pubkey;
 const SolAccountInfo = cpi.SolAccountInfo;
@@ -30,6 +31,10 @@ pub fn isTokenProgramKey(key: *const Pubkey) bool {
         key[20] == 0x5f and key[21] == 0x5b and key[22] == 0x37 and key[23] == 0x91 and
         key[24] == 0x3a and key[25] == 0x8c and key[26] == 0xf5 and key[27] == 0x85 and
         key[28] == 0x7e and key[29] == 0xff and key[30] == 0x00 and key[31] == 0xa9;
+}
+
+pub fn isToken2022ProgramKey(key: *const Pubkey) bool {
+    return pubkeyEq(key, &sdk_spl_token.PROGRAM_ID_2022);
 }
 
 pub fn writeU64Le(out: []u8, value: u64) void {
@@ -152,17 +157,22 @@ test "common pubkeyEq returns false for different pubkeys" {
     try std.testing.expect(!pubkeyEq(&lhs, &rhs));
 }
 
-test "common isTokenProgramKey recognizes only Tokenkeg bytes" {
+test "common token program helpers distinguish classic and Token-2022 ids" {
     const token_program: Pubkey = .{
         0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93,
         0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
         0x1c, 0xb4, 0x85, 0xed, 0x5f, 0x5b, 0x37, 0x91,
         0x3a, 0x8c, 0xf5, 0x85, 0x7e, 0xff, 0x00, 0xa9,
     };
+    const token_2022_program = sdk_spl_token.PROGRAM_ID_2022;
     var wrong = token_program;
     wrong[31] ^= 0xff;
     try std.testing.expect(isTokenProgramKey(&token_program));
+    try std.testing.expect(!isTokenProgramKey(&token_2022_program));
+    try std.testing.expect(isToken2022ProgramKey(&token_2022_program));
+    try std.testing.expect(!isToken2022ProgramKey(&token_program));
     try std.testing.expect(!isTokenProgramKey(&wrong));
+    try std.testing.expect(!isToken2022ProgramKey(&wrong));
 }
 
 test "common isSystemProgramKey accepts all-zero pubkey only" {

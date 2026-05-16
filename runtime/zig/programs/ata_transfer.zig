@@ -11,12 +11,14 @@ const Arena = @import("../arena.zig").Arena;
 const account = @import("../account.zig");
 const cpi = @import("../cpi.zig");
 const spl_token = @import("../spl_token.zig");
+const syscalls = @import("../syscalls.zig");
 const ata = @import("ata.zig");
 const common = @import("common.zig");
 
 const Pubkey = cpi.Pubkey;
 const isSystemProgramKey = common.isSystemProgramKey;
 const isTokenProgramKey = common.isTokenProgramKey;
+const isToken2022ProgramKey = common.isToken2022ProgramKey;
 const programIdFromInput = common.programIdFromInput;
 const pubkeyEq = common.pubkeyEq;
 const readU64LeSlice = common.readU64LeSlice;
@@ -63,6 +65,10 @@ fn initialize(program_id: *const Pubkey, views: []account.AccountView, instructi
     if (!destination_ata.is_writable) return 1;
     if (!pubkeyEq(destination_ata.owner, program_id)) return 1;
     if (!isSystemProgramKey(system_program.key)) return 1;
+    if (isToken2022ProgramKey(token_program.key)) {
+        syscalls.sol_log_("Token-2022 unsupported: ata_transfer only supports classic Tokenkeg helpers");
+        return 1;
+    }
     if (!isTokenProgramKey(token_program.key)) return 1;
     if (destination_ata.data.len < token_account_len) return 1;
 
@@ -81,6 +87,12 @@ fn initialize(program_id: *const Pubkey, views: []account.AccountView, instructi
     );
     if (ix.data_len != ata.create_idempotent_instruction_data_len) return 1;
     if (ix.data[0] != ata.create_idempotent_discriminator) return 1;
+
+    if (tokenAccountInitialized(destination_ata.data)) {
+        if (!tokenAccountMintEquals(destination_ata.data, mint.key)) return 1;
+        if (!tokenAccountOwnerEquals(destination_ata.data, owner.key)) return 1;
+        return 0;
+    }
 
     @memset(destination_ata.data[0..token_account_len], 0);
     @memcpy(destination_ata.data[token_account_mint_offset..][0..32], mint.key[0..]);
@@ -103,6 +115,10 @@ fn transfer(program_id: *const Pubkey, views: []account.AccountView, instruction
     if (!authority.is_signer) return 1;
     if (!pubkeyEq(source_ata.owner, program_id)) return 1;
     if (!pubkeyEq(destination_ata.owner, program_id)) return 1;
+    if (isToken2022ProgramKey(token_program.key)) {
+        syscalls.sol_log_("Token-2022 unsupported: ata_transfer only supports classic Tokenkeg helpers");
+        return 1;
+    }
     if (!isTokenProgramKey(token_program.key)) return 1;
     if (!tokenAccountOwnerEquals(source_ata.data, authority.key)) return 1;
     if (!tokenAccountInitialized(source_ata.data) or !tokenAccountInitialized(destination_ata.data)) return 1;
@@ -131,6 +147,11 @@ fn tokenAccountInitialized(data: []const u8) bool {
 fn tokenAccountOwnerEquals(data: []const u8, expected_owner: *const Pubkey) bool {
     if (data.len < token_account_len) return false;
     return std.mem.eql(u8, data[token_account_owner_offset..][0..32], expected_owner[0..]);
+}
+
+fn tokenAccountMintEquals(data: []const u8, expected_mint: *const Pubkey) bool {
+    if (data.len < token_account_len) return false;
+    return std.mem.eql(u8, data[token_account_mint_offset..][0..32], expected_mint[0..]);
 }
 
 fn tokenMintsEqual(lhs: []const u8, rhs: []const u8) bool {
@@ -272,6 +293,19 @@ test "ata_transfer initialize rejects destination owner mismatch" {
     var input: [48]u8 = undefined;
     writeAtaTransferProgramInput(input[0..], fixture.program_id);
     try std.testing.expectEqual(@as(u64, 1), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], &.{0}));
+}
+
+test "ata_transfer initialize is idempotent for an existing initialized ATA" {
+    var arena: Arena = undefined;
+    var fixture = AtaTransferTestFixture{};
+    fixture.init();
+    writeAtaTransferTokenAccount(&fixture.destination.data, &fixture.mint.key, &fixture.authority.key, 19);
+    var before = fixture.destination.data;
+    var views = fixture.initializeViews(true);
+    var input: [48]u8 = undefined;
+    writeAtaTransferProgramInput(input[0..], fixture.program_id);
+    try std.testing.expectEqual(@as(u64, 0), zxcaml_ata_transfer_process(&arena, input[0..].ptr, views[0..], &.{0}));
+    try std.testing.expectEqualSlices(u8, before[0..], fixture.destination.data[0..]);
 }
 
 test "ata_transfer transfer rejects mismatched token mints" {

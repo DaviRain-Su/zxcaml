@@ -9,10 +9,12 @@ const Arena = @import("../arena.zig").Arena;
 const account = @import("../account.zig");
 const cpi = @import("../cpi.zig");
 const spl_token = @import("../spl_token.zig");
+const syscalls = @import("../syscalls.zig");
 const common = @import("common.zig");
 
 const Pubkey = cpi.Pubkey;
 const isTokenProgramKey = common.isTokenProgramKey;
+const isToken2022ProgramKey = common.isToken2022ProgramKey;
 const programIdFromInput = common.programIdFromInput;
 const pubkeyEq = common.pubkeyEq;
 const readU64LeSlice = common.readU64LeSlice;
@@ -23,6 +25,8 @@ const token_account_mint_offset: usize = 0;
 const token_account_owner_offset: usize = 32;
 const token_account_amount_offset: usize = 64;
 const token_account_state_offset: usize = 108;
+const mint_len: usize = spl_token.mint_len;
+const mint_supply_offset: usize = 36;
 
 /// Processes the ZxCaml mocked SPL Token Burn example.
 pub fn zxcaml_spl_burn_process(arena: *Arena, input: [*]const u8, views: []account.AccountView, instruction_data: []const u8) u64 {
@@ -39,10 +43,15 @@ pub fn zxcaml_spl_burn_process(arena: *Arena, input: [*]const u8, views: []accou
     if (!account_to_burn.is_writable or !mint.is_writable) return 1;
     if (!authority.is_signer) return 1;
     if (!pubkeyEq(account_to_burn.owner, program_id)) return 1;
+    if (isToken2022ProgramKey(token_program.key)) {
+        syscalls.sol_log_("Token-2022 unsupported: spl_burn only supports classic Tokenkeg helpers");
+        return 1;
+    }
     if (!isTokenProgramKey(token_program.key)) return 1;
     if (!tokenAccountInitialized(account_to_burn.data)) return 1;
     if (!tokenAccountOwnerEquals(account_to_burn.data, authority.key)) return 1;
     if (!tokenAccountMintEquals(account_to_burn.data, mint.key)) return 1;
+    if (mint.data.len < mint_len) return 1;
 
     const amount = readU64LeSlice(instruction_data[1..spl_token.burn_instruction_data_len]);
     if (amount == 0) return 1;
@@ -57,8 +66,11 @@ pub fn zxcaml_spl_burn_process(arena: *Arena, input: [*]const u8, views: []accou
     if (ix.data[0] != spl_token.burn_discriminator) return 1;
 
     const current_amount = tokenAmount(account_to_burn.data);
+    const current_supply = mintSupply(mint.data);
     if (current_amount < amount) return 1;
+    if (current_supply < amount) return 1;
     writeTokenAmount(account_to_burn.data, current_amount - amount);
+    writeMintSupply(mint.data, current_supply - amount);
     return 0;
 }
 
@@ -82,6 +94,14 @@ fn tokenAmount(data: []const u8) u64 {
 
 fn writeTokenAmount(data: []u8, amount: u64) void {
     writeU64Le(data[token_account_amount_offset..][0..8], amount);
+}
+
+fn mintSupply(data: []const u8) u64 {
+    return readU64LeSlice(data[mint_supply_offset..][0..8]);
+}
+
+fn writeMintSupply(data: []u8, amount: u64) void {
+    writeU64Le(data[mint_supply_offset..][0..8], amount);
 }
 
 const SplBurnTestAccount = struct {
@@ -116,6 +136,7 @@ const SplBurnTestFixture = struct {
         var fixture = SplBurnTestFixture{};
         fixture.account_to_burn.owner = fixture.program_id;
         writeSplBurnTokenAccount(&fixture.account_to_burn.data, &fixture.mint.key, &fixture.authority.key, amount);
+        writeMintSupply(fixture.mint.data[0..], amount + 60);
         return fixture;
     }
 
@@ -144,7 +165,7 @@ fn writeSplBurnTokenAccount(data: *[token_account_len]u8, mint: *const Pubkey, o
     data[token_account_state_offset] = 1;
 }
 
-test "spl_burn burns requested amount from initialized mocked token account" {
+test "spl_burn burns requested amount from initialized mocked token account and mint supply" {
     var arena: Arena = undefined;
     var fixture = SplBurnTestFixture.init(40);
     var views = fixture.views(true);
@@ -153,6 +174,7 @@ test "spl_burn burns requested amount from initialized mocked token account" {
     const ix = spl_token.encodeBurn(15);
     try std.testing.expectEqual(@as(u64, 0), zxcaml_spl_burn_process(&arena, input[0..].ptr, views[0..], ix[0..]));
     try std.testing.expectEqual(@as(u64, 25), tokenAmount(fixture.account_to_burn.data[0..]));
+    try std.testing.expectEqual(@as(u64, 85), mintSupply(fixture.mint.data[0..]));
 }
 
 test "spl_burn rejects uninitialized mocked token account" {
