@@ -6,6 +6,17 @@ const sdk_spl_token = @import("spl_token_m4");
 
 const Pubkey = cpi.Pubkey;
 const SolAccountInfo = cpi.SolAccountInfo;
+const RawAccount = extern struct {
+    borrow_state: u8,
+    is_signer: u8,
+    is_writable: u8,
+    is_executable: u8,
+    padding: [4]u8,
+    key: Pubkey,
+    owner: Pubkey,
+    lamports: u64,
+    data_len: u64,
+};
 
 pub fn isZeroPubkeyBytes(bytes: []const u8) bool {
     if (bytes.len != 32) return false;
@@ -60,9 +71,8 @@ pub fn programIdFromInput(input: [*]const u8) *const Pubkey {
     const input_mut: [*]u8 = @constCast(input);
     var cursor: usize = 0;
     const account_count = readU64Raw(input_mut, &cursor);
-    var info: SolAccountInfo = undefined;
     for (0..@intCast(account_count)) |_| {
-        parseAccountInfoUnchecked(input_mut, &cursor, &info);
+        skipAccountInfoUnchecked(input_mut, &cursor);
     }
     const instruction_data_len = readU64Raw(input_mut, &cursor);
     cursor += @intCast(instruction_data_len);
@@ -102,40 +112,41 @@ pub inline fn readU64Raw(input: [*]const u8, cursor: *usize) u64 {
 }
 
 pub inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolAccountInfo) void {
-    _ = input[cursor.*];
-    cursor.* += 1;
-    const is_signer = input[cursor.*];
-    cursor.* += 1;
-    const is_writable = input[cursor.*];
-    cursor.* += 1;
-    const executable = input[cursor.*];
-    cursor.* += 1;
-    cursor.* += 4;
-    const key: *const Pubkey = @ptrCast(input + cursor.*);
-    cursor.* += 32;
-    const owner: *const Pubkey = @ptrCast(input + cursor.*);
-    cursor.* += 32;
-    const lamports: *align(1) u64 = @ptrCast(input + cursor.*);
-    cursor.* += @sizeOf(u64);
-    const data_len = readU64Raw(input, cursor);
-    const data = (input + cursor.*)[0..@intCast(data_len)];
+    const raw: *RawAccount = @ptrCast(@alignCast(input + cursor.*));
+    const data_len = raw.data_len;
+    const data = (@as([*]u8, @ptrCast(raw)) + @sizeOf(RawAccount))[0..@intCast(data_len)];
+    cursor.* += @sizeOf(RawAccount);
     cursor.* += @intCast(data_len);
     cursor.* += 10 * 1024;
     cursor.* = std.mem.alignForward(usize, cursor.*, 8);
-    const rent_epoch: *align(1) u64 = @ptrCast(input + cursor.*);
+    const rent_epoch: *align(1) u64 = @ptrCast(@alignCast(input + cursor.*));
     cursor.* += @sizeOf(u64);
 
     out.* = .{
-        .key = key,
-        .lamports = lamports,
+        .key = &raw.key,
+        .lamports = @ptrCast(&raw.lamports),
         .data_len = data.len,
         .data = data.ptr,
-        .owner = owner,
+        .owner = &raw.owner,
         .rent_epoch = rent_epoch.*,
-        .is_signer = is_signer,
-        .is_writable = is_writable,
-        .executable = executable,
+        .is_signer = raw.is_signer,
+        .is_writable = raw.is_writable,
+        .executable = raw.is_executable,
     };
+}
+
+pub inline fn skipAccountInfoUnchecked(input: [*]u8, cursor: *usize) void {
+    const raw: *RawAccount = @ptrCast(@alignCast(input + cursor.*));
+    if (raw.borrow_state != 0xff) {
+        cursor.* += @sizeOf(u64);
+        return;
+    }
+
+    cursor.* += @sizeOf(RawAccount);
+    cursor.* += @intCast(raw.data_len);
+    cursor.* += 10 * 1024;
+    cursor.* = std.mem.alignForward(usize, cursor.*, 8);
+    cursor.* += @sizeOf(u64);
 }
 
 test "common writeU64Le and readU64LeSlice round-trip a wide value" {
@@ -199,6 +210,13 @@ test "common programIdFromInput reads program id after serialized account and in
     try std.testing.expectEqualSlices(u8, program_id[0..], programIdFromInput(input[0..used].ptr)[0..]);
 }
 
+test "common programIdFromInput skips duplicate markers and large account lists" {
+    const program_id: Pubkey = [_]u8{0xcd} ** 32;
+    var input: [220_000]u8 = undefined;
+    const used = writeCommonSerializedInputWithDuplicateAndLargeCount(input[0..], program_id);
+    try std.testing.expectEqualSlices(u8, program_id[0..], programIdFromInput(input[0..used].ptr)[0..]);
+}
+
 fn writeCommonSerializedInput(out: []u8, program_id: Pubkey) usize {
     @memset(out, 0);
     var cursor: usize = 0;
@@ -239,6 +257,51 @@ fn writeCommonSerializedInput(out: []u8, program_id: Pubkey) usize {
     out[cursor + 1] = 0x55;
     cursor += 2;
 
+    @memcpy(out[cursor..][0..32], program_id[0..]);
+    cursor += 32;
+    return cursor;
+}
+
+fn writeCommonSerializedInputWithDuplicateAndLargeCount(out: []u8, program_id: Pubkey) usize {
+    @memset(out, 0);
+    var cursor: usize = 0;
+    writeU64Le(out[cursor..][0..8], 17);
+    cursor += 8;
+
+    for (0..16) |index| {
+        out[cursor] = 0xff;
+        cursor += 1;
+        out[cursor] = @intFromBool(index == 0);
+        cursor += 1;
+        out[cursor] = 1;
+        cursor += 1;
+        out[cursor] = 0;
+        cursor += 1;
+        cursor += 4;
+
+        const key: Pubkey = [_]u8{@intCast(0x10 + index)} ** 32;
+        const owner: Pubkey = [_]u8{@intCast(0x80 + index)} ** 32;
+        @memcpy(out[cursor..][0..32], key[0..]);
+        cursor += 32;
+        @memcpy(out[cursor..][0..32], owner[0..]);
+        cursor += 32;
+        writeU64Le(out[cursor..][0..8], @intCast(index));
+        cursor += 8;
+        writeU64Le(out[cursor..][0..8], 0);
+        cursor += 8;
+        cursor += 10 * 1024;
+        cursor = std.mem.alignForward(usize, cursor, 8);
+        writeU64Le(out[cursor..][0..8], @intCast(100 + index));
+        cursor += 8;
+    }
+
+    out[cursor] = 0;
+    cursor += 8;
+
+    writeU64Le(out[cursor..][0..8], 1);
+    cursor += 8;
+    out[cursor] = 0x7f;
+    cursor += 1;
     @memcpy(out[cursor..][0..32], program_id[0..]);
     cursor += 32;
     return cursor;

@@ -21,6 +21,17 @@ const SdkAccountMeta = vendored_sdk.cpi.AccountMeta;
 const SdkInstruction = vendored_sdk.cpi.Instruction;
 const SdkSeed = vendored_sdk.cpi.Seed;
 const SdkSigner = vendored_sdk.cpi.Signer;
+const RawAccount = extern struct {
+    borrow_state: u8,
+    is_signer: u8,
+    is_writable: u8,
+    is_executable: u8,
+    padding: [4]u8,
+    key: Pubkey,
+    owner: Pubkey,
+    lamports: u64,
+    data_len: u64,
+};
 
 /// Maximum Solana PDA seed length in bytes.
 pub const max_seed_len: usize = 32;
@@ -437,39 +448,26 @@ inline fn readU64Raw(input: [*]const u8, cursor: *usize) u64 {
 }
 
 inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolAccountInfo) void {
-    _ = input[cursor.*];
-    cursor.* += 1;
-    const is_signer = input[cursor.*];
-    cursor.* += 1;
-    const is_writable = input[cursor.*];
-    cursor.* += 1;
-    const executable = input[cursor.*];
-    cursor.* += 1;
-    cursor.* += 4;
-    const key: *const Pubkey = @ptrCast(input + cursor.*);
-    cursor.* += 32;
-    const owner: *const Pubkey = @ptrCast(input + cursor.*);
-    cursor.* += 32;
-    const lamports: *align(1) u64 = @ptrCast(input + cursor.*);
-    cursor.* += @sizeOf(u64);
-    const data_len = readU64Raw(input, cursor);
-    const data = (input + cursor.*)[0..@intCast(data_len)];
+    const raw: *RawAccount = @ptrCast(@alignCast(input + cursor.*));
+    const data_len = raw.data_len;
+    const data = (@as([*]u8, @ptrCast(raw)) + @sizeOf(RawAccount))[0..@intCast(data_len)];
+    cursor.* += @sizeOf(RawAccount);
     cursor.* += @intCast(data_len);
     cursor.* += 10 * 1024;
     cursor.* = std.mem.alignForward(usize, cursor.*, 8);
-    const rent_epoch: *align(1) u64 = @ptrCast(input + cursor.*);
+    const rent_epoch: *align(1) u64 = @ptrCast(@alignCast(input + cursor.*));
     cursor.* += @sizeOf(u64);
 
     out.* = .{
-        .key = key,
-        .lamports = lamports,
+        .key = &raw.key,
+        .lamports = @ptrCast(&raw.lamports),
         .data_len = data.len,
         .data = data.ptr,
-        .owner = owner,
+        .owner = &raw.owner,
         .rent_epoch = rent_epoch.*,
-        .is_signer = is_signer,
-        .is_writable = is_writable,
-        .executable = executable,
+        .is_signer = raw.is_signer,
+        .is_writable = raw.is_writable,
+        .executable = raw.is_executable,
     };
 }
 

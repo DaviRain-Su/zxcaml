@@ -37,9 +37,10 @@ fn shouldEmitLoaderLog(instruction_data: []const u8) bool {
 export fn entrypoint(input: [*]u8) callconv(.c) u64 {
     var bpf_arena_buffer: [arena_bytes]u8 align(8) = undefined;
     var arena = Arena.fromStaticBuffer(&bpf_arena_buffer);
-    var account_storage: [max_entrypoint_accounts]AccountRuntime.AccountView = undefined;
     var accounts: []AccountRuntime.AccountView = undefined;
-    AccountRuntime.parseAccountsFromPtrIntoStorage(input, account_storage[0..], &accounts) catch return 1;
+    const account_count = AccountRuntime.accountCountFromPtr(input) catch return 1;
+    if (account_count > max_entrypoint_accounts) return 1;
+    AccountRuntime.parseAccountsFromPtrInto(&arena, input, &accounts) catch return 1;
     const instruction_data = AccountRuntime.parseInstructionDataFromPtr(input) catch return 1;
     if (shouldEmitLoaderLog(instruction_data)) {
         syscalls.sol_log_(loader_log_message_bytes);

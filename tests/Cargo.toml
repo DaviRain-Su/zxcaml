@@ -165,6 +165,10 @@ name = "account_guard_test"
 path = "account_guard_test.rs"
 
 [[test]]
+name = "account_parser_view_test"
+path = "account_parser_view_test.rs"
+
+[[test]]
 name = "artifact_routing_test"
 path = "artifact_routing_test.rs"
 
