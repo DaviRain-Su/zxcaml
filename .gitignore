@@ -32,6 +32,7 @@ build/*.so
 
 # Slidev local dependencies
 slides/node_modules/
+tests/near/node_modules/
 
 # Hackathon Surfpool demo local state
 .surfpool/

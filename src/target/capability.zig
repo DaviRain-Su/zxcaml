@@ -5,11 +5,17 @@ const target_registry = @import("registry.zig");
 pub const Capability = enum {
     solana_host_api,
     account_data_mutation,
+    near_storage_api,
+    near_caller_identity_api,
+    near_promise_api,
 
     pub fn label(self: Capability) []const u8 {
         return switch (self) {
             .solana_host_api => "Solana host API",
             .account_data_mutation => "Solana account mutation",
+            .near_storage_api => "NEAR storage API",
+            .near_caller_identity_api => "NEAR caller identity API",
+            .near_promise_api => "NEAR promise API",
         };
     }
 };
@@ -171,6 +177,36 @@ fn isSolanaHostExternal(external: core_ir.ExternalDecl) bool {
     return false;
 }
 
+fn isNearStorageExternal(external: core_ir.ExternalDecl) bool {
+    return std.mem.startsWith(u8, external.symbol, "near.storage_");
+}
+
+fn isNearCallerIdentityExternal(external: core_ir.ExternalDecl) bool {
+    return std.mem.eql(u8, external.symbol, "near.predecessor_account_id") or
+        std.mem.eql(u8, external.symbol, "near.signer_account_id") or
+        std.mem.eql(u8, external.symbol, "near.current_account_id");
+}
+
+fn isNearPromiseExternal(external: core_ir.ExternalDecl) bool {
+    return std.mem.startsWith(u8, external.symbol, "near.promise_");
+}
+
+fn classifyExternalCapability(external: core_ir.ExternalDecl) ?Capability {
+    if (isSolanaHostExternal(external)) return .solana_host_api;
+    if (isNearStorageExternal(external)) return .near_storage_api;
+    if (isNearCallerIdentityExternal(external)) return .near_caller_identity_api;
+    if (isNearPromiseExternal(external)) return .near_promise_api;
+    return null;
+}
+
+fn externalApiSurface(external: core_ir.ExternalDecl) []const u8 {
+    const capability = classifyExternalCapability(external) orelse return external.name;
+    return switch (capability) {
+        .near_storage_api, .near_caller_identity_api, .near_promise_api => external.symbol,
+        .solana_host_api, .account_data_mutation => external.name,
+    };
+}
+
 fn isSolanaHostApiName(name: []const u8) bool {
     const name_prefixes = [_][]const u8{
         "Syscall.",
@@ -207,11 +243,12 @@ const UsageCollector = struct {
         }
 
         for (module.externals) |external| {
-            if (!isSolanaHostExternal(external)) continue;
-            if (self.hasUsage(.solana_host_api, external.name)) continue;
+            const capability = classifyExternalCapability(external) orelse continue;
+            const api_surface = externalApiSurface(external);
+            if (self.hasUsage(capability, api_surface)) continue;
             try self.appendUsage(.{
-                .capability = .solana_host_api,
-                .api_surface = external.name,
+                .capability = capability,
+                .api_surface = api_surface,
                 .loc = null,
             });
         }
@@ -223,9 +260,10 @@ const UsageCollector = struct {
             .Constant => {},
             .Var => |value| {
                 if (self.findHostExternal(value.name)) |external| {
+                    const capability = classifyExternalCapability(external) orelse return;
                     try self.appendUsage(.{
-                        .capability = .solana_host_api,
-                        .api_surface = external.name,
+                        .capability = capability,
+                        .api_surface = externalApiSurface(external),
                         .loc = value.loc,
                     });
                 } else if (isSolanaHostApiName(value.name)) {
@@ -332,7 +370,7 @@ const UsageCollector = struct {
     fn findHostExternal(self: *const UsageCollector, name: []const u8) ?core_ir.ExternalDecl {
         for (self.externals) |external| {
             if (!std.mem.eql(u8, external.name, name)) continue;
-            if (!isSolanaHostExternal(external)) continue;
+            if (classifyExternalCapability(external) == null) continue;
             return external;
         }
         return null;
@@ -353,9 +391,10 @@ const UsageCollector = struct {
         };
         const loc = app.loc orelse callee.loc;
         if (self.findHostExternal(callee.name)) |external| {
+            const capability = classifyExternalCapability(external) orelse return false;
             try self.appendUsage(.{
-                .capability = .solana_host_api,
-                .api_surface = external.name,
+                .capability = capability,
+                .api_surface = externalApiSurface(external),
                 .loc = loc,
             });
             return true;
@@ -391,6 +430,7 @@ fn renderedApiSurface(allocator: std.mem.Allocator, diagnostic: UnsupportedCapab
             std.fmt.allocPrint(allocator, "Account.{s}", .{diagnostic.api_surface})
         else
             diagnostic.api_surface,
+        .near_storage_api, .near_caller_identity_api, .near_promise_api => diagnostic.api_surface,
     };
 }
 
@@ -590,5 +630,34 @@ test "wasm capability rendering keeps account mutation context actionable" {
             try std.testing.expect(std.mem.indexOf(u8, rendered, "examples/future_capability.ml:7:3") != null);
             try std.testing.expect(std.mem.indexOf(u8, rendered, "pure logic only") != null);
         },
+    }
+}
+
+test "near capability policy rejects storage caller and promise APIs with target-aware diagnostics" {
+    const near = target_registry.lookupByCliName("near") orelse return error.TestUnexpectedResult;
+    const cases = [_]CapabilityUsage{
+        .{ .capability = .near_storage_api, .api_surface = "near.storage_write", .loc = sampleLoc() },
+        .{ .capability = .near_caller_identity_api, .api_surface = "near.predecessor_account_id", .loc = sampleLoc() },
+        .{ .capability = .near_promise_api, .api_surface = "near.promise_create", .loc = sampleLoc() },
+    };
+
+    for (cases) |usage| {
+        const result = try scanCapabilityUsages(capabilityPolicyForTarget(near), &.{usage});
+        switch (result) {
+            .ok => return error.TestExpectedUnsupportedCapability,
+            .unsupported => |diagnostic| {
+                try std.testing.expectEqualStrings("near", diagnostic.target_cli_name);
+                try std.testing.expectEqual(usage.capability, diagnostic.capability);
+                try std.testing.expectEqualStrings(usage.api_surface, diagnostic.api_surface);
+
+                const rendered = try renderUnsupportedCapabilityDiagnostic(std.testing.allocator, diagnostic);
+                defer std.testing.allocator.free(rendered);
+
+                try std.testing.expect(std.mem.indexOf(u8, rendered, "target `near`") != null);
+                try std.testing.expect(std.mem.indexOf(u8, rendered, usage.capability.label()) != null);
+                try std.testing.expect(std.mem.indexOf(u8, rendered, usage.api_surface) != null);
+                try std.testing.expect(std.mem.indexOf(u8, rendered, "no-storage adapter") != null);
+            },
+        }
     }
 }

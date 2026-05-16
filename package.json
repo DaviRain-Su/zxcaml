@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "test:near": "npm --prefix ./tests/near ci --no-fund --no-audit && npm --prefix ./tests/near test",
     "site:dev": "wrangler pages dev site --compatibility-date=2026-04-29",
     "site:deploy": "wrangler pages deploy site --project-name zxcaml --commit-dirty=true"
   },
