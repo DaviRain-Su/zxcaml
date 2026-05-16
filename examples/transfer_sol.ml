@@ -1,7 +1,5 @@
 (* zignocchio: examples/transfer-sol/lib.zig *)
 
-external log_message : string -> unit = "sol_log_"
-
 let transfer_sol from_account to_account system_program instruction_data =
   (* Type witnesses for ZxCaml lowering; codegen emits the actual guarded
      System Program CPI using the zignocchio-compatible u64 amount payload. *)
@@ -12,5 +10,5 @@ let transfer_sol from_account to_account system_program instruction_data =
   0
 
 let entrypoint from_account to_account system_program instruction_data =
-  let _ = log_message "transfer-sol: starting" in
+  let _ = Syscall.sol_log "transfer-sol: starting" in
   transfer_sol from_account to_account system_program instruction_data

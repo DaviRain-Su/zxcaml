@@ -4,9 +4,6 @@
    constant-product AMM quote with a 30 bps input fee. It returns 0 after the
    assertions pass so the same file is usable as a Solana BPF smoke program. *)
 
-external log_message : string -> unit = "sol_log_"
-external log_values : int -> int -> int -> int -> int -> unit = "sol_log_64_"
-
 let quote_constant_product input_reserve output_reserve input_amount fee_bps =
   let fee = Amount.fee_bps input_amount fee_bps in
   let net_input = input_amount - fee in
@@ -15,7 +12,7 @@ let quote_constant_product input_reserve output_reserve input_amount fee_bps =
 let quote_linear input_amount price = Amount.apply_rate input_amount price
 
 let entrypoint _input =
-  let _ = log_message "fixed amm quote: starting" in
+  let _ = Syscall.sol_log "fixed amm quote: starting" in
   let input_reserve = 1000000 in
   let output_reserve = 2000000 in
   let input_amount = 10000 in
@@ -27,7 +24,7 @@ let entrypoint _input =
   let amm_quote =
     quote_constant_product input_reserve output_reserve input_amount fee_bps
   in
-  let _ = log_values fee net_input (Fixed.to_scaled spot_price) linear_quote amm_quote in
+  let _ = Syscall.sol_log_64 fee net_input (Fixed.to_scaled spot_price) linear_quote amm_quote in
   assert (fee = 30);
   assert (net_input = 9970);
   assert (Fixed.to_scaled spot_price = 2000000);

@@ -1,14 +1,11 @@
 (* SPL Token CloseAccount primitive over program-owned mocked token-account state. *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-external log_message : string -> unit = "sol_log_"
-
 external spl_close_account_process :
   account -> account -> account -> account -> bytes -> int = "spl_close_account_process"
 
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let entrypoint account_to_close destination authority token_program instruction_data =
@@ -23,7 +20,7 @@ let entrypoint account_to_close destination authority token_program instruction_
        as a builtin for this fixture, so this is intentionally not a real
        Tokenkeg CPI. *)
   let discriminator = read_u8 instruction_data 0 in
-  let _ = log_message "SPL close account program: starting" in
+  let _ = Syscall.sol_log "SPL close account program: starting" in
   if discriminator = 0 then
     spl_close_account_process account_to_close destination authority token_program instruction_data
   else 1

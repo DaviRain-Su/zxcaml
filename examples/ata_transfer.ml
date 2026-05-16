@@ -1,15 +1,12 @@
 (* ATA flow: create_idempotent destination associated token account, then mocked SPL Token Transfer. *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-external log_message : string -> unit = "sol_log_"
-
 external ata_transfer_process :
   account -> account -> account -> account -> account -> account -> bytes -> int
   = "ata_transfer_process"
 
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let entrypoint account0 account1 account2 account3 account4 account5
@@ -25,7 +22,7 @@ let entrypoint account0 account1 account2 account3 account4 account5
        SPL Token convention: token accounts are owned by this example program,
        not Tokenkeg, and the amount field is updated directly in tests. *)
   let discriminator = read_u8 instruction_data 0 in
-  let _ = log_message "ATA transfer program: starting" in
+  let _ = Syscall.sol_log "ATA transfer program: starting" in
   if discriminator = 0 || discriminator = 1 then
     ata_transfer_process account0 account1 account2 account3 account4 account5
       instruction_data

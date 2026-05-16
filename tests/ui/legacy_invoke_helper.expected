@@ -1,0 +1,1 @@
+tests/ui/legacy_invoke_helper.ml:1:1: error: legacy runtime helper `invoke` is no longer supported under the SDK-backed public API; use `Cpi.invoke` instead.

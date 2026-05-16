@@ -1,0 +1,1 @@
+tests/ui/legacy_syscall_external.ml:1:39: error: legacy runtime external `sol_log_` is no longer supported under the SDK-backed public API; remove that external declaration and use `Syscall.sol_log` instead of `sol_log_`.

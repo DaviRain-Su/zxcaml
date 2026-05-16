@@ -1,19 +1,15 @@
 (* zignocchio: examples/counter/lib.zig *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-external log_message : string -> unit = "sol_log_"
-external log_values : int -> int -> int -> int -> int -> unit = "sol_log_64_"
-
 type counter = { count : int } [@@account]
 
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let read_u64_le bytes =
   (* Type witness for ZxCaml lowering; codegen emits the real LE u64 read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   0
 
 let write_u64_le value =
@@ -40,7 +36,7 @@ let entrypoint counter_account user instruction_data =
     else if discriminator = 0 then current + 1
     else current
   in
-  let _ = log_message "counter_v2 operation applied" in
-  let _ = log_values discriminator current next 0 0 in
+  let _ = Syscall.sol_log "counter_v2 operation applied" in
+  let _ = Syscall.sol_log_64 discriminator current next 0 0 in
   let _ = set_account_data counter_account (write_u64_le next) in
   if discriminator = 0 || discriminator = 2 then 0 else 1

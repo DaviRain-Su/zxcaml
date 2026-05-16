@@ -4,14 +4,12 @@
    data, and invokes without PDA signer seeds because the outer instruction
    already provides the source signer. *)
 
-external log_message : string -> unit = "sol_log_"
-
 let entrypoint accounts _input =
   let _ = accounts in
-  let _ = log_message "simple CPI via external binding" in
+  let _ = Syscall.sol_log "simple CPI via external binding" in
   (* CPI construction: invoke forwards signer/writable privileges from the
      current instruction; no PDA signer seeds are needed for a plain transfer. *)
-  invoke
+  Cpi.invoke
     {
       (* The native System Program has the all-zero 32-byte program id. *)
       program_id = Pubkey.zero;

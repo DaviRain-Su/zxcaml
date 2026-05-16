@@ -33,6 +33,10 @@ pub fn emitExternalAppExpr(
         try append(out, allocator, "cpi.sol_get_return_data_alloc(arena)");
         return;
     }
+    if (std.mem.eql(u8, external.symbol, "Cpi.get_return_program_id") and app.args.len == 1) {
+        try append(out, allocator, "cpi.sol_get_return_program_id_alloc(arena)");
+        return;
+    }
     if (std.mem.eql(u8, external.symbol, "sol_log_") and app.args.len == 1) {
         if (try emitSyscallStringCallBlock(out, allocator, app.args[0].*, indent_level, ctx, "syscalls.sol_log_", false, false)) return;
     }
@@ -415,6 +419,11 @@ pub fn emitSyscallAppExpr(
         try append(out, allocator, "@as(i64, @intCast(syscalls.sol_get_rent_lamports_per_byte_year()))");
         return true;
     }
+    if (std.mem.eql(u8, name, "Syscall.sol_log_compute_units")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "syscalls.sol_log_compute_units_()");
+        return true;
+    }
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units")) {
         if (app.args.len != 1) return error.UnsupportedExpr;
         try append(out, allocator, "@as(i64, @intCast(syscalls.sol_remaining_compute_units()))");
@@ -433,11 +442,16 @@ pub fn emitSyscallAppExpr(
         try append(out, allocator, "cpi.sol_get_return_data_alloc(arena)");
         return true;
     }
-    if (std.mem.eql(u8, name, "invoke")) {
+    if (std.mem.eql(u8, name, "Cpi.get_return_program_id")) {
+        if (app.args.len != 1) return error.UnsupportedExpr;
+        try append(out, allocator, "cpi.sol_get_return_program_id_alloc(arena)");
+        return true;
+    }
+    if (std.mem.eql(u8, name, "invoke") or std.mem.eql(u8, name, "Cpi.invoke")) {
         try emitCpiInvoke(out, allocator, app, indent_level, ctx, false);
         return true;
     }
-    if (std.mem.eql(u8, name, "invoke_signed")) {
+    if (std.mem.eql(u8, name, "invoke_signed") or std.mem.eql(u8, name, "Cpi.invoke_signed")) {
         try emitCpiInvoke(out, allocator, app, indent_level, ctx, true);
         return true;
     }
@@ -895,8 +909,6 @@ pub fn emitSplTokenTransferInstruction(
     indent_level: usize,
     ctx: *EmitContext,
 ) EmitError!void {
-    const instruction_ty = try zigTypeName(allocator, app.ty);
-    defer allocator.free(instruction_ty);
     const account_meta_ty = try userTypeName(allocator, "account_meta");
     defer allocator.free(account_meta_ty);
     const block_id = ctx.next_block_id;
@@ -915,7 +927,7 @@ pub fn emitSplTokenTransferInstruction(
     try emitExpr(out, allocator, app.args[3].*, indent_level + 1, ctx);
     try append(out, allocator, ";\n");
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "if (omlz_spl_amount_{d} < 0) break :blk{d} {s}{{ .program_id = &.{{}}, .accounts = &.{{}}, .data = &.{{}} }};\n", .{ block_id, block_id, instruction_ty });
+    try appendPrint(out, allocator, "if (omlz_spl_amount_{d} < 0) break :blk{d} .{{ .program_id = &.{{}}, .accounts = &.{{}}, .data = &.{{}} }};\n", .{ block_id, block_id });
 
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "var omlz_spl_program_id_{d}: []u8 = undefined;\n", .{block_id});
@@ -931,7 +943,7 @@ pub fn emitSplTokenTransferInstruction(
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "arena.allocIntoOrTrap(u8, spl_token.transfer_instruction_data_len, &omlz_spl_data_{d});\n", .{block_id});
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "_ = spl_token.encodeTransferInto(omlz_spl_data_{d}, @intCast(omlz_spl_amount_{d})) catch break :blk{d} {s}{{ .program_id = &.{{}}, .accounts = &.{{}}, .data = &.{{}} }};\n", .{ block_id, block_id, block_id, instruction_ty });
+    try appendPrint(out, allocator, "_ = spl_token.encodeTransferInto(omlz_spl_data_{d}, @intCast(omlz_spl_amount_{d})) catch break :blk{d} .{{ .program_id = &.{{}}, .accounts = &.{{}}, .data = &.{{}} }};\n", .{ block_id, block_id, block_id });
 
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "var omlz_spl_metas_{d}: []{s} = undefined;\n", .{ block_id, account_meta_ty });
@@ -945,7 +957,7 @@ pub fn emitSplTokenTransferInstruction(
     try appendPrint(out, allocator, "omlz_spl_metas_{d}[2] = .{{ .pubkey = omlz_spl_authority_{d}, .is_writable = prelude.Bool.false, .is_signer = prelude.Bool.true }};\n", .{ block_id, block_id });
 
     try emitIndent(out, allocator, indent_level + 1);
-    try appendPrint(out, allocator, "break :blk{d} {s}{{ .program_id = omlz_spl_program_id_{d}, .accounts = omlz_spl_metas_{d}, .data = omlz_spl_data_{d} }};\n", .{ block_id, instruction_ty, block_id, block_id, block_id });
+    try appendPrint(out, allocator, "break :blk{d} .{{ .program_id = omlz_spl_program_id_{d}, .accounts = omlz_spl_metas_{d}, .data = omlz_spl_data_{d} }};\n", .{ block_id, block_id, block_id, block_id });
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
 }

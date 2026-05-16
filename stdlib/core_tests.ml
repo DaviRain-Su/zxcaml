@@ -162,8 +162,8 @@ let () =
     { program_id = Bytes.of_string "program"; accounts = [| meta |]; data = account.data }
   in
   assert ((Array.get instruction.accounts 0).pubkey = account.key);
-  assert (invoke instruction = 0);
-  assert (invoke_signed instruction [| [| Bytes.of_string "seed" |] |] = 0);
+  assert (Cpi.invoke instruction = 0);
+  assert (Cpi.invoke_signed instruction [| [| Bytes.of_string "seed" |] |] = 0);
   assert (
     create_program_address [| Bytes.of_string "seed" |] instruction.program_id
     = instruction.program_id);

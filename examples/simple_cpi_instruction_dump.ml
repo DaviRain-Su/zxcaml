@@ -12,7 +12,7 @@ let signer_account = Bytes.of_string "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
 let writable_signer_account = Bytes.of_string "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"
 
 let entrypoint _accounts _input =
-  invoke_signed
+  Cpi.invoke_signed
     {
       program_id = dump_program_id;
       accounts =

@@ -2,9 +2,6 @@
    Non-escaping arithmetic lets should lower to stack locals, while values
    passed to functions or syscalls remain arena-backed. *)
 
-external log_message : string -> unit = "sol_log_"
-external log_values : int -> int -> int -> int -> int -> unit = "sol_log_64_"
-
 let id n = n
 
 let entrypoint _input =
@@ -14,6 +11,6 @@ let entrypoint _input =
   let arena_value = 4 in
   let escaped_value = id arena_value in
   let observed = stack_mix + escaped_value in
-  let _ = log_message "region demo" in
-  let _ = log_values observed escaped_value 0 0 0 in
+  let _ = Syscall.sol_log "region demo" in
+  let _ = Syscall.sol_log_64 observed escaped_value 0 0 0 in
   0

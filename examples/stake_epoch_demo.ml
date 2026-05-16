@@ -1,7 +1,5 @@
 (* cgrt23: StakeHistory + EpochSchedule sysvar reader demo. *)
 
-external log_message : string -> unit = "sol_log_"
-
 external array_get : stake_history_entry array -> int -> stake_history_entry
   = "array.get"
 
@@ -20,7 +18,7 @@ let entrypoint output_account stake_history_account epoch_schedule_account
     instruction_data =
   let _ = output_account.data in
   let _ = instruction_data in
-  let _ = log_message "stake/epoch sysvar demo: reading fixture accounts" in
+  let _ = Syscall.sol_log "stake/epoch sysvar demo: reading fixture accounts" in
   let newest =
     array_get
       (Sysvar.stake_history_latest_from_account stake_history_account.data 2)

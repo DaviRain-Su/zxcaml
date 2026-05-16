@@ -162,6 +162,20 @@ pub const items = [_]Item{
     .{ .label = "Format.int_to_string", .kind = .function, .detail = "int -> string" },
     .{ .label = "Format.hex_of_int", .kind = .function, .detail = "int -> int -> string" },
 
+    // Syscall / Crypto
+    .{ .label = "Syscall.sol_log", .kind = .function, .detail = "string -> unit" },
+    .{ .label = "Syscall.sol_log_64", .kind = .function, .detail = "int -> int -> int -> int -> int -> unit" },
+    .{ .label = "Syscall.sol_log_pubkey", .kind = .function, .detail = "pubkey -> unit" },
+    .{ .label = "Syscall.sol_sha256", .kind = .function, .detail = "bytes -> bytes" },
+    .{ .label = "Syscall.sol_get_clock_sysvar", .kind = .function, .detail = "unit -> clock" },
+    .{ .label = "Syscall.sol_get_rent_lamports_per_byte_year", .kind = .function, .detail = "unit -> int" },
+    .{ .label = "Syscall.sol_log_compute_units", .kind = .function, .detail = "unit -> unit" },
+    .{ .label = "Syscall.sol_remaining_compute_units", .kind = .function, .detail = "unit -> int" },
+    .{ .label = "Crypto.sha256", .kind = .function, .detail = "bytes -> bytes" },
+    .{ .label = "Crypto.keccak256", .kind = .function, .detail = "bytes -> bytes" },
+    .{ .label = "Crypto.blake3", .kind = .function, .detail = "bytes -> bytes" },
+    .{ .label = "Crypto.secp256k1_recover", .kind = .function, .detail = "bytes -> int -> bytes -> bytes" },
+
     // Sysvar
     .{ .label = "Sysvar.clock_from_account", .kind = .function, .detail = "account_data -> clock" },
     .{ .label = "Sysvar.rent_from_account", .kind = .function, .detail = "account_data -> rent" },
@@ -169,6 +183,12 @@ pub const items = [_]Item{
     .{ .label = "Sysvar.instruction_at", .kind = .function, .detail = "account_data -> int -> instruction" },
     .{ .label = "Sysvar.stake_history_latest_from_account", .kind = .function, .detail = "account_data -> int -> stake_history_entry array" },
     .{ .label = "Sysvar.epoch_schedule_from_account", .kind = .function, .detail = "account_data -> epoch_schedule" },
+
+    // SplToken
+    .{ .label = "SplToken.program_id", .kind = .function, .detail = "unit -> pubkey" },
+    .{ .label = "SplToken.transfer_data", .kind = .function, .detail = "int -> bytes" },
+    .{ .label = "SplToken.transfer_account_metas", .kind = .function, .detail = "pubkey -> pubkey -> pubkey -> account_meta array" },
+    .{ .label = "SplToken.transfer_instruction", .kind = .function, .detail = "pubkey -> pubkey -> pubkey -> int -> instruction" },
 
     // Cpi (runtime helpers; types not statically known here)
     .{ .label = "Cpi.invoke", .kind = .function, .detail = "Cpi" },

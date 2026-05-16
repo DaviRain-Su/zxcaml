@@ -5,10 +5,8 @@
    1 = mutate the first account and confirm a duplicate second account aliases it
  *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-
 let read_u8 bytes offset =
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let set_account_data (account : account) bytes =

@@ -1,6 +1,8 @@
 (* hash-demo: secp256k1_recover instruction-data fixture writer. *)
 
-external recover : string -> int -> string -> string = "sol_secp256k1_recover_alloc"
+let recover hash recovery_id signature =
+  Crypto.secp256k1_recover
+    (Bytes.of_string hash) recovery_id (Bytes.of_string signature)
 
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)

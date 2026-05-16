@@ -1,8 +1,5 @@
 (* zxcaml original: simple maker/taker order book *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-external log_message : string -> unit = "sol_log_"
-
 external order_book_process :
   account ->
   account ->
@@ -16,7 +13,7 @@ external order_book_process :
 
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let entrypoint account0 account1 account2 account3 account4 account5 account6
@@ -34,7 +31,7 @@ let entrypoint account0 account1 account2 account3 account4 account5 account6
        example program, not Tokenkeg, and the amount fields are updated
        directly by the runtime helper under Mollusk. *)
   let discriminator = read_u8 instruction_data 0 in
-  let _ = log_message "Order book program: starting" in
+  let _ = Syscall.sol_log "Order book program: starting" in
   if discriminator = 1 || discriminator = 2 then
     order_book_process account0 account1 account2 account3 account4 account5
       account6 instruction_data

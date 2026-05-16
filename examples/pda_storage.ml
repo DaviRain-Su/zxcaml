@@ -1,11 +1,8 @@
 (* zignocchio: examples/pda-storage/lib.zig *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-external log_message : string -> unit = "sol_log_"
-
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let pda_storage_process witness instruction_data =
@@ -17,5 +14,5 @@ let pda_storage_process witness instruction_data =
 
 let entrypoint witness instruction_data =
   let _ = witness.key in
-  let _ = log_message "PDA Storage: starting" in
+  let _ = Syscall.sol_log "PDA Storage: starting" in
   pda_storage_process witness instruction_data

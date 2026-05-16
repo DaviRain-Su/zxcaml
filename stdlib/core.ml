@@ -504,6 +504,8 @@ module Syscall = struct
   external sol_get_rent_lamports_per_byte_year : unit -> int
     = "sol_get_rent_lamports_per_byte_year"
 
+  external sol_log_compute_units : unit -> unit = "sol_log_compute_units_"
+
   external sol_remaining_compute_units : unit -> int
     = "sol_remaining_compute_units"
 end
@@ -535,6 +537,26 @@ module Sysvar = struct
 
   external epoch_schedule_from_account : account_data -> epoch_schedule_record
     = "sysvar.readEpochSchedule"
+end
+
+module SplToken = struct
+  let program_id () = Bytes.make 32 '\000'
+
+  let transfer_data (_amount : int) = Bytes.of_string ""
+
+  let transfer_account_metas source destination authority =
+    [|
+      { pubkey = source; is_writable = true; is_signer = false };
+      { pubkey = destination; is_writable = true; is_signer = false };
+      { pubkey = authority; is_writable = false; is_signer = true };
+    |]
+
+  let transfer_instruction source destination authority amount =
+    {
+      program_id = program_id ();
+      accounts = transfer_account_metas source destination authority;
+      data = transfer_data amount;
+    }
 end
 
 module Bytes = struct
@@ -764,6 +786,18 @@ let create_program_address (_seeds : signer_seeds) (program_id : bytes) =
 
 let try_find_program_address (_seeds : signer_seeds) (program_id : bytes) =
   Some (program_id, 0)
+
+module Cpi = struct
+  let invoke = invoke
+
+  let invoke_signed = invoke_signed
+
+  external set_return_data : bytes -> unit = "Cpi.set_return_data"
+
+  external get_return_data : unit -> bytes = "Cpi.get_return_data"
+
+  external get_return_program_id : unit -> pubkey = "Cpi.get_return_program_id"
+end
 
 let head xs = match xs with [] -> None | x :: _ -> Some x
 

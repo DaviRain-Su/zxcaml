@@ -1201,11 +1201,15 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = clock_ty };
     if (std.mem.eql(u8, name, "Syscall.sol_get_rent_lamports_per_byte_year") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
+    if (std.mem.eql(u8, name, "Syscall.sol_log_compute_units") and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Unit };
     if (std.mem.eql(u8, name, "Syscall.sol_remaining_compute_units") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = .Int };
     if ((std.mem.eql(u8, name, "set_return_data") or std.mem.eql(u8, name, "Cpi.set_return_data") or std.mem.eql(u8, name, "Syscall.sol_set_return_data")) and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{bytes_ty}), .return_ty = .Unit };
     if ((std.mem.eql(u8, name, "get_return_data") or std.mem.eql(u8, name, "Cpi.get_return_data") or std.mem.eql(u8, name, "Syscall.sol_get_return_data")) and arg_count == 1)
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
+    if (std.mem.eql(u8, name, "Cpi.get_return_program_id") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
     if (std.mem.eql(u8, name, "Bytes.of_string") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.String}), .return_ty = bytes_ty };
@@ -1227,9 +1231,9 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
     if (std.mem.eql(u8, name, "Fixed.equal") and arg_count == 2)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ .Int, .Int }), .return_ty = .Bool };
 
-    if (std.mem.eql(u8, name, "invoke") and arg_count == 1)
+    if ((std.mem.eql(u8, name, "invoke") or std.mem.eql(u8, name, "Cpi.invoke")) and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{instruction_ty}), .return_ty = .Int };
-    if (std.mem.eql(u8, name, "invoke_signed") and arg_count == 2)
+    if ((std.mem.eql(u8, name, "invoke_signed") or std.mem.eql(u8, name, "Cpi.invoke_signed")) and arg_count == 2)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ instruction_ty, signer_seeds_ty }), .return_ty = .Int };
     if (std.mem.eql(u8, name, "create_program_address") and arg_count == 2)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ signer_seed_ty, bytes_ty }), .return_ty = bytes_ty };

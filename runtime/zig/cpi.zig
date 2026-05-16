@@ -541,6 +541,16 @@ pub inline fn sol_get_return_data_alloc(arena: *Arena) []const u8 {
     return out;
 }
 
+/// Returns the producing return-data program id as an arena-owned byte slice.
+pub inline fn sol_get_return_program_id_alloc(arena: *Arena) []const u8 {
+    var scratch: [return_data_capacity]u8 = undefined;
+    var program_id: Pubkey = [_]u8{0} ** 32;
+    _ = sol_get_return_data(scratch[0..], &program_id);
+    const out = arena.alloc(u8, program_id.len) catch unreachable;
+    @memcpy(out, program_id[0..]);
+    return out;
+}
+
 /// Parses the entrypoint account list into CPI account-info descriptors while
 /// preserving Solana duplicate-account aliasing semantics.
 pub fn parseAccountInfosFromPtrInto(arena: *Arena, input: [*]const u8, out: *[]SolAccountInfo) void {

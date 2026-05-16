@@ -6,7 +6,7 @@ let error_program_id = Bytes.of_string "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
 let relay_account = Bytes.of_string "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
 
 let entrypoint _accounts _input =
-  invoke_signed
+  Cpi.invoke_signed
     {
       program_id = error_program_id;
       accounts =

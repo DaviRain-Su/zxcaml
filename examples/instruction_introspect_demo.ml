@@ -1,11 +1,8 @@
 (* sysvar-demo: Instructions account reader and next-instruction assertion. *)
 
-external log_message : string -> unit = "sol_log_"
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let write_u64_le value =
@@ -23,7 +20,7 @@ let set_account_data account bytes =
 let entrypoint output_account instructions_account instruction_data =
   let _ = output_account.data in
   let _ =
-    log_message "instructions sysvar demo: checking next instruction program"
+    Syscall.sol_log "instructions sysvar demo: checking next instruction program"
   in
   let instructions_data = instructions_account.data in
   let current_index = 0 in

@@ -4,13 +4,11 @@
    1 = withdraw all lamports from the vault PDA back to the owner.
    The vault PDA is derived from seeds ["vault", owner.key]. *)
 
-external hash_bytes : bytes -> bytes = "sol_sha256_alloc"
-
 type vault = { owner : bytes; balance : int } [@@account]
 
 let read_u8 bytes offset =
   (* Type witness for ZxCaml lowering; codegen emits the real byte read. *)
-  let _ = hash_bytes bytes in
+  let _ = Crypto.sha256 bytes in
   offset - offset
 
 let vault_deposit owner vault system_program instruction_data =

@@ -1,8 +1,9 @@
 //! Regression test for external bytes-return codegen.
 //!
 //! RESPONSIBILITIES:
-//! - Compile an OCaml source that declares `sol_sha256 : bytes -> bytes`.
-//! - Verify the generated Zig hoists the runtime `[32]u8` hash storage before slicing.
+//! - Compile an OCaml source that routes through the public `Crypto.sha256`
+//!   and `Syscall.sol_log_pubkey` surfaces.
+//! - Verify the generated Zig still routes through the syscall-backed helpers.
 //! - Execute the hosted native binary so the generated source is type-checked.
 
 const std = @import("std");
@@ -20,7 +21,7 @@ fn runCommand(allocator: Allocator, io: Io, argv: []const []const u8) !struct { 
     return .{ .stdout = result.stdout, .stderr = result.stderr, .exit_code = exit_code };
 }
 
-test "external sol_sha256 bytes return is sliced and native code compiles" {
+test "public crypto bytes return lowers through syscall helpers and native code compiles" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -46,14 +47,10 @@ test "external sol_sha256 bytes return is sliced and native code compiles" {
     const source = try std.Io.Dir.cwd().readFileAlloc(io, "out/program.zig", allocator, .limited(1024 * 1024));
     defer allocator.free(source);
 
-    const hoist_index = std.mem.indexOf(u8, source, "    var omlz_external_bytes_") orelse return error.TestUnexpectedResult;
     const return_index = std.mem.indexOf(u8, source, "    return @intCast(") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(hoist_index < return_index);
-    try std.testing.expect(std.mem.indexOf(u8, source, ": [32]u8 = undefined;\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "const omlz_external_bytes_") == null);
-    try std.testing.expect(std.mem.indexOf(u8, source, " = syscalls.sol_sha256(input);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_sha256(input)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "[0..];") != null);
+    try std.testing.expect(return_index > 0);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_sha256_alloc(arena, input)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "syscalls.sol_log_pubkey(@ptrCast((digest.*).ptr))") != null);
 
     const run_argv = [_][]const u8{output};
     const run = try runCommand(allocator, io, &run_argv);
