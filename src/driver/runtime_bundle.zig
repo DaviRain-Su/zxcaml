@@ -25,34 +25,45 @@ const vendored_solana_codec_root = "vendor/solana-program-sdk-zig/packages/solan
 const vendored_spl_token_m4_root = "vendor/solana-program-sdk-zig/packages/spl-token/src/zxcaml_m4_root.zig";
 const vendored_spl_ata_m4_root = "vendor/solana-program-sdk-zig/packages/spl-ata/src/zxcaml_m4_root.zig";
 
-const shared_runtime_files = [_]RuntimeFile{
-    .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
-    .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
-    .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
-    .{ .src_path = "runtime/zig/entry_context.zig", .out_path = "out/runtime/entry_context.zig" },
+const normalized_runtime_files = [_]RuntimeFile{
+    .{ .src_path = "runtime/zig/root.zig", .out_path = "out/runtime/root.zig" },
+    .{ .src_path = "runtime/zig/core.zig", .out_path = "out/runtime/core.zig" },
+    .{ .src_path = "runtime/zig/solana.zig", .out_path = "out/runtime/solana.zig" },
+    .{ .src_path = "runtime/zig/shims.zig", .out_path = "out/runtime/shims.zig" },
     .{ .src_path = "runtime/zig/sdk/root.zig", .out_path = "out/runtime/sdk/root.zig" },
     .{ .src_path = "runtime/zig/sdk/import_smoke.zig", .out_path = "out/runtime/sdk/import_smoke.zig" },
-    .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
-    .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
-    .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
-    .{ .src_path = "runtime/zig/programs/vault_v2.zig", .out_path = "out/runtime/programs/vault_v2.zig" },
-    .{ .src_path = "runtime/zig/programs/hackathon_greet.zig", .out_path = "out/runtime/programs/hackathon_greet.zig" },
-    .{ .src_path = "runtime/zig/programs/combined.zig", .out_path = "out/runtime/programs/combined.zig" },
-    .{ .src_path = "runtime/zig/programs/token_vault.zig", .out_path = "out/runtime/programs/token_vault.zig" },
-    .{ .src_path = "runtime/zig/programs/escrow_full.zig", .out_path = "out/runtime/programs/escrow_full.zig" },
-    .{ .src_path = "runtime/zig/programs/dao_voting.zig", .out_path = "out/runtime/programs/dao_voting.zig" },
-    .{ .src_path = "runtime/zig/programs/ata_transfer.zig", .out_path = "out/runtime/programs/ata_transfer.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_burn.zig", .out_path = "out/runtime/programs/spl_burn.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_close_account.zig", .out_path = "out/runtime/programs/spl_close_account.zig" },
-    .{ .src_path = "runtime/zig/programs/spl_revoke.zig", .out_path = "out/runtime/programs/spl_revoke.zig" },
-    .{ .src_path = "runtime/zig/programs/order_book.zig", .out_path = "out/runtime/programs/order_book.zig" },
-    .{ .src_path = "runtime/zig/programs/ata.zig", .out_path = "out/runtime/programs/ata.zig" },
+    .{ .src_path = "runtime/zig/programs/root.zig", .out_path = "out/runtime/programs/root.zig" },
+};
+
+const generated_import_compat_files = [_]RuntimeFile{
+    .{ .src_path = "runtime/zig/arena.zig", .out_path = "out/runtime/arena.zig" },
+    .{ .src_path = "runtime/zig/account.zig", .out_path = "out/runtime/account.zig" },
     .{ .src_path = "runtime/zig/bs58.zig", .out_path = "out/runtime/bs58.zig" },
+    .{ .src_path = "runtime/zig/cpi.zig", .out_path = "out/runtime/cpi.zig" },
+    .{ .src_path = "runtime/zig/entry_context.zig", .out_path = "out/runtime/entry_context.zig" },
     .{ .src_path = "runtime/zig/panic.zig", .out_path = "out/runtime/panic.zig" },
     .{ .src_path = "runtime/zig/prelude.zig", .out_path = "out/runtime/prelude.zig" },
     .{ .src_path = "runtime/zig/spl_token.zig", .out_path = "out/runtime/spl_token.zig" },
     .{ .src_path = "runtime/zig/syscalls.zig", .out_path = "out/runtime/syscalls.zig" },
     .{ .src_path = "runtime/zig/sysvar.zig", .out_path = "out/runtime/sysvar.zig" },
+};
+
+const program_runtime_files = [_]RuntimeFile{
+    .{ .src_path = "runtime/zig/programs/ata.zig", .out_path = "out/runtime/programs/ata.zig" },
+    .{ .src_path = "runtime/zig/programs/ata_transfer.zig", .out_path = "out/runtime/programs/ata_transfer.zig" },
+    .{ .src_path = "runtime/zig/programs/combined.zig", .out_path = "out/runtime/programs/combined.zig" },
+    .{ .src_path = "runtime/zig/programs/common.zig", .out_path = "out/runtime/programs/common.zig" },
+    .{ .src_path = "runtime/zig/programs/dao_voting.zig", .out_path = "out/runtime/programs/dao_voting.zig" },
+    .{ .src_path = "runtime/zig/programs/escrow_full.zig", .out_path = "out/runtime/programs/escrow_full.zig" },
+    .{ .src_path = "runtime/zig/programs/hackathon_greet.zig", .out_path = "out/runtime/programs/hackathon_greet.zig" },
+    .{ .src_path = "runtime/zig/programs/order_book.zig", .out_path = "out/runtime/programs/order_book.zig" },
+    .{ .src_path = "runtime/zig/programs/spl_burn.zig", .out_path = "out/runtime/programs/spl_burn.zig" },
+    .{ .src_path = "runtime/zig/programs/spl_close_account.zig", .out_path = "out/runtime/programs/spl_close_account.zig" },
+    .{ .src_path = "runtime/zig/programs/spl_revoke.zig", .out_path = "out/runtime/programs/spl_revoke.zig" },
+    .{ .src_path = "runtime/zig/programs/token_vault.zig", .out_path = "out/runtime/programs/token_vault.zig" },
+    .{ .src_path = "runtime/zig/programs/transfer_sol.zig", .out_path = "out/runtime/programs/transfer_sol.zig" },
+    .{ .src_path = "runtime/zig/programs/vault.zig", .out_path = "out/runtime/programs/vault.zig" },
+    .{ .src_path = "runtime/zig/programs/vault_v2.zig", .out_path = "out/runtime/programs/vault_v2.zig" },
 };
 
 pub fn materializeRuntime(allocator: Allocator, io: Io, entry_kind: EntryKind) !void {
@@ -61,7 +72,13 @@ pub fn materializeRuntime(allocator: Allocator, io: Io, entry_kind: EntryKind) !
     try cwd.createDirPath(io, "out/runtime/sdk");
     try cwd.createDirPath(io, "out/runtime/programs");
 
-    inline for (shared_runtime_files) |file| {
+    inline for (normalized_runtime_files) |file| {
+        try copyRuntimeFile(allocator, io, file);
+    }
+    inline for (generated_import_compat_files) |file| {
+        try copyRuntimeFile(allocator, io, file);
+    }
+    inline for (program_runtime_files) |file| {
         try copyRuntimeFile(allocator, io, file);
     }
     try copyRuntimeFile(allocator, io, switch (entry_kind) {

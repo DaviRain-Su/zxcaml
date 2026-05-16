@@ -46,6 +46,16 @@ fn fileExists(io: Io, path: []const u8) bool {
     return true;
 }
 
+fn expectNormalizedRuntimeLayout(io: Io) !void {
+    try std.testing.expect(fileExists(io, "out/runtime/root.zig"));
+    try std.testing.expect(fileExists(io, "out/runtime/core.zig"));
+    try std.testing.expect(fileExists(io, "out/runtime/solana.zig"));
+    try std.testing.expect(fileExists(io, "out/runtime/shims.zig"));
+    try std.testing.expect(fileExists(io, "out/runtime/sdk/root.zig"));
+    try std.testing.expect(fileExists(io, "out/runtime/programs/root.zig"));
+    try std.testing.expect(fileExists(io, "out/runtime/programs/transfer_sol.zig"));
+}
+
 fn commandExecutable(allocator: Allocator, io: Io, path: []const u8) bool {
     const argv = [_][]const u8{ path, "--version" };
     const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return false;
@@ -217,6 +227,7 @@ test "cli: custom SOLANA_ZIG wrapper records direct solana-zig argv" {
     const bpf_entry = try cwd.readFileAlloc(io, "out/bpf_entry.zig", allocator, .limited(128 * 1024));
     defer allocator.free(bpf_entry);
     try std.testing.expect(std.mem.indexOf(u8, bpf_entry, "@import(\"program.zig\")") != null);
+    try expectNormalizedRuntimeLayout(io);
 }
 
 test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavior" {
@@ -242,6 +253,7 @@ test "cli: bpf build refreshes generated Zig and preserves sidecar unmap behavio
     defer allocator.free(hello_result.stderr);
     try expectCommandSuccess(hello_result, "env -u SOLANA_ZIG omlz build --target=bpf examples/solana_hello.ml");
 
+    try expectNormalizedRuntimeLayout(io);
     try std.testing.expect(fileExists(io, "out/solana_hello.map"));
     try std.testing.expect(fileExists(io, adjacent_map_path));
     const first_program = try cwd.readFileAlloc(io, "out/program.zig", allocator, .limited(1024 * 1024));

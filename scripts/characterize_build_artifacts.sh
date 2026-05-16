@@ -88,6 +88,21 @@ copy_artifact_set() {
   cp out/bpf_entry.zig "$REPORT_DIR/${prefix}.bpf_entry.zig"
 }
 
+assert_runtime_layout_materialized() {
+  [[ -f out/runtime/root.zig ]]
+  [[ -f out/runtime/core.zig ]]
+  [[ -f out/runtime/solana.zig ]]
+  [[ -f out/runtime/shims.zig ]]
+  [[ -f out/runtime/sdk/root.zig ]]
+  [[ -f out/runtime/programs/root.zig ]]
+  [[ -f out/runtime/programs/transfer_sol.zig ]]
+  assert_contains 'pub const core = @import("core.zig");' out/runtime/root.zig
+  assert_contains 'pub const arena = @import("arena.zig");' out/runtime/core.zig
+  assert_contains 'pub const account = @import("account.zig");' out/runtime/solana.zig
+  assert_contains 'pub const entry_context = @import("entry_context.zig");' out/runtime/shims.zig
+  assert_contains 'pub const transfer_sol = @import("transfer_sol.zig");' out/runtime/programs/root.zig
+}
+
 rm -f \
   "$REPORT_DIR"/solana_hello.default.so \
   "$REPORT_DIR"/solana_hello.default.map \
@@ -135,6 +150,7 @@ env -u SOLANA_ZIG "$OMLZ_BIN" build --target=bpf --keep-zig examples/solana_hell
 [[ -f "$DEFAULT_SO" ]]
 [[ -f "$DEFAULT_SIDE_MAP" ]]
 [[ -f "$DEFAULT_MAP" ]]
+assert_runtime_layout_materialized
 assert_contains '@import("program.zig")' out/bpf_entry.zig
 copy_artifact_set "solana_hello"
 cp "$DEFAULT_MAP" "$REPORT_DIR/solana_hello.map"
@@ -189,6 +205,7 @@ env "SOLANA_ZIG=$WRAPPER_PATH" "$OMLZ_BIN" build --target=bpf --keep-zig example
 [[ -f "$CUSTOM_SO" ]]
 [[ -f "$CUSTOM_SIDE_MAP" ]]
 [[ -f "$CUSTOM_MAP" ]]
+assert_runtime_layout_materialized
 copy_artifact_set "hackathon_greet"
 cp "$CUSTOM_MAP" "$REPORT_DIR/hackathon_greet.map"
 
@@ -290,7 +307,12 @@ assert_contains "error: SOLANA_ZIG=0 is not supported" "$ZERO_STDERR"
   echo "artifact_identity:"
   echo "  generated_zig_changed_between_sources: yes"
   echo "  program_zig_imported_by_bpf_entry: yes"
-  echo "  covered_assertions: VAL-COMPILER-004, VAL-COMPILER-005, VAL-COMPILER-006, VAL-COMPILER-010, VAL-COMPILER-011, VAL-COMPILER-013, VAL-CROSS-002, VAL-CROSS-015"
+  echo "  normalized_runtime_root: out/runtime/root.zig"
+  echo "  normalized_core_root: out/runtime/core.zig"
+  echo "  normalized_solana_root: out/runtime/solana.zig"
+  echo "  normalized_shim_root: out/runtime/shims.zig"
+  echo "  normalized_program_root: out/runtime/programs/root.zig"
+  echo "  covered_assertions: VAL-CLI-007, VAL-CLI-012, VAL-BPF-001, VAL-RUNTIME-008, VAL-CROSS-002"
 } >"$REPORT_PATH"
 
 echo "Build artifact characterization report written to $REPORT_PATH"

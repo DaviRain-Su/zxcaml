@@ -289,6 +289,24 @@ pub fn build(b: *std.Build) void {
     const vendored_sdk_import_smoke_step = b.step("vendored-sdk-import-smoke", "Run vendored SDK import smoke tests");
     vendored_sdk_import_smoke_step.dependOn(&run_vendored_sdk_import_smoke_tests.step);
 
+    const runtime_import_matrix_module = b.createModule(.{
+        .root_source_file = b.path("runtime/zig/import_matrix.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    runtime_import_matrix_module.addImport("vendored_sdk", vendored_sdk_module);
+    runtime_import_matrix_module.addImport("solana_program_sdk", vendored_solana_program_sdk_module);
+    runtime_import_matrix_module.addImport("solana_codec", vendored_solana_codec_module);
+    runtime_import_matrix_module.addImport("spl_token_m4", vendored_spl_token_module);
+    runtime_import_matrix_module.addImport("spl_ata_m4", vendored_spl_ata_module);
+    const runtime_import_matrix_tests = b.addTest(.{
+        .name = "runtime-public-import-matrix",
+        .root_module = runtime_import_matrix_module,
+    });
+    const run_runtime_import_matrix_tests = b.addRunArtifact(runtime_import_matrix_tests);
+    const runtime_import_matrix_step = b.step("runtime-public-import-matrix", "Run runtime public import matrix smoke tests");
+    runtime_import_matrix_step.dependOn(&run_runtime_import_matrix_tests.step);
+
     const runtime_programs_test_module = b.createModule(.{
         .root_source_file = b.path("runtime/zig/programs_tests.zig"),
         .target = target,
@@ -1066,6 +1084,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_runtime_spl_token_tests.step);
     test_step.dependOn(&run_runtime_ata_tests.step);
     test_step.dependOn(&run_vendored_sdk_import_smoke_tests.step);
+    test_step.dependOn(&run_runtime_import_matrix_tests.step);
     test_step.dependOn(&run_runtime_programs_tests.step);
     test_step.dependOn(&run_runtime_bs58_tests.step);
     test_step.dependOn(&run_runtime_prelude_tests.step);
