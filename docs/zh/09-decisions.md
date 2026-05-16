@@ -5,6 +5,15 @@
 格式：简短、有日期、不可变。新增 ADR 用追加的方式；老的不要改 ——
 要改就用新条目 supersede。
 
+> **当前状态说明（2026-05-17）。** 本文尽量原样保留历史 ADR，但下面若干早期
+> Solana 构建 / runtime 条目现在都只能当作 **历史 / 已 superseded 背景** 阅读。
+> 当前 BPF 构建路径是直接使用 `SOLANA_ZIG` / `solana-zig build-lib -target sbf-solana`，
+> 它会 **不经过** `sbpf-linker` 直接产出最终可被 Solana 加载的 `.so`。当前 Solana
+> runtime 状态是通过 vendored `solana-program-sdk-zig` adapter 实现的 SDK-backed
+> 运行时，并通过 Surfpool harness（`127.0.0.1:8899` / `127.0.0.1:8900`）验证。
+> 除非后面的新 addendum 明确另行说明，文中出现的 `sbpf-linker`、
+> `bpfel-freestanding`、`solana-test-validator` 都应理解为历史背景，不是当前必须的默认配置。
+
 ---
 
 ## ADR-001 —— ZxCaml 是 OCaml 方言，不是新语言
@@ -70,6 +79,11 @@
 
 **日期：** 2026-04-27
 **状态：** 已采纳
+
+> **当前状态说明（2026-05-17）。** 本 ADR 中的工具链细节保留为 P1 历史背景。
+> 当前 `omlz build --target=bpf` 已不再走 `bpfel-freestanding` +
+> `sbpf-linker` 这条链路，而是走直接的 `SOLANA_ZIG` / `solana-zig build-lib`
+> 路径；当前本地验证流程也通过 Surfpool，而不是 `solana-test-validator`。
 
 ### 上下文
 
@@ -396,6 +410,10 @@ sbpf-linker --cpu v2 --export entrypoint    （或 --cpu v3 可选；ADR-013）
 Solana BPF .so
 ```
 
+> **历史链路说明（2026-05-17）。** 上面的图记录的是 P1 / spike β 时期的前端桥接形态。
+> 当前生产路径会跳过 bitcode + `sbpf-linker` 这一步，直接调用 `SOLANA_ZIG` /
+> `solana-zig build-lib -target sbf-solana ...` 产出最终 `.so`。
+
 Core IR 仍然是稳定契约（ADR-004 不变）。
 **Core IR 上层** 改了：Surface AST 现在是 OCaml 的 `Typedtree`，
 不是手写 AST。
@@ -491,6 +509,12 @@ zig build
 **状态：** 已采纳
 **Supersedes：** ADR-003 / `06-bpf-target.md` 早期草稿里那个隐含
 "光跑 `zig build-obj` 就能出 Solana 可加载产物"的假设。
+
+> **当前状态说明（2026-05-17）。** 本 ADR 保留的是早期 bitcode + linker 链路的
+> 历史记录。对于当前日常构建，它已经被直接的 `SOLANA_ZIG` / `solana-zig
+> build-lib -target sbf-solana` 路径 **取代**；当前链路不再依赖 `sbpf-linker`
+> 来产出最终 Solana-loadable `.so`。因此下面的内容应视为工具链历史，而不是当前默认 /
+> 必需依赖列表。
 
 ### 上下文
 
@@ -602,6 +626,11 @@ Homebrew macOS 上手动检查还可能需要 LLVM 工具完整路径，例如
 
 **日期：** 2026-04-27
 **状态：** 已采纳
+
+> **当前状态说明（2026-05-17）。** 本 ADR 保留历史上的 `sbpf-linker --cpu`
+> 讨论，以便读者看清 P1 规划到后续 v2 修订的演化过程。当前操作性指导应以
+> `06-bpf-target.md` 中记录的直接 `solana-zig` 路径为准；下面出现的
+> `sbpf-linker --cpu ...` 命令都是历史 / 已 superseded 背景，不是当前必需的 linker 步骤。
 
 ### 上下文
 

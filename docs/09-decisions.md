@@ -5,6 +5,18 @@
 Format: short, dated, immutable. Append new ADRs; do not edit old
 ones — supersede them with a new entry.
 
+> **Current-status note (2026-05-17).** This file preserves historical ADR
+> text exactly where possible, but several early Solana build/runtime entries
+> below are now **historical/superseded context only**. The current BPF build
+> path is the direct `SOLANA_ZIG` / `solana-zig build-lib -target sbf-solana`
+> route, which emits the final Solana-loadable `.so` **without**
+> `sbpf-linker`. The current Solana runtime state is SDK-backed through the
+> vendored `solana-program-sdk-zig` adapters and is validated through the
+> Surfpool harness (`127.0.0.1:8899` / `127.0.0.1:8900`). Unless a newer
+> addendum says otherwise, references below to `sbpf-linker`,
+> `bpfel-freestanding`, or `solana-test-validator` should be read as
+> historical background rather than current required setup.
+
 ---
 
 ## ADR-001 — ZxCaml is an OCaml dialect, not a new language
@@ -84,6 +96,12 @@ Rust, OCaml, Zig.
 
 **Date:** 2026-04-27
 **Status:** Accepted
+
+> **Current-status note (2026-05-17).** The toolchain details in this ADR are
+> preserved as historical P1 context. Current `omlz build --target=bpf` no
+> longer runs the `bpfel-freestanding` + `sbpf-linker` chain; it uses the
+> direct `SOLANA_ZIG` / `solana-zig build-lib` path and current local
+> validation flows go through Surfpool rather than `solana-test-validator`.
 
 ### Context
 
@@ -464,6 +482,11 @@ sbpf-linker --cpu v2 --export entrypoint    (or --cpu v3 opt-in; ADR-013)
 Solana BPF .so
 ```
 
+> **Historical pipeline note (2026-05-17).** The diagram above captures the
+> P1/Pβ bridge shape. The current production path skips the bitcode +
+> `sbpf-linker` stage and invokes direct `SOLANA_ZIG` /
+> `solana-zig build-lib -target sbf-solana ...` to emit the final `.so`.
+
 The Core IR remains the stable contract (ADR-004 unchanged).
 Everything **above** Core IR shifts: the Surface AST is now the
 OCaml `Typedtree`, not a hand-written one.
@@ -579,6 +602,13 @@ processing `.ml` input.
 **Supersedes:** the implicit assumption in earlier drafts of
 ADR-003 / `06-bpf-target.md` that "`zig build-obj`" alone produces
 a Solana-loadable artefact.
+
+> **Current-status note (2026-05-17).** This ADR is preserved as historical
+> record for the earlier bitcode + linker chain. It is **superseded for
+> current day-to-day builds** by the direct `SOLANA_ZIG` / `solana-zig
+> build-lib -target sbf-solana` path, which emits the final Solana-loadable
+> `.so` without `sbpf-linker`. Keep the text below as toolchain history, not
+> as the current required/default dependency list.
 
 ### Context
 
@@ -706,6 +736,13 @@ for example `/opt/homebrew/opt/llvm@20/bin/llvm-objdump`, because
 
 **Date:** 2026-04-27
 **Status:** Accepted
+
+> **Current-status note (2026-05-17).** This ADR preserves the historical
+> `sbpf-linker --cpu` discussion so the evolution from P1 planning to the
+> revised v2 addendum remains visible. Current operational guidance should use
+> the direct `solana-zig` route documented in `06-bpf-target.md`; the
+> `sbpf-linker --cpu ...` commands below are historical/superseded context,
+> not a current required linker step.
 
 ### Context
 
