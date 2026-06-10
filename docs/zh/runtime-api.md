@@ -13,6 +13,23 @@
 - 修改导出的结构体、常量或函数之前，先回到对应源文件确认调用点和测试。
 - 运行时 ABI、BPF loader 布局、OCaml 用户语法是三层不同的问题，不要混在同一个改动里。
 
+## 导入根（Import roots）
+
+`runtime/zig/root.zig` 是规范入口：新的 Solana 相关代码应通过它的命名空间
+导入，而不是直接伸进单个文件。
+
+- `runtime.core` —— arena、panic 标记、bs58、prelude 值形态。
+- `runtime.solana` —— account 视图、系统调用、sysvar、CPI、SPL token 编解码。
+- `runtime.sdk` —— vendored `solana-program-sdk-zig` 的适配器根。
+- `runtime.shims` —— generated code 与 SDK 之间的 entrypoint/指令上下文胶水。
+- `runtime.programs` —— fixture 与示例使用的手写程序移植。
+
+旧式单文件导入（`arena.zig`、`account.zig`、`cpi.zig`、`entry_context.zig`、
+`programs/*.zig`）仍是同一类型的别名；`runtime/zig/import_matrix.zig` 是把
+规范根与旧别名钉死为相同布局的测试——新增公共根时同步扩展它。绝不要直接
+从 `vendor/solana-program-sdk-zig/**` 导入；一律经 `runtime.sdk`，这样
+vendor 刷新永远只是单缝改动。
+
 ## Arena
 
 事实源：`runtime/zig/arena.zig`。

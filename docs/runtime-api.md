@@ -14,6 +14,26 @@ Reading guide:
 - Check the cited source file before changing an exported type, constant, or function.
 - Keep generated-code ABI concerns separate from user-facing OCaml documentation.
 
+## Import roots
+
+`runtime/zig/root.zig` is the canonical entry: new Solana-facing code imports
+through its namespaces rather than reaching into individual files.
+
+- `runtime.core` — arena, panic markers, bs58, prelude value shapes.
+- `runtime.solana` — account views, syscalls, sysvars, CPI, SPL token codecs.
+- `runtime.sdk` — the vendored `solana-program-sdk-zig` adapter roots.
+- `runtime.shims` — entrypoint/instruction-context glue between generated
+  code and the SDK.
+- `runtime.programs` — hand-written program ports used by fixtures and
+  examples.
+
+The legacy single-file imports (`arena.zig`, `account.zig`, `cpi.zig`,
+`entry_context.zig`, `programs/*.zig`) remain aliases of the same types;
+`runtime/zig/import_matrix.zig` is the test that pins canonical roots and
+legacy aliases to identical layouts — extend it when adding a new public
+root. Never import from `vendor/solana-program-sdk-zig/**` directly; go
+through `runtime.sdk` so vendor refreshes stay one-seam changes.
+
 ## Arena
 
 Source file: `runtime/zig/arena.zig`.

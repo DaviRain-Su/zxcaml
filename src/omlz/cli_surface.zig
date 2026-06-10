@@ -392,6 +392,7 @@ fn writeDoctorHelp(io: Io) !void {
         \\  llvm-objcopy   required for embedding BPF source maps
         \\  solana         optional; needed for the Mollusk path
         \\  cargo          optional; needed for the Mollusk path
+        \\  surfpool       optional; needed for the local acceptance harness
         \\
         \\Exit code is 0 unless any probe reports FAIL; WARN does not fail.
         \\

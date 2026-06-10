@@ -79,6 +79,7 @@ test "cli: doctor reports every documented probe" {
         "llvm-objcopy",
         "solana",
         "cargo",
+        "surfpool",
     };
 
     for (expected_labels) |label| {

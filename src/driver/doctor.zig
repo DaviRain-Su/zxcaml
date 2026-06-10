@@ -55,8 +55,30 @@ pub fn run(
     try probeFrontend(arena, io, stdout, argv0);
     try probeOcamlc(arena, io, stdout, &has_fail);
     try probeBpfTargetTools(arena, io, environ, stdout, &has_fail);
+    try probeSurfpool(arena, io, stdout);
 
     return !has_fail;
+}
+
+/// Surfpool drives the opt-in local acceptance harness
+/// (`SOLANA_BPF=1 tests/solana/hello/invoke.sh`); it is never required for
+/// builds, so a missing binary warns instead of failing.
+fn probeSurfpool(arena: Allocator, io: Io, stdout: anytype) !void {
+    const output = runCommand(arena, io, &.{ "surfpool", "--version" });
+    if (output.ok) {
+        try writeProbe(stdout, .{
+            .label = "surfpool",
+            .status = .ok,
+            .detail = firstLine(output.stdout),
+        });
+        return;
+    }
+
+    try writeProbe(stdout, .{
+        .label = "surfpool",
+        .status = .warn,
+        .detail = "not found; optional — needed only for the local acceptance harness (SOLANA_BPF=1 tests/solana/hello/invoke.sh)",
+    });
 }
 
 fn probeZig(arena: Allocator, io: Io, stdout: anytype, has_fail: *bool) !void {

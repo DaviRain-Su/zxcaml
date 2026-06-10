@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — DX: doctor surfpool probe and runtime import-roots guide
+
+- `omlz doctor` gains a `surfpool` probe (WARN when missing — the binary is
+  only needed for the opt-in local acceptance harness), so the documented
+  one-stop preflight now covers the entire local Solana loop.
+- `docs/runtime-api.md` (+ zh) documents the canonical runtime import roots
+  (`runtime.core` / `runtime.solana` / `runtime.sdk` / `runtime.shims` /
+  `runtime.programs`), the legacy single-file aliases, the
+  `import_matrix.zig` pinning test, and the rule that vendor code is only
+  reached through `runtime.sdk`.
+
 ### Added — DX: entrypoint misuse diagnostics
 
 - A statically `bool`- or `string`-typed entrypoint return — the classic
