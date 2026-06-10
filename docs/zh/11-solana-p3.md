@@ -151,6 +151,24 @@ runtime 侧镜像 Solana 的 C ABI：
 只有 callee 必须写入时才把 account meta 标为 writable，并且只把 authority
 account 标为 signer。
 
+### AccountMeta 构造器
+
+不必手写裸 `account_meta` record 字面量（`is_writable` / `is_signer` 两个
+旗标极易写反），用直接以旗标组合命名的 `AccountMeta` 构造器：
+
+```ocaml
+AccountMeta.writable p          (* { pubkey = p; is_writable = true;  is_signer = false } *)
+AccountMeta.signer p            (* { pubkey = p; is_writable = false; is_signer = true  } *)
+AccountMeta.writable_signer p   (* { pubkey = p; is_writable = true;  is_signer = true  } *)
+AccountMeta.readonly p          (* { pubkey = p; is_writable = false; is_signer = false } *)
+AccountMeta.of_account a        (* 转发 a 自身的 key 与 writable/signer 权限 *)
+```
+
+`AccountMeta.of_account` 覆盖最常见的流程——把 entrypoint 收到的某个账户
+连同其既有权限转发进 CPI。这些构造器降级为普通的 record 构造，因此在所有
+路径（解释器、原生、BPF、`--no-alloc` 核算）上的行为与手写字面量完全一致。
+`examples/account_meta_helpers.ml` 演练了全部五个构造器。
+
 `examples/simple_cpi.ml` 演示 system-program transfer 形态。本地 harness 路径：
 
 ```sh

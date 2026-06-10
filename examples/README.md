@@ -22,6 +22,7 @@ inputs to `./scripts/check_examples_corpus.sh`.
 
 <!-- user-examples:start -->
 - [`examples/account_guard.ml`](./account_guard.ml)
+- [`examples/account_meta_helpers.ml`](./account_meta_helpers.ml)
 - [`examples/account_parser_view.ml`](./account_parser_view.ml)
 - [`examples/arith_wrap.ml`](./arith_wrap.ml)
 - [`examples/array_mutation_demo.ml`](./array_mutation_demo.ml)

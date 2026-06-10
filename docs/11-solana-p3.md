@@ -159,6 +159,26 @@ The runtime side mirrors Solana's C ABI:
 Use writable account metas only when the callee must write the account, and mark
 only the authority accounts as signers.
 
+### AccountMeta constructors
+
+Instead of writing raw `account_meta` record literals (where the
+`is_writable` / `is_signer` flags are easy to swap), use the `AccountMeta`
+constructors that name the flag combination directly:
+
+```ocaml
+AccountMeta.writable p          (* { pubkey = p; is_writable = true;  is_signer = false } *)
+AccountMeta.signer p            (* { pubkey = p; is_writable = false; is_signer = true  } *)
+AccountMeta.writable_signer p   (* { pubkey = p; is_writable = true;  is_signer = true  } *)
+AccountMeta.readonly p          (* { pubkey = p; is_writable = false; is_signer = false } *)
+AccountMeta.of_account a        (* forwards a's own key + writable/signer privileges *)
+```
+
+`AccountMeta.of_account` covers the most common flow — forwarding one of the
+entrypoint's accounts into a CPI with its existing privileges. The
+constructors lower to plain record construction, so they behave identically
+to handwritten literals everywhere (interpreter, native, BPF, `--no-alloc`
+accounting). `examples/account_meta_helpers.ml` exercises all five.
+
 `examples/simple_cpi.ml` demonstrates the system-program transfer shape. The
 local harness path is:
 

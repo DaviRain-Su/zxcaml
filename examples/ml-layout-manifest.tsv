@@ -4,6 +4,7 @@
 # regeneration: run `python3 scripts/check_examples_layout.py --write` only when intentionally updating the managed examples README sections
 # columns: category<TAB>path<TAB>surface
 user_example	examples/account_guard.ml	user-examples
+user_example	examples/account_meta_helpers.ml	user-examples
 user_example	examples/account_parser_view.ml	user-examples
 user_example	examples/arith_wrap.ml	user-examples
 user_example	examples/array_mutation_demo.ml	user-examples

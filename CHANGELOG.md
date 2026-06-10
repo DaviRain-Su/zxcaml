@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — DX: AccountMeta constructor helpers
+
+- New `AccountMeta` stdlib module with five constructors that name CPI
+  account-meta flag combinations directly instead of raw record literals:
+  `writable`, `signer`, `writable_signer`, `readonly`, and `of_account`
+  (forwards an entrypoint account's own key and privileges). The helpers
+  desugar to plain record construction in ANF lowering, so the interpreter,
+  native, BPF, `--no-alloc` accounting, and determinism guarantees are
+  untouched.
+- `examples/simple_cpi.ml` now builds its metas with the constructors;
+  `examples/account_meta_helpers.ml` (new, examples corpus 98 → 99)
+  exercises all five with runtime flag checks. LSP completion includes the
+  new entries; documented in `docs/11-solana-p3.md` (+ zh).
+
 ### Added — DX: no_alloc/region diagnostics are explained and documented
 
 - `omlz check --explain DX2-NOALLOC` and `--explain DX2-REGION` now return

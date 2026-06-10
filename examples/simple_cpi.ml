@@ -14,20 +14,13 @@ let entrypoint accounts _input =
       (* The native System Program has the all-zero 32-byte program id. *)
       program_id = Pubkey.zero;
       (* Account metas describe the privileges forwarded to the callee:
+         the AccountMeta constructors name the flag combinations directly —
          a writable signer source and a writable non-signer destination. *)
       accounts =
         Array.of_list
           [
-            {
-              pubkey = Pubkey.zero;
-              is_writable = true;
-              is_signer = true;
-            };
-            {
-              pubkey = Pubkey.zero;
-              is_writable = true;
-              is_signer = false;
-            };
+            AccountMeta.writable_signer Pubkey.zero;
+            AccountMeta.writable Pubkey.zero;
           ];
       (* System transfer instruction data: discriminator 2 plus amount 1
          encoded as little-endian bytes for the runtime CPI helper. *)

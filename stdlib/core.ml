@@ -741,6 +741,23 @@ module Account = struct
   let is_owned_by (account : account) owner = Bytes.equal account.owner owner
 end
 
+module AccountMeta = struct
+  let writable pubkey = { pubkey; is_writable = true; is_signer = false }
+
+  let signer pubkey = { pubkey; is_writable = false; is_signer = true }
+
+  let writable_signer pubkey = { pubkey; is_writable = true; is_signer = true }
+
+  let readonly pubkey = { pubkey; is_writable = false; is_signer = false }
+
+  let of_account (account : account) =
+    {
+      pubkey = account.key;
+      is_writable = account.is_writable;
+      is_signer = account.is_signer;
+    }
+end
+
 module Pubkey = struct
   let zero : pubkey = Bytes.make 32 '\000'
 

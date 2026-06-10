@@ -220,7 +220,7 @@ explicit future roadmap gates.
 - **LSP latency observability:** `make lsp-bench` rebuilds and runs `omlz lsp-bench --warmup 3 --rounds 10`, reporting p50/p99 diagnostics latency against the default 350/800 ms thresholds; see [`docs/17-lsp-latency.md`](./docs/17-lsp-latency.md)
 - **Source maps:** BPF builds emit deterministic source maps, embed `.zxcaml.srcmap` when `llvm-objcopy` is available, and let `omlz unmap` resolve BPF PCs back to OCaml locations.
   Default is direct `solana-zig`; set `SOLANA_ZIG` to any custom command/path (except `0`) to override the binary.
-- **Examples:** 98 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closures, BPF smoke, account/syscall, CPI, SPL-Token, account parsing/views, hash/sysvar demos, ATA/order-book/DAO/vault flows, mutable-state stress, and fixed-point quote math; the separate OCaml-native `omlz test` corpus lives under `examples/tests/`
+- **Examples:** 99 programs in `examples/`, including ADT, nested/guarded pattern, tuple, record, stdlib, closures, BPF smoke, account/syscall, CPI, SPL-Token, account parsing/views, hash/sysvar demos, ATA/order-book/DAO/vault flows, mutable-state stress, and fixed-point quote math; the separate OCaml-native `omlz test` corpus lives under `examples/tests/`
 - **Golden/UI tests:** Core IR/sexp snapshot, UI, and fmt golden tests run
   through `zig build test`; the current committed floor is `zig build test --summary none`
   plus the full Cargo/Mollusk suite

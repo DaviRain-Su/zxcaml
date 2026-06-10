@@ -135,6 +135,13 @@ pub const items = [_]Item{
     .{ .label = "Account.has_key", .kind = .function, .detail = "account -> pubkey -> bool" },
     .{ .label = "Account.is_owned_by", .kind = .function, .detail = "account -> pubkey -> bool" },
 
+    // AccountMeta
+    .{ .label = "AccountMeta.writable", .kind = .function, .detail = "bytes -> account_meta" },
+    .{ .label = "AccountMeta.signer", .kind = .function, .detail = "bytes -> account_meta" },
+    .{ .label = "AccountMeta.writable_signer", .kind = .function, .detail = "bytes -> account_meta" },
+    .{ .label = "AccountMeta.readonly", .kind = .function, .detail = "bytes -> account_meta" },
+    .{ .label = "AccountMeta.of_account", .kind = .function, .detail = "account -> account_meta" },
+
     // Fixed / Amount
     .{ .label = "Fixed.scale", .kind = .constant, .detail = "int" },
     .{ .label = "Fixed.zero", .kind = .constant, .detail = "Fixed.t" },

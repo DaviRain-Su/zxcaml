@@ -28,6 +28,10 @@ const isAtomicTtree = match_lower.isAtomicTtree;
 const freshTemp = match_lower.freshTemp;
 
 const typeExprsToTysWithBindings = type_ops.typeExprsToTysWithBindings;
+const findRecordDecl = type_ops.findRecordDecl;
+const recordTy = type_ops.recordTy;
+const recordFieldTy = type_ops.recordFieldTy;
+const recordFieldAccessTy = type_ops.recordFieldAccessTy;
 const listTy = type_ops.listTy;
 const arrayTy = type_ops.arrayTy;
 const optionTy = type_ops.optionTy;
@@ -81,6 +85,14 @@ pub fn lowerApp(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, app: ttree.
     }
     if (isVarNamed(app.callee.*, "not") and app.args.len == 1) {
         return lowerLogicalNot(arena, ctx, app);
+    }
+    if (app.args.len == 1) {
+        if (accountMetaCtorFlags(app.callee.*)) |flags| {
+            return lowerAccountMetaCtorApp(arena, ctx, app, flags);
+        }
+        if (isVarNamed(app.callee.*, "AccountMeta.of_account")) {
+            return lowerAccountMetaOfAccountApp(arena, ctx, app);
+        }
     }
     if (builtinCallOp(app.callee.*, app.args.len)) |op| {
         return lowerBuiltinCallApp(arena, ctx, app, op);
@@ -157,6 +169,127 @@ pub fn boolCoreExpr(arena: *std.heap.ArenaAllocator, value: bool) LowerError!*co
         .type_name = null,
     } };
     return ptr;
+}
+
+/// Privilege flags carried by the four `AccountMeta.*` constructor helpers.
+const AccountMetaFlags = struct {
+    is_writable: bool,
+    is_signer: bool,
+};
+
+fn accountMetaCtorFlags(callee: ttree.Expr) ?AccountMetaFlags {
+    const var_ref = switch (callee) {
+        .Var => |value| value,
+        else => return null,
+    };
+    if (std.mem.eql(u8, var_ref.name, "AccountMeta.writable"))
+        return .{ .is_writable = true, .is_signer = false };
+    if (std.mem.eql(u8, var_ref.name, "AccountMeta.signer"))
+        return .{ .is_writable = false, .is_signer = true };
+    if (std.mem.eql(u8, var_ref.name, "AccountMeta.writable_signer"))
+        return .{ .is_writable = true, .is_signer = true };
+    if (std.mem.eql(u8, var_ref.name, "AccountMeta.readonly"))
+        return .{ .is_writable = false, .is_signer = false };
+    return null;
+}
+
+/// Desugar `AccountMeta.writable/signer/writable_signer/readonly p` into the
+/// equivalent `account_meta` record literal. Downstream consumers (the
+/// interpreter, Zig codegen, region inference, no_alloc, determinism) see the
+/// exact IR a handwritten `{ pubkey = p; is_writable = ...; is_signer = ... }`
+/// produces, so no new runtime symbol is involved.
+fn lowerAccountMetaCtorApp(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    app: ttree.App,
+    flags: AccountMetaFlags,
+) LowerError!ir.Expr {
+    const meta_decl = findRecordDecl(ctx.record_type_decls, "account_meta") orelse return error.UnsupportedNode;
+    const pubkey_ty = try recordFieldTy(arena, meta_decl, "pubkey");
+    const fields = try arena.allocator().alloc(ir.RecordExprField, 3);
+    fields[0] = .{
+        .name = try arena.allocator().dupe(u8, "pubkey"),
+        .value = try lowerExprPtrExpected(arena, ctx, app.args[0], pubkey_ty),
+    };
+    fields[1] = .{
+        .name = try arena.allocator().dupe(u8, "is_writable"),
+        .value = try boolCoreExpr(arena, flags.is_writable),
+    };
+    fields[2] = .{
+        .name = try arena.allocator().dupe(u8, "is_signer"),
+        .value = try boolCoreExpr(arena, flags.is_signer),
+    };
+    return .{ .Record = .{
+        .fields = fields,
+        .ty = try recordTy(arena, meta_decl),
+        .layout = layout.structPack(),
+    } };
+}
+
+/// Desugar `AccountMeta.of_account a` into
+/// `{ pubkey = a.key; is_writable = a.is_writable; is_signer = a.is_signer }`,
+/// forwarding the account's own privileges into a CPI meta. Variable arguments
+/// are projected directly (identical IR to the handwritten record literal);
+/// any other argument is bound once to a fresh temp so it is evaluated exactly
+/// once, mirroring the `inlineOptionUnaryHof` let-binding precedent.
+fn lowerAccountMetaOfAccountApp(
+    arena: *std.heap.ArenaAllocator,
+    ctx: *LowerContext,
+    app: ttree.App,
+) LowerError!ir.Expr {
+    const meta_decl = findRecordDecl(ctx.record_type_decls, "account_meta") orelse return error.UnsupportedNode;
+    const meta_ty = try recordTy(arena, meta_decl);
+
+    const account_value = try lowerExprPtr(arena, ctx, app.args[0]);
+    const account_ty = exprTy(account_value.*);
+    const account_is_var = account_value.* == .Var;
+    const subject_var: ir.Var = if (account_is_var) account_value.Var else .{
+        .name = try freshSyntheticName(arena, ctx, "__zxc_meta_account"),
+        .ty = account_ty,
+        .layout = exprLayout(account_value.*),
+    };
+
+    const projections = [_]struct { meta_field: []const u8, account_field: []const u8 }{
+        .{ .meta_field = "pubkey", .account_field = "key" },
+        .{ .meta_field = "is_writable", .account_field = "is_writable" },
+        .{ .meta_field = "is_signer", .account_field = "is_signer" },
+    };
+    const fields = try arena.allocator().alloc(ir.RecordExprField, projections.len);
+    for (projections, 0..) |projection, index| {
+        const field_ty = try recordFieldAccessTy(arena, ctx, account_ty, projection.account_field);
+        // Fresh Var node per projection keeps the lowered IR tree-shaped, the
+        // same shape `lowerRecordField` builds for a handwritten `a.key`.
+        const record_ref = try arena.allocator().create(ir.Expr);
+        record_ref.* = .{ .Var = subject_var };
+        const value = try arena.allocator().create(ir.Expr);
+        value.* = .{ .RecordField = .{
+            .record_expr = record_ref,
+            .field_name = try arena.allocator().dupe(u8, projection.account_field),
+            .ty = field_ty,
+            .layout = layoutForTy(field_ty),
+        } };
+        fields[index] = .{
+            .name = try arena.allocator().dupe(u8, projection.meta_field),
+            .value = value,
+        };
+    }
+
+    const record_expr: ir.Expr = .{ .Record = .{
+        .fields = fields,
+        .ty = meta_ty,
+        .layout = layout.structPack(),
+    } };
+    if (account_is_var) return record_expr;
+
+    const record_ptr = try arena.allocator().create(ir.Expr);
+    record_ptr.* = record_expr;
+    return .{ .Let = .{
+        .name = subject_var.name,
+        .value = account_value,
+        .body = record_ptr,
+        .ty = meta_ty,
+        .layout = layoutForTy(meta_ty),
+    } };
 }
 
 pub fn lowerBuiltinCallApp(
