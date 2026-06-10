@@ -39,6 +39,7 @@ basic_pairs = [
     ("docs/17-lsp-latency.md", "docs/zh/17-lsp-latency.md"),
     ("docs/20-solana-dx-api-polish-plan.md", "docs/zh/20-solana-dx-api-polish-plan.md"),
     ("docs/21-multifile-modules-plan.md", "docs/zh/21-multifile-modules-plan.md"),
+    ("docs/22-generic-arrays-plan.md", "docs/zh/22-generic-arrays-plan.md"),
     ("docs/alternatives-considered.md", "docs/zh/alternatives-considered.md"),
     ("docs/oxcaml-relationship.md", "docs/zh/oxcaml-relationship.md"),
     ("docs/zignocchio-relationship.md", "docs/zh/zignocchio-relationship.md"),
