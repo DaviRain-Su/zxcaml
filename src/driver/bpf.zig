@@ -14,6 +14,7 @@ const core_dce = @import("../core/dce.zig");
 const core_inline = @import("../core/inline.zig");
 const core_ir = @import("../core/ir.zig");
 const ttree = @import("../frontend_bridge/ttree.zig");
+const exec = @import("exec.zig");
 const runtime_bundle = @import("runtime_bundle.zig");
 const srcmap = @import("srcmap.zig");
 
@@ -332,25 +333,11 @@ fn runAndForward(
     failure: anyerror,
     forward_success_output: bool,
 ) !void {
-    const completed = try std.process.run(allocator, io, .{
-        .argv = argv,
+    return exec.runAndForward(allocator, io, argv, failure, .{
         .environ_map = environ_map,
+        .forward_success_output = forward_success_output,
+        .stderr_forward = writeToolStderr,
     });
-    defer allocator.free(completed.stdout);
-    defer allocator.free(completed.stderr);
-
-    const success = switch (completed.term) {
-        .exited => |code| code == 0,
-        .signal, .stopped, .unknown => false,
-    };
-
-    if (forward_success_output or !success) {
-        if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
-        if (completed.stderr.len > 0) try writeToolStderr(io, completed.stderr);
-    }
-
-    if (success) return;
-    return failure;
 }
 
 const llvm_objcopy_absolute_candidates = [_][]const u8{

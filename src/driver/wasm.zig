@@ -8,6 +8,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const exec = @import("exec.zig");
 
 pub const WasmBuildOptions = struct {
     wasm_entry_path: []const u8 = "out/wasm_entry.zig",
@@ -52,38 +53,9 @@ pub fn buildWasm(allocator: Allocator, io: Io, options: WasmBuildOptions) !void 
 
     try appendWasmBuildArgs(allocator, &argv, options);
 
-    const completed = try std.process.run(allocator, io, .{ .argv = argv.items });
-    defer allocator.free(completed.stdout);
-    defer allocator.free(completed.stderr);
-
-    const success = switch (completed.term) {
-        .exited => |code| code == 0,
-        .signal, .stopped, .unknown => false,
-    };
-
-    if (!options.quiet or !success) {
-        if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
-        if (completed.stderr.len > 0) try writeStderr(io, completed.stderr);
-    }
-
-    if (success) return;
-    return error.WasmBuildFailed;
-}
-
-fn writeStdout(io: Io, bytes: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    var file_writer: Io.File.Writer = .init(.stdout(), io, &buffer);
-    const writer = &file_writer.interface;
-    try writer.writeAll(bytes);
-    try writer.flush();
-}
-
-fn writeStderr(io: Io, bytes: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    var file_writer: Io.File.Writer = .init(.stderr(), io, &buffer);
-    const writer = &file_writer.interface;
-    try writer.writeAll(bytes);
-    try writer.flush();
+    try exec.runAndForward(allocator, io, argv.items, error.WasmBuildFailed, .{
+        .forward_success_output = !options.quiet,
+    });
 }
 
 test "wasm build argv targets freestanding module output and excludes native or Solana flags" {

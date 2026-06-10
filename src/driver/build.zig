@@ -8,6 +8,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const exec = @import("exec.zig");
 const runtime_bundle = @import("runtime_bundle.zig");
 
 /// Options for the developer-convenience native build path.
@@ -41,36 +42,7 @@ pub fn buildNative(allocator: Allocator, io: Io, options: NativeBuildOptions) !v
     try runtime_bundle.appendVendoredSdkModuleArgs(allocator, &argv, options.native_entry_path);
     try argv.append(allocator, emit_bin_arg);
 
-    const completed = try std.process.run(allocator, io, .{ .argv = argv.items });
-    defer allocator.free(completed.stdout);
-    defer allocator.free(completed.stderr);
-
-    if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
-    if (completed.stderr.len > 0) try writeStderr(io, completed.stderr);
-
-    switch (completed.term) {
-        .exited => |code| {
-            if (code == 0) return;
-            return error.NativeBuildFailed;
-        },
-        .signal, .stopped, .unknown => return error.NativeBuildFailed,
-    }
-}
-
-fn writeStdout(io: Io, bytes: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    var file_writer: Io.File.Writer = .init(.stdout(), io, &buffer);
-    const writer = &file_writer.interface;
-    try writer.writeAll(bytes);
-    try writer.flush();
-}
-
-fn writeStderr(io: Io, bytes: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    var file_writer: Io.File.Writer = .init(.stderr(), io, &buffer);
-    const writer = &file_writer.interface;
-    try writer.writeAll(bytes);
-    try writer.flush();
+    try exec.runAndForward(allocator, io, argv.items, error.NativeBuildFailed, .{});
 }
 
 test "native build wiring references vendored SDK modules and never references sbpf-linker" {

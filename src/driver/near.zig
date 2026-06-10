@@ -9,6 +9,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const exec = @import("exec.zig");
 const target_manifest = @import("../target/manifest.zig");
 
 pub const NearBuildOptions = struct {
@@ -96,38 +97,10 @@ pub fn buildNear(allocator: Allocator, io: Io, options: NearBuildOptions) !void 
         .quiet = options.quiet,
     });
 
-    const completed = try std.process.run(allocator, io, .{ .argv = argv.items });
-    defer allocator.free(completed.stdout);
-    defer allocator.free(completed.stderr);
-
-    const success = switch (completed.term) {
-        .exited => |code| code == 0,
-        .signal, .stopped, .unknown => false,
-    };
-
-    if (!options.quiet or !success) {
-        if (completed.stdout.len > 0) try writeStdout(io, completed.stdout);
-        if (completed.stderr.len > 0) try writeStderr(io, completed.stderr);
-    }
-
-    if (!success) return error.NearBuildFailed;
+    try exec.runAndForward(allocator, io, argv.items, error.NearBuildFailed, .{
+        .forward_success_output = !options.quiet,
+    });
     try publishBuiltArtifact(io, temp_output_path, options.output_path);
-}
-
-fn writeStdout(io: Io, bytes: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    var file_writer: Io.File.Writer = .init(.stdout(), io, &buffer);
-    const writer = &file_writer.interface;
-    try writer.writeAll(bytes);
-    try writer.flush();
-}
-
-fn writeStderr(io: Io, bytes: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    var file_writer: Io.File.Writer = .init(.stderr(), io, &buffer);
-    const writer = &file_writer.interface;
-    try writer.writeAll(bytes);
-    try writer.flush();
 }
 
 test "near build argv targets freestanding module output and excludes native, Solana, and sandbox tooling" {
