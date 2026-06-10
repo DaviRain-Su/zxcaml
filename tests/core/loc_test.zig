@@ -111,6 +111,81 @@ test "core loc: optimized hackathon_greet top-level Expr keeps frontend loc" {
     try std.testing.expect(saw_entrypoint);
 }
 
+// CR-7 audit baseline (2026-06-10): the frontend emits `(located ...)`
+// only for top-level let bindings, so decl-level locs are the granularity
+// every consumer (diagnostics, source maps) can rely on today. This test
+// pins that floor for every value declaration across a corpus sample;
+// widening loc emission to inner expressions is tracked as a frontend
+// wire-format slice in mission-internal/code-review-backlog.md.
+test "core loc: every top-level value decl keeps a known loc across corpus sample" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const sample_files = [_][]const u8{
+        "examples/hackathon_greet.ml",
+        "examples/factorial.ml",
+        "examples/tree_adt.ml",
+        "examples/counter.ml",
+    };
+
+    for (sample_files) |input_file| {
+        const argv = [_][]const u8{
+            options.zxc_frontend_bin,
+            "--emit=sexp",
+            input_file,
+        };
+        const result = try std.process.run(allocator, io, .{ .argv = &argv });
+        defer allocator.free(result.stderr);
+        defer allocator.free(result.stdout);
+
+        if (exitCode(result.term) != 0) {
+            std.debug.print("zxc-frontend failed for {s}:\n{s}\n", .{ input_file, result.stderr });
+            return error.FrontendFailed;
+        }
+
+        var frontend_arena = std.heap.ArenaAllocator.init(allocator);
+        defer frontend_arena.deinit();
+        const typed = try ttree.parseModule(&frontend_arena, result.stdout);
+
+        var core_arena = std.heap.ArenaAllocator.init(allocator);
+        defer core_arena.deinit();
+        const lowered = try core_anf.lowerModule(&core_arena, typed);
+
+        var decl_count: usize = 0;
+        for (lowered.decls) |decl| {
+            switch (decl) {
+                .Let => |let_decl| {
+                    decl_count += 1;
+                    const loc = exprLoc(let_decl.value.*) orelse {
+                        std.debug.print("missing loc on decl `{s}` in {s}\n", .{ let_decl.name, input_file });
+                        return error.MissingCoreLoc;
+                    };
+                    if (loc.isUnknown()) {
+                        std.debug.print("unknown loc on decl `{s}` in {s}\n", .{ let_decl.name, input_file });
+                        return error.UnknownCoreLoc;
+                    }
+                    try std.testing.expectEqualStrings(input_file, loc.file);
+                    try std.testing.expect(loc.line > 0);
+                    try std.testing.expect(loc.end_line >= loc.line);
+                },
+                .LetGroup => |group| for (group.bindings) |binding| {
+                    decl_count += 1;
+                    const loc = exprLoc(binding.value.*) orelse {
+                        std.debug.print("missing loc on group binding `{s}` in {s}\n", .{ binding.name, input_file });
+                        return error.MissingCoreLoc;
+                    };
+                    if (loc.isUnknown()) {
+                        std.debug.print("unknown loc on group binding `{s}` in {s}\n", .{ binding.name, input_file });
+                        return error.UnknownCoreLoc;
+                    }
+                    try std.testing.expectEqualStrings(input_file, loc.file);
+                },
+            }
+        }
+        try std.testing.expect(decl_count > 0);
+    }
+}
+
 fn runOmlz(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !struct { stdout: []u8, stderr: []u8, exit_code: u8 } {
     const result = try std.process.run(allocator, io, .{ .argv = args });
     return .{
