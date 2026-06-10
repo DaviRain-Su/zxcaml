@@ -163,7 +163,7 @@ SDK-backed adapter 和 SDK-style entrypoint 接到本地 harness 与生成产物
 - **诊断信息:** 默认是 rustc-style 诊断,并支持 `--error-format=human|json|oneline` 与 source snippet 上的 caret 标注；UI coverage 包含常见 `Account.*` helper 误用场景
 - **LSP:** `zig build` 会安装 `omlz-lsp`,它通过 stdio JSON-RPC 提供 LSP push diagnostics
 - **Source maps:** BPF 构建会发出确定性的 source map,嵌入 `.zxcaml.srcmap`,并可用 `omlz unmap` 把 BPF PC 映回 OCaml 位置
-- **示例:** `examples/` 下有 104 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL/ATA、account parser/view、hash/sysvar demo、order_book / dao_voting / vault / mutable_state_stress，以及 fixed-point quote 数学；独立的 `omlz test` 语料位于 `examples/tests/`
+- **示例:** `examples/` 下有 105 个程序，覆盖 ADT、嵌套/guarded pattern、tuple、record、stdlib、closure、BPF smoke、account/syscall、CPI、SPL/ATA、account parser/view、hash/sysvar demo、order_book / dao_voting / vault / mutable_state_stress，以及 fixed-point quote 数学；独立的 `omlz test` 语料位于 `examples/tests/`
 - **Golden/UI 测试:** Core IR/sexp snapshot、UI tests 和 fmt golden 通过 `zig build test` 运行;当前提交底线是 `zig build test --summary none` 加完整 Cargo/Mollusk suite 全部通过
 - **安装:** `./init.sh && zig build`(见 [INSTALLING.md](./INSTALLING.md))
 

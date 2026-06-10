@@ -177,7 +177,10 @@ AccountMeta.of_account a        (* 转发 a 自身的 key 与 writable/signer �
 `AccountMeta.of_account` 覆盖最常见的流程——把 entrypoint 收到的某个账户
 连同其既有权限转发进 CPI。这些构造器降级为普通的 record 构造，因此在所有
 路径（解释器、原生、BPF、`--no-alloc` 核算）上的行为与手写字面量完全一致。
-`examples/account_meta_helpers.ml` 演练了全部五个构造器。
+`examples/account_meta_helpers.ml` 演练了全部五个构造器。当辅助函数接受
+`account_meta` 参数时，请在函数体内读取一次 `m.pubkey`（见
+`examples/account_meta_param.ml`）：`pubkey` 是 `account_meta` 独有的字段，
+读取它能让参数类型启发式不再把该参数误归为 entrypoint 的 `account`。
 
 ### PDA 派生
 

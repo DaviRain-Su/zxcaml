@@ -660,87 +660,103 @@ pub fn recordTyContainingField(arena: *std.heap.ArenaAllocator, ctx: *LowerConte
     return null;
 }
 
+/// True when the lambda body reads `param_name` through account-shaped
+/// field names AND never through `pubkey` — the one field unique to
+/// `account_meta`. A pubkey read is decisive evidence the param is a CPI
+/// meta, not an entrypoint account, so the account heuristic must yield
+/// (CR-13). Params reading only the shared `is_signer`/`is_writable`
+/// flags still classify as `account`; distinguishing an explicit
+/// `(m : account_meta)` annotation there needs a wire-level marker.
 pub fn lambdaParamIsAccount(expr: ttree.Expr, param_name: []const u8) bool {
+    return lambdaParamReadsFieldWhere(expr, param_name, isAccountFieldName) and
+        !lambdaParamReadsFieldWhere(expr, param_name, isAccountMetaUniqueFieldName);
+}
+
+fn isAccountMetaUniqueFieldName(field_name: []const u8) bool {
+    return std.mem.eql(u8, field_name, "pubkey");
+}
+
+fn lambdaParamReadsFieldWhere(expr: ttree.Expr, param_name: []const u8, comptime pred: fn ([]const u8) bool) bool {
     return switch (expr) {
-        .RecordField => |field_access| (exprIsVarNamed(field_access.record_expr.*, param_name) and isAccountFieldName(field_access.field_name)) or
-            lambdaParamIsAccount(field_access.record_expr.*, param_name),
-        .FieldSet => |field_set| (exprIsVarNamed(field_set.record_expr.*, param_name) and isAccountFieldName(field_set.field_name)) or
-            lambdaParamIsAccount(field_set.record_expr.*, param_name) or
-            lambdaParamIsAccount(field_set.value.*, param_name),
+        .RecordField => |field_access| (exprIsVarNamed(field_access.record_expr.*, param_name) and pred(field_access.field_name)) or
+            lambdaParamReadsFieldWhere(field_access.record_expr.*, param_name, pred),
+        .FieldSet => |field_set| (exprIsVarNamed(field_set.record_expr.*, param_name) and pred(field_set.field_name)) or
+            lambdaParamReadsFieldWhere(field_set.record_expr.*, param_name, pred) or
+            lambdaParamReadsFieldWhere(field_set.value.*, param_name, pred),
         .App => |app| blk: {
-            if (lambdaParamIsAccount(app.callee.*, param_name)) break :blk true;
+            if (lambdaParamReadsFieldWhere(app.callee.*, param_name, pred)) break :blk true;
             for (app.args) |arg| {
-                if (lambdaParamIsAccount(arg, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(arg, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
-        .Lambda => |lambda| !lambdaParamShadows(lambda.params, param_name) and lambdaParamIsAccount(lambda.body.*, param_name),
-        .Let => |let_expr| lambdaParamIsAccount(let_expr.value.*, param_name) or
-            (!std.mem.eql(u8, let_expr.name, param_name) and lambdaParamIsAccount(let_expr.body.*, param_name)),
+        .Lambda => |lambda| !lambdaParamShadows(lambda.params, param_name) and lambdaParamReadsFieldWhere(lambda.body.*, param_name, pred),
+        .Let => |let_expr| lambdaParamReadsFieldWhere(let_expr.value.*, param_name, pred) or
+            (!std.mem.eql(u8, let_expr.name, param_name) and lambdaParamReadsFieldWhere(let_expr.body.*, param_name, pred)),
         .LetRecGroup => |group| blk: {
             for (group.bindings) |binding| {
-                if (lambdaParamIsAccount(binding.body, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(binding.body, param_name, pred)) break :blk true;
                 if (std.mem.eql(u8, binding.name, param_name)) break :blk false;
             }
-            break :blk lambdaParamIsAccount(group.body.*, param_name);
+            break :blk lambdaParamReadsFieldWhere(group.body.*, param_name, pred);
         },
-        .Assert => |assert_expr| lambdaParamIsAccount(assert_expr.condition.*, param_name),
-        .If => |if_expr| lambdaParamIsAccount(if_expr.cond.*, param_name) or
-            lambdaParamIsAccount(if_expr.then_branch.*, param_name) or
-            lambdaParamIsAccount(if_expr.else_branch.*, param_name),
+        .Assert => |assert_expr| lambdaParamReadsFieldWhere(assert_expr.condition.*, param_name, pred),
+        .If => |if_expr| lambdaParamReadsFieldWhere(if_expr.cond.*, param_name, pred) or
+            lambdaParamReadsFieldWhere(if_expr.then_branch.*, param_name, pred) or
+            lambdaParamReadsFieldWhere(if_expr.else_branch.*, param_name, pred),
         .Prim => |prim| blk: {
             for (prim.args) |arg| {
-                if (lambdaParamIsAccount(arg, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(arg, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
         .Ctor => |ctor| blk: {
             for (ctor.args) |arg| {
-                if (lambdaParamIsAccount(arg, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(arg, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
         .Tuple => |tuple_expr| blk: {
             for (tuple_expr.items) |item| {
-                if (lambdaParamIsAccount(item, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(item, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
-        .TupleProj => |tuple_proj| lambdaParamIsAccount(tuple_proj.tuple_expr.*, param_name),
+        .TupleProj => |tuple_proj| lambdaParamReadsFieldWhere(tuple_proj.tuple_expr.*, param_name, pred),
         .Record => |record_expr| blk: {
             for (record_expr.fields) |field| {
-                if (lambdaParamIsAccount(field.value, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(field.value, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
         .RecordUpdate => |record_update| blk: {
-            if (lambdaParamIsAccount(record_update.base_expr.*, param_name)) break :blk true;
+            if (lambdaParamReadsFieldWhere(record_update.base_expr.*, param_name, pred)) break :blk true;
             for (record_update.fields) |field| {
-                if (lambdaParamIsAccount(field.value, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(field.value, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
         .ArrayLit => |array_lit| blk: {
             for (array_lit.elems) |elem| {
-                if (lambdaParamIsAccount(elem, param_name)) break :blk true;
+                if (lambdaParamReadsFieldWhere(elem, param_name, pred)) break :blk true;
             }
             break :blk false;
         },
-        .ArrayGet => |array_get| lambdaParamIsAccount(array_get.arr.*, param_name) or lambdaParamIsAccount(array_get.idx.*, param_name),
-        .ArrayLength => |array_length| lambdaParamIsAccount(array_length.arr.*, param_name),
-        .ArraySet => |array_set| lambdaParamIsAccount(array_set.arr.*, param_name) or lambdaParamIsAccount(array_set.idx.*, param_name) or lambdaParamIsAccount(array_set.value.*, param_name),
-        .ArrayMake => |array_make| lambdaParamIsAccount(array_make.init.*, param_name),
-        .RefMake => |ref_make| lambdaParamIsAccount(ref_make.init.*, param_name),
-        .RefGet => |ref_get| lambdaParamIsAccount(ref_get.target.*, param_name),
-        .RefSet => |ref_set| lambdaParamIsAccount(ref_set.target.*, param_name) or lambdaParamIsAccount(ref_set.value.*, param_name),
+        .ArrayGet => |array_get| lambdaParamReadsFieldWhere(array_get.arr.*, param_name, pred) or lambdaParamReadsFieldWhere(array_get.idx.*, param_name, pred),
+        .ArrayLength => |array_length| lambdaParamReadsFieldWhere(array_length.arr.*, param_name, pred),
+        .ArraySet => |array_set| lambdaParamReadsFieldWhere(array_set.arr.*, param_name, pred) or lambdaParamReadsFieldWhere(array_set.idx.*, param_name, pred) or lambdaParamReadsFieldWhere(array_set.value.*, param_name, pred),
+        .ArrayMake => |array_make| lambdaParamReadsFieldWhere(array_make.init.*, param_name, pred),
+        .RefMake => |ref_make| lambdaParamReadsFieldWhere(ref_make.init.*, param_name, pred),
+        .RefGet => |ref_get| lambdaParamReadsFieldWhere(ref_get.target.*, param_name, pred),
+        .RefSet => |ref_set| lambdaParamReadsFieldWhere(ref_set.target.*, param_name, pred) or lambdaParamReadsFieldWhere(ref_set.value.*, param_name, pred),
         .Match => |match_expr| blk: {
-            if (lambdaParamIsAccount(match_expr.scrutinee.*, param_name)) break :blk true;
+            if (lambdaParamReadsFieldWhere(match_expr.scrutinee.*, param_name, pred)) break :blk true;
             for (match_expr.arms) |arm| {
                 if (!patternBindsTtreeName(arm.pattern, param_name)) {
                     if (arm.guard) |guard_expr| {
-                        if (lambdaParamIsAccount(guard_expr.*, param_name)) break :blk true;
+                        if (lambdaParamReadsFieldWhere(guard_expr.*, param_name, pred)) break :blk true;
                     }
-                    if (lambdaParamIsAccount(arm.body.*, param_name)) break :blk true;
+                    if (lambdaParamReadsFieldWhere(arm.body.*, param_name, pred)) break :blk true;
                 }
             }
             break :blk false;

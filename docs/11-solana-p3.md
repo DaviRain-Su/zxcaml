@@ -189,7 +189,11 @@ AccountMeta.of_account a        (* forwards a's own key + writable/signer privil
 entrypoint's accounts into a CPI with its existing privileges. The
 constructors lower to plain record construction, so they behave identically
 to handwritten literals everywhere (interpreter, native, BPF, `--no-alloc`
-accounting). `examples/account_meta_helpers.ml` exercises all five.
+accounting). `examples/account_meta_helpers.ml` exercises all five. When a helper
+function takes an `account_meta` parameter, read `m.pubkey` somewhere in
+its body (see `examples/account_meta_param.ml`): `pubkey` is the field
+unique to `account_meta`, and touching it keeps the parameter-typing
+heuristic from classifying the param as an entrypoint `account`.
 
 ### PDA derivation
 

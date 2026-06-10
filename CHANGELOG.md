@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — `account_meta` parameters that read `pubkey` type correctly
+
+- A helper function taking an `account_meta` parameter was typed as an
+  entrypoint `account` by the parameter heuristic whenever it read the
+  shared `is_signer`/`is_writable` flags, failing native/BPF builds with
+  an `AccountView` type mismatch (the interpreter's structural leniency
+  hid it). A `pubkey` read — the field unique to `account_meta` — now
+  vetoes the account classification; `examples/account_meta_param.ml`
+  (corpus 104 → 105) pins the fix and the Solana guide documents the
+  read-`pubkey` convention bilingually. Distinguishing an explicit
+  annotation that reads only the shared flags still needs a wire-level
+  marker and remains tracked internally.
+
 ### Added — `Pda.try_find_program_address` wired on every path
 
 - `try_find_program_address` (and the `Pda.` alias) now compiles end to
