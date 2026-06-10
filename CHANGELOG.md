@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [DX Polish, Wire 1.6/1.7, and Multi-file Modules] - 2026-06-11
+
+Engineering pass covering the agent-docs/refactor baseline, the
+review-backlog burn-down (CR-1..CR-16), all six Solana DX/API polish
+slices, ADR-016 multi-file modules, and the wire 1.6/1.7 bumps.
+
 ### Added — wire 1.7: explicit parameter annotations win over heuristics
 
 - The frontend bridge wire advances from `1.6` to `1.7`: explicitly
@@ -409,7 +415,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   swallowed Var argument so the binding stays "used" without conflicting
   with sibling uses elsewhere in the entrypoint body.
 
-## Route B — 2025-05-11
+## [Route B Byte Ops] - 2026-05-11
 
 ### Added — Bitwise Operations (Step 1)
 - 6 bitwise primitives: `land`, `lor`, `lxor`, `lsl`, `lsr`, `lnot`
@@ -454,7 +460,7 @@ Entries are grouped by project phase because this repository has shipped phase
 milestones rather than semver releases so far. Commit hashes cite the `git log`
 evidence for each major bullet.
 
-## [Unreleased]
+## [Toolchain Migration and Maintenance Phases 22-24] - 2026-05-12
 
 ### Removed — SBPF ELF post-pass in `tests/bpf_test_support.rs`
 
