@@ -152,7 +152,7 @@ pub fn emitArrayLitExpr(
 ) EmitError!void {
     const elem_ty = try zigTypeName(allocator, array_lit.elem_ty);
     defer allocator.free(elem_ty);
-    try appendPrint(out, allocator, "blk_arr: {{ const __zxc_arr = arena.alloc({s}, @as(usize, {d})) catch unreachable;", .{ elem_ty, array_lit.elems.len });
+    try appendPrint(out, allocator, "blk_arr: {{ const __zxc_arr = arena.alloc({s}, @as(usize, {d})) catch runtime_panic.arenaExhausted();", .{ elem_ty, array_lit.elems.len });
     for (array_lit.elems, 0..) |elem, index| {
         try appendPrint(out, allocator, " __zxc_arr[{d}] = ", .{index});
         try emitExpr(out, allocator, elem.*, indent_level, ctx);
@@ -223,7 +223,7 @@ pub fn emitArrayMakeExpr(
 ) EmitError!void {
     const elem_ty = try zigTypeName(allocator, array_make.elem_ty);
     defer allocator.free(elem_ty);
-    try appendPrint(out, allocator, "blk_mk: {{ const __zxc_arr = arena.alloc({s}, @as(usize, {d})) catch unreachable; const __zxc_init = ", .{ elem_ty, array_make.size });
+    try appendPrint(out, allocator, "blk_mk: {{ const __zxc_arr = arena.alloc({s}, @as(usize, {d})) catch runtime_panic.arenaExhausted(); const __zxc_init = ", .{ elem_ty, array_make.size });
     try emitExpr(out, allocator, array_make.init.*, indent_level, ctx);
     try append(out, allocator, ";");
     if (array_make.size <= 8) {

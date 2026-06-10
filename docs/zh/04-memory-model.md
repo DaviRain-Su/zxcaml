@@ -47,6 +47,14 @@ arena **不拥有**内存。BPF entry shim 提供静态 byte buffer，构造
 `alloc` 会做 checked size arithmetic、通过 `std.mem.alignForward` 对齐，并在静态
 buffer 耗尽时返回 `error.OutOfMemory`。`reset` 在程序退出时把 bump cursor 归零。
 
+**耗尽策略。** 生成的程序把 arena 耗尽视为不可恢复的程序错误：每个分配点都经
+runtime panic hook 中止，并带稳定标记 `ZXCAML_PANIC:arena_exhausted`（BPF 上先
+`sol_log_` 再 trap；原生上打印后以退出码 101 退出）。刻意选 panic 而不是
+`unreachable`：release 构建下 `unreachable` 是未定义行为，优化器可以把边界检查
+本身删掉；panic 则保留检查，且在未耗尽的热路径上除一次分支外零开销。可用
+`omlz check --no-alloc` 证明程序完全不做 arena 分配，用
+`omlz check --report=cu,stack` 对照上文的入口 arena 大小做预算。
+
 ## 4. 哪些值住哪里
 
 | 值类别 | Region | Repr |

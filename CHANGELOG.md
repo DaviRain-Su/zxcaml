@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — arena exhaustion aborts with a stable marker
+
+- Generated programs now abort arena exhaustion through the runtime panic
+  hook with the stable marker `ZXCAML_PANIC:arena_exhausted` (logged then
+  trapped on BPF; printed with exit code 101 on native), joining the
+  existing `division_by_zero` / `assert_failure` / `array_oob` markers.
+  Previously these paths used `unreachable`, which is undefined behavior in
+  release builds and could let the optimizer elide the bounds check
+  entirely. Documented in `docs/04-memory-model.md`.
+- The LSP server (`omlz-lsp`) resolves the `omlz` binary next to its own
+  executable before falling back to the cwd-relative `zig-out/bin/omlz`
+  lookup, so an installed server works outside the repository root.
+- `./init.sh` now prints the exact switch-recreation commands when the
+  pinned opam switch has drifted off OCaml 5.2.x (e.g. after an
+  `opam upgrade`), instead of only reporting the version mismatch.
+
 ### Changed — toolchain discovery robustness
 
 - An installed `omlz` invoked by bare name (via `PATH`) now resolves

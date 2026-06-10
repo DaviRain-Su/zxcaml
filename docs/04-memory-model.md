@@ -53,6 +53,18 @@ performs checked size arithmetic, alignment via `std.mem.alignForward`,
 and returns `error.OutOfMemory` when the static buffer is exhausted.
 `reset` rewinds the bump cursor at program exit.
 
+**Exhaustion policy.** Generated programs treat arena exhaustion as an
+unrecoverable program error: every allocation site aborts through the
+runtime panic hook with the stable marker `ZXCAML_PANIC:arena_exhausted`
+(logged via `sol_log_` then trapped on BPF; printed with exit code 101 on
+native). The abort is deliberately a panic rather than `unreachable`: in
+release builds `unreachable` is undefined behavior, which would let the
+optimizer delete the bounds check itself, while the panic keeps the check
+and costs nothing on the non-exhausted hot path beyond the branch. Use
+`omlz check --no-alloc` to prove a program performs no arena allocation
+at all, and `omlz check --report=cu,stack` to budget against the entry
+arena sizes above.
+
 ## 4. What goes where
 
 | Value class | Region | Repr |

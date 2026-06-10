@@ -26,6 +26,11 @@ pub const assert_failure_marker = "ZXCAML_PANIC:assert_failure";
 /// (ADR-015 option B / R9.1 read-only int arrays).
 pub const array_oob_marker = "ZXCAML_PANIC:array_oob";
 
+/// Stable user-observable marker for arena exhaustion. Generated programs
+/// abort through this instead of `unreachable` so release builds keep the
+/// bounds check (no UB) and the failure is identifiable in logs.
+pub const arena_exhausted_marker = "ZXCAML_PANIC:arena_exhausted";
+
 /// Panics with the stable division-by-zero marker.
 pub fn divisionByZero() noreturn {
     panic(division_by_zero_marker);
@@ -39,6 +44,11 @@ pub fn assertFailure() noreturn {
 /// Panics with the stable array-out-of-bounds marker.
 pub fn arrayOob() noreturn {
     panic(array_oob_marker);
+}
+
+/// Panics with the stable arena-exhaustion marker.
+pub fn arenaExhausted() noreturn {
+    panic(arena_exhausted_marker);
 }
 
 /// Aborts execution for an unrecoverable user-program panic.

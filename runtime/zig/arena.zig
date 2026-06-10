@@ -6,6 +6,7 @@
 //! - Reset the bump cursor at program exit without owning the backing buffer.
 
 const std = @import("std");
+const runtime_panic = @import("panic.zig");
 
 /// A bump allocator over a caller-owned byte buffer.
 pub const Arena = struct {
@@ -35,7 +36,8 @@ pub const Arena = struct {
         return ptr[0..count];
     }
 
-    /// Allocates `count` contiguous values into `out`, trapping on failure without returning an aggregate slice.
+    /// Allocates `count` contiguous values into `out`, aborting with the
+    /// stable arena-exhaustion marker on failure (never UB in release modes).
     pub fn allocIntoOrTrap(self: *Arena, comptime T: type, count: usize, out: *[]T) void {
         const byte_count = @sizeOf(T) * count;
         const base = @intFromPtr(self.buffer.ptr);
@@ -43,19 +45,20 @@ pub const Arena = struct {
         const start = aligned_addr - base;
         const end = start + byte_count;
 
-        if (end > self.buffer.len) unreachable;
+        if (end > self.buffer.len) runtime_panic.arenaExhausted();
 
         self.offset = end;
         const ptr: [*]T = @ptrCast(@alignCast(self.buffer.ptr + start));
         out.* = ptr[0..count];
     }
 
-    /// Allocates one value of `T`, trapping on out-of-memory for BPF-friendly codegen.
+    /// Allocates one value of `T`, aborting with the stable arena-exhaustion
+    /// marker on out-of-memory (never UB in release modes).
     pub fn allocOneOrTrap(self: *Arena, comptime T: type) *T {
         const byte_count = roundUpArenaSlot(@sizeOf(T));
         const start = self.offset;
 
-        if (start > self.buffer.len or byte_count > self.buffer.len - start) unreachable;
+        if (start > self.buffer.len or byte_count > self.buffer.len - start) runtime_panic.arenaExhausted();
 
         self.offset = start + byte_count;
         return @ptrCast(@alignCast(self.buffer.ptr + start));
