@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — toolchain discovery robustness
+
+- An installed `omlz` invoked by bare name (via `PATH`) now resolves
+  `zxc-frontend` next to its own executable before falling back to the
+  historical cwd-relative `zig-out/bin/zxc-frontend` lookup, so `omlz check`
+  works outside the repository root.
+- `llvm-objcopy` discovery for `.zxcaml.srcmap` embedding now honors an
+  explicit `LLVM_OBJCOPY` environment override (used verbatim as a command or
+  path, failing loudly if it is invalid) and additionally probes versioned
+  binary names (`llvm-objcopy-15` … `llvm-objcopy-20`) common on Linux
+  distributions.
+- The in-tree BPF smoke tests invoke `omlz` and `zxc-frontend` through
+  absolute paths supplied by the build system instead of cwd-relative
+  `zig-out/bin/` paths.
+
 ### Changed — R14 IDL error metadata polish
 
 - IDL `error_` constants now include a derived human-readable `msg` field in

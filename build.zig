@@ -60,6 +60,13 @@ pub fn build(b: *std.Build) void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", manifest.version);
     build_options.addOption(usize, "inline_max_nodes", inline_max_nodes);
+    // Absolute tool paths for in-tree smoke tests, so `zig build test` does
+    // not depend on the test runner's working directory. Only test blocks
+    // reference these; lazy compilation keeps them out of the shipped binary.
+    const omlz_abs = b.path("zig-out/bin/omlz").getPath(b);
+    const zxc_frontend_abs = b.path("zig-out/bin/zxc-frontend").getPath(b);
+    build_options.addOption([]const u8, "omlz_bin", omlz_abs);
+    build_options.addOption([]const u8, "zxc_frontend_bin", zxc_frontend_abs);
 
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -364,8 +371,6 @@ pub fn build(b: *std.Build) void {
     // Pass the absolute path to omlz so the test can invoke it as a subprocess
     // regardless of the test runner's working directory.
     const det_options = b.addOptions();
-    // b.path().getPath() resolves to an absolute path joined with the build root.
-    const omlz_abs = b.path("zig-out/bin/omlz").getPath(b);
     const test_util_module = b.createModule(.{
         .root_source_file = b.path("tests/test_util.zig"),
         .target = target,

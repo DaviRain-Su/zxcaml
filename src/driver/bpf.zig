@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const core_anf = @import("../core/anf.zig");
@@ -71,7 +72,7 @@ pub fn buildBpf(allocator: Allocator, io: Io, options: BpfBuildOptions) !void {
         // `llvm-objcopy` so the non-fatal degradation message is emitted at
         // most once per BPF compile invocation.
         var warned_missing_objcopy: bool = false;
-        try embedSourceMapSection(allocator, io, options.output_path, source_map.schema, &warned_missing_objcopy);
+        try embedSourceMapSection(allocator, io, options.environ, options.output_path, source_map.schema, &warned_missing_objcopy);
     }
 }
 
@@ -348,6 +349,16 @@ const llvm_objcopy_absolute_candidates = [_][]const u8{
     "/usr/bin/llvm-objcopy",
 };
 
+// Distro LLVM packages commonly install only a versioned binary name.
+const llvm_objcopy_versioned_candidates = [_][]const u8{
+    "llvm-objcopy-20",
+    "llvm-objcopy-19",
+    "llvm-objcopy-18",
+    "llvm-objcopy-17",
+    "llvm-objcopy-16",
+    "llvm-objcopy-15",
+};
+
 pub fn findLlvmObjcopyFallback(allocator: Allocator, io: Io) !?[]const u8 {
     if (try detectHomebrewLlvmPrefix(allocator, io)) |prefix| {
         defer allocator.free(prefix);
@@ -363,10 +374,30 @@ pub fn findLlvmObjcopyFallback(allocator: Allocator, io: Io) !?[]const u8 {
         }
     }
 
+    for (llvm_objcopy_versioned_candidates) |name| {
+        if (commandAvailable(allocator, io, name)) {
+            return try allocator.dupe(u8, name);
+        }
+    }
+
     return null;
 }
 
-pub fn findLlvmObjcopy(allocator: Allocator, io: Io) ![]const u8 {
+pub fn findLlvmObjcopy(allocator: Allocator, io: Io, environ: std.process.Environ) ![]const u8 {
+    // An explicit override wins over all discovery, mirroring SOLANA_ZIG:
+    // a non-empty LLVM_OBJCOPY is used verbatim as a command or path.
+    const override_raw = std.process.Environ.getAlloc(environ, allocator, "LLVM_OBJCOPY") catch |err| switch (err) {
+        error.EnvironmentVariableMissing => null,
+        else => return err,
+    };
+    if (override_raw) |raw| {
+        defer allocator.free(raw);
+        const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+        if (trimmed.len > 0) {
+            return try allocator.dupe(u8, trimmed);
+        }
+    }
+
     if (commandAvailable(allocator, io, "llvm-objcopy")) {
         return try allocator.dupe(u8, "llvm-objcopy");
     }
@@ -444,6 +475,7 @@ fn maybeEmitObjcopyMissingWarning(
 fn embedSourceMapSection(
     allocator: Allocator,
     io: Io,
+    environ: std.process.Environ,
     output_path: []const u8,
     schema: srcmap.Schema,
     warned_missing_objcopy: *bool,
@@ -471,7 +503,7 @@ fn embedSourceMapSection(
     const section_arg = try std.fmt.allocPrint(allocator, "{s}={s}", .{ srcmap_section_name, temp_section_path });
     defer allocator.free(section_arg);
 
-    const objcopy = findLlvmObjcopy(allocator, io) catch {
+    const objcopy = findLlvmObjcopy(allocator, io, environ) catch {
         // llvm-objcopy not available (e.g. Ubuntu CI); skip source map
         // embedding after emitting a single, non-fatal warning so users know
         // the .so has no embedded `.zxcaml.srcmap` section and must rely on
@@ -619,7 +651,7 @@ test "BPF build smoke does not spam LLVM dlopen warnings" {
     defer cwd.deleteFile(io, output_path) catch {};
 
     const argv = [_][]const u8{
-        "zig-out/bin/omlz",
+        build_options.omlz_bin,
         "build",
         "--target=bpf",
         "examples/hackathon_greet.ml",
@@ -684,7 +716,7 @@ test "BPF source map builder captures hackathon_greet source locations" {
     const io = std.testing.io;
 
     const frontend_argv = [_][]const u8{
-        "zig-out/bin/zxc-frontend",
+        build_options.zxc_frontend_bin,
         "--emit=sexp",
         "examples/hackathon_greet.ml",
     };

@@ -138,7 +138,7 @@ pub fn runFrontendFromArgv0WithOptions(
     };
     defer if (path_env) |path| allocator.free(path);
 
-    const sibling_path = try frontendSiblingFromArgv0(allocator, omlz_argv0);
+    const sibling_path = try frontendSiblingFromArgv0(allocator, io, omlz_argv0);
     defer allocator.free(sibling_path);
 
     return runFrontendWithConfigOptions(allocator, io, input_file, .{
@@ -196,10 +196,24 @@ pub fn runFrontendExecutableWithOptions(
     return runFrontendArgvParsedOptions(allocator, io, &argv, options);
 }
 
-fn frontendSiblingFromArgv0(allocator: Allocator, omlz_argv0: []const u8) ![]u8 {
+fn frontendSiblingFromArgv0(allocator: Allocator, io: Io, omlz_argv0: []const u8) ![]u8 {
     if (std.fs.path.dirname(omlz_argv0)) |dir| {
         return std.fs.path.join(allocator, &.{ dir, frontend_name });
     }
+
+    // Bare argv0 means `omlz` was found via PATH. Resolve the running
+    // executable's own directory so an installed `omlz` finds its sibling
+    // frontend outside the repo root; keep the historical cwd-relative
+    // default when no sibling is installed there.
+    if (std.process.executableDirPathAlloc(io, allocator)) |exe_dir| {
+        defer allocator.free(exe_dir);
+        const candidate = try std.fs.path.join(allocator, &.{ exe_dir, frontend_name });
+        if (isExecutable(io, candidate)) {
+            return candidate;
+        }
+        allocator.free(candidate);
+    } else |_| {}
+
     return allocator.dupe(u8, default_frontend_path);
 }
 

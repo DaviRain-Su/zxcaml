@@ -60,6 +60,11 @@ tools can still discover it with `llvm-objdump -h`.
 Embedding metadata is a best-effort step after sidecar generation:
 
 - It requires an available `llvm-objcopy` compatible with the produced ELF.
+- Discovery checks, in order: a non-empty `LLVM_OBJCOPY` environment override
+(used verbatim as a command or path; an invalid override fails the build
+loudly instead of degrading), `llvm-objcopy` on `PATH`, Homebrew LLVM
+prefixes and standard absolute locations, and versioned names such as
+`llvm-objcopy-18` common on Linux distributions.
 - If no suitable `llvm-objcopy` is found, the BPF build still succeeds and
 developers can still use the `.map` sidecar.
 - CI and `omlz` tests that validate `.so` sections are tolerant when `objcopy`
