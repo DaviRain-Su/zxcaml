@@ -13,6 +13,7 @@ const emitClosureCaptureStructs = decl_emission.emitClosureCaptureStructs;
 const emitFunction = decl_emission.emitFunction;
 const emitBuiltinAccountRecordType = decl_emission.emitBuiltinAccountRecordType;
 const emitAccountViewHelper = decl_emission.emitAccountViewHelper;
+const emitInternedTupleTypeDecls = decl_emission.emitInternedTupleTypeDecls;
 
 const GeneratedImport = struct {
     alias: []const u8,
@@ -50,6 +51,9 @@ pub fn emitModule(allocator: std.mem.Allocator, module: lir.LModule) EmitError![
     var body = std.ArrayList(u8).empty;
     defer body.deinit(allocator);
 
+    // CR-14: interned anonymous tuple type declarations live alongside the
+    // user ADT/record type declarations in the program preamble.
+    try emitInternedTupleTypeDecls(&body, allocator, module);
     for (module.type_decls) |type_decl| {
         try emitVariantType(&body, allocator, type_decl);
         try append(&body, allocator, "\n");

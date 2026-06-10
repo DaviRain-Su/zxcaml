@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — option-of-tuple values compile on native and BPF
+
+- Tuple types are now interned as named top-level structs in generated
+  Zig (one deterministic, shape-derived declaration per distinct tuple),
+  so option-of-tuple values crossing function boundaries no longer fail
+  with anonymous-struct nominal-identity mismatches. Tuple-free programs
+  produce byte-identical output.
+- Nullary constructor branches (`None`, `[]`) in `if`/`match` now adopt
+  the sibling branch's concrete type instantiation during ANF lowering
+  instead of defaulting to `int` payloads, eliminating the matching
+  `Option(i64)`-vs-`Option(tuple)` emission error.
+- `examples/option_tuple_roundtrip.ml` (corpus 103 → 104) pins the fix
+  through the interpreter≡native determinism gate.
+
 ### Added — ADR-016 multi-file modules: `open Foo` resolves to sibling files
 
 - `omlz` now accepts multi-file programs: a top-level `open Foo` in the

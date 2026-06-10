@@ -613,19 +613,12 @@ pub fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const 
             if (isAccountRecordTy(record)) break :blk try allocator.dupe(u8, "AccountRuntime.AccountView");
             break :blk try zigUserRecordNameFromRecord(allocator, record);
         },
-        .Tuple => |items| blk: {
-            var out = std.ArrayList(u8).empty;
-            errdefer out.deinit(allocator);
-            try append(&out, allocator, "struct { ");
-            for (items, 0..) |item, index| {
-                if (index != 0) try append(&out, allocator, ", ");
-                const item_ty = try zigTypeName(allocator, item);
-                defer allocator.free(item_ty);
-                try appendPrint(&out, allocator, "@\"{d}\": {s}", .{ index, item_ty });
-            }
-            try append(&out, allocator, " }");
-            break :blk try out.toOwnedSlice(allocator);
-        },
+        // CR-14: anonymous tuples are rendered as interned named structs
+        // (declared once per module by `emitInternedTupleTypeDecls`) instead
+        // of inline `struct { ... }` literals. Inline literals are distinct
+        // nominal types at every use site in Zig, so option-of-tuple values
+        // crossing function boundaries never unified.
+        .Tuple => |items| try tupleTypeName(allocator, items),
         .Adt => |adt| blk: {
             if (std.mem.eql(u8, adt.name, "option")) {
                 if (adt.params.len != 1) return error.UnsupportedExpr;
@@ -673,6 +666,64 @@ pub fn zigTypeName(allocator: std.mem.Allocator, ty: lir.LTy) EmitError![]const 
             break :blk try std.fmt.allocPrint(allocator, "*{s}", .{inner});
         },
     };
+}
+
+/// CR-14: deterministic name for an interned anonymous tuple type. The name
+/// is derived purely from the element type shapes (never from a counter), so
+/// identical shapes used in different functions share one declaration and the
+/// generated output stays deterministic. Example: `(string, int)` becomes
+/// `omlz_tuple2_str_int`.
+pub fn tupleTypeName(allocator: std.mem.Allocator, items: []const lir.LTy) EmitError![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try append(&out, allocator, "omlz_");
+    try appendTupleTypeKey(&out, allocator, .{ .Tuple = items });
+    return out.toOwnedSlice(allocator);
+}
+
+/// Identifier-safe structural key for a type embedded in an interned tuple
+/// name. Composite types carry their arity (`tuple2_...`) so nested tuples
+/// stay unambiguous.
+fn appendTupleTypeKey(out: *std.ArrayList(u8), allocator: std.mem.Allocator, ty: lir.LTy) EmitError!void {
+    switch (ty) {
+        .Int => try append(out, allocator, "int"),
+        .Bool => try append(out, allocator, "bool"),
+        .Unit => try append(out, allocator, "unit"),
+        .String => try append(out, allocator, "str"),
+        .Var => return error.UnsupportedExpr,
+        // Every first-class closure shares one Zig type (`*const
+        // prelude.Closure`), so one key covers all signatures.
+        .Closure => try append(out, allocator, "closure"),
+        .Record => |record| {
+            try appendSanitized(out, allocator, record.name);
+            for (record.params) |param| {
+                try append(out, allocator, "_");
+                try appendTupleTypeKey(out, allocator, param);
+            }
+        },
+        .Adt => |adt| {
+            try appendSanitized(out, allocator, adt.name);
+            for (adt.params) |param| {
+                try append(out, allocator, "_");
+                try appendTupleTypeKey(out, allocator, param);
+            }
+        },
+        .Tuple => |items| {
+            try appendPrint(out, allocator, "tuple{d}", .{items.len});
+            for (items) |item| {
+                try append(out, allocator, "_");
+                try appendTupleTypeKey(out, allocator, item);
+            }
+        },
+        .Array => |elem| {
+            try append(out, allocator, "array_");
+            try appendTupleTypeKey(out, allocator, elem.*);
+        },
+        .Ref => |elem| {
+            try append(out, allocator, "ref_");
+            try appendTupleTypeKey(out, allocator, elem.*);
+        },
+    }
 }
 
 pub fn zigTypeExprName(allocator: std.mem.Allocator, ty: lir.LTypeExpr, type_params: []const []const u8) EmitError![]const u8 {

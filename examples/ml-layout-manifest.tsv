@@ -69,6 +69,7 @@ user_example	examples/option_adt.ml	user-examples
 user_example	examples/option_basic.ml	user-examples
 user_example	examples/option_chain.ml	user-examples
 user_example	examples/option_construct.ml	user-examples
+user_example	examples/option_tuple_roundtrip.ml	user-examples
 user_example	examples/order_book.ml	user-examples
 user_example	examples/pda_derive.ml	user-examples
 user_example	examples/pda_storage.ml	user-examples

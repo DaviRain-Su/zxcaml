@@ -42,6 +42,8 @@ const layoutForTy = type_ops.layoutForTy;
 const makeArrowTyFromPieces = type_ops.makeArrowTyFromPieces;
 const exprTy = type_ops.exprTy;
 const exprLayout = type_ops.exprLayout;
+const tyEql = type_ops.tyEql;
+const adoptNullaryCtorBranchTy = type_ops.adoptNullaryCtorBranchTy;
 
 const lowerExprPtr = expr_lowering.lowerExprPtr;
 const lowerExprPtrExpected = expr_lowering.lowerExprPtrExpected;
@@ -1379,8 +1381,18 @@ pub fn appReturnTy(arena: *std.heap.ArenaAllocator, callee_ty: ir.Ty, arg_count:
 
 pub fn lowerIf(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, if_expr: ttree.IfExpr) LowerError!ir.Expr {
     const cond = try lowerExprPtrExpected(arena, ctx, if_expr.cond.*, .Bool);
-    const then_branch = try lowerExprPtr(arena, ctx, if_expr.then_branch.*);
-    const else_branch = try lowerExprPtr(arena, ctx, if_expr.else_branch.*);
+    var then_branch = try lowerExprPtr(arena, ctx, if_expr.then_branch.*);
+    var else_branch = try lowerExprPtr(arena, ctx, if_expr.else_branch.*);
+    // CR-14: a nullary-ctor branch (`None`, `[]`) lowered without an expected
+    // type defaults its ADT instantiation; rewrite it to the concrete
+    // instantiation produced by the sibling branch so both branches agree.
+    if (!tyEql(exprTy(then_branch.*), exprTy(else_branch.*))) {
+        if (try adoptNullaryCtorBranchTy(arena, else_branch, exprTy(then_branch.*))) |patched| {
+            else_branch = patched;
+        } else if (try adoptNullaryCtorBranchTy(arena, then_branch, exprTy(else_branch.*))) |patched| {
+            then_branch = patched;
+        }
+    }
     return .{ .If = .{
         .cond = cond,
         .then_branch = then_branch,

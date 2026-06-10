@@ -86,6 +86,7 @@ inputs to `./scripts/check_examples_corpus.sh`.
 - [`examples/option_basic.ml`](./option_basic.ml)
 - [`examples/option_chain.ml`](./option_chain.ml)
 - [`examples/option_construct.ml`](./option_construct.ml)
+- [`examples/option_tuple_roundtrip.ml`](./option_tuple_roundtrip.ml)
 - [`examples/order_book.ml`](./order_book.ml)
 - [`examples/pda_derive.ml`](./pda_derive.ml)
 - [`examples/pda_storage.ml`](./pda_storage.ml)

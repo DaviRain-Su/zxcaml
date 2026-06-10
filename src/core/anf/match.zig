@@ -85,6 +85,25 @@ pub fn lowerMatchWithScrutinee(
     }
 
     const owned_arms = try arms.toOwnedSlice(arena.allocator());
+    // CR-14: a nullary-ctor arm body (`None`, `[]`) lowered without an
+    // expected type defaults its ADT instantiation; rewrite it to the
+    // concrete instantiation produced by a sibling arm so all arms agree.
+    var join_ty: ?ir.Ty = null;
+    for (owned_arms) |arm| {
+        if (type_ops.isNullaryCtorExpr(arm.body.*)) continue;
+        const arm_ty = exprTy(arm.body.*);
+        if (arm_ty == .Adt and type_ops.tyIsFullyConcrete(arm_ty)) {
+            join_ty = arm_ty;
+            break;
+        }
+    }
+    if (join_ty) |concrete_ty| {
+        for (owned_arms) |*arm| {
+            if (try type_ops.adoptNullaryCtorBranchTy(arena, arm.body, concrete_ty)) |patched| {
+                arm.body = patched;
+            }
+        }
+    }
     const match_ty = exprTy(owned_arms[0].body.*);
     const match_layout = exprLayout(owned_arms[0].body.*);
 

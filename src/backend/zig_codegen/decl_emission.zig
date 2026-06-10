@@ -516,6 +516,199 @@ pub fn emittedClosureFunctionName(allocator: std.mem.Allocator, source_name: []c
     return std.fmt.allocPrint(allocator, "{s}__closure", .{base});
 }
 
+/// CR-14: one interned top-level declaration per distinct anonymous tuple
+/// shape used anywhere in the module, e.g.
+/// `const omlz_tuple2_str_int = struct { @"0": []const u8, @"1": i64 };`.
+/// `zigTypeName` renders every tuple use site as the matching name, so all
+/// sites share one nominal Zig type. Declarations are sorted by name, which
+/// keeps the output deterministic regardless of traversal order.
+const InternedTupleDecl = struct {
+    name: []const u8,
+    items: []const lir.LTy,
+};
+
+pub fn emitInternedTupleTypeDecls(out: *std.ArrayList(u8), allocator: std.mem.Allocator, module: lir.LModule) EmitError!void {
+    var decls = std.ArrayList(InternedTupleDecl).empty;
+    defer {
+        for (decls.items) |decl| allocator.free(decl.name);
+        decls.deinit(allocator);
+    }
+
+    try collectFuncTupleShapes(allocator, &decls, module.entrypoint);
+    for (module.functions) |func| {
+        try collectFuncTupleShapes(allocator, &decls, func);
+    }
+    for (module.externals) |external| {
+        try collectTyTupleShapes(allocator, &decls, external.ty);
+    }
+    if (decls.items.len == 0) return;
+
+    std.mem.sort(InternedTupleDecl, decls.items, {}, internedTupleDeclLessThan);
+    for (decls.items) |decl| {
+        try appendPrint(out, allocator, "const {s} = struct {{ ", .{decl.name});
+        for (decl.items, 0..) |item, index| {
+            if (index != 0) try append(out, allocator, ", ");
+            const item_ty = try zigTypeName(allocator, item);
+            defer allocator.free(item_ty);
+            try appendPrint(out, allocator, "@\"{d}\": {s}", .{ index, item_ty });
+        }
+        try append(out, allocator, " };\n");
+    }
+    try append(out, allocator, "\n");
+}
+
+fn internedTupleDeclLessThan(_: void, lhs: InternedTupleDecl, rhs: InternedTupleDecl) bool {
+    return std.mem.lessThan(u8, lhs.name, rhs.name);
+}
+
+fn collectFuncTupleShapes(
+    allocator: std.mem.Allocator,
+    decls: *std.ArrayList(InternedTupleDecl),
+    func: lir.LFunc,
+) EmitError!void {
+    for (func.params) |param| try collectTyTupleShapes(allocator, decls, param.ty);
+    for (func.captures) |capture| try collectTyTupleShapes(allocator, decls, capture.ty);
+    try collectTyTupleShapes(allocator, decls, func.return_ty);
+    try collectExprTupleShapes(allocator, decls, func.body);
+}
+
+fn collectTyTupleShapes(
+    allocator: std.mem.Allocator,
+    decls: *std.ArrayList(InternedTupleDecl),
+    ty: lir.LTy,
+) EmitError!void {
+    switch (ty) {
+        .Int, .Bool, .Unit, .String, .Var => {},
+        .Adt => |adt| for (adt.params) |param| try collectTyTupleShapes(allocator, decls, param),
+        .Record => |record| for (record.params) |param| try collectTyTupleShapes(allocator, decls, param),
+        .Closure => |closure| {
+            for (closure.params) |param| try collectTyTupleShapes(allocator, decls, param);
+            try collectTyTupleShapes(allocator, decls, closure.ret.*);
+        },
+        .Array => |elem| try collectTyTupleShapes(allocator, decls, elem.*),
+        .Ref => |elem| try collectTyTupleShapes(allocator, decls, elem.*),
+        .Tuple => |items| {
+            for (items) |item| try collectTyTupleShapes(allocator, decls, item);
+            // Shapes whose name cannot be derived (unresolved type variables)
+            // are skipped here; rendering them would fail in `zigTypeName`
+            // exactly as it did before interning.
+            const name = common.tupleTypeName(allocator, items) catch |err| switch (err) {
+                error.UnsupportedExpr => return,
+                else => |other| return other,
+            };
+            for (decls.items) |decl| {
+                if (std.mem.eql(u8, decl.name, name)) {
+                    allocator.free(name);
+                    return;
+                }
+            }
+            try decls.append(allocator, .{ .name = name, .items = items });
+        },
+    }
+}
+
+fn collectExprTupleShapes(
+    allocator: std.mem.Allocator,
+    decls: *std.ArrayList(InternedTupleDecl),
+    expr: lir.LExpr,
+) EmitError!void {
+    switch (expr) {
+        .Constant => {},
+        .Var => {},
+        .App => |app| {
+            try collectTyTupleShapes(allocator, decls, app.ty);
+            try collectTyTupleShapes(allocator, decls, app.callee_ty);
+            try collectExprTupleShapes(allocator, decls, app.callee.*);
+            for (app.args) |arg| try collectExprTupleShapes(allocator, decls, arg.*);
+        },
+        .Let => |let_expr| {
+            try collectTyTupleShapes(allocator, decls, let_expr.ty);
+            try collectExprTupleShapes(allocator, decls, let_expr.value.*);
+            try collectExprTupleShapes(allocator, decls, let_expr.body.*);
+        },
+        .Assert => |assert_expr| try collectExprTupleShapes(allocator, decls, assert_expr.condition.*),
+        .If => |if_expr| {
+            try collectExprTupleShapes(allocator, decls, if_expr.cond.*);
+            try collectExprTupleShapes(allocator, decls, if_expr.then_branch.*);
+            try collectExprTupleShapes(allocator, decls, if_expr.else_branch.*);
+        },
+        .Prim => |prim| for (prim.args) |arg| try collectExprTupleShapes(allocator, decls, arg.*),
+        .Ctor => |ctor_expr| {
+            try collectTyTupleShapes(allocator, decls, ctor_expr.ty);
+            for (ctor_expr.args) |arg| try collectExprTupleShapes(allocator, decls, arg.*);
+        },
+        .Match => |match_expr| {
+            try collectExprTupleShapes(allocator, decls, match_expr.scrutinee.*);
+            for (match_expr.arms) |arm| {
+                if (arm.guard) |guard_expr| try collectExprTupleShapes(allocator, decls, guard_expr.*);
+                try collectExprTupleShapes(allocator, decls, arm.body.*);
+            }
+        },
+        .Closure => |closure| for (closure.captures) |capture| try collectTyTupleShapes(allocator, decls, capture.ty),
+        .Tuple => |tuple_expr| {
+            try collectTyTupleShapes(allocator, decls, tuple_expr.ty);
+            for (tuple_expr.items) |item| try collectExprTupleShapes(allocator, decls, item.*);
+        },
+        .TupleProj => |tuple_proj| try collectExprTupleShapes(allocator, decls, tuple_proj.tuple_expr.*),
+        .Record => |record_expr| {
+            try collectTyTupleShapes(allocator, decls, record_expr.ty);
+            for (record_expr.fields) |field| try collectExprTupleShapes(allocator, decls, field.value.*);
+        },
+        .RecordField => |record_field| {
+            if (record_field.record_ty) |record_ty| try collectTyTupleShapes(allocator, decls, record_ty);
+            try collectExprTupleShapes(allocator, decls, record_field.record_expr.*);
+        },
+        .RecordUpdate => |record_update| {
+            try collectTyTupleShapes(allocator, decls, record_update.ty);
+            try collectExprTupleShapes(allocator, decls, record_update.base_expr.*);
+            for (record_update.fields) |field| try collectExprTupleShapes(allocator, decls, field.value.*);
+        },
+        .AccountFieldSet => |field_set| {
+            try collectExprTupleShapes(allocator, decls, field_set.account_expr.*);
+            try collectExprTupleShapes(allocator, decls, field_set.value.*);
+        },
+        .ArrayLit => |array_lit| {
+            try collectTyTupleShapes(allocator, decls, array_lit.elem_ty);
+            try collectTyTupleShapes(allocator, decls, array_lit.ty);
+            for (array_lit.elems) |elem| try collectExprTupleShapes(allocator, decls, elem.*);
+        },
+        .ArrayGet => |array_get| {
+            try collectTyTupleShapes(allocator, decls, array_get.ty);
+            try collectExprTupleShapes(allocator, decls, array_get.arr.*);
+            try collectExprTupleShapes(allocator, decls, array_get.idx.*);
+        },
+        .ArrayLength => |array_length| {
+            try collectTyTupleShapes(allocator, decls, array_length.ty);
+            try collectExprTupleShapes(allocator, decls, array_length.arr.*);
+        },
+        .ArraySet => |array_set| {
+            try collectTyTupleShapes(allocator, decls, array_set.ty);
+            try collectExprTupleShapes(allocator, decls, array_set.arr.*);
+            try collectExprTupleShapes(allocator, decls, array_set.idx.*);
+            try collectExprTupleShapes(allocator, decls, array_set.value.*);
+        },
+        .ArrayMake => |array_make| {
+            try collectTyTupleShapes(allocator, decls, array_make.elem_ty);
+            try collectTyTupleShapes(allocator, decls, array_make.ty);
+            try collectExprTupleShapes(allocator, decls, array_make.init.*);
+        },
+        .RefMake => |ref_make| {
+            try collectTyTupleShapes(allocator, decls, ref_make.elem_ty);
+            try collectTyTupleShapes(allocator, decls, ref_make.ty);
+            try collectExprTupleShapes(allocator, decls, ref_make.init.*);
+        },
+        .RefGet => |ref_get| {
+            try collectTyTupleShapes(allocator, decls, ref_get.ty);
+            try collectExprTupleShapes(allocator, decls, ref_get.target.*);
+        },
+        .RefSet => |ref_set| {
+            try collectTyTupleShapes(allocator, decls, ref_set.ty);
+            try collectExprTupleShapes(allocator, decls, ref_set.target.*);
+            try collectExprTupleShapes(allocator, decls, ref_set.value.*);
+        },
+    }
+}
+
 pub fn emitClosureCaptureBindings(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,

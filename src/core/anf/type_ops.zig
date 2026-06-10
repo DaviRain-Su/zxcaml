@@ -1006,6 +1006,82 @@ pub fn tyEql(lhs: ir.Ty, rhs: ir.Ty) bool {
     };
 }
 
+/// CR-14: true when `ty` carries no unresolved type variables (and no arrow,
+/// which never names a concrete runtime value type in branch positions).
+pub fn tyIsFullyConcrete(ty: ir.Ty) bool {
+    return switch (ty) {
+        .Int, .Bool, .Unit, .String => true,
+        .Var => false,
+        .Arrow => false,
+        .Adt => |adt| blk: {
+            for (adt.params) |param| {
+                if (!tyIsFullyConcrete(param)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Tuple => |items| blk: {
+            for (items) |item| {
+                if (!tyIsFullyConcrete(item)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Record => |record| blk: {
+            for (record.params) |param| {
+                if (!tyIsFullyConcrete(param)) break :blk false;
+            }
+            break :blk true;
+        },
+        .Array => |elem| tyIsFullyConcrete(elem.*),
+        .Ref => |elem| tyIsFullyConcrete(elem.*),
+    };
+}
+
+/// CR-14: a nullary constructor lowered without an expected type defaults its
+/// ADT instantiation (`None` -> `(option int)`, `[]` -> `(list int)`, user
+/// nullary ctors -> `Var` params). When a sibling `if`/`match` branch produced
+/// the concrete instantiation, returns a copy of the nullary-ctor branch with
+/// its ty rewritten to that concrete instantiation; returns null when the
+/// branch does not qualify. A nullary constructor places no constraint on the
+/// type parameters, so adopting the sibling's instantiation is always sound
+/// for programs the OCaml typechecker accepted.
+pub fn adoptNullaryCtorBranchTy(
+    arena: *std.heap.ArenaAllocator,
+    branch: *const ir.Expr,
+    concrete_ty: ir.Ty,
+) LowerError!?*const ir.Expr {
+    const ctor_expr = switch (branch.*) {
+        .Ctor => |value| value,
+        else => return null,
+    };
+    if (ctor_expr.args.len != 0) return null;
+    const ctor_adt = switch (ctor_expr.ty) {
+        .Adt => |value| value,
+        else => return null,
+    };
+    const concrete_adt = switch (concrete_ty) {
+        .Adt => |value| value,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, ctor_adt.name, concrete_adt.name)) return null;
+    if (ctor_adt.params.len != concrete_adt.params.len) return null;
+    if (!tyIsFullyConcrete(concrete_ty)) return null;
+    if (tyEql(ctor_expr.ty, concrete_ty)) return null;
+
+    var patched = ctor_expr;
+    patched.ty = concrete_ty;
+    const ptr = try arena.allocator().create(ir.Expr);
+    ptr.* = .{ .Ctor = patched };
+    return ptr;
+}
+
+/// CR-14: true for a bare nullary constructor expression (`None`, `[]`, ...).
+pub fn isNullaryCtorExpr(expr: ir.Expr) bool {
+    return switch (expr) {
+        .Ctor => |ctor_expr| ctor_expr.args.len == 0,
+        else => false,
+    };
+}
+
 pub fn exprLayout(expr: ir.Expr) layout.Layout {
     return switch (expr) {
         .Lambda => |lambda| lambda.layout,
