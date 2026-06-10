@@ -69,6 +69,9 @@ inputs to `./scripts/check_examples_corpus.sh`.
 - [`examples/log_accounts.ml`](./log_accounts.ml)
 - [`examples/logonly.ml`](./logonly.ml)
 - [`examples/m0_zero.ml`](./m0_zero.ml)
+- [`examples/mtf1_account_lamports_mutation.ml`](./mtf1_account_lamports_mutation.ml)
+- [`examples/mtf1_pure_numeric.ml`](./mtf1_pure_numeric.ml)
+- [`examples/mtf2_near_no_storage.ml`](./mtf2_near_no_storage.ml)
 - [`examples/multi_ix.ml`](./multi_ix.ml)
 - [`examples/mutable_state_stress.ml`](./mutable_state_stress.ml)
 - [`examples/mutual_rec.ml`](./mutual_rec.ml)
@@ -142,7 +145,7 @@ The manifest also tracks recursive validation-only `.ml` inputs so test-only
 fixtures stay separate from the user example catalog.
 
 <!-- validation-summary:start -->
-- `compiler_corpus`: 144 files under `runtime/lsp/fixtures/`, `tests/codegen/`, `tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.
+- `compiler_corpus`: 148 files under `runtime/lsp/fixtures/`, `tests/codegen/`, `tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.
 - `solana_harness_source`: 5 files under `tests/solana/`.
 - `excluded_historical`: 1 file kept out of the default user corpus (`examples/m0_unsupported.ml`).
 <!-- validation-summary:end -->

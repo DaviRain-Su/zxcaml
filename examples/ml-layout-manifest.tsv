@@ -52,6 +52,9 @@ user_example	examples/log_accounts.ml	user-examples
 user_example	examples/logonly.ml	user-examples
 excluded_historical	examples/m0_unsupported.ml	historical-diagnostic
 user_example	examples/m0_zero.ml	user-examples
+user_example	examples/mtf1_account_lamports_mutation.ml	user-examples
+user_example	examples/mtf1_pure_numeric.ml	user-examples
+user_example	examples/mtf2_near_no_storage.ml	user-examples
 user_example	examples/multi_ix.ml	user-examples
 user_example	examples/mutable_state_stress.ml	user-examples
 user_example	examples/mutual_rec.ml	user-examples
@@ -115,6 +118,10 @@ compiler_corpus	tests/codegen/region_let_storage.ml	codegen
 compiler_corpus	tests/fixtures/fmt/malformed.ml	fixtures-fmt
 compiler_corpus	tests/fixtures/fmt/needs_reformat.ml	fixtures-fmt
 compiler_corpus	tests/fixtures/fmt/well_formed.ml	fixtures-fmt
+compiler_corpus	tests/fixtures/near/near_assert_false.ml	fixtures-near
+compiler_corpus	tests/fixtures/near/near_predecessor_account_id.ml	fixtures-near
+compiler_corpus	tests/fixtures/near/near_promise_create.ml	fixtures-near
+compiler_corpus	tests/fixtures/near/near_storage_write.ml	fixtures-near
 compiler_corpus	tests/fixtures/otest/00_pass.ml	fixtures-otest
 compiler_corpus	tests/fixtures/otest/comments_ok.ml	fixtures-otest
 compiler_corpus	tests/fixtures/otest/mixed.ml	fixtures-otest

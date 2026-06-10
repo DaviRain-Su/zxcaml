@@ -199,7 +199,7 @@ async function main() {
 
     const panicArtifact = path.join(tempRoot, "mtf2_near_panic.wasm");
     const panicBuild = await buildNearFixture(
-      "tests/fixtures/near_assert_false.ml",
+      "tests/fixtures/near/near_assert_false.ml",
       panicArtifact,
     );
     assertSuccess(panicBuild, "build panic near fixture");
@@ -228,12 +228,12 @@ async function main() {
         expectedParts: [/target `near`/, /Solana host API/, /Syscall\.sol_sha256/],
       },
       {
-        sourcePath: "tests/fixtures/near_storage_write.ml",
+        sourcePath: "tests/fixtures/near/near_storage_write.ml",
         outputPath: path.join(tempRoot, "near_reject_storage.wasm"),
         expectedParts: [/target `near`/, /NEAR storage API/, /near\.storage_write/],
       },
       {
-        sourcePath: "tests/fixtures/near_predecessor_account_id.ml",
+        sourcePath: "tests/fixtures/near/near_predecessor_account_id.ml",
         outputPath: path.join(tempRoot, "near_reject_caller.wasm"),
         expectedParts: [
           /target `near`/,
@@ -242,7 +242,7 @@ async function main() {
         ],
       },
       {
-        sourcePath: "tests/fixtures/near_promise_create.ml",
+        sourcePath: "tests/fixtures/near/near_promise_create.ml",
         outputPath: path.join(tempRoot, "near_reject_promise.wasm"),
         expectedParts: [/target `near`/, /NEAR promise API/, /near\.promise_create/],
       },

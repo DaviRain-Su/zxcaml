@@ -4,7 +4,7 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 95
+frontend bridge accepts sexp wire format `1.5`, the examples corpus contains 98
 `.ml` programs, the Mollusk SVM suite contains 44 Rust integration-test files
 (66 Rust test cases), and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).

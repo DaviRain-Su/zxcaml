@@ -47,6 +47,7 @@ routed_pairs = [
     ("docs/13-omlz-test.md", "docs/zh/13-omlz-test.md"),
     ("docs/18-fixed-point.md", "docs/zh/18-fixed-point.md"),
     ("docs/19-functional-multichain-roadmap.md", "docs/zh/19-functional-multichain-roadmap.md"),
+    ("docs/20-functional-multichain-architecture-adr.md", "docs/zh/20-functional-multichain-architecture-adr.md"),
     ("docs/diagnostics.md", "docs/zh/diagnostics.md"),
     ("docs/lsp.md", "docs/zh/lsp.md"),
     ("docs/source-map.md", "docs/zh/source-map.md"),

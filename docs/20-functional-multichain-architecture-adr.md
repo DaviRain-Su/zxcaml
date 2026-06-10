@@ -1,5 +1,7 @@
 # 20 — Functional Multichain Architecture ADR
 
+> **Languages / 语言**: **English** · [简体中文](./zh/20-functional-multichain-architecture-adr.md)
+
 **Status:** Accepted  
 **Date:** 2026-05-15  
 **Scope:** MTF-0 target contract, MTF-1 generic WASM architecture, MTF-2 NEAR no-storage adapter architecture, MTF-3 portable contract core API architecture, MTF-4 EVM/Yul MVP architecture, MTF-5 verified extraction profile architecture, and MTF-6 additional adapter reservation architecture
