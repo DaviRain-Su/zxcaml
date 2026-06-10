@@ -1,12 +1,42 @@
-//! LSP session temp-directory lifecycle.
+//! LSP session temp-directory lifecycle and toolchain resolution.
 //!
 //! RESPONSIBILITIES:
 //! - Create the per-PID `/tmp/omlz_lsp_<pid>` scratch directory on demand
 //!   and hand out numbered `.ml` document paths inside it.
 //! - Sweep stale scratch directories (and legacy flat temp files) left by
 //!   dead LSP processes, plus the current PID's own directory on shutdown.
+//! - Resolve the `omlz` binary the server spawns for diagnostics, hover,
+//!   and test runs.
 const std = @import("std");
 const Io = std.Io;
+
+/// Historical cwd-relative fallback used when no installed sibling exists.
+pub const default_omlz_path = "zig-out/bin/omlz";
+
+/// Resolves the `omlz` binary to spawn: prefer a sibling of the running
+/// `omlz-lsp` executable so an installed server works outside the repo
+/// root, falling back to the historical cwd-relative path.
+pub fn resolveOmlzPath(io: Io, allocator: std.mem.Allocator) ![]u8 {
+    if (std.process.executableDirPathAlloc(io, allocator)) |exe_dir| {
+        defer allocator.free(exe_dir);
+        const candidate = try std.fs.path.join(allocator, &.{ exe_dir, "omlz" });
+        if (isExecutable(io, candidate)) {
+            return candidate;
+        }
+        allocator.free(candidate);
+    } else |_| {}
+
+    return allocator.dupe(u8, default_omlz_path);
+}
+
+fn isExecutable(io: Io, path: []const u8) bool {
+    if (std.fs.path.isAbsolute(path)) {
+        std.Io.Dir.accessAbsolute(io, path, .{ .execute = true }) catch return false;
+        return true;
+    }
+    std.Io.Dir.cwd().access(io, path, .{ .execute = true }) catch return false;
+    return true;
+}
 
 pub fn ensureTempDir(io: Io, allocator: std.mem.Allocator, temp_dir_created: *bool) !void {
     if (temp_dir_created.*) return;

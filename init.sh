@@ -138,6 +138,12 @@ setup_opam() {
     5.2.*) echo "    OCaml $reported OK" ;;
     *)
       echo "ERROR: ocaml $reported active; expected 5.2.x" >&2
+      echo "The $OPAM_SWITCH switch has drifted (e.g. via opam upgrade); compiler-libs" >&2
+      echo "from other OCaml series break the frontend build. Recreate it with:" >&2
+      echo "  opam switch remove $OPAM_SWITCH -y" >&2
+      echo "  opam switch create $OPAM_SWITCH ocaml-base-compiler.$OCAML_VERSION -y" >&2
+      echo "  opam install -y --switch=$OPAM_SWITCH ocamlfind" >&2
+      echo "then re-run ./init.sh." >&2
       exit 1
       ;;
   esac

@@ -90,6 +90,8 @@ const ServerState = struct {
     writer_mutex: std.atomic.Mutex = .unlocked,
     next_doc_id: u64 = 0,
     temp_dir_created: bool = false,
+    /// Resolved once at server start; see `session.resolveOmlzPath`.
+    omlz_path: ?[]u8 = null,
 
     fn init(allocator: std.mem.Allocator) ServerState {
         return .{
@@ -118,6 +120,11 @@ const ServerState = struct {
             entry.value_ptr.deinit();
         }
         self.hover_caches.deinit();
+        if (self.omlz_path) |path| self.allocator.free(path);
+    }
+
+    fn omlzBin(self: *const ServerState) []const u8 {
+        return self.omlz_path orelse session.default_omlz_path;
     }
 
     fn putDocument(self: *ServerState, uri: []const u8, text: []const u8) !void {
@@ -175,6 +182,7 @@ fn runServer(io: Io) !void {
 
     var state = ServerState.init(std.heap.page_allocator);
     defer state.deinit();
+    state.omlz_path = try session.resolveOmlzPath(io, std.heap.page_allocator);
     try session.cleanupTempFiles(io, false);
     defer session.cleanupTempFiles(io, true) catch {};
     while (true) {
@@ -613,7 +621,7 @@ fn ensureHoverCache(
         .flags = .{ .truncate = true },
     });
 
-    const argv = [_][]const u8{ "zig-out/bin/omlz", "check", "--emit=core-ir-with-loc", tmp_path };
+    const argv = [_][]const u8{ state.omlzBin(), "check", "--emit=core-ir-with-loc", tmp_path };
     const completed = std.process.run(allocator, io, .{ .argv = &argv }) catch return null;
     defer allocator.free(completed.stdout);
     defer allocator.free(completed.stderr);
@@ -1354,7 +1362,7 @@ fn publishDiagnosticsForText(
         .flags = .{ .truncate = true },
     });
 
-    const argv = [_][]const u8{ "zig-out/bin/omlz", "check", "--error-format=json", tmp_path };
+    const argv = [_][]const u8{ state.omlzBin(), "check", "--error-format=json", tmp_path };
     const completed = try std.process.run(allocator, io, .{ .argv = &argv });
     defer allocator.free(completed.stdout);
     defer allocator.free(completed.stderr);
@@ -1438,7 +1446,7 @@ fn runTestThreadInner(
     path: []const u8,
 ) !void {
     const allocator = std.heap.page_allocator;
-    const argv = [_][]const u8{ "zig-out/bin/omlz", "test", "--filter", name, "--format=json", path };
+    const argv = [_][]const u8{ state.omlzBin(), "test", "--filter", name, "--format=json", path };
     const completed = try std.process.run(allocator, io, .{ .argv = &argv });
     defer allocator.free(completed.stdout);
     defer allocator.free(completed.stderr);
