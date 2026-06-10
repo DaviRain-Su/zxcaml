@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — DX: entrypoint misuse diagnostics
+
+- A statically `bool`- or `string`-typed entrypoint return — the classic
+  trailing-comparison accident — is now rejected with a spanned
+  `DX2-REGION` diagnostic before codegen, instead of leaking a raw
+  generated-Zig type error with `out/program.zig` paths. `unit` returns
+  stay allowed for the experimental mutation-only target shapes.
+- The missing-`entrypoint` and non-function-`entrypoint` diagnostics now
+  state the expected declaration shape inline; entrypoint expectations
+  are documented in `docs/11-solana-p3.md` (+ zh) and all three misuse
+  cases are pinned by new `tests/ui/entrypoint_*.ml` fixtures.
+
 ### Added — DX: Pda namespace and cross-path PDA derivation
 
 - `Pda.create_program_address` joins the discoverable module namespaces

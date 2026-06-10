@@ -1,0 +1,1 @@
+_unknown_:0:0: error: region inference failure: `entrypoint` must be a function for region inference; declare it with parameters, e.g. `let entrypoint accounts instruction_data = ...`

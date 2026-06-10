@@ -147,7 +147,7 @@ The manifest also tracks recursive validation-only `.ml` inputs so test-only
 fixtures stay separate from the user example catalog.
 
 <!-- validation-summary:start -->
-- `compiler_corpus`: 149 files under `runtime/lsp/fixtures/`, `tests/codegen/`, `tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.
+- `compiler_corpus`: 152 files under `runtime/lsp/fixtures/`, `tests/codegen/`, `tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.
 - `solana_harness_source`: 5 files under `tests/solana/`.
 - `excluded_historical`: 1 file kept out of the default user corpus (`examples/m0_unsupported.ml`).
 <!-- validation-summary:end -->

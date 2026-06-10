@@ -1,0 +1,6 @@
+error[DX2-REGION]: region inference failure: region inference requires an `entrypoint` function; declare `let entrypoint ... = ...` as the program entry
+ --> tests/ui/entrypoint_missing.ml:1:9
+  |
+1 | let main (a : account) (data : bytes) =
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: Region inference is described in docs/04-memory-model.md; the same check runs inside `omlz build` before codegen.

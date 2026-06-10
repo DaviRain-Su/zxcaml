@@ -28,6 +28,18 @@ The implementation remains runtime-light:
 
 ## 1. Account handling
 
+### Entrypoint expectations
+
+Every program declares a function named exactly `entrypoint`. The accepted
+shapes are positional `account` parameters followed by the instruction-data
+`bytes` parameter — e.g. `let entrypoint (authority : account)
+(guarded : account) (instruction_data : bytes) = ...` — and the return value
+must be an `int` status (`0` for success; the entry ABI maps it to the
+program's exit status). Common mistakes are caught with `DX2-REGION`
+diagnostics before codegen: a missing/renamed `entrypoint`, a non-function
+binding, or a trailing `bool` expression where the status int belongs
+(`tests/ui/entrypoint_*.ml` pin all three).
+
 The P3 runtime parses the Solana BPF loader input into account views before user
 code runs. The parser understands the loader serialization shape used by real
 BPF invocations:

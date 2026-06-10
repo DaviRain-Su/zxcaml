@@ -17,6 +17,7 @@ pub const InferError = std.mem.Allocator.Error;
 pub const FailureKind = enum {
     EntrypointNotFound,
     EntrypointNotFunction,
+    EntrypointNotIntReturn,
 };
 
 /// The Core IR site that made region inference fail for an executable check.
@@ -117,8 +118,9 @@ pub fn inferModuleChecked(arena: *std.heap.ArenaAllocator, module: ir.Module) In
 /// Returns a stable user-facing description for a region failure kind.
 pub fn failureDescription(kind: FailureKind) []const u8 {
     return switch (kind) {
-        .EntrypointNotFound => "region inference requires an `entrypoint` function",
-        .EntrypointNotFunction => "`entrypoint` must be a function for region inference",
+        .EntrypointNotFound => "region inference requires an `entrypoint` function; declare `let entrypoint ... = ...` as the program entry",
+        .EntrypointNotFunction => "`entrypoint` must be a function for region inference; declare it with parameters, e.g. `let entrypoint accounts instruction_data = ...`",
+        .EntrypointNotIntReturn => "`entrypoint` must return `int`; the entry ABI maps the return value to the program's exit status",
     };
 }
 
@@ -130,7 +132,7 @@ fn entrypointFailure(module: ir.Module) ?Site {
             .Let => |let_decl| {
                 if (std.mem.eql(u8, let_decl.name, "entrypoint")) {
                     return switch (let_decl.value.*) {
-                        .Lambda => null,
+                        .Lambda => |lambda| entrypointReturnFailure(lambda, fallback_loc),
                         else => Site{ .kind = .EntrypointNotFunction, .loc = ir.exprLoc(let_decl.value.*) orelse fallback_loc },
                     };
                 }
@@ -139,6 +141,26 @@ fn entrypointFailure(module: ir.Module) ?Site {
         }
     }
     return Site{ .kind = .EntrypointNotFound, .loc = fallback_loc };
+}
+
+/// Rejects entrypoints whose final return type is statically known to be
+/// `bool` or `string`, before codegen can leak a generated-Zig error —
+/// the classic accident is a trailing comparison expression. `unit`
+/// returns stay allowed (mutation-only entrypoints on the experimental
+/// targets), and unknown/unresolved types pass through (the heuristics
+/// may not have a concrete type for every program).
+fn entrypointReturnFailure(lambda: ir.Lambda, fallback_loc: ?ir.Loc) ?Site {
+    var ty = lambda.ty;
+    while (true) {
+        switch (ty) {
+            .Arrow => |arrow| ty = arrow.ret.*,
+            .Bool, .String => return Site{
+                .kind = .EntrypointNotIntReturn,
+                .loc = lambda.loc orelse fallback_loc,
+            },
+            else => return null,
+        }
+    }
 }
 
 fn declLoc(decl: ir.Decl) ?ir.Loc {

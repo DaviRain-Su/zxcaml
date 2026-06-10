@@ -24,6 +24,16 @@ SPL-Token transfer，请 `omlz` 证明某个源文件不分配，并通过 `omlz
 
 ## 1. Account 处理
 
+### Entrypoint 期望
+
+每个程序都声明一个名字必须是 `entrypoint` 的函数。接受的形态是若干位置式
+`account` 参数后跟 instruction-data 的 `bytes` 参数——例如
+`let entrypoint (authority : account) (guarded : account)
+(instruction_data : bytes) = ...`——返回值必须是 `int` 状态码（`0` 表示成
+功；入口 ABI 把它映射为程序的退出状态）。常见错误在 codegen 之前就会以
+`DX2-REGION` 诊断拦截：缺失/改名的 `entrypoint`、非函数绑定、或在该写状态
+int 的位置留下一个 `bool` 表达式（`tests/ui/entrypoint_*.ml` 钉住全部三类）。
+
 P3 runtime 在用户代码运行前，把 Solana BPF loader 输入解析为 account 视图。
 解析器理解真实 BPF invocation 使用的 loader 序列化形态：
 

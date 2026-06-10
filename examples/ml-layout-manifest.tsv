@@ -241,6 +241,9 @@ compiler_corpus	tests/ui/assert_false.ml	ui
 compiler_corpus	tests/ui/ctor_payload_no_alloc.ml	ui
 compiler_corpus	tests/ui/dce_division_by_zero.ml	ui
 compiler_corpus	tests/ui/dx1_oneline_legacy.ml	ui
+compiler_corpus	tests/ui/entrypoint_bool_return.ml	ui
+compiler_corpus	tests/ui/entrypoint_missing.ml	ui
+compiler_corpus	tests/ui/entrypoint_not_function.ml	ui
 compiler_corpus	tests/ui/exception.ml	ui
 compiler_corpus	tests/ui/for_loop.ml	ui
 compiler_corpus	tests/ui/guard_fallthrough.ml	ui

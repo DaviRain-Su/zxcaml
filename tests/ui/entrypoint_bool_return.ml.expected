@@ -1,0 +1,6 @@
+error[DX2-REGION]: region inference failure: `entrypoint` must return `int`; the entry ABI maps the return value to the program's exit status
+ --> tests/ui/entrypoint_bool_return.ml:1:15
+  |
+1 | let entrypoint (a : account) (data : bytes) =
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: Region inference is described in docs/04-memory-model.md; the same check runs inside `omlz build` before codegen.
