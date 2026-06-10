@@ -78,16 +78,18 @@ fmt corpus 扩张暴露出的 lex-wart 债务。
 - `./scripts/check_docs_sync.sh` 是强制验证器；English/中文路由、Surfpool 术语和路径事实漂移都视为 blocker。
 - 这类工作属于流程卫生，不重新打开已封存的 P1-P9 编译器范围。
 
-### 下一优先级：Solana DX/API polish 规划
+### Solana DX/API polish：已实现
 
-- 在重新打开更大范围的 runtime/compiler 工作之前，下一步明确优先级是
-  [`20-solana-dx-api-polish-plan.md`](./20-solana-dx-api-polish-plan.md) 这份
-  **planning-only 的 Solana DX/API polish scaffold**。
-- 这份计划聚焦 entrypoint ergonomics、account/meta helper naming、
-  syscall/CPI/PDA 示例、SDK-backed import discoverability、Surfpool UX，
-  以及 diagnostics/docs 示例。
-- 它也明确排除了新的 compiler phase、多链排期和 runtime rewrite，避免范围
-  蔓延成不受控的大功能。
+- [`20-solana-dx-api-polish-plan.md`](./20-solana-dx-api-polish-plan.md) 的
+  六个聚焦方向已全部作为独立切片落地：诊断/误用示例（`DX2-NOALLOC` /
+  `DX2-REGION` 的 explain 注册表与实时 help 行）、`AccountMeta` 构造器、
+  `Pda` 命名空间与全路径的 `create_program_address` /
+  `try_find_program_address`、entrypoint 形态误用诊断、doctor 的
+  `surfpool` 探针，以及运行时导入根指南。
+- 支撑这些切片的 wire 升版（`1.6` 表达式级位置、`1.7` 参数标注标记）见
+  [`wire-compat.md`](./wire-compat.md)。
+- 下一个产品方向刻意保持未排期；候选项先经内部漏斗汇总，再开下一份
+  计划文档。
 
 ### BPF 工具链迁移（可选）
 
