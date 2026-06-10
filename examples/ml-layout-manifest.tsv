@@ -57,6 +57,9 @@ user_example	examples/mtf1_account_lamports_mutation.ml	user-examples
 user_example	examples/mtf1_pure_numeric.ml	user-examples
 user_example	examples/mtf2_near_no_storage.ml	user-examples
 user_example	examples/multi_ix.ml	user-examples
+user_example	examples/multifile_counter_bump.ml	user-examples
+user_example	examples/multifile_counter_init.ml	user-examples
+user_example_module	examples/multifile_counter_types.ml	user-examples
 user_example	examples/mutable_state_stress.ml	user-examples
 user_example	examples/mutual_rec.ml	user-examples
 user_example	examples/nested_let.ml	user-examples
@@ -259,6 +262,14 @@ compiler_corpus	tests/ui/list_sum.ml	ui
 compiler_corpus	tests/ui/match_apply_scrutinee.ml	ui
 compiler_corpus	tests/ui/match_if_scrutinee.ml	ui
 compiler_corpus	tests/ui/match_list.ml	ui
+compiler_corpus	tests/ui/multifile_cycle_a.ml	ui
+compiler_corpus	tests/ui/multifile_cycle_b.ml	ui
+compiler_corpus	tests/ui/multifile_dup.ml	ui
+compiler_corpus	tests/ui/multifile_dup_util.ml	ui
+compiler_corpus	tests/ui/multifile_ok.ml	ui
+compiler_corpus	tests/ui/multifile_ok_util.ml	ui
+compiler_corpus	tests/ui/multifile_open_missing.ml	ui
+compiler_corpus	tests/ui/multifile_open_reserved.ml	ui
 compiler_corpus	tests/ui/mutual_recursion.ml	ui
 compiler_corpus	tests/ui/recursion.ml	ui
 compiler_corpus	tests/ui/ref_basic.ml	ui

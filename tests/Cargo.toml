@@ -195,3 +195,7 @@ path = "spl_close_account_test.rs"
 [[test]]
 name = "spl_revoke_test"
 path = "spl_revoke_test.rs"
+
+[[test]]
+name = "multifile_counter_test"
+path = "multifile_counter_test.rs"

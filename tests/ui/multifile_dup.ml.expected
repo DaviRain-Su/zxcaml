@@ -1,0 +1,6 @@
+error[E0102]: duplicate top-level name `shared_name`: already defined in tests/ui/multifile_dup_util.ml
+ --> tests/ui/multifile_dup.ml:3:16
+  |
+3 | let shared_name x = x + 2
+  |                ^^^^^^^^^
+  = help: ADR-016 joins the file closure into one flat namespace; rename one of the bindings.

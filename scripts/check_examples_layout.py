@@ -16,6 +16,7 @@ SCOPE_GLOBS = ("examples/**/*.ml", "tests/**/*.ml", "runtime/lsp/**/*.ml")
 
 ALLOWED_CATEGORIES = {
     "user_example",
+    "user_example_module",
     "acceptance_fixture",
     "compiler_corpus",
     "solana_harness_source",
@@ -105,6 +106,21 @@ def validate_entry_shape(entry: Entry) -> None:
             fail(f"user_example entries must live directly under examples/: {entry.path}")
         if entry.surface != "user-examples":
             fail(f"user_example surface must be user-examples: {entry.path}")
+        return
+
+    if entry.category == "user_example_module":
+        # Entrypoint-less shared module opened by sibling user examples
+        # (ADR-016 multi-file modules). Skipping it in the per-file
+        # `omlz check` corpus loop is sound: every entry example that
+        # `open`s the module compiles it through closure resolution, so
+        # `omlz check` on those entries already type-checks this file.
+        # Standalone `omlz check` would fail DX2-REGION (no entrypoint).
+        if parent != "examples":
+            fail(
+                f"user_example_module entries must live directly under examples/: {entry.path}"
+            )
+        if entry.surface != "user-examples":
+            fail(f"user_example_module surface must be user-examples: {entry.path}")
         return
 
     if entry.category == "excluded_historical":
@@ -199,6 +215,9 @@ def render_validation_summary(entries: list[Entry]) -> str:
         f"{counter['compiler_corpus']} files under `runtime/lsp/fixtures/`, `tests/codegen/`, "
         "`tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.",
         f"- `solana_harness_source`: {counter['solana_harness_source']} files under `tests/solana/`.",
+        "- `user_example_module`: "
+        f"{counter['user_example_module']} entrypoint-less shared module files under `examples/` "
+        "compiled through the `open` closure of their entry examples (ADR-016).",
         "- `excluded_historical`: "
         f"{counter['excluded_historical']} file kept out of the default user corpus "
         f"(`examples/m0_unsupported.ml`).",
@@ -300,6 +319,7 @@ def main() -> int:
         "Examples layout check passed: "
         f"{len(entries)} files classified "
         f"({counter['user_example']} user examples, "
+        f"{counter['user_example_module']} shared example modules, "
         f"{counter['acceptance_fixture']} acceptance fixtures, "
         f"{counter['compiler_corpus']} compiler corpus, "
         f"{counter['solana_harness_source']} Solana harness sources, "

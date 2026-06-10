@@ -1,0 +1,6 @@
+error[E0100]: cannot resolve `open Nowhere_at_all`: tests/ui/nowhere_at_all.ml does not exist
+ --> tests/ui/multifile_open_missing.ml:1:0
+  |
+1 | open Nowhere_at_all
+  | ^^^^^^^^^^^^^^^^^^^
+  = help: ADR-016 resolves `open Foo` to `foo.ml` in the entry file's directory.

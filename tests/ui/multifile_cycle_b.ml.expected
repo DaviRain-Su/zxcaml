@@ -1,0 +1,6 @@
+error[E0101]: `open Multifile_cycle_b` creates a dependency cycle: multifile_cycle_b.ml -> multifile_cycle_a.ml -> multifile_cycle_b.ml
+ --> tests/ui/multifile_cycle_a.ml:1:0
+  |
+1 | open Multifile_cycle_b
+  | ^^^^^^^^^^^^^^^^^^^^^^
+  = help: Break the cycle by moving the shared definitions into a third file both sides open.

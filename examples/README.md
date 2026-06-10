@@ -6,6 +6,7 @@ is [`examples/ml-layout-manifest.tsv`](./ml-layout-manifest.tsv), which
 classifies every `.ml` file in the example/test workflow as one of:
 
 - `user_example`
+- `user_example_module`
 - `acceptance_fixture`
 - `compiler_corpus`
 - `solana_harness_source`
@@ -74,6 +75,8 @@ inputs to `./scripts/check_examples_corpus.sh`.
 - [`examples/mtf1_pure_numeric.ml`](./mtf1_pure_numeric.ml)
 - [`examples/mtf2_near_no_storage.ml`](./mtf2_near_no_storage.ml)
 - [`examples/multi_ix.ml`](./multi_ix.ml)
+- [`examples/multifile_counter_bump.ml`](./multifile_counter_bump.ml)
+- [`examples/multifile_counter_init.ml`](./multifile_counter_init.ml)
 - [`examples/mutable_state_stress.ml`](./mutable_state_stress.ml)
 - [`examples/mutual_rec.ml`](./mutual_rec.ml)
 - [`examples/nested_let.ml`](./nested_let.ml)
@@ -122,6 +125,12 @@ inputs to `./scripts/check_examples_corpus.sh`.
 - [`examples/while_loop_demo.ml`](./while_loop_demo.ml)
 <!-- user-examples:end -->
 
+### Multi-file module trio (ADR-016)
+
+- [`examples/multifile_counter_types.ml`](./multifile_counter_types.ml) — entrypoint-less shared surface (`op` ADT, instruction decoding, clamp guard) opened by both entry programs; checked through their `open` closure rather than standalone.
+- [`examples/multifile_counter_init.ml`](./multifile_counter_init.ml) — init instruction program; `open Multifile_counter_types` and returns the wire code of a decoded Init (0).
+- [`examples/multifile_counter_bump.ml`](./multifile_counter_bump.ml) — bump instruction program over the same shared types; decodes Bump 5, applies the clamp guard, returns 5.
+
 ## `omlz test` acceptance fixtures
 
 `examples/tests/*.ml` remains the default `omlz test` discovery surface.
@@ -147,8 +156,9 @@ The manifest also tracks recursive validation-only `.ml` inputs so test-only
 fixtures stay separate from the user example catalog.
 
 <!-- validation-summary:start -->
-- `compiler_corpus`: 152 files under `runtime/lsp/fixtures/`, `tests/codegen/`, `tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.
+- `compiler_corpus`: 160 files under `runtime/lsp/fixtures/`, `tests/codegen/`, `tests/fixtures/`, `tests/golden/`, `tests/idl/`, `tests/lsp/`, and `tests/ui/`.
 - `solana_harness_source`: 5 files under `tests/solana/`.
+- `user_example_module`: 1 entrypoint-less shared module files under `examples/` compiled through the `open` closure of their entry examples (ADR-016).
 - `excluded_historical`: 1 file kept out of the default user corpus (`examples/m0_unsupported.ml`).
 <!-- validation-summary:end -->
 

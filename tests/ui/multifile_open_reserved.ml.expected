@@ -1,0 +1,6 @@
+error[E0103]: cannot `open Fixed`: it names a bundled stdlib module
+ --> tests/ui/multifile_open_reserved.ml:1:0
+  |
+1 | open Fixed
+  | ^^^^^^^^^^
+  = help: The bundled stdlib is auto-opened; use qualified access (e.g. `Fixed.mul`) instead of `open`.

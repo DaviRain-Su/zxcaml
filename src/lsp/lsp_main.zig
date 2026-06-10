@@ -1362,12 +1362,56 @@ fn publishDiagnosticsForText(
         .flags = .{ .truncate = true },
     });
 
+    // ADR-016: mirror the document's on-disk sibling `.ml` files into the
+    // scratch directory so multi-file `open Foo` closure resolution can
+    // find `foo.ml` next to the scratch copy. Failure degrades to
+    // single-file diagnostics rather than blocking the publish.
+    if (filePathFromUri(allocator, uri)) |doc_path| {
+        defer allocator.free(doc_path);
+        mirrorSiblingSources(io, allocator, doc_path, tmp_path) catch {};
+    } else |_| {}
+
     const argv = [_][]const u8{ state.omlzBin(), "check", "--error-format=json", tmp_path };
     const completed = try std.process.run(allocator, io, .{ .argv = &argv });
     defer allocator.free(completed.stdout);
     defer allocator.free(completed.stderr);
 
     try writePublishDiagnostics(allocator, writer, uri, completed.stderr);
+}
+
+fn mirrorSiblingSources(
+    io: Io,
+    allocator: std.mem.Allocator,
+    doc_path: []const u8,
+    tmp_path: []const u8,
+) !void {
+    const doc_dir_path = std.fs.path.dirname(doc_path) orelse return;
+    const tmp_dir_path = std.fs.path.dirname(tmp_path) orelse return;
+    const tmp_base = std.fs.path.basename(tmp_path);
+
+    var doc_dir = try std.Io.Dir.openDirAbsolute(io, doc_dir_path, .{
+        .access_sub_paths = true,
+        .iterate = true,
+    });
+    defer doc_dir.close(io);
+
+    var iter = doc_dir.iterate();
+    while (try iter.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".ml")) continue;
+        if (std.mem.eql(u8, entry.name, tmp_base)) continue;
+
+        const data = doc_dir.readFileAlloc(io, entry.name, allocator, .limited(1 << 20)) catch continue;
+        defer allocator.free(data);
+
+        const dest = try std.fs.path.join(allocator, &.{ tmp_dir_path, entry.name });
+        defer allocator.free(dest);
+        std.Io.Dir.cwd().writeFile(io, .{
+            .sub_path = dest,
+            .data = data,
+            .flags = .{ .truncate = true },
+        }) catch continue;
+    }
 }
 
 fn writeCodeLensResponse(
