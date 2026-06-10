@@ -1,0 +1,6 @@
+error[DX2-NOALLOC]: no_alloc failure in function `entrypoint`: constructor `Logged` carries an arena-allocated payload
+ --> tests/ui/ctor_payload_no_alloc.ml:5:10
+  |
+5 |   let e = Logged (Account.lamports a) in
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: The arena budget without --no-alloc is 32 KiB on native and 3 KiB on BPF; see docs/04-memory-model.md.

@@ -3,3 +3,4 @@ error[DX2-NOALLOC]: no_alloc failure in function `entrypoint`: ref cell allocati
   |
 2 |   let r = ref 10 in
   |          ^^^^^^
+  = help: The arena budget without --no-alloc is 32 KiB on native and 3 KiB on BPF; see docs/04-memory-model.md.

@@ -150,6 +150,20 @@ pub const entries = [_]Entry{
         .hint = "Try --report=cu, --report=stack, or --report=all. Multiple kinds may be combined as --report=cu,stack.",
     },
     .{
+        .code = "DX2-NOALLOC",
+        .title = "Arena allocation rejected under --no-alloc",
+        .description = "`omlz check --no-alloc` proves a program performs no arena allocation, and this expression allocates. Allocation-bearing forms include payload-carrying constructors (e.g. `Some x`, list cons, user ADT payloads), closures and partial applications, string concatenation, `Array.make` / array literals, and `ref` cells. The caret points at the allocating expression itself.",
+        .fix = "Restructure the flagged expression to avoid arena allocation: prefer plain integers/booleans, pattern-match instead of constructing payload values, hoist constant data, or drop --no-alloc if the program legitimately allocates within its entry arena budget.",
+        .hint = "The arena budget without --no-alloc is 32 KiB on native and 3 KiB on BPF; see docs/04-memory-model.md.",
+    },
+    .{
+        .code = "DX2-REGION",
+        .title = "Region inference failure",
+        .description = "Checked region inference could not assign a consistent memory region (static / stack / arena) to a value in this program. This is a compiler-side consistency failure of the escape analysis rather than an ordinary subset rejection.",
+        .fix = "Reduce the program to the smallest expression that still fails and report it; as a workaround, simplify the flagged value's flow (avoid re-binding it across closures or returning it through mixed branches).",
+        .hint = "Region inference is described in docs/04-memory-model.md; the same check runs inside `omlz build` before codegen.",
+    },
+    .{
         .code = "E0090",
         .title = "Catch-all for unsupported Texp_* expressions",
         .description = "The frontend rejected a typedtree expression node (a `Texp_*` form) that has no dedicated diagnostic yet. This is a catch-all bucket meaning the OCaml expression construct is outside the supported ZxCaml subset.",

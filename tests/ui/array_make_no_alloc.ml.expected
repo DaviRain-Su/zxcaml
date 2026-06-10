@@ -3,3 +3,4 @@ error[DX2-NOALLOC]: no_alloc failure in function `entrypoint`: int array allocat
   |
 2 |   let a = Array.make 3 1 in
   |          ^^^^^^^^^^^^^^
+  = help: The arena budget without --no-alloc is 32 KiB on native and 3 KiB on BPF; see docs/04-memory-model.md.

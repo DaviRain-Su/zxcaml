@@ -236,6 +236,7 @@ compiler_corpus	tests/ui/array_set.ml	ui
 compiler_corpus	tests/ui/array_set_oob.ml	ui
 compiler_corpus	tests/ui/assert_expr.ml	ui
 compiler_corpus	tests/ui/assert_false.ml	ui
+compiler_corpus	tests/ui/ctor_payload_no_alloc.ml	ui
 compiler_corpus	tests/ui/dce_division_by_zero.ml	ui
 compiler_corpus	tests/ui/dx1_oneline_legacy.ml	ui
 compiler_corpus	tests/ui/exception.ml	ui

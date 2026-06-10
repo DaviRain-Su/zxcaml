@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — DX: no_alloc/region diagnostics are explained and documented
+
+- `omlz check --explain DX2-NOALLOC` and `--explain DX2-REGION` now return
+  full explanations; previously both codes were emitted by the compiler but
+  unknown to the explain registry. Both codes join the table in
+  `docs/diagnostics.md`.
+- Live `DX2-NOALLOC` failures now carry a `= help:` line stating the entry
+  arena budgets (32 KiB native / 3 KiB BPF) and pointing at
+  `docs/04-memory-model.md`.
+- Added a Solana-flavored misuse fixture (`tests/ui/ctor_payload_no_alloc.ml`)
+  showing the expression-precise caret on a payload constructor built from
+  `Account.lamports` under `--no-alloc`.
+
 ### Added — wire 1.6: expression-level source locations
 
 - The frontend bridge wire advances from `1.5` to `1.6`: the OCaml

@@ -182,11 +182,13 @@ tools can key on codes instead of matching message text.
 | E0031 | _n/a_ | Unknown or duplicate label. | Emitted when a call to a whitelisted labelled stdlib function uses an unknown label or supplies the same label more than once. |
 | E0090–E0099 | _n/a_ | Generic subset fallback buckets. | Used only when a more specific tailored subset code does not apply. |
 | E0200 | _n/a_ | Unknown `--report` kind. | Emitted by `omlz check --report=<kind>` when `<kind>` is not one of `cu`, `stack`, or `all`. |
+| DX2-NOALLOC | _n/a_ | Arena allocation rejected under `--no-alloc`. | Emitted by `omlz check --no-alloc` at the allocating expression (payload constructors, closures, string concat, arrays, refs). Wire 1.6 makes the caret expression-precise. |
+| DX2-REGION | _n/a_ | Checked region inference failure. | Emitted when escape analysis cannot assign a consistent static/stack/arena region; also runs inside `omlz build` before codegen. |
 
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
 
-## Wire format history (current default 1.5)
+## Wire format history (current default 1.6)
 
 DX2 bumps the frontend bridge wire from `1.1` to `1.2` so frontend-emitted
 S-expressions can carry source locations into the Zig bridge, following the
@@ -195,7 +197,7 @@ mission-local canonical facts snapshot,
 `mission-internal/canonical-facts.md`, is the historical citation for the
 pre-DX2 canonical wire value (`1.1`); the post-bump implementation source of
 truth is now `src/frontend_bridge/sexp_parser.zig`
-(`expected_wire_version = "1.5"`; the reader still accepts compatible `1.2+` shapes).
+(`expected_wire_version = "1.6"`; the reader still accepts compatible `1.2+` shapes).
 
 ### Optional `(loc ...)` schema
 
