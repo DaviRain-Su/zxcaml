@@ -186,9 +186,10 @@ AccountMeta.of_account a        (* 转发 a 自身的 key 与 writable/signer �
 的 `sol_create_program_address` 系统调用；解释器与原生目标上该助手原样返回
 `program_id`——与 `stdlib/core.ml` 为纯 OCaml 运行定义的确定性链下 stub 一
 致，模式同 `Cpi.invoke` 链下 stub 为 `0`。裸名 `create_program_address` 仍然
-可用；`Pda.` 是可发现的命名空间。`try_find_program_address` 为 OCaml 层兼容
-而声明，但尚未接线进编译器（其 `(bytes * int) option` 返回类型受一个
-codegen 限制阻塞）。`examples/pda_derive.ml` 端到端演练该助手。
+可用；`Pda.` 是可发现的命名空间。`Pda.try_find_program_address seeds
+program_id` 返回 `Some (address, bump)`（`(bytes * int) option`）：BPF 上经
+`sol_try_find_program_address` 运行真实的 bump 搜索，确定性的链下 stub 则产
+出 `Some (program_id, 0)`。`examples/pda_derive.ml` 端到端演练这两个助手。
 
 `examples/simple_cpi.ml` 演示 system-program transfer 形态。本地 harness 路径：
 

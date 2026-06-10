@@ -206,6 +206,8 @@ pub const items = [_]Item{
 
     // Pda
     .{ .label = "Pda.create_program_address", .kind = .function, .detail = "bytes array -> bytes -> bytes" },
+    .{ .label = "Pda.try_find_program_address", .kind = .function, .detail = "bytes array -> bytes -> (bytes * int) option" },
+    .{ .label = "try_find_program_address", .kind = .function, .detail = "bytes array -> bytes -> (bytes * int) option" },
 };
 
 test "stdlib whitelist contains expected anchors" {

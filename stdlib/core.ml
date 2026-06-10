@@ -806,6 +806,8 @@ let try_find_program_address (_seeds : signer_seeds) (program_id : bytes) =
 
 module Pda = struct
   let create_program_address = create_program_address
+
+  let try_find_program_address = try_find_program_address
 end
 
 module Cpi = struct

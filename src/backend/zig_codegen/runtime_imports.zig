@@ -459,6 +459,10 @@ pub fn emitSyscallAppExpr(
         try emitCreateProgramAddress(out, allocator, app, indent_level, ctx);
         return true;
     }
+    if (std.mem.eql(u8, name, "try_find_program_address") or std.mem.eql(u8, name, "Pda.try_find_program_address")) {
+        try emitTryFindProgramAddress(out, allocator, app, indent_level, ctx);
+        return true;
+    }
     return false;
 }
 
@@ -1344,6 +1348,69 @@ pub fn emitCreateProgramAddress(
     try appendPrint(out, allocator, "if (omlz_status_{d} != 0) break :blk{d} @as([]const u8, &.{{}});\n", .{ block_id, block_id });
     try emitIndent(out, allocator, indent_level + 1);
     try appendPrint(out, allocator, "break :blk{d} omlz_out_{d}[0][0..];\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level);
+    try append(out, allocator, "}");
+}
+
+/// CR-15: `try_find_program_address` returns `(bytes * int) option`. The
+/// seeds marshalling mirrors `emitCreateProgramAddress`; the result is wrapped
+/// in `prelude.Option(...)` over the CR-14 interned tuple type rendered via
+/// `zigTypeName` (never an inline `struct { ... }` literal): on success the
+/// block breaks with `Some (address, bump)`, on any failure with `None`.
+pub fn emitTryFindProgramAddress(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    app: lir.LApp,
+    indent_level: usize,
+    ctx: *EmitContext,
+) EmitError!void {
+    if (app.args.len != 2) return error.UnsupportedExpr;
+    const option_ty_name = try zigTypeName(allocator, app.ty);
+    defer allocator.free(option_ty_name);
+    const tuple_ty: lir.LTy = switch (app.ty) {
+        .Adt => |adt| blk: {
+            if (!std.mem.eql(u8, adt.name, "option") or adt.params.len != 1) return error.UnsupportedExpr;
+            break :blk adt.params[0];
+        },
+        else => return error.UnsupportedExpr,
+    };
+    const tuple_ty_name = try zigTypeName(allocator, tuple_ty);
+    defer allocator.free(tuple_ty_name);
+    const block_id = ctx.next_block_id;
+    ctx.next_block_id += 1;
+    try appendPrint(out, allocator, "blk{d}: {{\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_seed_group_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[0].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_program_id_slice_{d} = ", .{block_id});
+    try emitExpr(out, allocator, app.args[1].*, indent_level + 1, ctx);
+    try append(out, allocator, ";\n");
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_program_id_{d}: cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_program_id_slice_{d}.len != 32) break :blk{d} {s}.none;\n", .{ block_id, block_id, option_ty_name });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "@memcpy(omlz_program_id_{d}[0..], omlz_program_id_slice_{d}[0..32]);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_c_seeds_{d}: []cpi.SolSignerSeed = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.SolSignerSeed, omlz_seed_group_{d}.len, &omlz_c_seeds_{d});\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "for (omlz_seed_group_{d}, 0..) |omlz_seed, omlz_seed_index| omlz_c_seeds_{d}[omlz_seed_index] = cpi.SolSignerSeed.fromSlice(omlz_seed);\n", .{ block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_out_{d}: []cpi.Pubkey = undefined;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "arena.allocIntoOrTrap(cpi.Pubkey, 1, &omlz_out_{d});\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "var omlz_bump_{d}: u8 = 0;\n", .{block_id});
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "const omlz_status_{d} = cpi.sol_try_find_program_address(omlz_c_seeds_{d}, &omlz_program_id_{d}, &omlz_out_{d}[0], &omlz_bump_{d});\n", .{ block_id, block_id, block_id, block_id, block_id });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "if (omlz_status_{d} != 0) break :blk{d} {s}.none;\n", .{ block_id, block_id, option_ty_name });
+    try emitIndent(out, allocator, indent_level + 1);
+    try appendPrint(out, allocator, "break :blk{d} {s}{{ .some = {s}{{ .@\"0\" = omlz_out_{d}[0][0..], .@\"1\" = @as(i64, omlz_bump_{d}) }} }};\n", .{ block_id, option_ty_name, tuple_ty_name, block_id, block_id });
     try emitIndent(out, allocator, indent_level);
     try append(out, allocator, "}");
 }

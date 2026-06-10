@@ -579,6 +579,13 @@ pub fn makeStdlibCallSignature(arena: *std.heap.ArenaAllocator, name: []const u8
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ instruction_ty, signer_seeds_ty }), .return_ty = .Int };
     if ((std.mem.eql(u8, name, "create_program_address") or std.mem.eql(u8, name, "Pda.create_program_address")) and arg_count == 2)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{ signer_seed_ty, bytes_ty }), .return_ty = bytes_ty };
+    if ((std.mem.eql(u8, name, "try_find_program_address") or std.mem.eql(u8, name, "Pda.try_find_program_address")) and arg_count == 2) {
+        const addr_bump_items = try arena.allocator().alloc(ir.Ty, 2);
+        addr_bump_items[0] = bytes_ty;
+        addr_bump_items[1] = .Int;
+        const addr_bump_option_ty = try optionTy(arena, .{ .Tuple = addr_bump_items });
+        return .{ .name = name, .arg_tys = try tySlice(arena, &.{ signer_seed_ty, bytes_ty }), .return_ty = addr_bump_option_ty };
+    }
     if (std.mem.eql(u8, name, "SplToken.program_id") and arg_count == 1)
         return .{ .name = name, .arg_tys = try tySlice(arena, &.{.Unit}), .return_ty = bytes_ty };
     if (std.mem.eql(u8, name, "SplToken.transfer_data") and arg_count == 1)

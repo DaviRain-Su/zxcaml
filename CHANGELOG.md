@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — `Pda.try_find_program_address` wired on every path
+
+- `try_find_program_address` (and the `Pda.` alias) now compiles end to
+  end: BPF runs the real `sol_try_find_program_address` bump search,
+  while the interpreter and native targets return the documented
+  deterministic off-chain stub `Some (program_id, 0)` — unblocked by the
+  option-of-tuple codegen fix below. LSP completion knows both names;
+  `examples/pda_derive.ml` exercises create + try-find together, and the
+  Solana guide drops its "not yet wired" caveat bilingually.
+- Practical note baked into the example: two inlined sha256-based PDA
+  derivations in one function can overflow the SBF 4 KiB stack frame;
+  splitting the calls into separate functions avoids it.
+
 ### Fixed — option-of-tuple values compile on native and BPF
 
 - Tuple types are now interned as named top-level structs in generated

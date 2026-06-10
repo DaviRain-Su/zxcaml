@@ -459,6 +459,20 @@ fn evalStdlibApp(
         _ = try evalExpr(allocator, args[0].*, env);
         return try evalExpr(allocator, args[1].*, env);
     }
+    if (std.mem.eql(u8, name, "try_find_program_address") or std.mem.eql(u8, name, "Pda.try_find_program_address")) {
+        // Deterministic off-chain stub mirroring `stdlib/core.ml`: evaluate
+        // both arguments, ignore the seeds, and return
+        // `Some (program_id, 0)`. The real bump search only runs on BPF.
+        if (args.len != 2) return error.ArityMismatch;
+        _ = try evalExpr(allocator, args[0].*, env);
+        const program_id = try evalExpr(allocator, args[1].*, env);
+        const tuple_items = try allocator.alloc(Value, 2);
+        tuple_items[0] = program_id;
+        tuple_items[1] = .{ .Int = 0 };
+        const some_args = try allocator.alloc(Value, 1);
+        some_args[0] = .{ .Tuple = tuple_items };
+        return .{ .Ctor = .{ .name = "Some", .args = some_args } };
+    }
 
     if (std.mem.eql(u8, name, "Option.is_none")) {
         if (args.len != 1) return error.ArityMismatch;

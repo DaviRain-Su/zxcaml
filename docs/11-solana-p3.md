@@ -200,10 +200,11 @@ native targets the helper returns `program_id` unchanged — the same
 deterministic off-chain stub `stdlib/core.ml` defines for plain OCaml runs,
 mirroring how `Cpi.invoke` stubs to `0` off-chain. The bare
 `create_program_address` name remains available; `Pda.` is the discoverable
-namespace. `try_find_program_address` is declared for OCaml-level
-compatibility but is not yet wired through the compiler (its
-`(bytes * int) option` return is blocked on a codegen limitation).
-`examples/pda_derive.ml` exercises the helper end-to-end.
+namespace. `Pda.try_find_program_address seeds program_id` returns
+`Some (address, bump)` (`(bytes * int) option`): on BPF the real bump search
+runs via `sol_try_find_program_address`, while the deterministic off-chain
+stub yields `Some (program_id, 0)`.
+`examples/pda_derive.ml` exercises both helpers end-to-end.
 
 `examples/simple_cpi.ml` demonstrates the system-program transfer shape. The
 local harness path is:

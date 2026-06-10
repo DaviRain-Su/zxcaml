@@ -501,8 +501,8 @@ pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_i
     return sol_create_program_address_derive(seeds, program_id, out);
 }
 
-/// Finds a valid program address and bump seed for a seed prefix.
-pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
+/// Real bump search shared by BPF builds and host unit tests.
+pub inline fn sol_try_find_program_address_derive(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
     if (seeds.len >= max_seeds or !validateSeeds(seeds)) return invalid_seeds;
     var seed_slices_buf: [max_seeds][]const u8 = undefined;
     for (seeds, 0..) |seed, index| {
@@ -514,6 +514,22 @@ pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program
     out.* = derived.address;
     bump_seed.* = derived.bump_seed;
     return success;
+}
+
+/// Finds a valid program address and bump seed for a seed prefix.
+///
+/// Off-chain (native/hosted) builds mirror the deterministic stdlib stub in
+/// `stdlib/core.ml`: the seeds are ignored, the program id is returned as the
+/// address, and the bump is `0`, so interpreter and native outputs stay
+/// byte-identical. The real bump search only runs on BPF (and remains
+/// available off-chain via `sol_try_find_program_address_derive`).
+pub inline fn sol_try_find_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey, bump_seed: *u8) u64 {
+    if (!comptime is_bpf) {
+        out.* = program_id.*;
+        bump_seed.* = 0;
+        return success;
+    }
+    return sol_try_find_program_address_derive(seeds, program_id, out, bump_seed);
 }
 
 /// Stores return data for the current instruction.
@@ -796,7 +812,7 @@ fn compareFindWithVendoredSdk(seed_slices: []const []const u8, program_id: *cons
     var observed_bump: u8 = 0;
     try std.testing.expectEqual(
         success,
-        sol_try_find_program_address(c_seeds[0..seed_slices.len], program_id, &observed, &observed_bump),
+        sol_try_find_program_address_derive(c_seeds[0..seed_slices.len], program_id, &observed, &observed_bump),
     );
 
     const expected = try vendored_sdk.pda.findProgramAddress(seed_slices, program_id);
@@ -853,7 +869,7 @@ test "hosted PDA derivation is deterministic and finds a bump" {
 
     var bump: u8 = 0;
     var found: Pubkey = undefined;
-    try std.testing.expectEqual(success, sol_try_find_program_address(seeds[0..], &program_id, &found, &bump));
+    try std.testing.expectEqual(success, sol_try_find_program_address_derive(seeds[0..], &program_id, &found, &bump));
     try std.testing.expect(bump <= 255);
 
     const bump_seed: [1]u8 = .{bump};
@@ -910,7 +926,7 @@ test "PDA find helper rejects seed lists that cannot fit a canonical bump withou
     var bump: u8 = 0;
     try std.testing.expectEqual(
         invalid_seeds,
-        sol_try_find_program_address(c_seeds[0..], &program_id, &observed, &bump),
+        sol_try_find_program_address_derive(c_seeds[0..], &program_id, &observed, &bump),
     );
 }
 
