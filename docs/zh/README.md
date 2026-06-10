@@ -44,7 +44,7 @@ Solana BPF .so
 - P9 Developer Experience 文档入口:[`./diagnostics.md`](./diagnostics.md)
   说明 rustc-style 诊断,[`./lsp.md`](./lsp.md) 说明 `omlz-lsp`,
   [`./source-map.md`](./source-map.md) 说明 source maps,
-  [`./wire-compat.md`](./wire-compat.md) 说明当前 wire `1.5` 兼容窗口。
+  [`./wire-compat.md`](./wire-compat.md) 说明当前 wire `1.6` 兼容窗口。
 
 ---
 
@@ -129,7 +129,7 @@ deploy/invoke 流程、公平性取向的 Anchor 对照、双语 Slidev deck，�
 [`docs/hackathon/README.md` 索引](../hackathon/README.md)。
 
 `omlz` 已端到端工作:通过上游 `compiler-libs` 解析/type-check OCaml → 发出
-sexp `1.5` → 带 constant folding、DCE、inlining、escape analysis 地 lower 到
+sexp `1.6` → 带 constant folding、DCE、inlining、escape analysis 地 lower 到
 Core IR → 解释执行、构建 native Zig、构建 Solana BPF `.so` 产物,或发出
 Anchor-compatible IDL。
 当前 Solana runtime 通过 vendored `solana-program-sdk-zig` 子树上的
@@ -138,7 +138,7 @@ SDK-backed adapter 和 SDK-style entrypoint 接到本地 harness 与生成产物
 ### 当前功能
 
 - **CLI 命令:** `omlz check <file>`、`omlz check --no-alloc <file>`、`omlz run <file>`、`omlz build --target=native <file> -o <out>`、`omlz build --target=bpf <file> -o <out>`、`omlz idl <file>`、`omlz unmap --map <file.map> --pc <addr>`、`omlz unmap --so <file.so> --pc <addr>`
-- **Wire 格式:** 版本 1.5(P1 为 `0.4`;P2 在 `0.5` 加用户 ADT、在 `0.6` 加嵌套/guarded pattern、在 `0.7` 加 tuple/record;P3 在 `0.8` 加 account/syscall 引用、在 `0.9` 加 CPI 类型/引用;P4/P5 让 instruction data 和 external declarations 走过 `1.0`;P8 为 mutual-recursion groups 升到 `1.1`;P9/DX2 为 source-location plumbing 升到 `1.2`;R8/R9 继续加入 typed-parameter/array surface;R10 为 `ref-make` / `ref-get` / `ref-set` 升到 `1.5`,旧 wire 仅作为兼容窗口)
+- **Wire 格式:** 版本 1.6(P1 为 `0.4`;P2 在 `0.5` 加用户 ADT、在 `0.6` 加嵌套/guarded pattern、在 `0.7` 加 tuple/record;P3 在 `0.8` 加 account/syscall 引用、在 `0.9` 加 CPI 类型/引用;P4/P5 让 instruction data 和 external declarations 走过 `1.0`;P8 为 mutual-recursion groups 升到 `1.1`;P9/DX2 为 source-location plumbing 升到 `1.2`;R8/R9 继续加入 typed-parameter/array surface;R10 为 `ref-make` / `ref-get` / `ref-set` 升到 `1.5`;为表达式级 `located` span 升到 `1.6`,旧 wire 仅作为兼容窗口)
 - **OCaml 子集:** let 绑定、嵌套 let、let rec、curried 函数、函数应用、算术/比较运算、if/then/else、用户自定义 ADT、嵌套构造器模式、带 guard 的 match arm、字面量常量模式、or-pattern、alias pattern、tuple、record、字段访问、函数式 record update、列表(`[]` / `::`)、sequence 表达式(`;`)、function cases(`function |`)、`while` / 计数 `for` loop、string 操作(`^`、length、get、sub)、char 操作(code、chr)、可变 `int` array（`Array.make`、`Array.get`、`Array.set`、`Array.length`、`a.(i)`、`a.(i) <- v`）、`int` / `bool` ref（`ref`、`!`、`:=`），以及覆盖这些形式的模式匹配
 - **Stdlib:** bundled `List`(`length`、`map`、`filter`、`fold_left`、`rev`、`append`、`hd`、`tl`、`nth`、`exists`、`for_all`、`find`、`sort`、`combine`、`split`)、`Option`(`is_none`、`is_some`、`value`、`get`、`fold`)、`Result`(`is_ok`、`is_error`、`ok`、`error`、`map`、`bind`)、`Fun`(`id`、`const`、`flip`)、`Map`(`empty`、`singleton`、`add`、`find`、`remove`、`mem`、`size`、`to_list`)、`Set`(`empty`、`singleton`、`add`、`mem`、`remove`、`size`、`to_list`、`union`、`inter`)、`String`(`length`、`get`、`sub`)、`Char`(`code`、`chr`)、`Account` guard/read helper、`Fixed` / `Amount` deterministic 六位小数和 bps helper、`Crypto`(`sha256`、`keccak256`)和 `Pubkey`(`zero`、`token_program`、`of_hex`)模块
 - **内存模型:** arena-only,并通过 region inference 自动把不逃逸的局部值放到栈上;native entry arena 为 32 KiB，BPF entry arena 为 3 KiB，以保持 loader entrypoint 低于 SBF 4 KiB 栈帧上限
@@ -192,7 +192,7 @@ SDK-backed adapter 和 SDK-style entrypoint 接到本地 harness 与生成产物
 | P9+ | [Diagnostics](./diagnostics.md) | `--error-format`、caret rendering、color、JSON schema 和 wire location 说明 |
 | P9 | [LSP](./lsp.md) | `omlz-lsp` stdio JSON-RPC、支持的 LSP 方法和编辑器设置 |
 | P9 | [Source maps](./source-map.md) | `.map` sidecar schema、`.zxcaml.srcmap` 和 `omlz unmap` |
-| P9+ | [Wire compatibility](./wire-compat.md) | 当前 wire `1.5`、历史 additive bump 和 deprecated 兼容窗口 |
+| P9+ | [Wire compatibility](./wire-compat.md) | 当前 wire `1.6`、历史 additive bump 和 deprecated 兼容窗口 |
 | 18 | [Fixed-point math](./18-fixed-point.md) | `Fixed` / `Amount` 六位小数 arithmetic 和 bps helper |
 | 19 | [函数式多链路线图](./19-functional-multichain-roadmap.md) | 探索性规划稿；不改变当前 Solana 优先级，也不重新打开已封版的编译器范围 |
 | 20 | [Solana DX/API polish 规划](./20-solana-dx-api-polish-plan.md) | 仅限规划的下一优先级脚手架，包含规范链接、验收门槛与防范围蔓延约束 |

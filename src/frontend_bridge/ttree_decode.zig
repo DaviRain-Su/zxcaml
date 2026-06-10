@@ -105,6 +105,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
 
     const file_version = try expectAtom(header[1]);
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "1.5") and
         !std.mem.eql(u8, file_version, "1.4") and
         !std.mem.eql(u8, file_version, "1.3") and
         !std.mem.eql(u8, file_version, "1.2") and
@@ -129,7 +130,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=1.5\n");
+            try writeStderr(io, " expected=1.6\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
@@ -144,7 +145,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits ref-capable sexp 1.5.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits location-rich sexp 1.6.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }

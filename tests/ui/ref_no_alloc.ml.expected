@@ -1,5 +1,5 @@
 error[DX2-NOALLOC]: no_alloc failure in function `entrypoint`: ref cell allocation is not allowed in a no_alloc context
- --> tests/ui/ref_no_alloc.ml:1:15
+ --> tests/ui/ref_no_alloc.ml:2:10
   |
-1 | let entrypoint _ =
-  |               ^^^^
+2 |   let r = ref 10 in
+  |          ^^^^^^

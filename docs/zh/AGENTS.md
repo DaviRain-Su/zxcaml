@@ -15,7 +15,7 @@ OCaml：解析与类型检查由上游 `compiler-libs` 完成，Typedtree 之后
 
 一行版管线：
 
-`.ml` → `ocamlc -bin-annot`（`.cmt`）→ `zxc-frontend`（sexp wire `1.5`）→
+`.ml` → `ocamlc -bin-annot`（`.cmt`）→ `zxc-frontend`（sexp wire `1.6`）→
 `omlz`（ANF Core IR → 常量折叠/DCE/内联 → region 推断 + arena 降级 →
 Zig codegen | 树遍历解释器）→ `solana-zig build-lib` → `.so`
 
@@ -74,7 +74,7 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
   OCaml 会拒绝的语法。（ADR-001）
 - **Arena-only 内存**：无 GC、无 free；原生入口 arena 32 KiB，BPF 上
   3 KiB。见 [docs/04-memory-model.md](./04-memory-model.md)。
-- **Wire 格式版本化**（当前 `1.5`）：前端↔Zig 的 sexp 格式变更必须遵循
+- **Wire 格式版本化**（当前 `1.6`）：前端↔Zig 的 sexp 格式变更必须遵循
   [docs/wire-compat.md](./wire-compat.md)（增量式升版、留有文档）。
 - **双语文档门禁**：`./scripts/check_docs_sync.sh` 强制中英文配对。任何
   **新增的 `docs/*.md` 必须在该脚本中归类**（mirrored/basic/routed/

@@ -33,6 +33,11 @@ type expr =
   | Const_int of int
   | Const_string of string
   | Var of string
+  (* Wire 1.6: carries the Typedtree source span of the wrapped expression.
+     Inserted centrally by `parse_expr`; synthetic (desugared) expressions
+     stay unwrapped. Structural inspections must look through it via
+     `strip_located`. *)
+  | Located of loc * expr
   | Lambda of lambda
   | App of app
   | Let of let_expr
@@ -637,6 +642,13 @@ let builtin_epoch_schedule_record_decl =
       record_is_account = false;
     }
 
+(* Wire 1.6: looks through `Located` wrappers for structural inspection.
+   Use this wherever code matches on the shape of an already-parsed
+   expression. *)
+let rec strip_located = function
+  | Located (_, inner) -> strip_located inner
+  | expr -> expr
+
 let loc_of_location (location : Location.t) =
   let start = location.loc_start in
   let finish = location.loc_end in
@@ -1075,6 +1087,7 @@ let parse_param (param : function_param) =
    synthetic-let lift. Anything else is lowered through `parse_expr` and
    then bound to a fresh `__zxc_*` name by the caller. *)
 let rec is_scrutinee_atom = function
+  | Located (_, inner) -> is_scrutinee_atom inner
   | Const_int _ | Const_string _ | Var _ -> true
   | Ctor { args; _ } -> List.for_all is_scrutinee_atom args
   | Tuple items -> List.for_all is_scrutinee_atom items
@@ -1260,9 +1273,10 @@ and parse_record_fields env fields =
       | None -> acc)
     fields []
 
-and split_rec_binding_body = function
+and split_rec_binding_body body =
+  match strip_located body with
   | Lambda lambda -> (lambda.params, lambda.param_types, lambda.body)
-  | body -> ([], [], body)
+  | _ -> ([], [], body)
 
 and parse_let_rec_binding env (binding : value_binding) =
   let rec_name = parse_binding_name binding.vb_pat in
@@ -1273,6 +1287,21 @@ and parse_let_rec_binding env (binding : value_binding) =
     rec_loc = loc_of_location binding.vb_expr.exp_loc }
 
 and parse_expr env (expr : expression) =
+  (* Wire 1.6: centrally wrap every parsed expression with its Typedtree
+     span so the bridge can recover expression-level locations. Ghost or
+     unknown locations stay unwrapped, as do pass-through cases that
+     already carry a (more precise) wrapper. *)
+  let inner = parse_expr_unwrapped env expr in
+  if expr.exp_loc.Location.loc_ghost then inner
+  else
+    let lowered = loc_of_location expr.exp_loc in
+    if String.equal lowered.file "_unknown_" then inner
+    else
+      match inner with
+      | Located _ -> inner
+      | _ -> Located (lowered, inner)
+
+and parse_expr_unwrapped env (expr : expression) =
   match expr.exp_desc with
   | Texp_constant (Const_int n) -> Const_int n
   | Texp_constant (Const_char value) -> Const_int (Char.code value)
@@ -1432,7 +1461,11 @@ and parse_expr env (expr : expression) =
       (* ADR-015 option B / R9.2: accept `Array.make N init` when the size is
          a positive int literal known at parse time. Non-literal sizes still
          raise E0019. *)
-      match parse_apply_args env args with
+      match
+        match parse_apply_args env args with
+        | [ size_expr; init_expr ] -> [ strip_located size_expr; init_expr ]
+        | other -> other
+      with
       | [ Const_int n; init_expr ] when n >= 0 ->
           Array_make { make_size = n; make_init = init_expr }
       | [ Const_int _; _ ] ->
@@ -2072,6 +2105,7 @@ let variant_uses_type type_name variant =
   List.exists (type_expr_uses_type type_name) variant.payload_types
 
 let rec expr_uses_record_fields field_names = function
+  | Located (_, inner) -> expr_uses_record_fields field_names inner
   | Const_int _ | Const_string _ | Var _ -> false
   | Lambda lambda -> expr_uses_record_fields field_names lambda.body
   | App app ->
@@ -2161,6 +2195,7 @@ and pattern_uses_record_fields field_names = function
       pattern_uses_record_fields field_names alias.alias_pattern
 
 let rec expr_uses_var var_name = function
+  | Located (_, inner) -> expr_uses_var var_name inner
   | Var name -> String.equal name var_name
   | Const_int _ | Const_string _ -> false
   | Lambda lambda -> expr_uses_var var_name lambda.body

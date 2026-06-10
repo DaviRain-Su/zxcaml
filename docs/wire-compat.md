@@ -10,7 +10,7 @@ for the implementation rationale.
 
 `omlz check --wire=1.1 ...` is a deprecated one-mission compatibility window
 that forwards `--wire=1.1` to `zxc-frontend` and emits the old location-free
-shape. The current `1.5` reader still accepts `1.1`/`1.2` compatibility sexps and treats missing locations
+shape. The current `1.6` reader still accepts `1.1`/`1.2` compatibility sexps and treats missing locations
 as `Loc.unknown`.
 
 ## Wire 1.3 — typed lambda parameters
@@ -22,7 +22,7 @@ of the bare atom shape that 1.2 used. Unknown/polymorphic types fall back
 to the `(any)` sentinel which the bridge maps to `null`, and the Core IR
 lowerer falls back to its existing structural heuristics in that case.
 
-The current `1.5` reader still accepts `1.2`/`1.3` sexps; legacy bare-atom params parse as
+The current `1.6` reader still accepts `1.2`/`1.3` sexps; legacy bare-atom params parse as
 "untyped" and follow the original heuristic-only path. `omlz check --wire=1.2
 ...` (and `--wire=1.1`) remain available as one-mission compatibility windows
 that re-emit the older shapes.
@@ -32,7 +32,7 @@ that re-emit the older shapes.
 R9 advances the additive wire surface for ADR-015 array/loop work. It carries
 `int`-array literals and explicit array get/length/set/make nodes, plus the
 loop-era desugarings used by the frontend. These shapes remain accepted by the
-current `1.5` reader.
+current `1.6` reader.
 
 ## Wire 1.5 — ref cells
 
@@ -46,7 +46,25 @@ R10 advances the frontend bridge wire to `1.5` to carry the three new
 - `(ref-set <r-expr> <val-expr>)` — writes into a ref cell (`r := v`).
 
 The `1.5` reader is a strict additive extension of `1.4`: every prior
-wire shape continues to parse. Wire 1.5 is the new default. See
+wire shape continues to parse. See
 `src/frontend/zxc_sexp_format.md` for the canonical sexp grammar and
 worked examples. `--no-alloc` rejects `ref-make` with `DX2-NOALLOC`;
 `ref-get` / `ref-set` are allocation-free.
+
+## Wire 1.6 — expression-level locations
+
+The frontend bridge wire advances to `1.6` so the OCaml frontend wraps
+**inner expressions** in `(located (loc <file> <line> <col> <end_line>
+<end_col>) <expr>)` — previously only top-level let bindings carried a
+`located` wrapper. The Zig reader already accepted `located` at any
+expression position, so ANF lowering now stamps expression-level
+locations into Core IR: `--no-alloc` and region-inference diagnostics
+point at the offending expression instead of the enclosing declaration,
+and BPF source maps gain expression-granularity entries.
+
+Synthetic (desugared) expressions and ghost locations stay unwrapped and
+parse as `Loc.unknown`, exactly as before. The `1.6` reader is a strict
+additive extension of `1.5`: every prior wire shape continues to parse.
+Wire 1.6 is the new default; `omlz check --wire=1.5 ...` is the
+one-mission compatibility window that re-emits the decl-only-located
+shape.

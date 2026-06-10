@@ -93,12 +93,12 @@ The serialised form is an S-expression because:
 
 ### 3.1 Top-level shape
 
-The current wire grammar is sexp **version `1.5`**. The header carries the
+The current wire grammar is sexp **version `1.6`**. The header carries the
 version so `omlz` can reject stale frontend output with an upgrade hint:
 
 ```text
 ;; locations elided for readability
-(zxcaml-cir 1.5
+(zxcaml-cir 1.6
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -130,6 +130,7 @@ Wire-format history:
 | `1.3` | typed lambda / `let rec` parameters with `(any)` fallback |
 | `1.4` | array / loop-era additive surface before refs |
 | `1.5` | `ref-make`, `ref-get`, and `ref-set` for arena-backed ref cells |
+| `1.6` | `(located ...)` wrappers on inner expressions for expression-level diagnostics and source maps |
 
 Diagnostics carry locations separately on stderr; ordinary comments and
 formatting trivia are not serialized.

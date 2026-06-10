@@ -7,7 +7,7 @@
 
 ## 当前状态
 
-- 默认 frontend wire 版本是 **`1.5`**。
+- 默认 frontend wire 版本是 **`1.6`**。
 - 读取器仍接受 `1.1` / `1.2` / `1.3` / `1.4` 的兼容形态。
 - 缺失 `loc`、typed lambda 参数或 `ref-*` 节点时，仍按兼容模式处理。
 
@@ -17,6 +17,7 @@
 - **1.3**：加入 typed lambda parameters。
 - **1.4**：加入数组与 loop 相关 additive 形态。
 - **1.5**：加入 `ref-make` / `ref-get` / `ref-set`。
+- **1.6**：内层表达式带 `(located ...)` 包装，诊断与 source map 达到表达式级；`--wire=1.5` 为兼容窗口。
 
 ## 关键事实
 

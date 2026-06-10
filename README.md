@@ -48,7 +48,7 @@ Solana BPF .so
 - P9 Developer Experience docs: [`docs/diagnostics.md`](./docs/diagnostics.md)
   for rustc-style diagnostics, [`docs/lsp.md`](./docs/lsp.md) for
   `omlz-lsp`, [`docs/source-map.md`](./docs/source-map.md) for source maps,
-  and [`docs/wire-compat.md`](./docs/wire-compat.md) for current wire `1.5`
+  and [`docs/wire-compat.md`](./docs/wire-compat.md) for current wire `1.6`
   compatibility.
 
 ---
@@ -145,7 +145,7 @@ bilingual Slidev decks, and a live Cloudflare Pages site at
 scripts, comparison artifacts, and recording checklist.
 
 `omlz` works end-to-end: parse/type-check OCaml with upstream
-`compiler-libs` → emit sexp `1.5` → lower through Core IR with constant folding, DCE, inlining, escape
+`compiler-libs` → emit sexp `1.6` → lower through Core IR with constant folding, DCE, inlining, escape
 analysis → interpret, build native Zig, build Solana BPF `.so` artifacts,
 or emit Anchor-compatible IDL.
 
@@ -178,7 +178,7 @@ explicit future roadmap gates.
 
 - **CLI commands:** `omlz check <file>`, `omlz check --no-alloc <file>`, `omlz run <file>`, `omlz build --target=native <file> -o <out>`, `omlz build --target=bpf <file> -o <out>`, `omlz build --target=wasm [--keep-zig] <file> [-o <out.wasm>]`, `omlz build --target=near [--keep-zig] <file> -o <out.wasm>`, `omlz idl <file>`, `omlz unmap --map <file.map> --pc <addr>`, and `omlz unmap --so <file.so> --pc <addr>`
 - **Formatter:** `omlz fmt` formats `.ml` sources with `--check`, `--write`, `--stdin`, JSON summaries, LSP `textDocument/formatting` / `rangeFormatting`, a 20-golden fmt corpus, and bytewise idempotency; see [`docs/16-omlz-fmt.md`](./docs/16-omlz-fmt.md)
-- **Wire format:** version 1.5 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4/P5 moved the wire through `1.0` for instruction data and external declarations; P8 moved to `1.1` for mutual-recursion groups; P9/DX2 moved to `1.2` for source-location plumbing; R8/R9 moved through typed-parameter/array surfaces; R10 moved to `1.5` for `ref-make` / `ref-get` / `ref-set` while older readers remain compatibility-only)
+- **Wire format:** version 1.6 (P1 `0.4`; P2 added user ADTs in `0.5`, nested/guarded patterns in `0.6`, and tuples/records in `0.7`; P3 added account/syscall references in `0.8` and CPI types/references in `0.9`; P4/P5 moved the wire through `1.0` for instruction data and external declarations; P8 moved to `1.1` for mutual-recursion groups; P9/DX2 moved to `1.2` for source-location plumbing; R8/R9 moved through typed-parameter/array surfaces; R10 moved to `1.5` for `ref-make` / `ref-get` / `ref-set`; the wire moved to `1.6` for expression-level `located` spans while older shapes remain compatibility-only)
 - **OCaml subset:** let bindings, nested let, let rec, curried functions, function application, arithmetic/comparison operators, if/then/else, user-defined ADTs, nested constructor patterns, guarded match arms, literal constant patterns, or-patterns, alias patterns, tuples, records, field access, functional record update, lists (`[]` / `::`), sequence expressions (`;`), function cases (`function |`), `while` / counted `for` loops, string operations (`^`, length, get, sub), char operations (code, chr), mutable `int` arrays (`Array.make`, `Array.get`, `Array.set`, `Array.length`, `a.(i)`, `a.(i) <- v`), `ref`/`!`/`:=` for `int` and `bool`, and pattern matching over all of those forms
 - **Stdlib:** bundled `List` (`length`, `map`, `filter`, `fold_left`, `rev`, `append`, `hd`, `tl`, `nth`, `exists`, `for_all`, `find`, `sort`, `combine`, `split`), `Option` (`is_none`, `is_some`, `value`, `get`, `fold`), `Result` (`is_ok`, `is_error`, `ok`, `error`, `map`, `map_error`, `map_err`, `bind`), `Fun` (`id`, `const`, `flip`), `Map` (`empty`, `singleton`, `add`, `find`, `remove`, `mem`, `size`, `to_list`), `Set` (`empty`, `singleton`, `add`, `mem`, `remove`, `size`, `to_list`, `union`, `inter`), `String` (`length`, `get`, `sub`), `Bytes` (`length`, `get`, `sub`, `create`, `set`, `of_string`, `blit`, `fill`, `iter`, `iteri`, `fold_left`, `equal`, `compare`), `Char` (`code`, `chr`), `Account` guard/read helpers, `Fixed` / `Amount` deterministic six-decimal and bps helpers, `Format` (`int_to_string`, `hex_of_int`), `Crypto` (`sha256`, `keccak256`), and `Pubkey` (`zero`, `token_program`, `of_hex`) modules
 - **Memory model:** arena-only with region inference for automatic stack allocation of non-escaping locals; native entry arena is 32 KiB, and BPF entry arena is 3 KiB to keep the loader entrypoint below SBF's 4 KiB stack-frame limit
@@ -251,7 +251,7 @@ Read in order:
 | P9+ | [Diagnostics](./docs/diagnostics.md) | `--error-format`, caret rendering, color, JSON schema, and wire-location notes |
 | P9 | [LSP](./docs/lsp.md) | `omlz-lsp` stdio JSON-RPC, supported LSP methods, and editor setup |
 | P9 | [Source maps](./docs/source-map.md) | `.map` sidecar schema, `.zxcaml.srcmap`, and `omlz unmap` |
-| P9+ | [Wire compatibility](./docs/wire-compat.md) | Current wire `1.5`, prior additive bumps, and deprecated compatibility windows |
+| P9+ | [Wire compatibility](./docs/wire-compat.md) | Current wire `1.6`, prior additive bumps, and deprecated compatibility windows |
 | 18 | [Fixed-point math](./docs/18-fixed-point.md) | `Fixed` / `Amount` six-decimal arithmetic and bps helpers for deterministic DeFi examples |
 | 19 | [Functional multichain roadmap](./docs/19-functional-multichain-roadmap.md) | Exploratory plan for portable contract logic, WASM-chain adapters, EVM/Yul, upper syntaxes, and verified extraction |
 | 20 | [Solana DX/API polish plan](./docs/20-solana-dx-api-polish-plan.md) | Planning-only next-priority scaffold with canonical links, acceptance gates, and anti-creep guardrails |

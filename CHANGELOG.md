@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — wire 1.6: expression-level source locations
+
+- The frontend bridge wire advances from `1.5` to `1.6`: the OCaml
+  frontend now wraps inner expressions in `(located ...)` spans, where
+  previously only top-level let bindings carried one. The bump is strictly
+  additive; every prior wire shape still parses, and
+  `omlz check --wire=1.5` is the one-mission compatibility window that
+  re-emits the old decl-only-located shape (see `docs/wire-compat.md`).
+- `--no-alloc` and region-inference diagnostics now point at the offending
+  expression instead of the enclosing declaration (e.g. a rejected
+  `Array.make 3 1` is underlined at its own span, not at
+  `let entrypoint _ =`).
+- BPF source maps gain expression-granularity entries
+  (`hackathon_greet.map` grows from function-level to 41 entries), so
+  `omlz unmap` resolves program counters to tighter source spans.
+
 ### Changed — arena exhaustion aborts with a stable marker
 
 - Generated programs now abort arena exhaustion through the runtime panic

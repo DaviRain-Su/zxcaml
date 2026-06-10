@@ -10,7 +10,13 @@
 open Format
 open Zxc_subset
 
-type wire_version = Wire_1_1 | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5
+type wire_version =
+  | Wire_1_1
+  | Wire_1_2
+  | Wire_1_3
+  | Wire_1_4
+  | Wire_1_5
+  | Wire_1_6
 
 let version = function
   | Wire_1_1 -> "1.1"
@@ -18,6 +24,7 @@ let version = function
   | Wire_1_3 -> "1.3"
   | Wire_1_4 -> "1.4"
   | Wire_1_5 -> "1.5"
+  | Wire_1_6 -> "1.6"
 
 let wire_version_of_string = function
   | "1.1" -> Some Wire_1_1
@@ -25,11 +32,18 @@ let wire_version_of_string = function
   | "1.3" -> Some Wire_1_3
   | "1.4" -> Some Wire_1_4
   | "1.5" -> Some Wire_1_5
+  | "1.6" -> Some Wire_1_6
   | _ -> None
 
 let emit_param_types = function
   | Wire_1_1 | Wire_1_2 -> false
-  | Wire_1_3 | Wire_1_4 | Wire_1_5 -> true
+  | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 -> true
+
+(* Wire 1.6: emit `(located ...)` wrappers around inner expressions; the
+   older shapes strip them so `--wire=1.5` output stays byte-identical. *)
+let emit_inner_locs = function
+  | Wire_1_1 | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 -> false
+  | Wire_1_6 -> true
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
@@ -62,6 +76,10 @@ let rec pp_type_expr ppf = function
       fprintf ppf ")"
 
 let rec pp_expr ~wire ppf = function
+  | Located (loc, inner) ->
+      if emit_inner_locs wire then
+        fprintf ppf "(located %a %a)" pp_loc loc (pp_expr ~wire) inner
+      else pp_expr ~wire ppf inner
   | Const_int n -> fprintf ppf "(const-int %d)" n
   | Const_string value -> fprintf ppf "(const-string %S)" value
   | Var name -> fprintf ppf "(var %a)" pp_atom name
@@ -279,7 +297,9 @@ and pp_record_pattern_field ppf field =
 
 let rec pp_decl ~wire ppf decl =
   let emit_locs =
-    match wire with Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 -> true | Wire_1_1 -> false
+    match wire with
+    | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 -> true
+    | Wire_1_1 -> false
   in
   match decl with
   | Let_decl decl ->
@@ -386,4 +406,4 @@ let pp_module ~wire ppf = function
       List.iter (fun decl -> fprintf ppf " %a" (pp_decl ~wire) decl) decls;
       fprintf ppf "))"
 
-let to_string ?(wire = Wire_1_5) modul = asprintf "%a@." (pp_module ~wire) modul
+let to_string ?(wire = Wire_1_6) modul = asprintf "%a@." (pp_module ~wire) modul

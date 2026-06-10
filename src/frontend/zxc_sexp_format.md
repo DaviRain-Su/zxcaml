@@ -1,7 +1,7 @@
 # ZxCaml frontend S-expression wire format
 
 `zxc-frontend --emit=sexp <input.ml>` emits exactly one S-expression on
-stdout. The current default wire is `1.5`. The grammar below records the
+stdout. The current default wire is `1.6`. The grammar below records the
 historical `0.5` base (user-authored ADT type declarations over the P1
 expression/match nodes), followed by additive notes for the later `1.x` wire
 bumps, including the current `1.5` ref-cell shapes.

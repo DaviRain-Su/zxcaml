@@ -85,12 +85,12 @@ zxc-frontend --emit=sexp <input.ml>
 
 ### 3.1 顶层形态
 
-当前 wire grammar 是 sexp **版本 `1.5`**。Header 携带版本，使 `omlz` 能对过期
+当前 wire grammar 是 sexp **版本 `1.6`**。Header 携带版本，使 `omlz` 能对过期
 前端输出给出 upgrade hint：
 
 ```text
 ;; 为了可读性省略 locations
-(zxcaml-cir 1.5
+(zxcaml-cir 1.6
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -122,6 +122,7 @@ Wire-format history：
 | `1.3` | 带 `(any)` fallback 的 typed lambda / `let rec` 参数 |
 | `1.4` | array / loop 阶段在 ref 之前的 additive surface |
 | `1.5` | arena-backed ref cell 的 `ref-make`、`ref-get`、`ref-set` |
+| `1.6` | 内层表达式的 `(located ...)` 包装，支撑表达式级诊断与 source map |
 
 诊断位置仍通过 stderr 上的诊断单独携带；普通注释和格式 trivia 不会序列化。
 

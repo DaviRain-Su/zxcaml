@@ -186,6 +186,116 @@ test "core loc: every top-level value decl keeps a known loc across corpus sampl
     }
 }
 
+fn countKnownExprLocs(expr: ir.Expr, total: *usize, known: *usize) void {
+    total.* += 1;
+    if (exprLoc(expr)) |loc| {
+        if (!loc.isUnknown()) known.* += 1;
+    }
+    switch (expr) {
+        .Lambda => |value| countKnownExprLocs(value.body.*, total, known),
+        .Constant, .Var => {},
+        .App => |value| {
+            countKnownExprLocs(value.callee.*, total, known);
+            for (value.args) |arg| countKnownExprLocs(arg.*, total, known);
+        },
+        .Let => |value| {
+            countKnownExprLocs(value.value.*, total, known);
+            countKnownExprLocs(value.body.*, total, known);
+        },
+        .LetGroup => |value| {
+            for (value.bindings) |binding| countKnownExprLocs(binding.value.*, total, known);
+            countKnownExprLocs(value.body.*, total, known);
+        },
+        .Assert => |value| countKnownExprLocs(value.condition.*, total, known),
+        .If => |value| {
+            countKnownExprLocs(value.cond.*, total, known);
+            countKnownExprLocs(value.then_branch.*, total, known);
+            countKnownExprLocs(value.else_branch.*, total, known);
+        },
+        .Prim => |value| for (value.args) |arg| countKnownExprLocs(arg.*, total, known),
+        .Ctor => |value| for (value.args) |arg| countKnownExprLocs(arg.*, total, known),
+        .Match => |value| {
+            countKnownExprLocs(value.scrutinee.*, total, known);
+            for (value.arms) |arm| {
+                if (arm.guard) |guard| countKnownExprLocs(guard.*, total, known);
+                countKnownExprLocs(arm.body.*, total, known);
+            }
+        },
+        .Tuple => |value| for (value.items) |item| countKnownExprLocs(item.*, total, known),
+        .TupleProj => |value| countKnownExprLocs(value.tuple_expr.*, total, known),
+        .Record => |value| for (value.fields) |field| countKnownExprLocs(field.value.*, total, known),
+        .RecordField => |value| countKnownExprLocs(value.record_expr.*, total, known),
+        .RecordUpdate => |value| {
+            countKnownExprLocs(value.base_expr.*, total, known);
+            for (value.fields) |field| countKnownExprLocs(field.value.*, total, known);
+        },
+        .AccountFieldSet => |value| {
+            countKnownExprLocs(value.account_expr.*, total, known);
+            countKnownExprLocs(value.value.*, total, known);
+        },
+        .ArrayLit => |value| for (value.elems) |elem| countKnownExprLocs(elem.*, total, known),
+        .ArrayGet => |value| {
+            countKnownExprLocs(value.arr.*, total, known);
+            countKnownExprLocs(value.idx.*, total, known);
+        },
+        .ArrayLength => |value| countKnownExprLocs(value.arr.*, total, known),
+        .ArraySet => |value| {
+            countKnownExprLocs(value.arr.*, total, known);
+            countKnownExprLocs(value.idx.*, total, known);
+            countKnownExprLocs(value.value.*, total, known);
+        },
+        .ArrayMake => |value| countKnownExprLocs(value.init.*, total, known),
+        .RefMake => |value| countKnownExprLocs(value.init.*, total, known),
+        .RefGet => |value| countKnownExprLocs(value.target.*, total, known),
+        .RefSet => |value| {
+            countKnownExprLocs(value.target.*, total, known);
+            countKnownExprLocs(value.value.*, total, known);
+        },
+    }
+}
+
+// Wire 1.6: the frontend now wraps inner expressions in (located ...), so
+// ANF lowering can stamp expression-level locs, not just decl-level ones.
+// Require a majority of pre-optimization Core IR nodes to carry a known loc.
+test "core loc: wire 1.6 stamps inner expression locs in lowered Core IR" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    const argv = [_][]const u8{
+        options.zxc_frontend_bin,
+        "--emit=sexp",
+        "examples/hackathon_greet.ml",
+    };
+    const result = try std.process.run(allocator, io, .{ .argv = &argv });
+    defer allocator.free(result.stderr);
+    defer allocator.free(result.stdout);
+    try std.testing.expectEqual(@as(u8, 0), exitCode(result.term));
+
+    var frontend_arena = std.heap.ArenaAllocator.init(allocator);
+    defer frontend_arena.deinit();
+    const typed = try ttree.parseModule(&frontend_arena, result.stdout);
+
+    var core_arena = std.heap.ArenaAllocator.init(allocator);
+    defer core_arena.deinit();
+    const lowered = try core_anf.lowerModule(&core_arena, typed);
+
+    var total: usize = 0;
+    var known: usize = 0;
+    for (lowered.decls) |decl| {
+        switch (decl) {
+            .Let => |let_decl| countKnownExprLocs(let_decl.value.*, &total, &known),
+            .LetGroup => |group| for (group.bindings) |binding|
+                countKnownExprLocs(binding.value.*, &total, &known),
+        }
+    }
+
+    try std.testing.expect(total > 10);
+    if (known * 2 < total) {
+        std.debug.print("inner loc coverage too low: {d}/{d}\n", .{ known, total });
+        return error.InnerLocCoverageTooLow;
+    }
+}
+
 fn runOmlz(allocator: std.mem.Allocator, io: std.Io, args: []const []const u8) !struct { stdout: []u8, stderr: []u8, exit_code: u8 } {
     const result = try std.process.run(allocator, io, .{ .argv = args });
     return .{
