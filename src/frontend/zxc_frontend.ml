@@ -242,6 +242,131 @@ let ocamlc_command () =
 let absolute_path path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
 
+(* --- ADR-016: multi-file `open Foo` closure resolution ---------------- *)
+
+(* Module names the bundled stdlib occupies: `Core` / `Generators`
+   (the auto-opened file modules), their nested modules, and the OCaml
+   stdlib prefixes zxc_subset.ml whitelists by qualified-name string
+   matching. `open` of these is rejected (E0103) so that matching stays
+   unambiguous. *)
+let reserved_module_names =
+  [
+    "Core"; "Generators"; "Stdlib"; "Array";
+    "Option"; "Result"; "List"; "String"; "Char"; "Fun"; "Map"; "Set";
+    "Syscall"; "Crypto"; "Sysvar"; "SplToken"; "Bytes"; "Fixed"; "Amount";
+    "Format"; "Account"; "AccountMeta"; "Pubkey"; "Error"; "Pda"; "Cpi";
+  ]
+
+let is_reserved_module name = List.mem name reserved_module_names
+
+let module_name_of_path path =
+  String.capitalize_ascii (Filename.remove_extension (Filename.basename path))
+
+let emit_open_error ~file ~(loc : Location.t) ~code ~message ~hint =
+  let start = loc.loc_start in
+  let finish = loc.loc_end in
+  emit_frontend_parse_error ~input:file ~line:start.pos_lnum
+    ~col:(start.pos_cnum - start.pos_bol)
+    ~end_col:(finish.pos_cnum - finish.pos_bol)
+    ~code ~node_kind:"Tstr_open" ~message ~hint ()
+
+(* Untyped scan of the top-level `open M` items. A parse failure here is
+   ignored on purpose: ocamlc owns syntax errors and reports them through
+   the existing E0001 path. *)
+let scan_top_level_opens source_path =
+  let parse () =
+    let channel = open_in_bin source_path in
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr channel)
+      (fun () ->
+        let lexbuf = Lexing.from_channel channel in
+        Lexing.set_filename lexbuf source_path;
+        Parse.implementation lexbuf)
+  in
+  match parse () with
+  | exception _ -> []
+  | items ->
+      List.filter_map
+        (fun (item : Parsetree.structure_item) ->
+          match item.pstr_desc with
+          | Pstr_open
+              {
+                popen_expr = { pmod_desc = Pmod_ident { txt; _ }; _ };
+                popen_loc;
+                _;
+              } ->
+              Some (txt, popen_loc)
+          | _ -> None)
+        items
+
+(* DFS over `open` edges. Returns the closure in topological order
+   (dependencies first, entry last, sibling order = source order), or
+   exits with E0100/E0101/E0103. `open A.B` style longidents are left
+   for the typedtree-level E0091 rejection. *)
+let resolve_closure entry =
+  let entry_dir = Filename.dirname entry in
+  let visited : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+  let in_stack : (string, unit) Hashtbl.t = Hashtbl.create 8 in
+  let stack = ref [] in
+  let order = ref [] in
+  let rec visit path =
+    let key = absolute_path path in
+    if Hashtbl.mem visited key then ()
+    else begin
+      Hashtbl.add in_stack key ();
+      stack := path :: !stack;
+      List.iter
+        (fun (lid, loc) ->
+          match lid with
+          | Longident.Lident name ->
+              if is_reserved_module name then
+                emit_open_error ~file:path ~loc ~code:"E0103"
+                  ~message:
+                    (Printf.sprintf
+                       "cannot `open %s`: it names a bundled stdlib module"
+                       name)
+                  ~hint:
+                    "the bundled stdlib is auto-opened; use qualified access \
+                     (e.g. `Fixed.mul`) instead of `open`"
+              else
+                let target =
+                  Filename.concat entry_dir
+                    (String.uncapitalize_ascii name ^ ".ml")
+                in
+                if Hashtbl.mem in_stack (absolute_path target) then
+                  let cycle =
+                    List.rev (target :: !stack)
+                    |> List.map Filename.basename
+                    |> String.concat " -> "
+                  in
+                  emit_open_error ~file:path ~loc ~code:"E0101"
+                    ~message:
+                      (Printf.sprintf
+                         "`open %s` creates a dependency cycle: %s" name cycle)
+                    ~hint:
+                      "break the cycle by moving the shared definitions into \
+                       a third file both sides open"
+                else if not (Sys.file_exists target) then
+                  emit_open_error ~file:path ~loc ~code:"E0100"
+                    ~message:
+                      (Printf.sprintf
+                         "cannot resolve `open %s`: %s does not exist" name
+                         target)
+                    ~hint:
+                      "ADR-016 resolves `open Foo` to `foo.ml` in the entry \
+                       file's directory"
+                else visit target
+          | _ -> ())
+        (scan_top_level_opens path);
+      Hashtbl.remove in_stack key;
+      stack := List.tl !stack;
+      Hashtbl.add visited key ();
+      order := path :: !order
+    end
+  in
+  visit entry;
+  List.rev !order
+
 type otest_kind = Otest_unit | Otest_prop
 
 type otest_binding = {
@@ -868,23 +993,38 @@ let compile_bundled_stdlib ~dir =
     ~module_name:"generators"
     ~extra_flags:(Printf.sprintf "-I %s -open Core" (Filename.quote dir))
 
-let compile_to_cmt ~diagnostic_input ~extra_cleanup input =
+let compile_to_cmt ?stdlib_dir ?(extra_includes = []) ~diagnostic_input
+    ~extra_cleanup input =
   let tmp_cmo = Filename.temp_file "Zxcaml_" ".cmo" in
   let tmp_prefix = Filename.remove_extension tmp_cmo in
   let tmp_cmt = tmp_prefix ^ ".cmt" in
   let tmp_stderr = tmp_prefix ^ ".stderr" in
-  let stdlib_dir = make_temp_dir "Zxcaml_stdlib_" in
-  compile_bundled_stdlib ~dir:stdlib_dir;
+  let owns_stdlib_dir = Option.is_none stdlib_dir in
+  let stdlib_dir =
+    match stdlib_dir with
+    | Some dir -> dir
+    | None ->
+        let dir = make_temp_dir "Zxcaml_stdlib_" in
+        compile_bundled_stdlib ~dir;
+        dir
+  in
+  let release_stdlib_dir () =
+    if owns_stdlib_dir then cleanup_bundled_stdlib_dir stdlib_dir
+  in
+  let include_flags =
+    stdlib_dir :: extra_includes
+    |> List.map (fun dir -> Printf.sprintf "-I %s" (Filename.quote dir))
+    |> String.concat " "
+  in
   let command =
-    Printf.sprintf
-      "%s -bin-annot -I %s -open Core -open Generators -c %s -o %s 2> %s"
-      (ocamlc_command ()) (Filename.quote stdlib_dir) (Filename.quote input)
+    Printf.sprintf "%s -bin-annot %s -open Core -open Generators -c %s -o %s 2> %s"
+      (ocamlc_command ()) include_flags (Filename.quote input)
       (Filename.quote tmp_cmo)
       (Filename.quote tmp_stderr)
   in
   match Sys.command command with
   | 0 ->
-      cleanup_bundled_stdlib_dir stdlib_dir;
+      release_stdlib_dir ();
       (try Sys.remove tmp_stderr with Sys_error _ -> ());
       (tmp_cmo, tmp_cmt)
   | status ->
@@ -899,8 +1039,47 @@ let compile_to_cmt ~diagnostic_input ~extra_cleanup input =
         (fun path -> try Sys.remove path with Sys_error _ -> ())
         ([ tmp_cmo; tmp_cmt; Filename.remove_extension tmp_cmo ^ ".cmi"; tmp_stderr ]
         @ extra_cleanup);
-      cleanup_bundled_stdlib_dir stdlib_dir;
+      release_stdlib_dir ();
       exit 2
+
+(* ADR-016: compile one dependency of the closure. The output lands in
+   [deps_dir] under the dependency's own basename so the compiled module
+   name matches the `open` (foo.ml -> Foo). *)
+let compile_dep_to_cmt ~stdlib_dir ~deps_dir source =
+  let module_base = Filename.remove_extension (Filename.basename source) in
+  let stderr_path = Filename.concat deps_dir (module_base ^ ".stderr") in
+  let command =
+    Printf.sprintf
+      "cd %s && %s -bin-annot -I %s -I . -open Core -open Generators -c %s -o %s 2> %s"
+      (Filename.quote deps_dir) (ocamlc_command ())
+      (Filename.quote stdlib_dir)
+      (Filename.quote (absolute_path source))
+      (Filename.quote (module_base ^ ".cmo"))
+      (Filename.quote stderr_path)
+  in
+  match Sys.command command with
+  | 0 -> Filename.concat deps_dir (module_base ^ ".cmt")
+  | status ->
+      let stderr =
+        try read_file stderr_path
+        with Sys_error message ->
+          Printf.sprintf "ocamlc -bin-annot failed for %s with status %d: %s"
+            source status message
+      in
+      emit_ocamlc_error ~input:source ~stderr;
+      exit 2
+
+let cleanup_deps_dir dir sources =
+  List.iter
+    (fun source ->
+      let base = Filename.remove_extension (Filename.basename source) in
+      List.iter
+        (fun ext ->
+          try Sys.remove (Filename.concat dir (base ^ ext))
+          with Sys_error _ -> ())
+        [ ".cmo"; ".cmi"; ".cmt"; ".stderr" ])
+    sources;
+  try Sys.rmdir dir with Sys_error _ -> ()
 
 let cleanup paths =
   List.iter
@@ -917,8 +1096,7 @@ let load_implementation cmt_path =
         ~message:(Printf.sprintf "expected an implementation .cmt: %s" cmt_path);
       exit 3
 
-let () =
-  let input, wire = parse_args () in
+let run_single_file ~input ~wire =
   let compile_input, extra_cleanup =
     match preprocess_otest_source input with
     | None -> (input, [])
@@ -953,3 +1131,70 @@ let () =
       emit_internal_error ~message;
       cleanup cleanup_files;
       exit 3
+
+(* ADR-016 multi-file path: compile the closure (dependencies first),
+   convert every Typedtree through one shared subset environment, and
+   emit a single joined sexp. Temp directories are released through
+   at_exit so every E0xxx exit path stays clean. *)
+let run_multi_file ~input ~wire ~deps =
+  let stdlib_dir = make_temp_dir "Zxcaml_stdlib_" in
+  let deps_dir = make_temp_dir "Zxcaml_deps_" in
+  at_exit (fun () ->
+      cleanup_deps_dir deps_dir deps;
+      cleanup_bundled_stdlib_dir stdlib_dir);
+  compile_bundled_stdlib ~dir:stdlib_dir;
+  let dep_cmts =
+    List.map (fun dep -> (dep, compile_dep_to_cmt ~stdlib_dir ~deps_dir dep)) deps
+  in
+  let compile_input, extra_cleanup =
+    match preprocess_otest_source input with
+    | None -> (input, [])
+    | Some transformed -> (transformed, [ transformed ])
+  in
+  let tmp_cmo, tmp_cmt =
+    compile_to_cmt ~stdlib_dir ~extra_includes:[ deps_dir ]
+      ~diagnostic_input:input ~extra_cleanup compile_input
+  in
+  let tmp_cmi = Filename.remove_extension tmp_cmo ^ ".cmi" in
+  let cleanup_files = [ tmp_cmo; tmp_cmt; tmp_cmi ] @ extra_cleanup in
+  try
+    let structures =
+      List.map (fun (dep, cmt) -> (dep, load_implementation cmt)) dep_cmts
+      @ [ (input, load_implementation tmp_cmt) ]
+    in
+    let user_modules = List.map module_name_of_path deps in
+    let modul = Zxc_subset.of_structures ~user_modules structures in
+    print_string (Zxc_sexp.to_string ~wire modul);
+    cleanup cleanup_files
+  with
+  | Zxc_subset.Unsupported diagnostic ->
+      emit_diagnostic diagnostic;
+      cleanup cleanup_files;
+      exit 1
+  | Cmt_format.Error error ->
+      let message =
+        match error with
+        | Cmt_format.Not_a_typedtree path ->
+            Printf.sprintf "not a typedtree file: %s" path
+      in
+      emit_internal_error
+        ~message;
+      cleanup cleanup_files;
+      exit 3
+  | Sys_error message ->
+      emit_internal_error ~message;
+      cleanup cleanup_files;
+      exit 3
+
+let () =
+  let input, wire = parse_args () in
+  let closure = resolve_closure input in
+  let deps =
+    List.filter
+      (fun path ->
+        not (String.equal (absolute_path path) (absolute_path input)))
+      closure
+  in
+  match deps with
+  | [] -> run_single_file ~input ~wire
+  | deps -> run_multi_file ~input ~wire ~deps

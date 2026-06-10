@@ -303,6 +303,7 @@ type alias_binding = {
 type type_env = {
   constructors : StringSet.t;
   aliases : alias_binding StringMap.t;
+  user_modules : StringSet.t;
 }
 
 let builtin_constructor_names =
@@ -366,6 +367,7 @@ let initial_type_env =
         (fun constructors name -> StringSet.add name constructors)
         StringSet.empty builtin_constructor_names;
     aliases = StringMap.empty;
+    user_modules = StringSet.empty;
   }
 
 let type_env_has_constructor env name = StringSet.mem name env.constructors
@@ -840,6 +842,18 @@ let longident_name (lid : Longident.t Location.loc) =
   in
   String.concat "." (parts lid.txt)
 
+(* ADR-016: a qualified reference to a user-written module file
+   (`Foo.helper` with `foo.ml` in the compiled closure) resolves to the
+   flat top-level name (`helper`); the joined module is one namespace.
+   Anything else keeps the dotted source spelling so the stdlib
+   whitelist matching below stays untouched. *)
+let resolved_ident_name env (lid : Longident.t Location.loc) =
+  match lid.txt with
+  | Longident.Ldot (Longident.Lident modname, name)
+    when StringSet.mem modname env.user_modules ->
+      name
+  | _ -> longident_name lid
+
 let is_whitelisted_prim = function
   | "+" | "-" | "*" | "/" | "mod" | "=" | "<>" | "<" | "<=" | ">" | ">=" -> true
   | "land" | "lor" | "lxor" | "lsl" | "lsr" | "lnot" -> true
@@ -1309,7 +1323,7 @@ and parse_expr_unwrapped env (expr : expression) =
   | Texp_ident (_, lid, _) -> (
       match pubkey_constant_expr (longident_name lid) with
       | Some expr -> expr
-      | None -> Var (longident_name lid))
+      | None -> Var (resolved_ident_name env lid))
   | Texp_function (params, Tfunction_body body) ->
       let parsed = List.map parse_param params in
       let params = List.map fst parsed in
@@ -1548,7 +1562,7 @@ and parse_expr_unwrapped env (expr : expression) =
       match tuple_projection_index (longident_last lid) with
       | Some index -> parse_tuple_projection_args env ~index args ~loc:expr.exp_loc
       | None ->
-          let callee_name = longident_name lid in
+          let callee_name = resolved_ident_name env lid in
           let args =
             match labelled_callee_canonical_order callee_name with
             | Some canonical_order ->
@@ -2505,15 +2519,80 @@ let parse_structure_item env (item : structure_item) =
       unsupported ~node_kind:"Tstr_value(empty)" ~loc:item.str_loc ()
   | Tstr_value (Nonrecursive, _ :: _ :: _) ->
       unsupported ~node_kind:"Tstr_value(and)" ~loc:item.str_loc ()
+  | Tstr_open od -> (
+      (* ADR-016: skip only a top-level `open` of a module the frontend
+         driver resolved to a user file in this closure; the joined
+         namespace makes it a no-op. Every other open keeps today's
+         E0091 rejection. *)
+      match od.open_expr.mod_desc with
+      | Tmod_ident (_, { txt = Longident.Lident name; _ })
+        when StringSet.mem name env.user_modules ->
+          (env, [])
+      | _ -> unsupported ~node_kind:"Tstr_open" ~loc:item.str_loc ())
   | other ->
       unsupported ~node_kind:(structure_item_kind other) ~loc:item.str_loc ()
 
-let of_structure (structure : structure) =
-  let _env, decls =
+let decl_top_level_names = function
+  | Let_decl { name; loc; _ } -> [ (name, Some loc) ]
+  | Let_rec_group_decl bindings ->
+      List.map (fun binding -> (binding.rec_name, Some binding.rec_loc)) bindings
+  | Type_decl { type_name; variants; _ } ->
+      (type_name, None)
+      :: List.map (fun variant -> (variant.constr_name, None)) variants
+  | Tuple_type_decl { tuple_type_name; _ } -> [ (tuple_type_name, None) ]
+  | Record_type_decl { record_type_name; _ } -> [ (record_type_name, None) ]
+  | Type_alias_decl { alias_type_name; _ } -> [ (alias_type_name, None) ]
+  | External_decl { external_name; _ } -> [ (external_name, None) ]
+
+let duplicate_top_level ~file ~prior_file ~name ~loc =
+  let fallback = { file; line = 1; col = 0; end_line = 1; end_col = 0 } in
+  raise
+    (Unsupported
+       {
+         severity = "error";
+         code = "E0102";
+         node_kind = "Tstr_value";
+         loc = Option.value loc ~default:fallback;
+         message =
+           Printf.sprintf "duplicate top-level name `%s`: already defined in %s"
+             name prior_file;
+         hint =
+           Some
+             "ADR-016 joins the file closure into one flat namespace; rename \
+              one of the bindings";
+       })
+
+let check_cross_file_duplicates seen ~file decls =
+  List.iter
+    (fun decl ->
+      List.iter
+        (fun (name, loc) ->
+          if String.equal name "_" then ()
+          else
+            match Hashtbl.find_opt seen name with
+            | Some prior_file when not (String.equal prior_file file) ->
+                duplicate_top_level ~file ~prior_file ~name ~loc
+            | Some _ -> ()
+            | None -> Hashtbl.add seen name file)
+        (decl_top_level_names decl))
+    decls
+
+let of_structures ~user_modules (structures : (string * structure) list) =
+  let user_modules = StringSet.of_list user_modules in
+  let seen : (string, string) Hashtbl.t = Hashtbl.create 64 in
+  let env0 = { initial_type_env with user_modules } in
+  let _env, rev_decls =
     List.fold_left
-      (fun (env, acc) item ->
-        let env, item_decls = parse_structure_item env item in
-        (env, List.rev_append item_decls acc))
-      (initial_type_env, []) structure.str_items
+      (fun acc_state (file, structure) ->
+        List.fold_left
+          (fun (env, acc) item ->
+            let env, item_decls = parse_structure_item env item in
+            check_cross_file_duplicates seen ~file item_decls;
+            (env, List.rev_append item_decls acc))
+          acc_state structure.str_items)
+      (env0, []) structures
   in
-  Module (List.rev decls |> add_builtin_external_decls |> add_builtin_record_decls)
+  Module (List.rev rev_decls |> add_builtin_external_decls |> add_builtin_record_decls)
+
+let of_structure (structure : structure) =
+  of_structures ~user_modules:[] [ ("", structure) ]
