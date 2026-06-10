@@ -24,6 +24,8 @@
 - `omlz check --wire=1.1` 与 `--wire=1.2` 仅用于兼容窗口。
 - `--no-alloc` 会拒绝 `ref-make` 这类分配点。
 - 规范 grammar 仍以 `src/frontend/zxc_sexp_format.md` 为准。
+- ADR-016 多文件 `open Foo` 不需要 wire bump：joined 多文件输出仍是合法
+  `1.6`（各 `(loc ...)` 节点的 file 字段现在可逐节点不同）。
 
 ## 相关文档
 

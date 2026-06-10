@@ -114,6 +114,9 @@ examples/
 故意失败的诊断 fixture 仍是 `examples/m0_unsupported.ml`，在 pass-only corpus
 loop 中应继续排除。
 
+多文件程序（ADR-016）= 一个入口 `.ml` 加同目录的依赖文件——顶层 `open Foo`
+解析为入口文件旁边的 `foo.ml`。canonical 样例是 `examples/multifile_*` 三件套。
+
 ## 6. `tests/`
 
 ```text

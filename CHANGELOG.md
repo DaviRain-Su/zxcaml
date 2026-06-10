@@ -6,6 +6,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — ADR-016 multi-file modules: `open Foo` resolves to sibling files
+
+- `omlz` now accepts multi-file programs: a top-level `open Foo` in the
+  entry file resolves to `foo.ml` in the same directory, the frontend
+  type-checks the dependency closure topologically, joins the Typedtrees
+  through one shared subset environment, and emits a single sexp. The
+  joined program is one flat namespace; qualified references
+  (`Foo.helper`) flatten to the same top-level names. No wire bump was
+  needed: wire `1.6` `(loc ...)` nodes already carry per-file paths, so
+  cross-file diagnostics, source maps, and `omlz unmap` attribute spans
+  to the right file unchanged.
+- New frontend diagnostics, all registered with `omlz check --explain`
+  and rendered with `= help:` hints: `E0100` (unresolvable `open`),
+  `E0101` (dependency cycle, message lists the cycle path), `E0102`
+  (duplicate top-level name across the closure), and `E0103` (`open` of
+  a bundled stdlib module). Non-closure opens (`include`, `open A.B`,
+  local opens) keep the existing `E0091` rejection.
+- `omlz-lsp` mirrors on-disk sibling `.ml` files into its scratch
+  directory before running diagnostics, so multi-file entries check
+  cleanly while edited; sibling files are read from disk, not from
+  unsaved editor buffers.
+- Examples corpus grows to 103 with the shared-types trio
+  `multifile_counter_types.ml` / `multifile_counter_init.ml` /
+  `multifile_counter_bump.ml` (manifest category `user_example_module`
+  covers entrypoint-less shared modules), backed by a two-case Mollusk
+  SVM test (Rust suite: 45 files / 68 cases) and eight `tests/ui/`
+  fixtures covering the new diagnostics and the happy path.
+- Implementation contract and ADR deltas are pinned in
+  `docs/21-multifile-modules-plan.md` (+ zh); ADR-016 is revised to
+  Accepted as built.
+
 ### Added — DX: doctor surfpool probe and runtime import-roots guide
 
 - `omlz doctor` gains a `surfpool` probe (WARN when missing — the binary is

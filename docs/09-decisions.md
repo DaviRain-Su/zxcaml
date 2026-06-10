@@ -1202,6 +1202,24 @@ justified by the current corpus size.
   packages with separate compilation", we revisit ADR-011 and
   this ADR together; until then, option B is the smaller commit.
 
+### Revised 2026-06-10 — implemented as built (Proposed → Accepted)
+
+ADR-016 is implemented; the as-built contract is pinned in
+[`21-multifile-modules-plan.md`](./21-multifile-modules-plan.md). Status is
+now **Accepted**. Deltas vs. the original text above:
+
+- **No `file_id` wire bump.** The wire stays `1.6`: every
+  `(loc <file> <line> <col> <end_line> <end_col>)` node already carries a
+  file atom, so multi-file span attribution needed no new wire shape.
+- **No `--entry` / `--root` flags.** The existing positional input is the
+  entry; the project root is the entry file's directory.
+- **Duplicate-name rejection instead of mangling.** The joined namespace is
+  flat; duplicate top-level names across the closure are rejected (E0102),
+  keeping the sexp shape byte-identical to single-file output.
+- **Diagnostics.** E0100 (unresolvable `open`), E0101 (`open` cycle), E0102
+  (duplicate top-level name), and E0103 (`open` of a bundled stdlib module,
+  or a user file shadowing one) — all emitted before `ocamlc` runs.
+
 ---
 
 ## ADR-017 — Float replacement strategy

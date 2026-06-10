@@ -47,7 +47,8 @@ OCaml 这一侧是一个 **小型、只读** 的 `compiler-libs` 消费者。
 
 - 不生成代码。
 - 不做 ANF 或任何 IR lowering。ANF 在 Zig 侧。
-- 不加载多文件；P1 一次一个 `.ml`。模块支持是 P3 的事。
+- 最多加载入口文件的顶层 `open Foo` 依赖闭包（§2.5，ADR-016）；
+  没有 package 或 `dune` 式的工程模型。
 
 ### 2.3 源码位置和构建
 
@@ -73,6 +74,31 @@ zxc-frontend --emit=sexp <input.ml>
 ```
 
 `omlz` 始终传 `--json-diag`，统一渲染诊断。
+
+### 2.5 多文件闭包解析（ADR-016）
+
+用户代码里的顶层 `open Foo` 会把同目录文件拉进构建（完整契约见
+[`21-multifile-modules-plan.md`](../21-multifile-modules-plan.md)）：
+
+- **发现。** 调用 `ocamlc` 之前，前端先用 `Parse.implementation` 对入口文件做
+  untyped parse，扫描顶层 `open M`。`M` 解析为 `<entry_dir>/<首字母小写的 M>.ml`
+  （`open Vault_types` → `vault_types.ml`）；发现过程对依赖递归。
+- **编译。** 依赖按拓扑序编译进一个共享临时目录（每个文件各自的
+  `<name>.cmo` / `.cmt`）；入口文件最后编译，带同一个 `-I <deps>`。
+- **Join。** 每个 `.cmt` 的 Typedtree 经同一个共享子集环境转换，声明连接成
+  单一 module（入口最后）；已解析的顶层 open 在转换时跳过，最终只发出一个
+  joined sexp。
+- **扁平命名空间。** 发出的名字不带限定；闭包内重复的顶层名字被拒绝
+  （E0102），不做 mangling；指向用户模块的 `Foo.x` 引用发出裸 `x`。
+- **依赖边只有 `open`。** 没有 `open Foo` 的 `Foo.x` 不构成依赖边（`ocamlc`
+  会报 unbound module）；`include` 与嵌套/local open 仍被拒绝。
+- **`ocamlc` 之前的诊断。** E0100（`open` 无法解析）、E0101（`open` 环）、
+  E0103（`open` 内置 stdlib 模块，或用户文件遮蔽其名字）都在 `ocamlc`
+  运行前发出。
+
+Wire 仍是 **`1.6`**：每个 `(loc <file> <line> <col> <end_line> <end_col>)`
+节点本来就带 file atom，多文件 span 归属不需要新的 wire 形态；没有用户
+`open` 的程序产出与单文件 byte-identical 的 sexp。
 
 ## 3. Wire 格式：`.cir.sexp`
 
@@ -280,8 +306,9 @@ src/frontend_bridge/
 
 ## 9. 这份文档 **不覆盖** 的内容
 
-- 多文件模块（当前单文件编译器之外的未来工作）。
-- `.mli` 签名（当前单文件编译器之外的未来工作）。
+- §2.5 概述之外的多文件闭包解析细节（见
+  [`21-multifile-modules-plan.md`](../21-multifile-modules-plan.md)）。
+- `.mli` 签名（未来工作；ADR-016 只覆盖 `.ml` 的 open）。
 - functor 支持（按 ADR-001，范围之外）。
 - 任何要求理解 OCaml C runtime 布局的事。
 

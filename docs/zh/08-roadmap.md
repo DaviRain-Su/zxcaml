@@ -2,7 +2,7 @@
 
 > **Languages / 语言**: [English](../08-roadmap.md) · **简体中文**
 
-这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.6`，examples 语料包含 100 个 `.ml` 程序，Mollusk SVM 套件包含 44 个 Rust 集成测试文件（66 个 Rust test case），并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
+这份路线图现在把已经封存的编译器阶段、演示/运营工作，以及未来可选方向分开说明。面向用户文档的当前规范事实是：frontend bridge 接受 sexp wire 格式 `1.6`，examples 语料包含 103 个 `.ml` 程序，Mollusk SVM 套件包含 45 个 Rust 集成测试文件（68 个 Rust test case），并且 P1-P9 都已经在 [`CHANGELOG.md`](../../CHANGELOG.md) 中封存。
 Real-world Examples Batch 3 补齐了 `spl_burn`、`spl_close_account` 和 `spl_revoke` 这三个 SPL Token primitive 示例。R13 已作为 account-guard 产品打磨 slice 收束：`Account.*` helper、`account_guard`、IDL signer/writable/error metadata，以及 UI 误用诊断都已有测试和文档覆盖。
 Zig runtime 公契面见 [`docs/zh/runtime-api.md`](./runtime-api.md)。
 
@@ -97,7 +97,7 @@ fmt corpus 扩张暴露出的 lex-wart 债务。
 
 ### 语言子集差距提案
 
-- ADR-015 已部分落地，并且现在有 R12 stress coverage 覆盖受控 `int` array、`for` / `while` loop，以及 `int` / `bool` ref；动态/泛型 array、更宽 ref 类型和跨函数/闭包 aliasing 仍是后续项。ADR-017 的 deterministic-number 方向现在已有初版六位小数 `Fixed` / `Amount` stdlib surface；更完整 fixed-point/decimal 设计仍是未来工作。R13 已作为 Solana account-guard polish slice 封存。ADR-016（多文件模块，前端 `open Foo`）仍保留为提案。
+- ADR-015 已部分落地，并且现在有 R12 stress coverage 覆盖受控 `int` array、`for` / `while` loop，以及 `int` / `bool` ref；动态/泛型 array、更宽 ref 类型和跨函数/闭包 aliasing 仍是后续项。ADR-017 的 deterministic-number 方向现在已有初版六位小数 `Fixed` / `Amount` stdlib surface；更完整 fixed-point/decimal 设计仍是未来工作。R13 已作为 Solana account-guard polish slice 封存。ADR-016（多文件模块，前端 `open Foo`）已按 as-built 实现；见 [`21-multifile-modules-plan.md`](./21-multifile-modules-plan.md)。
 
 ### PX — 多目标扩展（可选，有门槛）
 

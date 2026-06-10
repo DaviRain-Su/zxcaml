@@ -121,7 +121,7 @@ The OCaml parser may accept the syntax, but the subset walker rejects these
 forms with location-aware diagnostics:
 
 ```text
-module  sig  struct  functor  open  include
+module  sig  struct  functor  include
 exception  try  raise
 mutable record-field writes (`r.x <- v` outside `AccountFieldSet`)
 instance-variable writes  override expressions
@@ -131,6 +131,12 @@ class  object  method  inherit  initializer
 lazy
 labelled arguments outside the whitelisted stdlib surface  optional arguments  local opens
 ```
+
+One exception (ADR-016): a **top-level** `open Foo` that names a sibling user
+file is accepted — it resolves to `<entry_dir>/foo.ml` and pulls that file
+into the compile closure. `open` of a bundled stdlib module is still rejected
+(E0103), and `include`, local opens, and dotted opens (`open A.B`) remain
+rejected.
 
 ## 6. Standard library visible to programs
 

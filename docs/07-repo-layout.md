@@ -118,6 +118,10 @@ Current example families include:
 The intentionally failing diagnostic fixture remains `examples/m0_unsupported.ml`
 and should stay excluded from pass-only corpus loops.
 
+Multi-file programs (ADR-016) are an entry `.ml` plus sibling dependency files
+in the same directory — top-level `open Foo` resolves to `foo.ml` next to the
+entry file. The `examples/multifile_*` trio is the canonical sample.
+
 ## 6. `tests/`
 
 ```text

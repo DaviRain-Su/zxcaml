@@ -181,6 +181,10 @@ tools can key on codes instead of matching message text.
 | E0030 | _n/a_ | Missing required label. | Emitted when a call to a whitelisted labelled stdlib function omits a required `~label:` argument. |
 | E0031 | _n/a_ | Unknown or duplicate label. | Emitted when a call to a whitelisted labelled stdlib function uses an unknown label or supplies the same label more than once. |
 | E0090–E0099 | _n/a_ | Generic subset fallback buckets. | Used only when a more specific tailored subset code does not apply. |
+| E0100 | _n/a_ | Cannot resolve `open` to a file. | Emitted before `ocamlc` when a top-level `open Foo` does not resolve to `foo.ml` in the entry file's directory (ADR-016). |
+| E0101 | _n/a_ | `open` dependency cycle. | Emitted when the ADR-016 multi-file closure contains a cycle; the message lists the cycle path. |
+| E0102 | _n/a_ | Duplicate top-level name across files. | Emitted when two files in the joined closure declare the same top-level value, type, or constructor name. |
+| E0103 | _n/a_ | `open` of a bundled stdlib module. | Emitted when `open` names a bundled stdlib module (or a user file shadows one); the stdlib is auto-opened and matched by qualified name. |
 | E0200 | _n/a_ | Unknown `--report` kind. | Emitted by `omlz check --report=<kind>` when `<kind>` is not one of `cu`, `stack`, or `all`. |
 | DX2-NOALLOC | _n/a_ | Arena allocation rejected under `--no-alloc`. | Emitted by `omlz check --no-alloc` at the allocating expression (payload constructors, closures, string concat, arrays, refs). Wire 1.6 makes the caret expression-precise. |
 | DX2-REGION | _n/a_ | Checked region inference failure. | Emitted when escape analysis cannot assign a consistent static/stack/arena region; also runs inside `omlz build` before codegen. |

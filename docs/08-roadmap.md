@@ -4,9 +4,9 @@
 
 This roadmap now separates sealed compiler phases from demo/operational work and
 future optional ideas. Current canonical facts for the user-facing docs: the
-frontend bridge accepts sexp wire format `1.6`, the examples corpus contains 100
-`.ml` programs, the Mollusk SVM suite contains 44 Rust integration-test files
-(66 Rust test cases), and P1-P9
+frontend bridge accepts sexp wire format `1.6`, the examples corpus contains 103
+`.ml` programs, the Mollusk SVM suite contains 45 Rust integration-test files
+(68 Rust test cases), and P1-P9
 are sealed in [`CHANGELOG.md`](../CHANGELOG.md).
 Real-world Examples Batch 2 is tracked in [`CHANGELOG.md`](../CHANGELOG.md#real-world-examples-batch-2---2026-05-05).
 Real-world Examples Batch 3 adds the SPL Token primitive examples
@@ -129,7 +129,7 @@ the fmt corpus expansion.
 - **Maintenance hold:** pause new feature scope and keep the repository on
   validator, drift, and process-hygiene work if no high-confidence runtime or
   codegen direction is ready.
-- **Language-subset gap proposals:** ADR-015 is partially landed and now has R12 stress coverage across controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs; follow-ups remain deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. R13 is sealed as a Solana account-guard polish slice. ADR-016 (multi-file modules via frontend `open Foo`) remains proposed in [`09-decisions.md`](./09-decisions.md).
+- **Language-subset gap proposals:** ADR-015 is partially landed and now has R12 stress coverage across controlled `int` arrays, `for` / `while` loops, and `int` / `bool` refs; follow-ups remain deferred for dynamic/generic arrays and broader ref aliasing/types. ADR-017's deterministic-number direction now has an initial six-decimal `Fixed` / `Amount` stdlib surface; fuller fixed-point/decimal design remains future work. R13 is sealed as a Solana account-guard polish slice. ADR-016 (multi-file modules via frontend `open Foo`) is implemented as built; see [`21-multifile-modules-plan.md`](./21-multifile-modules-plan.md).
 
 ## Future / optional
 

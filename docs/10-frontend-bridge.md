@@ -52,8 +52,9 @@ fork it.
 
 - Does not generate code.
 - Does not perform ANF or any IR lowering. ANF is Zig-side.
-- Does not load multiple files; one `.ml` per invocation in P1.
-  Module support is a P3 concern (see roadmap).
+- Loads at most the top-level `open Foo` dependency closure of the
+  entry file (§2.5, ADR-016); there is no package or `dune`-style
+  project model.
 
 ### 2.3 Source location and build
 
@@ -80,6 +81,39 @@ zxc-frontend --emit=sexp <input.ml>
 
 `omlz` always passes `--json-diag` so it can render diagnostics
 uniformly.
+
+### 2.5 Multi-file closure resolution (ADR-016)
+
+Top-level `open Foo` in user code pulls a sibling file into the build
+(full contract:
+[`21-multifile-modules-plan.md`](./21-multifile-modules-plan.md)):
+
+- **Discovery.** Before invoking `ocamlc`, the frontend parses the
+  entry file untyped (`Parse.implementation`) and scans top-level
+  `open M` items. `M` resolves to `<entry_dir>/<uncapitalized M>.ml`
+  (`open Vault_types` → `vault_types.ml`); discovery recurses through
+  dependencies.
+- **Compilation.** Dependencies compile in topological order into a
+  shared temp directory as `<name>.cmo` / `.cmt`; the entry file
+  compiles last with the same `-I <deps>` flag.
+- **Join.** Each `.cmt`'s Typedtree is converted through one shared
+  subset environment, declarations concatenate into a single module
+  (entry last), resolved top-level opens are skipped, and one joined
+  sexp is emitted.
+- **Flat namespace.** Emitted names are unqualified; duplicate
+  top-level names across the closure are rejected (E0102) instead of
+  mangled, and `Foo.x` references to a user module emit plain `x`.
+- **Dependency edges are `open` only.** `Foo.x` without `open Foo` is
+  not a dependency edge (`ocamlc` reports an unbound module);
+  `include` and nested/local opens stay rejected.
+- **Pre-`ocamlc` diagnostics.** E0100 (unresolvable `open`), E0101
+  (`open` cycle), and E0103 (`open` of a bundled stdlib module, or a
+  user file shadowing one) are emitted before `ocamlc` runs.
+
+The wire stays **`1.6`**: every `(loc <file> <line> <col> <end_line>
+<end_col>)` node already carries a file atom, so multi-file span
+attribution needs no new wire shape, and a program with no user
+`open` produces a byte-identical sexp to single-file output.
 
 ## 3. Wire format: `.cir.sexp`
 
@@ -314,8 +348,9 @@ its backend or its runtime model.
 
 ## 9. What this document does **not** cover
 
-- Multi-file modules (future work outside the current single-file compiler).
-- `.mli` signatures (future work outside the current single-file compiler).
+- Multi-file closure resolution beyond the §2.5 summary (see
+  [`21-multifile-modules-plan.md`](./21-multifile-modules-plan.md)).
+- `.mli` signatures (future work; ADR-016 covers `.ml` opens only).
 - Functor support (out of scope per ADR-001).
 - Anything that requires reading OCaml's C runtime layout.
 

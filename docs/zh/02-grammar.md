@@ -108,7 +108,7 @@ type pair = int * bool
 OCaml parser 可能接受这些语法，但子集 walker 会用带位置的诊断拒绝：
 
 ```text
-module  sig  struct  functor  open  include
+module  sig  struct  functor  include
 exception  try  raise
 普通 mutable record-field writes（`r.x <- v`，`AccountFieldSet` 之外）
 instance-variable writes  override expressions
@@ -118,6 +118,10 @@ class  object  method  inherit  initializer
 lazy
 whitelisted stdlib surface 之外的 labelled arguments  optional arguments  local opens
 ```
+
+一个例外（ADR-016）：指向同目录用户文件的**顶层** `open Foo` 是接受的——
+它解析为 `<entry_dir>/foo.ml`，并把该文件拉进编译闭包。`open` 内置 stdlib
+模块仍被拒绝（E0103）；`include`、local open 和带点路径的 `open A.B` 仍被拒绝。
 
 ## 6. 程序可见的标准库
 

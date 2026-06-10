@@ -68,3 +68,10 @@ additive extension of `1.5`: every prior wire shape continues to parse.
 Wire 1.6 is the new default; `omlz check --wire=1.5 ...` is the
 one-mission compatibility window that re-emits the decl-only-located
 shape.
+
+## ADR-016 — multi-file modules: no wire change
+
+ADR-016 (frontend-level `open Foo` multi-file support) needed no wire bump:
+the joined multi-file output is valid `1.6`. Every `(loc <file> <line> <col>
+<end_line> <end_col>)` node already carries a file atom; the only observable
+difference is that the `loc` file fields now vary per node within one sexp.

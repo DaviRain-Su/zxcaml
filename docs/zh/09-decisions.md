@@ -781,3 +781,32 @@ PDA / CPI helper、litesvm/surfpool/mollusk 测试集成。
   bump allocator 也只有一种顺手的写法。趋同演化没问题；copy-paste 不行。
 - 关于"我们从读 zignocchio 学到了什么、它如何塑造了 P1"的较长叙事，
   见 `docs/zignocchio-relationship.md`。
+
+---
+
+## ADR-016 —— 多文件模块（`open Foo`）
+
+**日期：** 2026-05-12
+**状态：** Proposed（见下方 2026-06-10 addendum：已实现并 Accepted）
+
+原始 ADR 全文仅存于英文版 [`09-decisions.md`](../09-decisions.md)：采纳
+option B —— 前端级 `open Foo`，由 OCaml 前端类型检查依赖闭包、join
+Typedtree、发出单一 sexp；不引入 `dune`、不做 `.cmi` 缓存、不做增量编译
+（ADR-011 不变）。
+
+### Revised 2026-06-10 —— 按 as-built 实现（Proposed → Accepted）
+
+ADR-016 已实现；as-built 契约钉在
+[`21-multifile-modules-plan.md`](./21-multifile-modules-plan.md)。状态现在是
+**Accepted**。相对原文的偏差：
+
+- **不需要 `file_id` wire bump。** wire 仍是 `1.6`：每个
+  `(loc <file> <line> <col> <end_line> <end_col>)` 节点本来就带 file atom，
+  多文件 span 归属不需要新 wire 形态。
+- **没有 `--entry` / `--root` 标志。** 现有的位置参数输入就是入口；
+  project root 是入口文件所在目录。
+- **重名拒绝而非 mangling。** join 后命名空间扁平；闭包内重复的顶层名字
+  被拒绝（E0102），sexp 形态与单文件输出 byte-identical。
+- **诊断。** E0100（`open` 无法解析）、E0101（`open` 环）、E0102（顶层
+  重名）、E0103（`open` 内置 stdlib 模块，或用户文件遮蔽其名字）——都在
+  `ocamlc` 运行前发出。
