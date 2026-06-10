@@ -18,7 +18,7 @@ const isZeroPubkeyBytes = common.isZeroPubkeyBytes;
 const programIdFromInput = common.programIdFromInput;
 const pubkeyEq = common.pubkeyEq;
 const readU64LeSlice = common.readU64LeSlice;
-const sol_create_program_address = cpi.sol_create_program_address;
+const sol_create_program_address = cpi.sol_create_program_address_derive;
 const writeSystemTransferData = common.writeSystemTransferData;
 const writeU64Le = common.writeU64Le;
 

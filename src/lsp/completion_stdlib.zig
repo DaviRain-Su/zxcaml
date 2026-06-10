@@ -203,6 +203,9 @@ pub const items = [_]Item{
     .{ .label = "Cpi.set_return_data", .kind = .function, .detail = "Cpi" },
     .{ .label = "Cpi.get_return_data", .kind = .function, .detail = "Cpi" },
     .{ .label = "Cpi.get_return_program_id", .kind = .function, .detail = "Cpi" },
+
+    // Pda
+    .{ .label = "Pda.create_program_address", .kind = .function, .detail = "bytes array -> bytes -> bytes" },
 };
 
 test "stdlib whitelist contains expected anchors" {

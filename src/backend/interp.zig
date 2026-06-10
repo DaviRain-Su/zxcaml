@@ -57,13 +57,13 @@ const Value = union(enum) {
     Record: RecordValue,
     Lambda: ir.Lambda,
     Closure: *const ClosureValue,
-    /// ADR-015 R9.1+R9.2 mutable int array. R9.2 promotes the backing
+    /// ADR-015 R9.1+R9.2 mutable array. R9.2 promotes the backing
     /// storage to a writable slice so `Array.set` / `a.(i) <- v` can
-    /// mutate elements in place; reads still work because `[]i64` coerces
-    /// to a read-only view where needed. The interpreter only supports
-    /// `int` element types; an OOB access returns the `array_oob` panic
-    /// marker via `error.ArrayOutOfBounds`.
-    Array: []i64,
+    /// mutate elements in place. Elements are boxed `Value`s so arrays
+    /// of non-int payloads (e.g. `bytes array` PDA signer seeds built
+    /// via `Array.of_list`) evaluate too; an OOB access returns the
+    /// `array_oob` panic marker via `error.ArrayOutOfBounds`.
+    Array: []Value,
     /// ADR-015 option C / R10 mutable ref cell. The cell is allocated on
     /// the per-evaluation arena and stores any supported element value
     /// (`int`, `bool`, `option int`, `option bool`).
@@ -258,11 +258,11 @@ fn evalRefSet(allocator: std.mem.Allocator, ref_set: ir.RefSet, env: *std.String
     return .{ .Int = 0 };
 }
 
-/// ADR-015 R9.1 interpreter evaluation of an int array literal.
+/// ADR-015 R9.1 interpreter evaluation of an array literal.
 fn evalArrayLit(allocator: std.mem.Allocator, array_lit: ir.ArrayLit, env: *std.StringHashMap(Value)) EvalError!Value {
-    const elems = try allocator.alloc(i64, array_lit.elems.len);
+    const elems = try allocator.alloc(Value, array_lit.elems.len);
     for (array_lit.elems, 0..) |elem, index| {
-        elems[index] = try intValue(try evalExpr(allocator, elem.*, env));
+        elems[index] = try evalExpr(allocator, elem.*, env);
     }
     return .{ .Array = elems };
 }
@@ -276,7 +276,7 @@ fn evalArrayGet(allocator: std.mem.Allocator, array_get: ir.ArrayGet, env: *std.
     };
     const idx = try intValue(try evalExpr(allocator, array_get.idx.*, env));
     if (idx < 0 or @as(usize, @intCast(idx)) >= elems.len) return error.ArrayOutOfBounds;
-    return .{ .Int = elems[@as(usize, @intCast(idx))] };
+    return elems[@as(usize, @intCast(idx))];
 }
 
 /// ADR-015 R9.1 interpreter evaluation of `Array.length arr`.
@@ -301,16 +301,16 @@ fn evalArraySet(allocator: std.mem.Allocator, array_set: ir.ArraySet, env: *std.
     };
     const idx = try intValue(try evalExpr(allocator, array_set.idx.*, env));
     if (idx < 0 or @as(usize, @intCast(idx)) >= elems.len) return error.ArrayOutOfBounds;
-    const value = try intValue(try evalExpr(allocator, array_set.value.*, env));
+    const value = try evalExpr(allocator, array_set.value.*, env);
     elems[@as(usize, @intCast(idx))] = value;
     return .{ .Ctor = .{ .name = "()", .args = &.{} } };
 }
 
 /// ADR-015 R9.2 interpreter evaluation of `Array.make N init` (literal N).
-/// Allocates a writable `[]i64` of length `size` filled with `init`.
+/// Allocates a writable `[]Value` of length `size` filled with `init`.
 fn evalArrayMake(allocator: std.mem.Allocator, array_make: ir.ArrayMake, env: *std.StringHashMap(Value)) EvalError!Value {
-    const init_val = try intValue(try evalExpr(allocator, array_make.init.*, env));
-    const elems = try allocator.alloc(i64, @as(usize, array_make.size));
+    const init_val = try evalExpr(allocator, array_make.init.*, env);
+    const elems = try allocator.alloc(Value, @as(usize, array_make.size));
     for (elems) |*slot| slot.* = init_val;
     return .{ .Array = elems };
 }
@@ -436,6 +436,28 @@ fn evalStdlibApp(
             .cons => |cell| .{ .List = cell.tail },
             .nil => error.MatchFailure,
         };
+    }
+    if (std.mem.eql(u8, name, "Array.of_list")) {
+        if (args.len != 1) return error.ArityMismatch;
+        const list = try evalListArg(allocator, args[0].*, env);
+        const length: usize = @intCast(try listLength(list));
+        const elems = try allocator.alloc(Value, length);
+        var current = list;
+        var index: usize = 0;
+        while (current.* == .cons) : (index += 1) {
+            elems[index] = current.cons.head;
+            current = current.cons.tail;
+        }
+        return .{ .Array = elems };
+    }
+
+    if (std.mem.eql(u8, name, "create_program_address") or std.mem.eql(u8, name, "Pda.create_program_address")) {
+        // Deterministic off-chain stub mirroring `stdlib/core.ml`: evaluate
+        // both arguments, ignore the seeds, and return the program id
+        // unchanged. The real sha256-based derivation only runs on BPF.
+        if (args.len != 2) return error.ArityMismatch;
+        _ = try evalExpr(allocator, args[0].*, env);
+        return try evalExpr(allocator, args[1].*, env);
     }
 
     if (std.mem.eql(u8, name, "Option.is_none")) {

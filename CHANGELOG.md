@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — DX: Pda namespace and cross-path PDA derivation
+
+- `Pda.create_program_address` joins the discoverable module namespaces
+  (the bare `create_program_address` name remains available), with LSP
+  completion. The helper previously worked only on the BPF path; the
+  interpreter and native targets now run the documented deterministic
+  off-chain stub (program-id pass-through, matching `stdlib/core.ml`),
+  so `examples/pda_derive.ml` — the first PDA example — passes the
+  interpreter≡native determinism gate (examples corpus 99 → 100).
+- The interpreter gained `Array.of_list` support and value-typed arrays
+  along the way (seeds are `bytes array`).
+- `try_find_program_address` stays declared but unwired; its
+  `(bytes * int) option` return is blocked on a codegen limitation, both
+  now tracked in the internal review backlog.
+
 ### Added — DX: AccountMeta constructor helpers
 
 - New `AccountMeta` stdlib module with five constructors that name CPI

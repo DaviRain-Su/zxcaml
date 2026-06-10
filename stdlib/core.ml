@@ -804,6 +804,10 @@ let create_program_address (_seeds : signer_seeds) (program_id : bytes) =
 let try_find_program_address (_seeds : signer_seeds) (program_id : bytes) =
   Some (program_id, 0)
 
+module Pda = struct
+  let create_program_address = create_program_address
+end
+
 module Cpi = struct
   let invoke = invoke
 

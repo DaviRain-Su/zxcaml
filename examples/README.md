@@ -84,6 +84,7 @@ inputs to `./scripts/check_examples_corpus.sh`.
 - [`examples/option_chain.ml`](./option_chain.ml)
 - [`examples/option_construct.ml`](./option_construct.ml)
 - [`examples/order_book.ml`](./order_book.ml)
+- [`examples/pda_derive.ml`](./pda_derive.ml)
 - [`examples/pda_storage.ml`](./pda_storage.ml)
 - [`examples/record_nested.ml`](./record_nested.ml)
 - [`examples/record_param_box.ml`](./record_param_box.ml)

@@ -179,6 +179,20 @@ constructors lower to plain record construction, so they behave identically
 to handwritten literals everywhere (interpreter, native, BPF, `--no-alloc`
 accounting). `examples/account_meta_helpers.ml` exercises all five.
 
+### PDA derivation
+
+`Pda.create_program_address seeds program_id` derives a program address from
+signer seeds (`Bytes.of_string` segments built via `Array.of_list`). On BPF
+the real `sol_create_program_address` syscall runs; on the interpreter and
+native targets the helper returns `program_id` unchanged — the same
+deterministic off-chain stub `stdlib/core.ml` defines for plain OCaml runs,
+mirroring how `Cpi.invoke` stubs to `0` off-chain. The bare
+`create_program_address` name remains available; `Pda.` is the discoverable
+namespace. `try_find_program_address` is declared for OCaml-level
+compatibility but is not yet wired through the compiler (its
+`(bytes * int) option` return is blocked on a codegen limitation).
+`examples/pda_derive.ml` exercises the helper end-to-end.
+
 `examples/simple_cpi.ml` demonstrates the system-program transfer shape. The
 local harness path is:
 

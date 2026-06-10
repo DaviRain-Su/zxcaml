@@ -455,7 +455,7 @@ pub fn emitSyscallAppExpr(
         try emitCpiInvoke(out, allocator, app, indent_level, ctx, true);
         return true;
     }
-    if (std.mem.eql(u8, name, "create_program_address")) {
+    if (std.mem.eql(u8, name, "create_program_address") or std.mem.eql(u8, name, "Pda.create_program_address")) {
         try emitCreateProgramAddress(out, allocator, app, indent_level, ctx);
         return true;
     }

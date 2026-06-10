@@ -169,6 +169,17 @@ AccountMeta.of_account a        (* 转发 a 自身的 key 与 writable/signer �
 路径（解释器、原生、BPF、`--no-alloc` 核算）上的行为与手写字面量完全一致。
 `examples/account_meta_helpers.ml` 演练了全部五个构造器。
 
+### PDA 派生
+
+`Pda.create_program_address seeds program_id` 从 signer seeds（用
+`Array.of_list` 组装的 `Bytes.of_string` 片段）派生程序地址。BPF 上运行真实
+的 `sol_create_program_address` 系统调用；解释器与原生目标上该助手原样返回
+`program_id`——与 `stdlib/core.ml` 为纯 OCaml 运行定义的确定性链下 stub 一
+致，模式同 `Cpi.invoke` 链下 stub 为 `0`。裸名 `create_program_address` 仍然
+可用；`Pda.` 是可发现的命名空间。`try_find_program_address` 为 OCaml 层兼容
+而声明，但尚未接线进编译器（其 `(bytes * int) option` 返回类型受一个
+codegen 限制阻塞）。`examples/pda_derive.ml` 端到端演练该助手。
+
 `examples/simple_cpi.ml` 演示 system-program transfer 形态。本地 harness 路径：
 
 ```sh

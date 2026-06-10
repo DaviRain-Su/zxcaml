@@ -472,8 +472,8 @@ inline fn parseAccountInfoUnchecked(input: [*]u8, cursor: *usize, out: *SolAccou
     };
 }
 
-/// Derives a program address from seeds and a program id.
-pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
+/// Real seeds-to-address derivation shared by BPF builds and host unit tests.
+pub inline fn sol_create_program_address_derive(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
     if (!validateSeeds(seeds)) return invalid_seeds;
     var seed_slices_buf: [max_seeds][]const u8 = undefined;
     for (seeds, 0..) |seed, index| {
@@ -484,6 +484,21 @@ pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_i
     };
     out.* = derived;
     return success;
+}
+
+/// Derives a program address from seeds and a program id.
+///
+/// Off-chain (native/hosted) builds mirror the deterministic stdlib stub in
+/// `stdlib/core.ml`: the seeds are ignored and the program id is returned
+/// unchanged, so interpreter and native outputs stay byte-identical. The real
+/// sha256-based derivation only runs on BPF (and remains available off-chain
+/// via `sol_create_program_address_derive`).
+pub inline fn sol_create_program_address(seeds: []const SolSignerSeed, program_id: *const Pubkey, out: *Pubkey) u64 {
+    if (!comptime is_bpf) {
+        out.* = program_id.*;
+        return success;
+    }
+    return sol_create_program_address_derive(seeds, program_id, out);
 }
 
 /// Finds a valid program address and bump seed for a seed prefix.
@@ -801,7 +816,7 @@ fn compareFindWithVendoredSdk(seed_slices: []const []const u8, program_id: *cons
     var recreated: Pubkey = undefined;
     try std.testing.expectEqual(
         success,
-        sol_create_program_address(with_bump_c[0 .. seed_slices.len + 1], program_id, &recreated),
+        sol_create_program_address_derive(with_bump_c[0 .. seed_slices.len + 1], program_id, &recreated),
     );
     try std.testing.expectEqualSlices(u8, expected.address[0..], recreated[0..]);
 }
@@ -848,8 +863,8 @@ test "hosted PDA derivation is deterministic and finds a bump" {
     };
     var first: Pubkey = undefined;
     var second: Pubkey = undefined;
-    try std.testing.expectEqual(success, sol_create_program_address(bumped_seeds[0..], &program_id, &first));
-    try std.testing.expectEqual(success, sol_create_program_address(bumped_seeds[0..], &program_id, &second));
+    try std.testing.expectEqual(success, sol_create_program_address_derive(bumped_seeds[0..], &program_id, &first));
+    try std.testing.expectEqual(success, sol_create_program_address_derive(bumped_seeds[0..], &program_id, &second));
     try std.testing.expectEqualSlices(u8, &first, &second);
     try std.testing.expectEqualSlices(u8, &found, &first);
 }
@@ -874,7 +889,7 @@ test "PDA helper rejects overlong seeds like the SDK" {
     var observed: Pubkey = undefined;
     try std.testing.expectEqual(
         invalid_seeds,
-        sol_create_program_address(c_seeds[0..], &program_id, &observed),
+        sol_create_program_address_derive(c_seeds[0..], &program_id, &observed),
     );
     try std.testing.expectError(
         error.MaxSeedLengthExceeded,
@@ -913,12 +928,26 @@ test "PDA create helper rejects too many seeds like the SDK" {
     var observed: Pubkey = undefined;
     try std.testing.expectEqual(
         invalid_seeds,
-        sol_create_program_address(c_seeds[0..], &program_id, &observed),
+        sol_create_program_address_derive(c_seeds[0..], &program_id, &observed),
     );
     try std.testing.expectError(
         error.MaxSeedLengthExceeded,
         vendored_sdk.pda.createProgramAddress(seed_slices[0..], &program_id),
     );
+}
+
+test "hosted create_program_address entry mirrors the stdlib program-id stub" {
+    // Generated programs call `sol_create_program_address`; off-chain it must
+    // match the deterministic `stdlib/core.ml` stub (program id pass-through)
+    // so interpreter and native outputs agree. Real derivation stays pinned
+    // by the `_derive` tests above.
+    var program_id: Pubkey = [_]u8{0x44} ** 32;
+    const seed_bytes = "zxcaml";
+    const seeds = [_]SolSignerSeed{SolSignerSeed.fromSlice(seed_bytes)};
+
+    var observed: Pubkey = undefined;
+    try std.testing.expectEqual(success, sol_create_program_address(seeds[0..], &program_id, &observed));
+    try std.testing.expectEqualSlices(u8, program_id[0..], observed[0..]);
 }
 
 test "CPI account info parser resolves duplicate accounts to shared backing state" {
