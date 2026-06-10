@@ -16,6 +16,7 @@ root = Path(sys.argv[1])
 mirrored_pairs = [
     ("README.md", "docs/zh/README.md"),
     ("INSTALLING.md", "docs/zh/INSTALLING.md"),
+    ("AGENTS.md", "docs/zh/AGENTS.md"),
     ("docs/01-architecture.md", "docs/zh/01-architecture.md"),
     ("docs/06-bpf-target.md", "docs/zh/06-bpf-target.md"),
     ("docs/07-repo-layout.md", "docs/zh/07-repo-layout.md"),
@@ -65,6 +66,7 @@ historical_globs = [
 active_stale_scan = {
     "README.md",
     "INSTALLING.md",
+    "AGENTS.md",
     "demo.sh",
     "docs/01-architecture.md",
     "docs/06-bpf-target.md",
@@ -75,6 +77,7 @@ active_stale_scan = {
     "docs/runtime-api.md",
     "docs/zh/README.md",
     "docs/zh/INSTALLING.md",
+    "docs/zh/AGENTS.md",
     "docs/zh/01-architecture.md",
     "docs/zh/06-bpf-target.md",
     "docs/zh/07-repo-layout.md",
