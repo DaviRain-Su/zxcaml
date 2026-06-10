@@ -190,10 +190,14 @@ entrypoint's accounts into a CPI with its existing privileges. The
 constructors lower to plain record construction, so they behave identically
 to handwritten literals everywhere (interpreter, native, BPF, `--no-alloc`
 accounting). `examples/account_meta_helpers.ml` exercises all five. When a helper
-function takes an `account_meta` parameter, read `m.pubkey` somewhere in
-its body (see `examples/account_meta_param.ml`): `pubkey` is the field
-unique to `account_meta`, and touching it keeps the parameter-typing
-heuristic from classifying the param as an entrypoint `account`.
+function takes an `account_meta` parameter, annotate it explicitly —
+`let meta_flags (m : account_meta) = ...` — and the annotation types the
+helper correctly (wire 1.7 carries the annotation marker; see
+`examples/account_meta_annotated.ml`). For *unannotated* params the
+`pubkey`-read veto remains: reading `m.pubkey` — the field unique to
+`account_meta` — keeps the parameter-typing heuristic from classifying
+the param as an entrypoint `account` (see
+`examples/account_meta_param.ml`).
 
 ### PDA derivation
 

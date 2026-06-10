@@ -178,9 +178,12 @@ AccountMeta.of_account a        (* 转发 a 自身的 key 与 writable/signer �
 连同其既有权限转发进 CPI。这些构造器降级为普通的 record 构造，因此在所有
 路径（解释器、原生、BPF、`--no-alloc` 核算）上的行为与手写字面量完全一致。
 `examples/account_meta_helpers.ml` 演练了全部五个构造器。当辅助函数接受
-`account_meta` 参数时，请在函数体内读取一次 `m.pubkey`（见
-`examples/account_meta_param.ml`）：`pubkey` 是 `account_meta` 独有的字段，
-读取它能让参数类型启发式不再把该参数误归为 entrypoint 的 `account`。
+`account_meta` 参数时，请显式注解——`let meta_flags (m : account_meta) = ...`
+——注解即可让该 helper 正确定型（wire 1.7 携带注解标记；见
+`examples/account_meta_annotated.ml`）。对于*未注解*的参数，`pubkey` 读取
+否决仍然有效：读取 `m.pubkey`（`account_meta` 独有的字段）能让参数类型
+启发式不再把该参数误归为 entrypoint 的 `account`（见
+`examples/account_meta_param.ml`）。
 
 ### PDA 派生
 

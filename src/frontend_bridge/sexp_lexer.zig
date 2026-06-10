@@ -135,7 +135,8 @@ fn isDelimiter(ch: u8) bool {
 }
 
 fn isAtomChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-' or ch == '\'' or ch == '.';
+    // `!` joined the alphabet with wire 1.7's annotated-parameter `ty!` tag.
+    return std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-' or ch == '\'' or ch == '.' or ch == '!';
 }
 
 fn isIdentifier(bytes: []const u8) bool {

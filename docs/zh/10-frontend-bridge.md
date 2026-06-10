@@ -96,7 +96,7 @@ zxc-frontend --emit=sexp <input.ml>
   E0103（`open` 内置 stdlib 模块，或用户文件遮蔽其名字）都在 `ocamlc`
   运行前发出。
 
-Wire 仍是 **`1.6`**：每个 `(loc <file> <line> <col> <end_line> <end_col>)`
+Wire 仍是 **`1.7`**：每个 `(loc <file> <line> <col> <end_line> <end_col>)`
 节点本来就带 file atom，多文件 span 归属不需要新的 wire 形态；没有用户
 `open` 的程序产出与单文件 byte-identical 的 sexp。
 
@@ -111,12 +111,12 @@ Wire 仍是 **`1.6`**：每个 `(loc <file> <line> <col> <end_line> <end_col>)`
 
 ### 3.1 顶层形态
 
-当前 wire grammar 是 sexp **版本 `1.6`**。Header 携带版本，使 `omlz` 能对过期
+当前 wire grammar 是 sexp **版本 `1.7`**。Header 携带版本，使 `omlz` 能对过期
 前端输出给出 upgrade hint：
 
 ```text
 ;; 为了可读性省略 locations
-(zxcaml-cir 1.6
+(zxcaml-cir 1.7
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -149,6 +149,7 @@ Wire-format history：
 | `1.4` | array / loop 阶段在 ref 之前的 additive surface |
 | `1.5` | arena-backed ref cell 的 `ref-make`、`ref-get`、`ref-set` |
 | `1.6` | 内层表达式的 `(located ...)` 包装，支撑表达式级诊断与 source map |
+| `1.7` | 显式参数注解的 `ty!` 标记，使 `(p : ty)` 注解优先于参数分类启发式 |
 
 诊断位置仍通过 stderr 上的诊断单独携带；普通注释和格式 trivia 不会序列化。
 

@@ -2,9 +2,10 @@
 
    Reading `m.pubkey` — the field unique to `account_meta` — is what keeps
    the param-classification heuristic from treating `m` as an entrypoint
-   `account`. A helper that reads only the shared `is_signer`/`is_writable`
-   flags still classifies as `account`; touch `pubkey` (as here) when a
-   function genuinely takes a CPI meta. *)
+   `account` when the parameter is *unannotated*. Since wire 1.7, an
+   explicit `(m : account_meta)` annotation alone suffices — annotations
+   beat the heuristics (see `examples/account_meta_annotated.ml`); the
+   `pubkey`-read veto remains relevant only for unannotated params. *)
 
 let meta_summary (m : account_meta) =
   let _ = m.pubkey in

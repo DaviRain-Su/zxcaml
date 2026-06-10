@@ -1,7 +1,7 @@
 # ZxCaml frontend S-expression wire format
 
 `zxc-frontend --emit=sexp <input.ml>` emits exactly one S-expression on
-stdout. The current default wire is `1.6`. The grammar below records the
+stdout. The current default wire is `1.7`. The grammar below records the
 historical `0.5` base (user-authored ADT type declarations over the P1
 expression/match nodes), followed by additive notes for the later `1.x` wire
 bumps, including the current `1.5` ref-cell shapes.
@@ -235,7 +235,11 @@ cross-version compatibility matrix. In summary:
 - `1.4`: prior wire major; `1.5` is a strict additive extension.
 - `1.3`: lambda and `let rec` parameters carry an inferred per-parameter
   OCaml type as `(name (ty <type-expr>))`. Unresolved types use the
-  `(any)` sentinel.
+  `(any)` sentinel. Wire `1.7` additionally emits the `ty!` tag instead of
+  `ty` (same arity) for parameters that carried an explicit `(p : ty)`
+  annotation in the source, so explicit annotations beat the consumer's
+  parameter-classification heuristics; `--wire=1.6` re-emits the plain
+  `ty` tag.
 - `1.2`: optional `(loc ...)` location metadata on expression nodes; lambda
   params stay as bare-atom names. The current `1.5` reader still accepts
   `1.2` sexps.

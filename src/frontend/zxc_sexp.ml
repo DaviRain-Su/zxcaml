@@ -17,6 +17,7 @@ type wire_version =
   | Wire_1_4
   | Wire_1_5
   | Wire_1_6
+  | Wire_1_7
 
 let version = function
   | Wire_1_1 -> "1.1"
@@ -25,6 +26,7 @@ let version = function
   | Wire_1_4 -> "1.4"
   | Wire_1_5 -> "1.5"
   | Wire_1_6 -> "1.6"
+  | Wire_1_7 -> "1.7"
 
 let wire_version_of_string = function
   | "1.1" -> Some Wire_1_1
@@ -33,17 +35,26 @@ let wire_version_of_string = function
   | "1.4" -> Some Wire_1_4
   | "1.5" -> Some Wire_1_5
   | "1.6" -> Some Wire_1_6
+  | "1.7" -> Some Wire_1_7
   | _ -> None
 
 let emit_param_types = function
   | Wire_1_1 | Wire_1_2 -> false
-  | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 -> true
+  | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 | Wire_1_7 -> true
 
 (* Wire 1.6: emit `(located ...)` wrappers around inner expressions; the
    older shapes strip them so `--wire=1.5` output stays byte-identical. *)
 let emit_inner_locs = function
   | Wire_1_1 | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 -> false
-  | Wire_1_6 -> true
+  | Wire_1_6 | Wire_1_7 -> true
+
+(* Wire 1.7: explicitly annotated params emit `(name (ty! <type-expr>))`
+   instead of `(name (ty <type-expr>))` so the consumer can let explicit
+   annotations win over its classification heuristics. Older shapes emit
+   the plain `ty` tag so `--wire=1.6` output stays byte-identical. *)
+let emit_annotated_params = function
+  | Wire_1_1 | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 -> false
+  | Wire_1_7 -> true
 
 let is_atom_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-' | '\'' | '.' -> true
@@ -85,7 +96,8 @@ let rec pp_expr ~wire ppf = function
   | Var name -> fprintf ppf "(var %a)" pp_atom name
   | Lambda lambda ->
       fprintf ppf "(lambda (";
-      pp_lambda_params ~wire ppf lambda.params lambda.param_types;
+      pp_lambda_params ~wire ppf lambda.params lambda.param_types
+        lambda.param_annotated;
       fprintf ppf ") %a)" (pp_expr ~wire) lambda.body
   | App app ->
       fprintf ppf "(app %a" (pp_expr ~wire) app.callee;
@@ -184,58 +196,65 @@ and pp_record_expr_field ~wire ppf field =
 
 and pp_let_rec_binding ~wire ppf binding =
   fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
-  pp_rec_params ~wire ppf binding.rec_params binding.rec_param_types;
+  pp_rec_params ~wire ppf binding.rec_params binding.rec_param_types
+    binding.rec_param_annotated;
   fprintf ppf ") (body %a))" (pp_expr ~wire) binding.rec_body
 
 and pp_let_rec_binding_with_loc ~wire ppf binding =
   fprintf ppf "(binding (name %a) (params" pp_atom binding.rec_name;
-  pp_rec_params ~wire ppf binding.rec_params binding.rec_param_types;
+  pp_rec_params ~wire ppf binding.rec_params binding.rec_param_types
+    binding.rec_param_annotated;
   fprintf ppf ") (body %a))" (pp_expr_with_loc ~wire) (binding.rec_loc, binding.rec_body)
 
-and pp_lambda_params ~wire ppf params param_types =
+and pp_lambda_params ~wire ppf params param_types param_annotated =
   if emit_param_types wire then
-    pp_typed_lambda_params ppf params param_types
+    pp_typed_lambda_params ~wire ppf params param_types param_annotated
   else
     pp_params ppf params
 
-and pp_typed_lambda_params ppf params param_types =
-  let typed_list =
-    let rec zip ps ts =
-      match (ps, ts) with
-      | [], _ -> []
-      | p :: prest, [] -> (p, None) :: zip prest []
-      | p :: prest, t :: trest -> (p, t) :: zip prest trest
-    in
-    zip params param_types
+(* Pads the lockstep type/annotation lists out to the param-list length so
+   serialization never depends on the extractor having produced full
+   lockstep metadata. *)
+and zip_typed_params params param_types param_annotated =
+  let rec zip ps ts ans =
+    match ps with
+    | [] -> []
+    | p :: prest ->
+        let t, trest = match ts with [] -> (None, []) | t :: rest -> (t, rest) in
+        let a, anrest =
+          match ans with [] -> (false, []) | a :: rest -> (a, rest)
+        in
+        (p, t, a) :: zip prest trest anrest
   in
-  let pp_one ppf (param, ty_opt) =
+  zip params param_types param_annotated
+
+and pp_typed_lambda_params ~wire ppf params param_types param_annotated =
+  let typed_list = zip_typed_params params param_types param_annotated in
+  let pp_one ppf (param, ty_opt, annotated) =
     let ty = match ty_opt with Some ty -> ty | None -> Type_any in
-    fprintf ppf "(%a (ty %a))" pp_param param pp_type_expr ty
+    let tag =
+      if annotated && emit_annotated_params wire then "ty!" else "ty"
+    in
+    fprintf ppf "(%a (%s %a))" pp_param param tag pp_type_expr ty
   in
   match typed_list with
   | [] -> ()
   | [ one ] -> pp_one ppf one
   | first :: rest ->
       pp_one ppf first;
-      List.iter (fun pair -> fprintf ppf " %a" pp_one pair) rest
+      List.iter (fun triple -> fprintf ppf " %a" pp_one triple) rest
 
-and pp_rec_params ~wire ppf params param_types =
-  if emit_param_types wire then begin
-    let pad_types =
-      let rec pad ps ts =
-        match (ps, ts) with
-        | [], _ -> []
-        | _ :: prest, [] -> None :: pad prest []
-        | _ :: prest, t :: trest -> t :: pad prest trest
-      in
-      pad params param_types
-    in
-    List.iter2
-      (fun param ty_opt ->
+and pp_rec_params ~wire ppf params param_types param_annotated =
+  if emit_param_types wire then
+    List.iter
+      (fun (param, ty_opt, annotated) ->
         let ty = match ty_opt with Some ty -> ty | None -> Type_any in
-        fprintf ppf " (%a (ty %a))" pp_param param pp_type_expr ty)
-      params pad_types
-  end else
+        let tag =
+          if annotated && emit_annotated_params wire then "ty!" else "ty"
+        in
+        fprintf ppf " (%a (%s %a))" pp_param param tag pp_type_expr ty)
+      (zip_typed_params params param_types param_annotated)
+  else
     List.iter (fun param -> fprintf ppf " %a" pp_param param) params
 
 and pp_params ppf = function
@@ -298,7 +317,7 @@ and pp_record_pattern_field ppf field =
 let rec pp_decl ~wire ppf decl =
   let emit_locs =
     match wire with
-    | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 -> true
+    | Wire_1_2 | Wire_1_3 | Wire_1_4 | Wire_1_5 | Wire_1_6 | Wire_1_7 -> true
     | Wire_1_1 -> false
   in
   match decl with
@@ -406,4 +425,4 @@ let pp_module ~wire ppf = function
       List.iter (fun decl -> fprintf ppf " %a" (pp_decl ~wire) decl) decls;
       fprintf ppf "))"
 
-let to_string ?(wire = Wire_1_6) modul = asprintf "%a@." (pp_module ~wire) modul
+let to_string ?(wire = Wire_1_7) modul = asprintf "%a@." (pp_module ~wire) modul

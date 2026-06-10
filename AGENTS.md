@@ -16,7 +16,7 @@ pipeline. The CLI binary is `omlz`.
 
 Pipeline in one line:
 
-`.ml` → `ocamlc -bin-annot` (`.cmt`) → `zxc-frontend` (sexp wire `1.6`) →
+`.ml` → `ocamlc -bin-annot` (`.cmt`) → `zxc-frontend` (sexp wire `1.7`) →
 `omlz` (ANF Core IR → const-fold/DCE/inline → region inference + arena
 lowering → Zig codegen | tree-walk interpreter) → `solana-zig build-lib`
 → `.so`
@@ -77,7 +77,7 @@ zig-out/bin/omlz build examples/solana_hello.ml --target=bpf -o sh.so
   add syntax upstream OCaml would reject. (ADR-001)
 - **Arena-only memory**: no GC, no free; 32 KiB entry arena native, 3 KiB on
   BPF. See [docs/04-memory-model.md](./docs/04-memory-model.md).
-- **Wire format is versioned** (currently `1.6`): changes to the
+- **Wire format is versioned** (currently `1.7`): changes to the
   frontend↔Zig sexp format must follow
   [docs/wire-compat.md](./docs/wire-compat.md) (additive bumps, documented).
 - **Bilingual docs gate**: `./scripts/check_docs_sync.sh` enforces

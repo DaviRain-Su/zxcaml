@@ -192,7 +192,7 @@ tools can key on codes instead of matching message text.
 Consumers should treat `code` as optional. When present, prefer exact matching
 over parsing message text.
 
-## Wire format history (current default 1.6)
+## Wire format history (current default 1.7)
 
 DX2 bumps the frontend bridge wire from `1.1` to `1.2` so frontend-emitted
 S-expressions can carry source locations into the Zig bridge, following the
@@ -201,7 +201,7 @@ mission-local canonical facts snapshot,
 `mission-internal/canonical-facts.md`, is the historical citation for the
 pre-DX2 canonical wire value (`1.1`); the post-bump implementation source of
 truth is now `src/frontend_bridge/sexp_parser.zig`
-(`expected_wire_version = "1.6"`; the reader still accepts compatible `1.2+` shapes).
+(`expected_wire_version = "1.7"`; the reader still accepts compatible `1.2+` shapes).
 
 ### Optional `(loc ...)` schema
 

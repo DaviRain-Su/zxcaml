@@ -216,12 +216,12 @@ let emit_frontend_parse_error ~input ~line ~col ~end_col ~code ~node_kind
   exit 2
 
 let usage () =
-  prerr_endline "usage: zxc-frontend --emit=sexp [--wire=1.1|--wire=1.2|--wire=1.3|--wire=1.4|--wire=1.5|--wire=1.6] <input.ml>";
+  prerr_endline "usage: zxc-frontend --emit=sexp [--wire=1.1|--wire=1.2|--wire=1.3|--wire=1.4|--wire=1.5|--wire=1.6|--wire=1.7] <input.ml>";
   exit 3
 
 let parse_args () =
   match Array.to_list Sys.argv with
-  | [ _program; "--emit=sexp"; input ] -> (input, Zxc_sexp.Wire_1_6)
+  | [ _program; "--emit=sexp"; input ] -> (input, Zxc_sexp.Wire_1_7)
   | [ _program; "--emit=sexp"; wire_flag; input ]
     when starts_with ~prefix:"--wire=" wire_flag -> (
       let requested = String.sub wire_flag (String.length "--wire=")

@@ -56,6 +56,8 @@ pub const LetRecBinding = struct {
     params: []const []const u8,
     /// Lockstep with `params`. See `Lambda.param_types`.
     param_types: []const ?TypeExpr = &.{},
+    /// Lockstep with `params`. See `Lambda.param_annotated`.
+    param_annotated: []const bool = &.{},
     body: Expr,
 };
 
@@ -246,6 +248,10 @@ pub const Lambda = struct {
     /// parameter; wire <=1.2 emits the bare-name form and the bridge fills
     /// these with `null` so downstream consumers fall back to heuristics.
     param_types: []const ?TypeExpr = &.{},
+    /// One entry per `params`, in lockstep. Wire 1.7 emits `ty!` for params
+    /// that carried an explicit `(p : ty)` annotation in the source; older
+    /// wires leave every entry `false` so heuristics keep their old priority.
+    param_annotated: []const bool = &.{},
     body: *const Expr,
     loc: Loc = Loc.unknown,
 };

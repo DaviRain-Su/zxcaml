@@ -67,6 +67,10 @@ type expr =
 and lambda = {
   params : param list;
   param_types : type_expr option list;
+  (* Lockstep with [params]. Wire 1.7 / CR-13: [true] when the source
+     carried an explicit `(p : ty)` annotation, so the consumer can let the
+     annotation win over its parameter-classification heuristics. *)
+  param_annotated : bool list;
   body : expr;
 }
 
@@ -91,6 +95,8 @@ and let_rec_binding = {
   rec_name : string;
   rec_params : param list;
   rec_param_types : type_expr option list;
+  (* Lockstep with [rec_params]; see [lambda.param_annotated]. *)
+  rec_param_annotated : bool list;
   rec_body : expr;
   rec_loc : loc;
 }
@@ -1086,10 +1092,20 @@ let parse_param (param : function_param) =
   match (param.fp_arg_label, param.fp_kind) with
   | Nolabel, Tparam_pat pat ->
       let ty = Some (type_of_ocaml_type_expr pat.pat_type) in
+      (* Wire 1.7 / CR-13: an explicit `(p : ty)` parameter annotation leaves
+         a `Tpat_constraint` entry in `pat_extra`; record it so explicit
+         annotations can override the downstream classification heuristics. *)
+      let annotated =
+        List.exists
+          (fun (extra, _, _) ->
+            match extra with Tpat_constraint _ -> true | _ -> false)
+          pat.pat_extra
+      in
       (match pat.pat_desc with
-      | Tpat_any -> (Anonymous, ty)
-      | Tpat_var (ident, _, _) -> (Param (ident_name ident), ty)
-      | Tpat_alias (_, ident, _, _) -> (Param (ident_name ident), ty)
+      | Tpat_any -> (Anonymous, ty, annotated)
+      | Tpat_var (ident, _, _) -> (Param (ident_name ident), ty, annotated)
+      | Tpat_alias (_, ident, _, _) ->
+          (Param (ident_name ident), ty, annotated)
       | other -> unsupported ~node_kind:(pat_kind other) ~loc:pat.pat_loc ())
   | _, Tparam_pat pat ->
       unsupported ~node_kind:"labelled-parameter" ~loc:pat.pat_loc ()
@@ -1289,15 +1305,16 @@ and parse_record_fields env fields =
 
 and split_rec_binding_body body =
   match strip_located body with
-  | Lambda lambda -> (lambda.params, lambda.param_types, lambda.body)
-  | _ -> ([], [], body)
+  | Lambda lambda ->
+      (lambda.params, lambda.param_types, lambda.param_annotated, lambda.body)
+  | _ -> ([], [], [], body)
 
 and parse_let_rec_binding env (binding : value_binding) =
   let rec_name = parse_binding_name binding.vb_pat in
-  let rec_params, rec_param_types, rec_body =
+  let rec_params, rec_param_types, rec_param_annotated, rec_body =
     split_rec_binding_body (parse_expr env binding.vb_expr)
   in
-  { rec_name; rec_params; rec_param_types; rec_body;
+  { rec_name; rec_params; rec_param_types; rec_param_annotated; rec_body;
     rec_loc = loc_of_location binding.vb_expr.exp_loc }
 
 and parse_expr env (expr : expression) =
@@ -1326,14 +1343,23 @@ and parse_expr_unwrapped env (expr : expression) =
       | None -> Var (resolved_ident_name env lid))
   | Texp_function (params, Tfunction_body body) ->
       let parsed = List.map parse_param params in
-      let params = List.map fst parsed in
-      let param_types = List.map snd parsed in
+      let params = List.map (fun (param, _, _) -> param) parsed in
+      let param_types = List.map (fun (_, ty, _) -> ty) parsed in
+      let param_annotated =
+        List.map (fun (_, _, annotated) -> annotated) parsed
+      in
       let body = parse_expr env body in
-      Lambda { params; param_types; body }
+      Lambda { params; param_types; param_annotated; body }
   | Texp_function (params, Tfunction_cases { cases; param; _ }) ->
       let parsed = List.map parse_param params in
-      let params = List.map fst parsed @ [ Param (ident_name param) ] in
-      let param_types = List.map snd parsed @ [ None ] in
+      let params =
+        List.map (fun (param, _, _) -> param) parsed
+        @ [ Param (ident_name param) ]
+      in
+      let param_types = List.map (fun (_, ty, _) -> ty) parsed @ [ None ] in
+      let param_annotated =
+        List.map (fun (_, _, annotated) -> annotated) parsed @ [ false ]
+      in
       let body =
         Match
           {
@@ -1341,7 +1367,7 @@ and parse_expr_unwrapped env (expr : expression) =
             arms = List.map (parse_value_match_case env) cases;
           }
       in
-      Lambda { params; param_types; body }
+      Lambda { params; param_types; param_annotated; body }
   | Texp_let (Nonrecursive, [ binding ], body) -> (
       (* R11.5: a `let (a, b, ...) = rhs in body` binding is desugared
          into a synthetic `let __zxc_match_scrut_<n> = rhs in match
@@ -1681,6 +1707,7 @@ and parse_expr_unwrapped env (expr : expression) =
             params = [ Param iter_name ];
             param_types =
               [ Some (Type_constr { type_name = "int"; args = []; is_recursive_ref = false }) ];
+            param_annotated = [ false ];
             body = loop_body;
           }
       in
@@ -1782,6 +1809,7 @@ and parse_expr_unwrapped env (expr : expression) =
             params = [ Param counter_name ];
             param_types =
               [ Some (Type_constr { type_name = "int"; args = []; is_recursive_ref = false }) ];
+            param_annotated = [ false ];
             body = loop_body;
           }
       in

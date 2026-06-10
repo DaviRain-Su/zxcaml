@@ -9,7 +9,7 @@
 
 - 默认诊断格式是 **rustc-style human renderer**。
 - `omlz check`、`omlz build`、`omlz idl`、`omlz run` 共享同一套错误格式开关。
-- 当前 wire 默认值是 `1.6`，兼容旧的 additive 读者窗口。
+- 当前 wire 默认值是 `1.7`，兼容旧的 additive 读者窗口。
 
 ## 关键命令
 

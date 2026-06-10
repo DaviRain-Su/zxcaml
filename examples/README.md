@@ -23,6 +23,7 @@ inputs to `./scripts/check_examples_corpus.sh`.
 
 <!-- user-examples:start -->
 - [`examples/account_guard.ml`](./account_guard.ml)
+- [`examples/account_meta_annotated.ml`](./account_meta_annotated.ml)
 - [`examples/account_meta_helpers.ml`](./account_meta_helpers.ml)
 - [`examples/account_meta_param.ml`](./account_meta_param.ml)
 - [`examples/account_parser_view.ml`](./account_parser_view.ml)

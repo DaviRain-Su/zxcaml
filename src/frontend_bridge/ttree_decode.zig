@@ -105,6 +105,7 @@ pub fn parseModule(arena: *std.heap.ArenaAllocator, bytes: []const u8) BridgeErr
 
     const file_version = try expectAtom(header[1]);
     if (!std.mem.eql(u8, file_version, expected_wire_version) and
+        !std.mem.eql(u8, file_version, "1.6") and
         !std.mem.eql(u8, file_version, "1.5") and
         !std.mem.eql(u8, file_version, "1.4") and
         !std.mem.eql(u8, file_version, "1.3") and
@@ -130,7 +131,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
         error.WireFormatVersionMismatch => {
             try writeStderr(io, "wire format version mismatch: file=");
             try writeStderr(io, extractHeaderVersion(bytes));
-            try writeStderr(io, " expected=1.6\n");
+            try writeStderr(io, " expected=1.7\n");
             if (std.mem.eql(u8, extractHeaderVersion(bytes), "0.1") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.2") or
                 std.mem.eql(u8, extractHeaderVersion(bytes), "0.3") or
@@ -145,7 +146,7 @@ pub fn writeParseError(io: Io, bytes: []const u8, err: anyerror) !void {
             {
                 try writeStderr(io, "hint: frontend wire format ");
                 try writeStderr(io, extractHeaderVersion(bytes));
-                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits location-rich sexp 1.6.\n");
+                try writeStderr(io, " is deprecated; rebuild zxc-frontend with this omlz so it emits annotation-aware sexp 1.7.\n");
             } else {
                 try writeStderr(io, "hint: rebuild zxc-frontend with this omlz so the frontend and Zig bridge agree on the wire format.\n");
             }
@@ -977,6 +978,7 @@ fn parseLetRecBinding(arena: *std.heap.ArenaAllocator, node: *const Sexp) Bridge
         .name = try dupeAtom(arena, name_items[1]),
         .params = params_with_types.names,
         .param_types = params_with_types.types,
+        .param_annotated = params_with_types.annotated,
         .body = try parseExpr(arena, body_items[1]),
     };
 }
@@ -984,6 +986,7 @@ fn parseLetRecBinding(arena: *std.heap.ArenaAllocator, node: *const Sexp) Bridge
 const LetRecParams = struct {
     names: []const []const u8,
     types: []const ?TypeExpr,
+    annotated: []const bool,
 };
 
 fn parseLetRecParams(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!LetRecParams {
@@ -994,14 +997,18 @@ fn parseLetRecParams(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeE
     errdefer names.deinit(arena.allocator());
     var types = std.ArrayList(?TypeExpr).empty;
     errdefer types.deinit(arena.allocator());
+    var annotated = std.ArrayList(bool).empty;
+    errdefer annotated.deinit(arena.allocator());
     for (params_items[1..]) |param_node| {
         const parsed = try parseLambdaParam(arena, param_node);
         try names.append(arena.allocator(), parsed.name);
         try types.append(arena.allocator(), parsed.ty);
+        try annotated.append(arena.allocator(), parsed.annotated);
     }
     return .{
         .names = try names.toOwnedSlice(arena.allocator()),
         .types = try types.toOwnedSlice(arena.allocator()),
+        .annotated = try annotated.toOwnedSlice(arena.allocator()),
     };
 }
 
@@ -1094,10 +1101,13 @@ fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Brid
     errdefer params.deinit(arena.allocator());
     var param_types = std.ArrayList(?TypeExpr).empty;
     errdefer param_types.deinit(arena.allocator());
+    var param_annotated = std.ArrayList(bool).empty;
+    errdefer param_annotated.deinit(arena.allocator());
     for (param_nodes) |param_node| {
         const parsed = try parseLambdaParam(arena, param_node);
         try params.append(arena.allocator(), parsed.name);
         try param_types.append(arena.allocator(), parsed.ty);
+        try param_annotated.append(arena.allocator(), parsed.annotated);
     }
 
     const body = try arena.allocator().create(Expr);
@@ -1106,6 +1116,7 @@ fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Brid
     return .{
         .params = try params.toOwnedSlice(arena.allocator()),
         .param_types = try param_types.toOwnedSlice(arena.allocator()),
+        .param_annotated = try param_annotated.toOwnedSlice(arena.allocator()),
         .body = body,
     };
 }
@@ -1113,17 +1124,21 @@ fn parseLambda(arena: *std.heap.ArenaAllocator, items: []const *const Sexp) Brid
 const LambdaParam = struct {
     name: []const u8,
     ty: ?TypeExpr,
+    annotated: bool,
 };
 
 /// Parses one lambda/binding parameter as either:
 ///   - wire <= 1.2 legacy: a bare atom (`s` or `_`)
 ///   - wire 1.3: a list `(name (ty <type-expr>))` where `<type-expr>` may be
-///     `(any)` to mean "type unknown, fall back to the lowerer heuristics".
+///     `(any)` to mean "type unknown, fall back to the lowerer heuristics"
+///   - wire 1.7: same shape with the `ty!` tag when the source carried an
+///     explicit `(p : ty)` annotation, so lowering lets it beat heuristics.
 fn parseLambdaParam(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeError!LambdaParam {
     if (node.atomLike()) |atom| {
         return .{
             .name = try arena.allocator().dupe(u8, atom),
             .ty = null,
+            .annotated = false,
         };
     }
     const items = try expectList(node);
@@ -1131,7 +1146,9 @@ fn parseLambdaParam(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeEr
     const name = try dupeAtom(arena, items[0]);
     const ty_items = try expectList(items[1]);
     if (ty_items.len != 2) return error.MalformedLambda;
-    try expectAtomValue(ty_items[0], "ty");
+    const ty_tag = try expectAtom(ty_items[0]);
+    const annotated = std.mem.eql(u8, ty_tag, "ty!");
+    if (!annotated and !std.mem.eql(u8, ty_tag, "ty")) return error.MalformedLambda;
     // `(any)` is a sentinel for "no type information"; record it as null so
     // the Core IR lowerer falls back to its existing heuristics.
     const ty_payload = ty_items[1];
@@ -1140,13 +1157,14 @@ fn parseLambdaParam(arena: *std.heap.ArenaAllocator, node: *const Sexp) BridgeEr
         if (payload_items.len == 1) {
             const tag = try expectAtom(payload_items[0]);
             if (std.mem.eql(u8, tag, "any")) {
-                return .{ .name = name, .ty = null };
+                return .{ .name = name, .ty = null, .annotated = annotated };
             }
         }
     }
     return .{
         .name = name,
         .ty = try parseTypeExpr(arena, ty_payload),
+        .annotated = annotated,
     };
 }
 

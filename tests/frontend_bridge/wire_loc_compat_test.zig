@@ -119,6 +119,51 @@ test "wire 1.3 typed lambda params populate param_types with typed and any entri
     try std.testing.expect(lambda.param_types[1] == null);
 }
 
+// Verification anchor: wire_1_7|lambda_param_annotated|ty_bang
+test "wire 1.7 ty! params set param_annotated while ty params stay false" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const module = try ttree.parseModule(
+        &arena,
+        \\(zxcaml-cir 1.7
+        \\  (module
+        \\    (let entrypoint
+        \\      (lambda ((m (ty! (type-ref account_meta))) (y (ty (type-ref int))) (z (ty! (any))))
+        \\        (var y)))))
+    );
+
+    const let_decl = switch (module.decls[0]) {
+        .Let => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+    const lambda = switch (let_decl.body) {
+        .Lambda => |value| value,
+        else => return error.TestUnexpectedResult,
+    };
+
+    try std.testing.expectEqual(@as(usize, 3), lambda.params.len);
+    try std.testing.expectEqual(@as(usize, 3), lambda.param_types.len);
+    try std.testing.expectEqual(@as(usize, 3), lambda.param_annotated.len);
+
+    // First param: explicitly annotated account_meta.
+    try std.testing.expect(lambda.param_annotated[0]);
+    const first_ty = lambda.param_types[0] orelse
+        return error.TestUnexpectedResult;
+    switch (first_ty) {
+        .TypeRef => |ref| try std.testing.expectEqualStrings("account_meta", ref.name),
+        else => return error.TestUnexpectedResult,
+    }
+
+    // Second param: inferred type, not annotated.
+    try std.testing.expect(!lambda.param_annotated[1]);
+    try std.testing.expect(lambda.param_types[1] != null);
+
+    // Third param: annotated but `(any)` sentinel still maps to null.
+    try std.testing.expect(lambda.param_annotated[2]);
+    try std.testing.expect(lambda.param_types[2] == null);
+}
+
 // Verification anchor: wire_1_2|lambda_param_types|legacy
 test "wire 1.2 legacy bare-atom params produce all-null param_types" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

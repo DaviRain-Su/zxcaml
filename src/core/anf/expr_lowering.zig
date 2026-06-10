@@ -83,6 +83,7 @@ pub fn lowerLetRecGroupBinding(arena: *std.heap.ArenaAllocator, ctx: *LowerConte
     const lambda: ttree.Lambda = .{
         .params = binding.params,
         .param_types = binding.param_types,
+        .param_annotated = binding.param_annotated,
         .body = &binding.body,
     };
     var value = try lowerExprPtr(arena, ctx, .{ .Lambda = lambda });
@@ -104,23 +105,36 @@ pub fn lowerLambda(arena: *std.heap.ArenaAllocator, ctx: *LowerContext, lambda: 
 
     for (lambda.params, 0..) |param_name, param_index| {
         const owned_name = try arena.allocator().dupe(u8, param_name);
-        // Wire 1.3 may carry an explicit per-parameter type. The existing
-        // structural heuristics (account/record/list/function callback)
-        // retain priority because they encode programmer-intent inferences
-        // (e.g. treating a bare `authority` lambda param that reaches into
-        // `is_signer` as an `account` rather than the formally-inferred
-        // `account_meta`). The wire type wins over the historical `Ty.Int`
-        // fallback so string/option/result/etc. payloads now flow through
-        // for higher-order callbacks. Truly unconstrained params arrive as
-        // `null` here and collapse back to `Ty.Int`.
+        // Per-parameter type precedence (wire 1.7 / CR-13):
+        //   1. `_`-prefixed names stay `Unit` — the underscore encodes
+        //      "unused" and entrypoint shapes rely on it, even when the
+        //      param carries an explicit annotation like `(_a : account)`.
+        //   2. Instruction-data names stay `String` (ABI-relevant).
+        //   3. An explicitly annotated wire type (`ty!`, wire 1.7) wins
+        //      next: `(m : account_meta)` means the programmer said so,
+        //      and heuristics must not override it.
+        //   4. The structural heuristics (account/record/list/function
+        //      callback) classify *unannotated* params, encoding
+        //      programmer-intent inferences (e.g. a bare `authority` param
+        //      that reaches into `is_signer` is an entrypoint `account`
+        //      rather than the formally-inferred `account_meta`).
+        //   5. An unannotated wire type beats the historical `Ty.Int`
+        //      fallback so string/option/result/etc. payloads flow through
+        //      for higher-order callbacks.
+        //   6. Truly unconstrained params arrive as `null` and collapse
+        //      back to `Ty.Int`.
         const wire_param_ty: ?ir.Ty = if (param_index < lambda.param_types.len)
             try lowerTypeExprOpt(arena, ctx, lambda.param_types[param_index])
         else
             null;
+        const annotated = param_index < lambda.param_annotated.len and
+            lambda.param_annotated[param_index];
         const param_ty: ir.Ty = if (std.mem.startsWith(u8, param_name, "_"))
             .Unit
         else if (isInstructionDataParamName(param_name))
             .String
+        else if (annotated and wire_param_ty != null)
+            wire_param_ty.?
         else if (lambdaParamIsAccount(lambda.body.*, param_name))
             try accountTy(arena)
         else if (lambdaParamRecordTy(arena, ctx, lambda.body.*, param_name)) |record_ty|

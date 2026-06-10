@@ -10,7 +10,7 @@ for the implementation rationale.
 
 `omlz check --wire=1.1 ...` is a deprecated one-mission compatibility window
 that forwards `--wire=1.1` to `zxc-frontend` and emits the old location-free
-shape. The current `1.6` reader still accepts `1.1`/`1.2` compatibility sexps and treats missing locations
+shape. The current `1.7` reader still accepts `1.1`/`1.2` compatibility sexps and treats missing locations
 as `Loc.unknown`.
 
 ## Wire 1.3 — typed lambda parameters
@@ -22,7 +22,7 @@ of the bare atom shape that 1.2 used. Unknown/polymorphic types fall back
 to the `(any)` sentinel which the bridge maps to `null`, and the Core IR
 lowerer falls back to its existing structural heuristics in that case.
 
-The current `1.6` reader still accepts `1.2`/`1.3` sexps; legacy bare-atom params parse as
+The current `1.7` reader still accepts `1.2`/`1.3` sexps; legacy bare-atom params parse as
 "untyped" and follow the original heuristic-only path. `omlz check --wire=1.2
 ...` (and `--wire=1.1`) remain available as one-mission compatibility windows
 that re-emit the older shapes.
@@ -32,7 +32,7 @@ that re-emit the older shapes.
 R9 advances the additive wire surface for ADR-015 array/loop work. It carries
 `int`-array literals and explicit array get/length/set/make nodes, plus the
 loop-era desugarings used by the frontend. These shapes remain accepted by the
-current `1.6` reader.
+current `1.7` reader.
 
 ## Wire 1.5 — ref cells
 
@@ -63,15 +63,39 @@ point at the offending expression instead of the enclosing declaration,
 and BPF source maps gain expression-granularity entries.
 
 Synthetic (desugared) expressions and ghost locations stay unwrapped and
-parse as `Loc.unknown`, exactly as before. The `1.6` reader is a strict
+parse as `Loc.unknown`, exactly as before. The `1.6` reader was a strict
 additive extension of `1.5`: every prior wire shape continues to parse.
-Wire 1.6 is the new default; `omlz check --wire=1.5 ...` is the
-one-mission compatibility window that re-emits the decl-only-located
-shape.
+`omlz check --wire=1.5 ...` remains the compatibility window that
+re-emits the decl-only-located shape.
+
+## Wire 1.7 — annotated parameters
+
+The frontend bridge wire advances to `1.7` so explicitly annotated
+lambda / `let rec` parameters are distinguishable from inferred ones:
+a parameter written `(m : account_meta)` in the source emits as
+`(m (ty! (type-ref account_meta)))` — the same arity as the wire 1.3
+`(name (ty <type-expr>))` shape, with the distinct `ty!` tag. Unannotated
+parameters keep the plain `ty` tag.
+
+Motivation (CR-13): explicit annotations must beat the Core IR
+parameter-classification heuristics. Previously a helper like
+`let meta_flags (m : account_meta) = ... m.is_signer ... m.is_writable ...`
+was reclassified as taking an entrypoint `account` (flags-only reads are
+wire-indistinguishable from bare account params), breaking native/BPF
+account-view layout. With the `ty!` marker, lowering uses the annotated
+wire type directly; the heuristics now only govern unannotated
+parameters (`_`-prefixed params stay `unit` and instruction-data names
+stay `string`, both unchanged).
+
+The `1.7` reader is a strict additive extension of `1.6`: every prior
+wire shape continues to parse, and `ty` params follow the old
+heuristic-priority path. Wire 1.7 is the new default; `omlz check
+--wire=1.6 ...` is the one-mission compatibility window that re-emits
+the plain-`ty` shape.
 
 ## ADR-016 — multi-file modules: no wire change
 
 ADR-016 (frontend-level `open Foo` multi-file support) needed no wire bump:
-the joined multi-file output is valid `1.6`. Every `(loc <file> <line> <col>
+the joined multi-file output is valid `1.7`. Every `(loc <file> <line> <col>
 <end_line> <end_col>)` node already carries a file atom; the only observable
 difference is that the `loc` file fields now vary per node within one sexp.

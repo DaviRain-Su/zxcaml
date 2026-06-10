@@ -110,7 +110,7 @@ Top-level `open Foo` in user code pulls a sibling file into the build
   (`open` cycle), and E0103 (`open` of a bundled stdlib module, or a
   user file shadowing one) are emitted before `ocamlc` runs.
 
-The wire stays **`1.6`**: every `(loc <file> <line> <col> <end_line>
+The wire stays **`1.7`**: every `(loc <file> <line> <col> <end_line>
 <end_col>)` node already carries a file atom, so multi-file span
 attribution needs no new wire shape, and a program with no user
 `open` produces a byte-identical sexp to single-file output.
@@ -127,12 +127,12 @@ The serialised form is an S-expression because:
 
 ### 3.1 Top-level shape
 
-The current wire grammar is sexp **version `1.6`**. The header carries the
+The current wire grammar is sexp **version `1.7`**. The header carries the
 version so `omlz` can reject stale frontend output with an upgrade hint:
 
 ```text
 ;; locations elided for readability
-(zxcaml-cir 1.6
+(zxcaml-cir 1.7
   (module
     (type_decl (name color) (params)
       (variants ((Red (payload_types))
@@ -165,6 +165,7 @@ Wire-format history:
 | `1.4` | array / loop-era additive surface before refs |
 | `1.5` | `ref-make`, `ref-get`, and `ref-set` for arena-backed ref cells |
 | `1.6` | `(located ...)` wrappers on inner expressions for expression-level diagnostics and source maps |
+| `1.7` | annotated-parameter `ty!` markers so explicit `(p : ty)` annotations beat parameter heuristics |
 
 Diagnostics carry locations separately on stderr; ordinary comments and
 formatting trivia are not serialized.

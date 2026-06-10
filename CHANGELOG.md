@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — wire 1.7: explicit parameter annotations win over heuristics
+
+- The frontend bridge wire advances from `1.6` to `1.7`: explicitly
+  annotated parameters emit `(name (ty! <type-expr>))` so the compiler
+  can distinguish `(m : account_meta)` from a bare param whose inferred
+  type merely happens to be `account_meta`. Annotated types now take
+  precedence over the account/record/list/function classification
+  heuristics (the `_`-prefix unused rule and the instruction-data name
+  rule stay highest); unannotated params keep today's behavior exactly.
+  This completes the `account_meta` parameter fix: a flags-only
+  annotated helper now compiles on every path without the read-`pubkey`
+  workaround (`examples/account_meta_annotated.ml`, corpus 105 → 106).
+- The bump is strictly additive: every prior wire shape still parses and
+  `omlz check --wire=1.6` (alongside the existing `1.5`/`1.1` windows)
+  re-emits the previous shape byte-identically. See
+  `docs/wire-compat.md`.
+
 ### Fixed — `account_meta` parameters that read `pubkey` type correctly
 
 - A helper function taking an `account_meta` parameter was typed as an

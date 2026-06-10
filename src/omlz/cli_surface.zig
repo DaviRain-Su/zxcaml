@@ -104,7 +104,7 @@ pub fn writeHelp(io: Io, version: []const u8) !void {
         \\  omlz check <file.ml>
         \\  omlz check --no-alloc <file.ml>
         \\  omlz check --explain <CODE>
-        \\  omlz check --emit=core-ir [--bless] [--wire=1.1|--wire=1.5] <file.ml>
+        \\  omlz check --emit=core-ir [--bless] [--wire=1.1|--wire=1.5|--wire=1.6] <file.ml>
         \\  omlz check --emit=core-ir-with-loc <file.ml>
         \\  omlz idl <file.ml>
         \\  omlz build --target=native [--keep-zig] <file.ml> -o <out>
@@ -179,7 +179,10 @@ pub fn parseCheckArgs(args: []const []const u8) !CheckArgs {
             report = arg["--report=".len..];
         } else if (std.mem.startsWith(u8, arg, "--wire=")) {
             const requested = arg["--wire=".len..];
-            if (!std.mem.eql(u8, requested, "1.1") and !std.mem.eql(u8, requested, "1.5")) {
+            if (!std.mem.eql(u8, requested, "1.1") and
+                !std.mem.eql(u8, requested, "1.5") and
+                !std.mem.eql(u8, requested, "1.6"))
+            {
                 return error.UnsupportedCheckArgs;
             }
             wire_version = requested;
@@ -353,7 +356,7 @@ fn writeCheckHelp(io: Io) !void {
         \\  omlz check --no-alloc <file.ml>
         \\  omlz check --report=<kinds> <file.ml>
         \\  omlz check --explain <CODE>
-        \\  omlz check --emit=core-ir [--bless] [--wire=1.1|--wire=1.5] <file.ml>
+        \\  omlz check --emit=core-ir [--bless] [--wire=1.1|--wire=1.5|--wire=1.6] <file.ml>
         \\  omlz check --emit=core-ir-with-loc <file.ml>
         \\
         \\Flags:
@@ -365,7 +368,8 @@ fn writeCheckHelp(io: Io) !void {
         \\  --report=<kinds> Emit a static profiling report. Accepts a comma-
         \\                   separated list of `cu`, `stack`, or the literal
         \\                   `all`. Output is opt-in and goes to stdout.
-        \\  --wire=1.1|1.5   Deprecated: ask zxc-frontend to emit an older wire sexp shape.
+        \\  --wire=1.1|1.5|1.6
+        \\                   Deprecated: ask zxc-frontend to emit an older wire sexp shape.
         \\  --bless          Rewrite the Core IR golden snapshot for the input.
         \\  --error-format=human|json|oneline
         \\                   Select diagnostic output format (default: human).
